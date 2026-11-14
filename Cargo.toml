@@ -7,6 +7,7 @@ description = "Read-only Diablo II: Resurrected minimap overlay for Hyprland (Li
 publish = false
 
 [dependencies]
+anyhow = "1.0.104"
 
 [lints.rust]
 unsafe_code = "forbid"
