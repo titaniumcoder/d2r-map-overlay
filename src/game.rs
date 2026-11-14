@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use anyhow::{Context, Result, bail};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::offsets::{
     ROOM_TILE_SCALE, item_data, level, monster_data, path, player_data, preset, room_tile, room1, room2,
@@ -37,7 +37,17 @@ impl Serialize for Addr {
     }
 }
 
-#[derive(Debug, Serialize)]
+impl<'de> Deserialize<'de> for Addr {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        let hex = s.strip_prefix("0x").unwrap_or(&s);
+        u64::from_str_radix(hex, 16)
+            .map(Self)
+            .map_err(|e| serde::de::Error::custom(format!("bad address {s:?}: {e}")))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     pub player: Player,
     pub player_candidates: Vec<Candidate>,
@@ -49,7 +59,7 @@ pub struct Snapshot {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Player {
     pub addr: Addr,
     pub id: u32,
@@ -61,13 +71,13 @@ pub struct Player {
     pub level_id: u32,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Candidate {
     pub addr: Addr,
     pub name: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Level {
     pub id: u32,
     /// `None` if the level has no readable rooms.
@@ -76,7 +86,7 @@ pub struct Level {
 }
 
 /// World-tile bounding box; `max` is exclusive (room x + w).
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
 pub struct Bounds {
     pub min_x: u32,
     pub min_y: u32,
@@ -85,7 +95,7 @@ pub struct Bounds {
 }
 
 /// A room in world tiles.
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Room {
     pub x: u32,
     pub y: u32,
@@ -94,7 +104,7 @@ pub struct Room {
     pub loaded: bool,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PresetKind {
     Monster,
@@ -117,7 +127,7 @@ impl PresetKind {
 }
 
 /// A preset unit in world tiles.
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Preset {
     pub kind: PresetKind,
     pub txt: u32,
@@ -126,20 +136,20 @@ pub struct Preset {
 }
 
 /// World-tile origin of a room.
-#[derive(Debug, Serialize, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
 pub struct RoomPos {
     pub x: u32,
     pub y: u32,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RoomLink {
     pub from_room: RoomPos,
     pub to_level_id: u32,
     pub to_room: RoomPos,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Monster {
     pub addr: Addr,
     pub id: u32,
@@ -151,7 +161,7 @@ pub struct Monster {
     pub name_seed: u16,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Item {
     pub addr: Addr,
     pub id: u32,
