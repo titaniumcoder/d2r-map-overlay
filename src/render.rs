@@ -17,14 +17,17 @@ pub const WAYPOINT_IDS: &[u32] = &[
     119, 145, 156, 157, 237, 238, 288, 323, 324, 398, 402, 429, 494, 496, 511, 539,
 ];
 /// A room that marks a landmark: the rooms of a level in `level_ids` whose level-preset id (lvlprest
-/// row) is in `preset_ids` get one [`Marker::Landmark`] at the centre of their combined bounding box
-/// (one piece often spans several Room2 cells).
+/// row) is in `preset_ids` get one marker at the centre of their combined bounding box (one piece
+/// often spans several Room2 cells): [`Marker::Landmark`] if the rule is confirmed in game,
+/// [`Marker::Suspected`] (a "?") if it is only assumed.
 #[derive(Debug)]
 pub struct LandmarkRule {
     pub level_ids: std::ops::RangeInclusive<u32>,
     pub preset_ids: std::ops::RangeInclusive<u32>,
     /// What the landmark is (not drawn; for tests and debugging).
     pub label: &'static str,
+    /// Seen in game; `false` for a rule extrapolated from a pattern.
+    pub confirmed: bool,
 }
 
 /// Landmark rules.
@@ -33,8 +36,8 @@ pub struct LandmarkRule {
 ///   Ordinary arm ends use other ids (510, 511, 513, 517 seen).
 /// - Tal Rasha's tombs (66–72): the real tomb's orifice chamber. Confirmed: 462 in tomb 72 (orifice
 ///   object 152 inside it). A fake tomb's chest chamber was 473 in tomb 71. Pattern assumed: orifice
-///   chamber = level + 390 (456–462), chest chamber = level + 402 (468–474); only 462 is confirmed.
-///   The 462 chamber spans 4 Room2 cells.
+///   chamber = level + 390 (456–462), chest chamber = level + 402 (468–474); only 462 is confirmed,
+///   so 456–461 are an unconfirmed rule. The 462 chamber spans 4 Room2 cells.
 /// - Flayer Jungle (78): the Gidbinn altar (object 252) lies in piece 602, live-verified 2026-11-15
 ///   (player in a 602 room 5 tiles from the altar). 602 spans 16 Room2 cells; 601 is the waypoint
 ///   area (waypoint object 237).
@@ -45,23 +48,50 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 74..=74,
         preset_ids: 525..=528,
         label: "summoner",
+        confirmed: true,
+    },
+    LandmarkRule {
+        level_ids: 72..=72,
+        preset_ids: 462..=462,
+        label: "orifice",
+        confirmed: true,
     },
     LandmarkRule {
         level_ids: 66..=72,
-        preset_ids: 456..=462,
-        label: "orifice",
+        preset_ids: 456..=461,
+        label: "orifice (assumed level+390 pattern)",
+        confirmed: false,
     },
     LandmarkRule {
         level_ids: 78..=78,
         preset_ids: 602..=602,
         label: "gidbinn",
+        confirmed: true,
     },
     LandmarkRule {
         level_ids: 92..=92,
         preset_ids: 739..=739,
         label: "sewer stairs",
+        confirmed: true,
     },
 ];
+
+/// Quest objects (object txt ids from objects.txt, which matched live) drawn where their preset
+/// is, once the room holding it is loaded. The id alone identifies them, so they are confirmed.
+pub const QUEST_OBJECTS: &[(u32, &str)] = &[
+    (152, "orifice"),
+    (252, "gidbinn altar"),
+    (366, "sewer stairs"),
+    (367, "sewer lever"),
+];
+
+/// The quest-object label of object txt id `txt`, if it is one.
+pub fn quest_object(txt: u32) -> Option<&'static str> {
+    QUEST_OBJECTS
+        .iter()
+        .find(|&&(id, _)| id == txt)
+        .map(|&(_, label)| label)
+}
 
 /// Monster flag bits for superunique (0x02), champion (0x04) and unique/boss (0x08); minion is 0x10.
 const ELITE_FLAGS: u8 = 0x0E;
@@ -79,6 +109,12 @@ const MARKER_OUTLINE: Rgba = [0, 0, 0, 220];
 const LANDMARK_GOLD: Rgba = [255, 200, 30, 255];
 /// Halo ring radius in px, beyond the star's tips.
 const LANDMARK_RING: f32 = 13.0;
+/// "?" marker for an unconfirmed landmark: a light gold glyph on a dark translucent disc.
+const SUSPECT_TEXT: Rgba = [255, 235, 150, 255];
+const SUSPECT_DISC: Rgba = [0, 0, 0, 150];
+const SUSPECT_DISC_RADIUS: f32 = 13.0;
+/// Font size; the "?" ink is about 16 px tall at this size.
+const SUSPECT_GLYPH_PX: f32 = 22.0;
 /// Unique items, and unique charms.
 const UNIQUE_GOLD: Rgba = [235, 190, 60, 255];
 /// Charms: a light blue, apart from the rune orange and the entry teal.
@@ -108,9 +144,15 @@ pub enum Marker {
     /// Monster preset: superunique or other special spawn, with the superunique's name when its
     /// txt id is in the table (see `session::superunique`). Not drawn as text; kept for later use.
     Special(Option<&'static str>),
+    /// A room an unconfirmed landmark rule matched (see [`LANDMARKS`]), with the rule's label:
+    /// drawn as a "?".
+    Suspected(&'static str),
     /// A landmark room (see [`LANDMARKS`]), with the rule's label. Drawn below live elites so the
     /// boss standing on it stays visible.
     Landmark(&'static str),
+    /// A quest object preset (see [`QUEST_OBJECTS`]), with its label: a small gold star without
+    /// halo, drawn above the landmark star so both show when they overlap.
+    QuestObject(&'static str),
     /// Live superunique, champion or unique monster.
     Elite,
     /// An item on the ground worth picking up.
@@ -126,7 +168,10 @@ impl Marker {
             Self::Entry => ([40, 200, 200, 255], 4.5, Shape::Square),
             Self::Waypoint => ([60, 140, 255, 255], 5.0, Shape::Circle),
             Self::Special(_) => ([255, 110, 40, 255], 4.5, Shape::Circle),
+            // The ring is the no-font fallback; with a font the "?" glyph is drawn instead.
+            Self::Suspected(_) => (SUSPECT_TEXT, 7.0, Shape::Circle),
             Self::Landmark(_) => (LANDMARK_GOLD, 9.0, Shape::Star),
+            Self::QuestObject(_) => (LANDMARK_GOLD, 6.0, Shape::Star),
             Self::Elite => ([230, 30, 30, 255], 3.5, Shape::Circle),
             Self::Drop(DropKind::Unique) => (UNIQUE_GOLD, 5.0, Shape::Diamond),
             Self::Drop(DropKind::Set) => ([30, 220, 30, 255], 5.0, Shape::Diamond),
@@ -245,10 +290,11 @@ pub fn is_elite(m: &Monster) -> bool {
 pub fn preset_marker(p: &Preset) -> Option<Marker> {
     match p.kind {
         PresetKind::Object if WAYPOINT_IDS.contains(&p.txt) => Some(Marker::Waypoint),
+        PresetKind::Object => quest_object(p.txt).map(Marker::QuestObject),
         PresetKind::Tile if p.entry => Some(Marker::Entry),
         PresetKind::Tile => Some(Marker::Exit),
         PresetKind::Monster => Some(Marker::Special(session::superunique(p.txt))),
-        PresetKind::Object | PresetKind::Other(_) => None,
+        PresetKind::Other(_) => None,
     }
 }
 
@@ -268,7 +314,12 @@ pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f
                 .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))?;
             let x = f64::midpoint(f64::from(x0), f64::from(x1));
             let y = f64::midpoint(f64::from(y0), f64::from(y1));
-            Some((Marker::Landmark(rule.label), x, y))
+            let marker = if rule.confirmed {
+                Marker::Landmark(rule.label)
+            } else {
+                Marker::Suspected(rule.label)
+            };
+            Some((marker, x, y))
         })
         .collect()
 }
@@ -364,6 +415,12 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         width: 4.5,
         ..Stroke::default()
     };
+    // The quest-object star: same scheme as the landmark star, thinner for its smaller size.
+    let small_star_outline = Stroke {
+        width: 3.0,
+        line_join: LineJoin::Round,
+        ..Stroke::default()
+    };
     let solid = |pm: &mut Pixmap, path: &Path, colour: Rgba| {
         pm.fill_path(
             path,
@@ -379,7 +436,18 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         let Some(dot) = marker_path(shape, cx, cy, size) else {
             continue;
         };
-        if shape == Shape::Star {
+        if let Marker::Suspected(_) = marker {
+            draw_suspected(&mut pm, font, &dot, cx, cy);
+        } else if let Marker::QuestObject(_) = marker {
+            pm.stroke_path(
+                &dot,
+                &paint(MARKER_OUTLINE),
+                &small_star_outline,
+                Transform::identity(),
+                None,
+            );
+            solid(&mut pm, &dot, colour);
+        } else if shape == Shape::Star {
             // Halo: a gold ring on a wider dark ring, so it reads on any background.
             if let Some(halo) = PathBuilder::from_circle(cx, cy, LANDMARK_RING) {
                 pm.stroke_path(
@@ -408,6 +476,31 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         info::draw(&mut pm, font, &info::info_line(snap.level.id, snap.difficulty));
     }
     Ok(pm)
+}
+
+/// A "?" for an unconfirmed landmark at (`cx`, `cy`): the glyph on a dark translucent disc, or
+/// without a font the hollow light-gold `ring` on a dark backing.
+fn draw_suspected(pm: &mut Pixmap, font: Option<&FontVec>, ring: &Path, cx: f32, cy: f32) {
+    if let Some(font) = font {
+        if let Some(disc) = PathBuilder::from_circle(cx, cy, SUSPECT_DISC_RADIUS) {
+            pm.fill_path(
+                &disc,
+                &paint(SUSPECT_DISC),
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+        info::draw_centred(pm, font, SUSPECT_GLYPH_PX, SUSPECT_TEXT, '?', cx, cy);
+    } else {
+        for (colour, width) in [(MARKER_OUTLINE, 4.0), (LANDMARK_GOLD, 2.0)] {
+            let stroke = Stroke {
+                width,
+                ..Stroke::default()
+            };
+            pm.stroke_path(ring, &paint(colour), &stroke, Transform::identity(), None);
+        }
+    }
 }
 
 /// The outline of a marker centred on (`cx`, `cy`); `None` for a degenerate size.
@@ -1177,6 +1270,21 @@ mod tests {
         let mut snap = sanctuary([Some(473), Some(424), None, None]);
         snap.level.id = 71;
         assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+        // Tomb 66 with 456: only the assumed level+390 pattern says so, a "?".
+        let mut snap = sanctuary([None, Some(456), None, None]);
+        snap.level.id = 66;
+        assert_eq!(
+            landmarks(&snap, LANDMARKS),
+            vec![(
+                Marker::Suspected("orifice (assumed level+390 pattern)"),
+                90.0,
+                30.0
+            )]
+        );
+        // 462 outside tomb 72 is not confirmed and not in the assumed range either.
+        let mut snap = sanctuary([None, Some(462), None, None]);
+        snap.level.id = 66;
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
         // The orifice id outside the tombs is nothing either.
         let mut snap = sanctuary([Some(462), None, None, None]);
         snap.level.id = 73;
@@ -1298,6 +1406,149 @@ mod tests {
         assert!(
             dx.hypot(dy) <= f64::from(LANDMARK_RING) * 1.5,
             "gold spread {dx},{dy}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rules_are_confirmed_except_the_assumed_orifice_pattern() {
+        let unconfirmed: Vec<&str> = LANDMARKS
+            .iter()
+            .filter(|r| !r.confirmed)
+            .map(|r| r.label)
+            .collect();
+        assert_eq!(unconfirmed, vec!["orifice (assumed level+390 pattern)"]);
+    }
+
+    fn object(txt: u32, x: u32, y: u32) -> Preset {
+        Preset {
+            kind: PresetKind::Object,
+            txt,
+            x,
+            y,
+            entry: false,
+        }
+    }
+
+    #[test]
+    fn quest_objects_are_markers_with_labels() {
+        for (txt, label) in [
+            (152, "orifice"),
+            (252, "gidbinn altar"),
+            (366, "sewer stairs"),
+            (367, "sewer lever"),
+        ] {
+            assert_eq!(
+                preset_marker(&object(txt, 0, 0)),
+                Some(Marker::QuestObject(label)),
+                "{txt}"
+            );
+        }
+        // Other objects: nothing; waypoints stay waypoints.
+        for txt in [0, 151, 153, 365, 368, 473] {
+            assert_eq!(preset_marker(&object(txt, 0, 0)), None, "{txt}");
+        }
+        assert_eq!(preset_marker(&object(237, 0, 0)), Some(Marker::Waypoint));
+        // A quest-object id that is a monster or tile preset is not a quest object.
+        let monster = Preset {
+            kind: PresetKind::Monster,
+            ..object(152, 0, 0)
+        };
+        assert_eq!(preset_marker(&monster), Some(Marker::Special(None)));
+    }
+
+    /// Tomb 66 with an assumed-orifice room (456) at world 90,30 and the orifice object at 150,30.
+    fn tomb_66() -> Snapshot {
+        let mut snap = sanctuary([None, Some(456), None, None]);
+        snap.level.id = 66;
+        snap.presets = vec![object(152, 150, 30)];
+        snap
+    }
+
+    /// Pixels within `r` px of `at` for which `pred` holds.
+    fn count_near(pm: &Pixmap, at: (f32, f32), r: f32, pred: impl Fn(Rgba) -> bool) -> Result<u32> {
+        let mut n = 0;
+        for y in 0..pm.height() {
+            for x in 0..pm.width() {
+                let (dx, dy) = (px(f64::from(x)) + 0.5 - at.0, px(f64::from(y)) + 0.5 - at.1);
+                if dx.hypot(dy) <= r && pred(rgba(pm, x, y)?) {
+                    n += 1;
+                }
+            }
+        }
+        Ok(n)
+    }
+
+    /// The "?" glyph's light gold, also partly covered over the dark disc: bright red and green,
+    /// more blue than the landmark gold, warmer than the room grey.
+    fn is_suspect_text(p: Rgba) -> bool {
+        p[0] >= 170 && p[1] >= 150 && p[2] >= 80 && p[0] >= p[2] + 40
+    }
+
+    #[test]
+    fn suspected_landmark_renders_as_a_question_mark() -> Result<()> {
+        let snap = tomb_66();
+        let (w, h) = (400, 400);
+        // Without a font: a hollow gold ring, no glyph.
+        let plain = render_with(&snap, w, h, None)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+        let at = v.to_screen(90.0, 30.0);
+        assert_eq!(count_near(&plain, at, SUSPECT_DISC_RADIUS, is_suspect_text)?, 0);
+        let (_, radius, _) = Marker::Suspected("").style();
+        let ring = count_near(&plain, at, radius + 1.5, |p| p == LANDMARK_GOLD)?;
+        let centre = count_near(&plain, at, radius - 2.5, |p| p == LANDMARK_GOLD)?;
+        assert!(ring >= 15 && centre == 0, "ring {ring}, centre {centre}");
+
+        let Some(font) = info::font() else {
+            eprintln!("skipped the glyph check: no font on this machine");
+            return Ok(());
+        };
+        let pm = render_with(&snap, w, h, Some(font))?;
+        let v = View::fit(level_bounds(&snap), w, map_height(h, Some(font)));
+        let at = v.to_screen(90.0, 30.0);
+        let near = count_near(&pm, at, SUSPECT_DISC_RADIUS, is_suspect_text)?;
+        assert!(near >= 15, "only {near} light glyph pixels near the ?");
+        // No landmark star there: no gold.
+        let star_gold = count_near(&pm, at, LANDMARK_RING + 2.0, |p| p == LANDMARK_GOLD)?;
+        assert_eq!(star_gold, 0, "gold star pixels at the ?");
+        // The disc darkens the room behind the glyph: some dark opaque pixels inside it.
+        let dark = count_near(&pm, at, SUSPECT_DISC_RADIUS, |p| p[3] >= 150 && p[0] < 50)?;
+        assert!(dark >= 30, "only {dark} dark disc/outline pixels");
+        Ok(())
+    }
+
+    #[test]
+    fn quest_object_renders_as_a_small_gold_star() -> Result<()> {
+        // The orifice object alone (no "?" room, whose no-font ring is gold too).
+        let mut snap = tomb_66();
+        for r in &mut snap.level.rooms {
+            r.preset = None;
+        }
+        let (w, h) = (400, 400);
+        let pm = render_with(&snap, w, h, None)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+        let at = v.to_screen(150.0, 30.0);
+        let (gold, size, shape) = Marker::QuestObject("orifice").style();
+        assert_eq!((gold, shape), (LANDMARK_GOLD, Shape::Star));
+        assert!(
+            size < Marker::Landmark("orifice").style().1,
+            "smaller than the landmark star"
+        );
+        let (hits, dx, dy) = colour_spread(&pm, gold, at)?;
+        assert!(hits >= 12, "only {hits} gold pixels");
+        assert!(dx.hypot(dy) <= f64::from(size), "gold spread {dx},{dy}: no halo");
+        // Drawn after (above) the landmark star, so both show when they overlap.
+        let mut snap = sanctuary([None, Some(462), None, None]);
+        snap.level.id = 72;
+        snap.presets = vec![object(152, 90, 30)];
+        let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                Marker::Landmark("orifice"),
+                Marker::QuestObject("orifice"),
+                Marker::Player
+            ]
         );
         Ok(())
     }

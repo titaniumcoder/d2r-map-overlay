@@ -177,7 +177,38 @@ pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine) {
     let max_width = f32_px(w.saturating_sub(2 * (PAD + 1)));
     let baseline = f32_px(h - PAD - 1) + scaled.descent();
     let text = fit_text(font, line, max_width);
+    draw_outlined(pm, font, TEXT_PX, TEXT, &text, (x0, baseline), false);
+}
 
+/// Draws `c` at `size` px in `colour` with the info line's dark 1 px outline, its ink box centred
+/// on (`cx`, `cy`), emboldened by 1 px. Used for the map's "?" markers.
+pub fn draw_centred(pm: &mut Pixmap, font: &FontVec, size: f32, colour: [u8; 4], c: char, cx: f32, cy: f32) {
+    let scaled = font.as_scaled(PxScale::from(size));
+    let glyph = scaled
+        .glyph_id(c)
+        .with_scale_and_position(PxScale::from(size), point(0.0, 0.0));
+    let Some(outlined) = scaled.outline_glyph(glyph) else {
+        return;
+    };
+    let b = outlined.px_bounds();
+    let pen = cx - f32::midpoint(b.min.x, b.max.x);
+    let baseline = cy - f32::midpoint(b.min.y, b.max.y);
+    draw_outlined(pm, font, size, colour, &c.to_string(), (pen, baseline), true);
+}
+
+/// Draws `text` from pen position `x0` on `baseline`: `colour` glyphs over a dark 1 px outline.
+/// `bold` widens the glyphs by 1 px first (a faux bold; the outline grows with them).
+fn draw_outlined(
+    pm: &mut Pixmap,
+    font: &FontVec,
+    size: f32,
+    colour: [u8; 4],
+    text: &str,
+    (x0, baseline): (f32, f32),
+    bold: bool,
+) {
+    let (w, h) = (pm.width(), pm.height());
+    let scaled = font.as_scaled(PxScale::from(size));
     // Glyph coverage goes into a mask; the outline is the mask grown by 1 px. tiny-skia then
     // blends a solid colour through each mask, which keeps premultiplied alpha right.
     let (Some(mut glyphs), Some(mut outline)) = (Mask::new(w, h), Mask::new(w, h)) else {
@@ -190,7 +221,7 @@ pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine) {
         if let Some(p) = prev {
             pen += scaled.kern(p, id);
         }
-        let glyph = id.with_scale_and_position(PxScale::from(TEXT_PX), point(pen, baseline));
+        let glyph = id.with_scale_and_position(PxScale::from(size), point(pen, baseline));
         pen += scaled.h_advance(id);
         prev = Some(id);
         let Some(outlined) = scaled.outline_glyph(glyph) else {
@@ -208,16 +239,38 @@ pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine) {
             }
         });
     }
+    if bold {
+        widen(glyphs.data_mut(), w);
+    }
     grow(glyphs.data(), outline.data_mut(), w, h);
 
     let Some(rect) = Rect::from_xywh(0.0, 0.0, f32_px(w), f32_px(h)) else {
         return;
     };
-    for (colour, mask) in [(OUTLINE, &outline), (TEXT, &glyphs)] {
+    for (colour, mask) in [(OUTLINE, &outline), (colour, &glyphs)] {
         let mut paint = Paint::default();
         let [red, green, blue, alpha] = colour;
         paint.set_color_rgba8(red, green, blue, alpha);
         pm.fill_rect(rect, &paint, Transform::identity(), Some(mask));
+    }
+}
+
+/// Faux bold: each pixel of the `w`-wide mask `data` takes the max of itself and its left
+/// neighbour. Horizontal only, so gaps between a glyph's parts above each other (the dot of "?")
+/// stay open.
+fn widen(data: &mut [u8], w: u32) {
+    let Ok(w) = usize::try_from(w) else { return };
+    if w == 0 {
+        return;
+    }
+    for row in data.chunks_mut(w) {
+        // Right to left, so each pixel reads its left neighbour's original value.
+        for x in (1..row.len()).rev() {
+            let left = row.get(x - 1).copied().unwrap_or(0);
+            if let Some(cur) = row.get_mut(x) {
+                *cur = (*cur).max(left);
+            }
+        }
     }
 }
 
