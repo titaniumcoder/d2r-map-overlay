@@ -85,6 +85,11 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - **MonsterData** (unitData): `+0x18` nameSeed, `+0x1A` flag byte, classic D2 bits: 0x02 superunique, 0x04 champion,
   0x08 unique/boss, 0x10 minion. Live: minions of a killed pack = 0x10, pack leaders seen as 0x08/0x0C.
   Superunique bit (Countess/Smith) still to observe.
+- **Room1** (loaded rooms only): `+0x38` → CollMap: u32 `+0x00/+0x04` world x/y, `+0x08/+0x0C` width/height
+  (= Room2 rect), `+0x20` → width×height u16 flags, row-major. Bit `0x0001` = blocked (walls seen as 5/7, floor 0).
+  Verified Sewers Level 1, 2026-11-14.
+- **Room2 neighbour list** (`+0x10` list, `+0x50` u16 count) is only filled for loaded rooms and includes other
+  levels' rooms — **no** walkable-connection info for unexplored rooms. Openings for the whole level need the seed.
 
 ## Markers
 - **Waypoint**: object ids table (119, 157 seen; full list from objects.txt waypoint rows).
@@ -93,6 +98,15 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - **Superuniques/specials**: type-1 presets (853/757 Tower 5, 771 Smith…) + live monsters with superunique flag.
 - **Packs/uniques**: live monsters with unique/champion flag (minions clustered to their leader); dead skipped.
 - **Accumulate per game**: markers persist in a cache keyed by (levelId, x, y) once seen, until the game (act ptr / seed) changes — so explored exits/waypoints stay on the map.
+
+## User feedback, first live session (Act 1, 2026-11-14)
+- Minimap "already helps drastically"; ~1% CPU, 7 MB RSS.
+- Hide in towns (level ids 1, 40, 75, 103, 109).
+- Wants corridors/openings, not just room tiles → draw CollMap walls for loaded rooms, keep them per game.
+- Orange monster-preset dots appeared where nothing was (non-superunique presets) → only presets learned as
+  superunique (live monster with flag 0x02 near the preset; persisted list); remove once that monster is dead.
+- A killed superunique's marker stayed → same fix.
+- Andariel's unique spear and gems not shown → items are M4b.
 
 ## Item drops (added 2026-11-14, user request)
 - Show **important drops on the ground**: unique, set, gems, runes. Nothing else.
