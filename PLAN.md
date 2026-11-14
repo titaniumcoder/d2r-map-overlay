@@ -70,8 +70,11 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - **Image**: two mappings of the same memfd inode with `SizeOfImage≈0x279c000`: the live view
   (has `---s` encrypted pages; pointers refer to its base) and a fully readable `rw-s` alias → scan the alias,
   compute addresses from the live base.
-- **Unit hash table**: sig `48 03 C7 49 8B 8C C6`, `rel32` at sig+7, table = liveBase + rel. 128 slots × 8 per unit type
-  (0 player, 1 monster). Chain next `+0x150` (verified for monsters; verify for players).
+- **Unit hash table**: 6 blocks (unit types 0–5) × 128 slots × 8 bytes, in `.data` (rva 0x1ebe5f0 for build
+  `6ad81202-279c000`). A unit sits in slot `id & 127`; chain next `+0x150` (verified live for players and monsters).
+  **D2R re-encrypts code pages after use**, so the code sig `48 03 C7 49 8B 8C C6` (rel32 at sig+7) only works
+  sometimes. Lookup order: sig → per-build cache (`~/.cache/d2r-map-overlay/offsets.toml`) → structural search of
+  `.data` (type + hash-slot check; needs the player in a game).
 - **Player**: type 0 with `act(+0x20)≠0` and path pos ≠ 0; optional `player_name` in config to disambiguate
   party members (PlayerData `+0x10`, name at +0).
 - **Unit**: `+0x04` txt, `+0x08` id, `+0x0C` mode (0/12 dead), `+0x10` unitData, `+0x38` path (x `+0x02`, y `+0x06`, room1 `+0x20`).
@@ -79,8 +82,9 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - **Room2**: `+0x48` next, `+0x58` room1 (loaded), `+0x60/64/68/6C` x/y/w/h in room units (×5 = tiles),
   `+0x78` room-tile list (entry `+0x00` Room2 of the linked level, `+0x08` next), `+0x98` presets.
 - **PresetUnit**: `+0x04` txt, `+0x08` x (room-relative), `+0x10` next, `+0x20` type (1 monster, 2 object, 5 tile/exit), `+0x24` y.
-- **MonsterData** (unitData): `+0x18` nameSeed, `+0x1A` flag byte (observed 0x08, 0x0C on elites) — bit meaning
-  to confirm in M1 against known superunique (Countess/Smith) and champions.
+- **MonsterData** (unitData): `+0x18` nameSeed, `+0x1A` flag byte, classic D2 bits: 0x02 superunique, 0x04 champion,
+  0x08 unique/boss, 0x10 minion. Live: minions of a killed pack = 0x10, pack leaders seen as 0x08/0x0C.
+  Superunique bit (Countess/Smith) still to observe.
 
 ## Markers
 - **Waypoint**: object ids table (119, 157 seen; full list from objects.txt waypoint rows).
@@ -95,7 +99,10 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - Ground items are units of type 4 in the same unit hash table (slot block 4). On the ground = item mode to confirm live
   (classic D2: 3 = on floor). Like monsters, the client only knows items near the player — fine for drops.
 - Quality from ItemData (unitData `+0x10`; classic D2 quality at ItemData+0x00: 5 set, 7 unique); gems/runes by base
-  item txt id ranges (from items/misc txt). All offsets/ids **to verify live** before use.
+  item txt id ranges (from items/misc txt).
+- Live (Jail 1, 2026-11-14): ground items have **mode 3**; ItemData+0x00 = 2 (normal) on all 5 ground items — quality
+  location consistent. Items' path is a different struct: `+0x02/+0x06` give garbage (22407, 0); classic StaticPath
+  puts x/y at `+0x10/+0x14` — **verify** with a known drop. Unique/set ids still to observe.
 - Drawn as distinct icons (unique gold, set green, rune orange, gem by colour), dropped from the map once picked up.
 
 ## Overlay
@@ -112,7 +119,7 @@ Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each re
 ## Milestones
 - [x] **M0 setup**: mise Rust pin, `cargo init`, lint config, rustfmt, PLAN.md + CLAUDE.md + .gitignore, `git init`, first commit.
    From here on the user can start sessions directly in `~/Work/d2r_map_overlay`.
-- [ ] **M1 reader** (a: process/image ✓, b: game snapshot + --dump): `d2r-map-overlay --dump` prints one JSON snapshot. Validate against `research/rooms.py` / `presets.py` output in Jail 1 and Tower 5; confirm player chain `+0x150` and the elite flag bits.
+- [x] **M1 reader** (verified live in Jail 1, 2026-11-14; fixture tests/fixtures/jail1-snapshot.json): `d2r-map-overlay --dump` prints one JSON snapshot. Validate against `research/rooms.py` / `presets.py` output in Jail 1 and Tower 5; confirm player chain `+0x150` and the elite flag bits.
 - [ ] **M2 overlay**: draw a static snapshot file (no game needed) — layer-shell, click-through, iso render.
 - [ ] **M3 live**: reader thread + Hyprland focus hide/show; ~5 Hz redraw.
 - [ ] **M4 markers**: classification tables, per-game accumulation, exit labels.
