@@ -48,6 +48,8 @@ pub struct Update {
     pub new_game: bool,
     /// Preset txt ids learned as superuniques by this snapshot (to persist).
     pub learned: Vec<u32>,
+    /// The arrival point settled in this snapshot: (level id, x, y). Once per level per game.
+    pub arrival: Option<(u32, u16, u16)>,
 }
 
 #[derive(Debug, Default)]
@@ -100,6 +102,7 @@ impl Session {
         }
         if let Some(&arrival) = self.arrivals.get(&level) {
             let found = mark_entry(snap, arrival);
+            let was_settling = self.settling.is_some_and(|(l, _)| l == level);
             self.settling = match self.settling {
                 Some((l, left)) if l == level && !found && left > 0 => {
                     self.arrivals.insert(level, here);
@@ -112,6 +115,9 @@ impl Session {
                 Some((l, _)) if l == level => None,
                 other => other,
             };
+            if was_settling && self.settling.is_none() {
+                update.arrival = self.arrivals.get(&level).map(|&(x, y)| (level, x, y));
+            }
         }
 
         for m in snap
@@ -420,6 +426,36 @@ mod tests {
         let mut later = at(snap(1, 0xa000, 29), 1290, 1290, &presets);
         s.apply(&mut later);
         assert_eq!(tiles(&later), vec![(1, true), (2, false)]);
+    }
+
+    #[test]
+    fn settled_arrival_is_reported_once() {
+        let presets = [preset(PresetKind::Tile, 1, 1000, 1000)];
+        let mut s = Session::default();
+        assert_eq!(
+            s.apply(&mut snap(1, 0xa000, 1)).arrival,
+            None,
+            "no arrival at start"
+        );
+        // Stale first frame: still settling, nothing reported yet.
+        assert_eq!(
+            s.apply(&mut at(snap(1, 0xa000, 29), 5, 5, &presets)).arrival,
+            None
+        );
+        let settled = s.apply(&mut at(snap(1, 0xa000, 29), 1003, 1002, &presets));
+        assert_eq!(settled.arrival, Some((29, 1003, 1002)));
+        assert_eq!(
+            s.apply(&mut at(snap(1, 0xa000, 29), 1100, 1100, &presets))
+                .arrival,
+            None
+        );
+
+        // No tile near (waypoint): reported once the settle window runs out.
+        s.apply(&mut snap(1, 0xa000, 1));
+        let reports: Vec<_> = (0..=ARRIVAL_SETTLE + 2)
+            .filter_map(|_| s.apply(&mut at(snap(1, 0xa000, 28), 200, 200, &[])).arrival)
+            .collect();
+        assert_eq!(reports, vec![(28, 200, 200)]);
     }
 
     #[test]

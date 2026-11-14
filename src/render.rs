@@ -14,8 +14,9 @@ use crate::items::{DropKind, GemColour};
 pub const WAYPOINT_IDS: &[u32] = &[
     119, 145, 156, 157, 237, 238, 288, 323, 324, 398, 402, 429, 494, 496, 511, 539,
 ];
-/// A room that marks a landmark: a room of a level in `level_ids` whose level-preset id (lvlprest row)
-/// is in `preset_ids` gets a [`Marker::Landmark`] at its centre.
+/// A room that marks a landmark: the rooms of a level in `level_ids` whose level-preset id (lvlprest
+/// row) is in `preset_ids` get one [`Marker::Landmark`] at the centre of their combined bounding box
+/// (one piece often spans several Room2 cells).
 #[derive(Debug)]
 pub struct LandmarkRule {
     pub level_ids: std::ops::RangeInclusive<u32>,
@@ -31,6 +32,10 @@ pub struct LandmarkRule {
 /// - Tal Rasha's tombs (66–72): the real tomb's orifice chamber. Confirmed: 462 in tomb 72 (orifice
 ///   object 152 inside it). A fake tomb's chest chamber was 473 in tomb 71. Pattern assumed: orifice
 ///   chamber = level + 390 (456–462), chest chamber = level + 402 (468–474); only 462 is confirmed.
+///   The 462 chamber spans 4 Room2 cells.
+/// - Flayer Jungle (78): the Gidbinn altar (object 252) lies in piece 602, live-verified 2026-11-15
+///   (player in a 602 room 5 tiles from the altar). 602 spans 16 Room2 cells; 601 is the waypoint
+///   area (waypoint object 237).
 pub const LANDMARKS: &[LandmarkRule] = &[
     LandmarkRule {
         level_ids: 74..=74,
@@ -41,6 +46,11 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 66..=72,
         preset_ids: 456..=462,
         label: "orifice",
+    },
+    LandmarkRule {
+        level_ids: 78..=78,
+        preset_ids: 602..=602,
+        label: "gidbinn",
     },
 ];
 
@@ -219,22 +229,23 @@ pub fn preset_marker(p: &Preset) -> Option<Marker> {
     }
 }
 
-/// Landmark markers at the centre of each room matching a rule in `rules`.
+/// One landmark marker per rule in `rules` with matching rooms, at the centre of the bounding box of
+/// all of them.
 pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f64)> {
     let level = &snap.level;
     rules
         .iter()
         .filter(|rule| rule.level_ids.contains(&level.id))
-        .flat_map(|rule| {
-            level
+        .filter_map(|rule| {
+            let (x0, y0, x1, y1) = level
                 .rooms
                 .iter()
                 .filter(|r| r.preset.is_some_and(|id| rule.preset_ids.contains(&id)))
-                .map(|r| {
-                    let x = f64::from(r.w).mul_add(0.5, f64::from(r.x));
-                    let y = f64::from(r.h).mul_add(0.5, f64::from(r.y));
-                    (Marker::Landmark(rule.label), x, y)
-                })
+                .map(|r| (r.x, r.y, r.x.saturating_add(r.w), r.y.saturating_add(r.h)))
+                .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))?;
+            let x = f64::midpoint(f64::from(x0), f64::from(x1));
+            let y = f64::midpoint(f64::from(y0), f64::from(y1));
+            Some((Marker::Landmark(rule.label), x, y))
         })
         .collect()
 }
@@ -765,6 +776,7 @@ mod tests {
             id: 1,
             code: None,
             kind,
+            quality: 0,
             x,
             y,
         }
@@ -939,6 +951,20 @@ mod tests {
         let mut snap = sanctuary([Some(462), Some(424), None, None]);
         snap.level.id = 72;
         assert_eq!(landmarks(&snap, LANDMARKS), vec![(orifice, 30.0, 30.0)]);
+        // The chamber spans several Room2 cells: one star at their combined centre.
+        let mut snap = sanctuary([Some(462), Some(462), Some(424), None]);
+        snap.level.id = 72;
+        snap.level.rooms.extend([
+            Room {
+                preset: Some(462),
+                ..room(0, 60, false)
+            },
+            Room {
+                preset: Some(462),
+                ..room(60, 60, false)
+            },
+        ]);
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![(orifice, 60.0, 60.0)]);
         // Fake tomb 71: its chest chamber 473 is no landmark.
         let mut snap = sanctuary([Some(473), Some(424), None, None]);
         snap.level.id = 71;
@@ -952,17 +978,14 @@ mod tests {
     #[test]
     fn summoner_rule_marks_the_room_centre() {
         // Every Summoner arm-end preset is matched, at the centre of its room.
-        let snap = sanctuary([Some(525), Some(526), Some(527), Some(528)]);
         let summoner = Marker::Landmark("summoner");
-        assert_eq!(
-            landmarks(&snap, LANDMARKS),
-            vec![
-                (summoner, 30.0, 30.0),
-                (summoner, 90.0, 30.0),
-                (summoner, 150.0, 30.0),
-                (summoner, 210.0, 30.0),
-            ]
-        );
+        for id in 525..=528 {
+            let snap = sanctuary([None, Some(id), None, None]);
+            assert_eq!(landmarks(&snap, LANDMARKS), vec![(summoner, 90.0, 30.0)], "{id}");
+        }
+        // Several matching rooms make one star, at the centre of their bounding box.
+        let snap = sanctuary([Some(525), None, None, Some(528)]);
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![(summoner, 120.0, 30.0)]);
         // Ordinary arm ends, the neighbouring ids and unknown presets: nothing.
         let snap = sanctuary([Some(510), Some(524), Some(529), None]);
         assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
@@ -975,6 +998,22 @@ mod tests {
         snap.monsters = vec![monster(0x02, 1)];
         let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
         assert_eq!(kinds, vec![summoner, Marker::Elite, Marker::Player]);
+    }
+
+    #[test]
+    fn gidbinn_rule_marks_the_altar_piece() {
+        let gidbinn = Marker::Landmark("gidbinn");
+        let mut snap = sanctuary([Some(601), Some(602), Some(602), None]);
+        snap.level.id = 78;
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![(gidbinn, 120.0, 30.0)]);
+        // The waypoint area 601 alone: nothing.
+        let mut snap = sanctuary([Some(601), None, None, None]);
+        snap.level.id = 78;
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+        // 602 in another level: nothing.
+        let mut snap = sanctuary([None, Some(602), None, None]);
+        snap.level.id = 77;
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
     }
 
     #[test]

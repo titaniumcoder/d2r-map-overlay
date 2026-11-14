@@ -201,6 +201,9 @@ pub struct ItemDrop {
     /// Item code (`"gcg"`); `None` if the items table is unknown.
     pub code: Option<String>,
     pub kind: DropKind,
+    /// Raw `ItemData` quality (2 normal, 5 set, 7 unique, ...); 0 in snapshots dumped before it existed.
+    #[serde(default)]
+    pub quality: u32,
     pub x: u32,
     pub y: u32,
 }
@@ -669,6 +672,7 @@ impl<M: ReadMem> Reader<'_, M> {
             id: head.id,
             code: code.map(items::code_text),
             kind,
+            quality,
             x: self.u32(path, static_path::X)?,
             y: self.u32(path, static_path::Y)?,
         }))
@@ -1214,10 +1218,16 @@ mod tests {
     }
 
     fn drop_of(addr: u64, code: Option<&str>, kind: DropKind, (x, y): (u32, u32)) -> ItemDrop {
+        let quality = match kind {
+            DropKind::Unique => 7,
+            DropKind::Set => 5,
+            _ => 2,
+        };
         ItemDrop {
             id: u32::try_from(addr >> 12).unwrap_or_default(),
             code: code.map(str::to_owned),
             kind,
+            quality,
             x,
             y,
         }
@@ -1385,7 +1395,7 @@ mod tests {
         assert_eq!(
             v.pointer("/drops/0"),
             Some(
-                &serde_json::json!({"id": 0x801, "code": "gcg", "kind": {"gem": "emerald"}, "x": 5323, "y": 5622})
+                &serde_json::json!({"id": 0x801, "code": "gcg", "kind": {"gem": "emerald"}, "quality": 2, "x": 5323, "y": 5622})
             )
         );
         assert_eq!(v.pointer("/drops/1/kind"), Some(&serde_json::json!("unique")));

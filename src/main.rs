@@ -6,6 +6,7 @@ mod game;
 mod hypr;
 mod image;
 mod items;
+mod journal;
 mod live;
 mod offset_cache;
 mod offsets;
@@ -27,16 +28,19 @@ use overlay::Msg;
 /// Overlay / render size in px when none is given.
 const DEFAULT_SIZE: (u32, u32) = (400, 400);
 
-const USAGE: &str = "usage: d2r-map-overlay [--player NAME] [--size WxH]   (live overlay)\n       \
+const USAGE: &str = "usage: d2r-map-overlay [--player NAME] [--size WxH] [--no-journal]   (live overlay)\n       \
                      d2r-map-overlay --probe | --dump [--player NAME] \
                      | --render SNAPSHOT.json OUT.png [WxH] | --show SNAPSHOT.json [WxH]";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
-        _ if args.first().is_none_or(|a| a == "--player" || a == "--size") => {
-            let (player, size) = parse_live_args(&args)?;
-            live(player, size)
+        _ if args
+            .first()
+            .is_none_or(|a| ["--player", "--size", "--no-journal"].contains(&a.as_str())) =>
+        {
+            let (player, size, journal) = parse_live_args(&args)?;
+            live(player, size, journal)
         }
         [flag] if flag == "--probe" => probe(),
         [flag] if flag == "--dump" => dump(None),
@@ -49,12 +53,18 @@ fn main() -> Result<()> {
     }
 }
 
-/// Parses live-mode options: `--player NAME` and `--size WxH`, in any order.
-fn parse_live_args(args: &[String]) -> Result<(Option<String>, (u32, u32))> {
+/// Parses live-mode options: `--player NAME`, `--size WxH` and `--no-journal`, in any order.
+/// Returns (player, size, journal on).
+fn parse_live_args(args: &[String]) -> Result<(Option<String>, (u32, u32), bool)> {
     let mut player = None;
     let mut size = DEFAULT_SIZE;
+    let mut journal = true;
     let mut it = args.iter();
     while let Some(flag) = it.next() {
+        if flag == "--no-journal" {
+            journal = false;
+            continue;
+        }
         let value = it
             .next()
             .with_context(|| format!("{flag} needs a value\n{USAGE}"))?;
@@ -64,19 +74,30 @@ fn parse_live_args(args: &[String]) -> Result<(Option<String>, (u32, u32))> {
             _ => bail!("unknown option {flag:?}\n{USAGE}"),
         }
     }
-    Ok((player, size))
+    Ok((player, size, journal))
 }
 
 /// Live overlay: a reader thread (game memory → frames) and a focus thread (Hyprland) feed the
 /// UI loop on this thread. Runs until killed.
-fn live(player: Option<String>, size: (u32, u32)) -> Result<()> {
+fn live(player: Option<String>, size: (u32, u32), journal: bool) -> Result<()> {
+    let journal = match journal::default_dir() {
+        Some(dir) if journal => {
+            eprintln!("journal: {}", dir.display());
+            journal::Journal::new(dir)
+        }
+        Some(_) => journal::Journal::disabled(),
+        None => {
+            eprintln!("journal off: neither $XDG_DATA_HOME nor $HOME is set");
+            journal::Journal::disabled()
+        }
+    };
     let (tx, rx) = channel::channel();
     let reader_tx = tx.clone();
     thread::Builder::new()
         .name("reader".into())
         .spawn(move || {
             let _exit = ExitOnDrop;
-            live::run(&reader_tx, player.as_deref(), size);
+            live::run(&reader_tx, player.as_deref(), size, journal);
         })
         .context("starting the reader thread")?;
     thread::Builder::new()
@@ -209,10 +230,14 @@ mod tests {
 
     #[test]
     fn parses_live_args() -> Result<()> {
-        assert_eq!(parse_live_args(&[])?, (None, DEFAULT_SIZE));
+        assert_eq!(parse_live_args(&[])?, (None, DEFAULT_SIZE, true));
         assert_eq!(
             parse_live_args(&strings(&["--size", "300x200", "--player", "BigWolf"]))?,
-            (Some("BigWolf".to_owned()), (300, 200))
+            (Some("BigWolf".to_owned()), (300, 200), true)
+        );
+        assert_eq!(
+            parse_live_args(&strings(&["--no-journal", "--size", "300x200"]))?,
+            (None, (300, 200), false)
         );
         assert!(parse_live_args(&strings(&["--player"])).is_err());
         assert!(parse_live_args(&strings(&["--size", "big"])).is_err());
