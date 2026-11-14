@@ -207,8 +207,14 @@ pub trait ReadMem {
     /// See [`ReadMem::read`].
     fn read_ptr(&self, addr: u64) -> io::Result<Option<u64>> {
         let p = self.read_u64(addr)?;
-        Ok((MIN_USER_PTR < p && p < MAX_USER_PTR).then_some(p))
+        Ok(is_user_ptr(p).then_some(p))
     }
+}
+
+/// True if `p` is a plausible user-space pointer (not null, not tiny, not kernel-half).
+#[must_use]
+pub const fn is_user_ptr(p: u64) -> bool {
+    MIN_USER_PTR < p && p < MAX_USER_PTR
 }
 
 /// Reads a live process through `/proc/<pid>/mem` (positioned reads; needs `CAP_SYS_PTRACE`).

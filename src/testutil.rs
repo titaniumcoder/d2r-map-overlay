@@ -1,7 +1,8 @@
 //! Test doubles for the OS boundary.
 
 use std::collections::BTreeMap;
-use std::io;
+use std::path::PathBuf;
+use std::{fs, io};
 
 use crate::process::ReadMem;
 
@@ -30,5 +31,15 @@ impl ReadMem for FakeMem {
             .ok_or_else(unmapped)?;
         buf.copy_from_slice(src);
         Ok(())
+    }
+}
+
+/// A fresh, empty directory path under the system temp dir, unique per process and `name`
+/// (a leftover from an earlier run is removed). Not created: the code under test creates it.
+pub fn temp_dir(name: &str) -> io::Result<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("d2r-map-overlay-test-{}-{name}", std::process::id()));
+    match fs::remove_dir_all(&dir) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(dir),
     }
 }

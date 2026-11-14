@@ -4,6 +4,7 @@
 
 mod game;
 mod image;
+mod offset_cache;
 mod offsets;
 mod process;
 #[cfg(test)]
@@ -35,8 +36,17 @@ fn probe() -> Result<()> {
     println!("live_base   {:#x}", img.live_base);
     println!("alias_base  {:#x}", img.alias_base);
     println!("size        {:#x}", img.size);
-    let table = img.unit_table(&mem)?;
-    println!("unit_table  {table:#x}");
+    let cache = offset_cache::default_path();
+    let table = img.unit_table(&mem, cache.as_deref())?;
+    println!("build       {}", table.build);
+    println!(
+        "unit_table  {:#x} (rva {:#x}, via {:?})",
+        table.addr, table.rva, table.source
+    );
+    match &cache {
+        Some(path) => println!("cache       {}", path.display()),
+        None => println!("cache       (none: neither $XDG_CACHE_HOME nor $HOME set)"),
+    }
     Ok(())
 }
 
@@ -46,8 +56,8 @@ fn dump(player: Option<&str>) -> Result<()> {
     let maps = process::read_maps(pid)?;
     let mem = process::ProcMem::open(pid)?;
     let img = image::find_image(&maps, &mem).context("locating D2R.exe image")?;
-    let table = img.unit_table(&mem)?;
-    let snap = game::snapshot(&mem, table, player)?;
+    let table = img.unit_table(&mem, offset_cache::default_path().as_deref())?;
+    let snap = game::snapshot(&mem, table.addr, player)?;
     println!("{}", serde_json::to_string_pretty(&snap)?);
     Ok(())
 }
