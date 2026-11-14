@@ -27,7 +27,7 @@ const FONT_PATHS: [&str; 3] = [
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
 ];
 /// Text size in px.
-const TEXT_PX: f32 = 13.0;
+const TEXT_PX: f32 = 16.0;
 /// Px between the text (with its outline) and the canvas's left and bottom edges, and between
 /// the text and the map above it.
 const PAD: u32 = 3;
