@@ -23,7 +23,7 @@ const CORNER: f32 = 10.0;
 const FALLBACK_SPAN: u32 = 50;
 
 type Rgba = [u8; 4];
-const BACKGROUND: Rgba = [12, 14, 18, 170];
+const BACKGROUND: Rgba = [12, 14, 18, 110];
 const ROOM: Rgba = [70, 74, 84, 120];
 const ROOM_LOADED: Rgba = [125, 130, 142, 160];
 const ROOM_OUTLINE: Rgba = [190, 195, 205, 170];

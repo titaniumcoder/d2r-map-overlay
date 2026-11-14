@@ -19,8 +19,10 @@ use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_registry, registry_handlers};
 use tiny_skia::Pixmap;
 
-/// Gap in px between the overlay and the top and right screen edges.
+/// Gap in px between the overlay and the right screen edge.
 const MARGIN: i32 = 20;
+/// Gap in px below the top edge: clears D2R's own clock and area-name lines in that corner.
+const MARGIN_TOP: i32 = 70;
 
 /// Opens the overlay showing `frame` and blocks until the compositor closes it or the process is killed.
 ///
@@ -42,7 +44,7 @@ pub fn show(frame: Pixmap) -> Result<()> {
         None,
     );
     layer.set_anchor(Anchor::TOP | Anchor::RIGHT);
-    layer.set_margin(MARGIN, MARGIN, 0, 0);
+    layer.set_margin(MARGIN_TOP, MARGIN, 0, 0);
     layer.set_size(frame.width(), frame.height());
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     // Click-through: an empty input region means pointer events go to the window below.
