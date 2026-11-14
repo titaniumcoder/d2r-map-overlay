@@ -105,7 +105,9 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   527 (−y / up-right), 528 (+y / down-left)** — all four confirmed by the user in game. Normal arm ends use
   other ids (510, 511, 513, 517 seen). Drawn as a gold haloed star from the moment the level is entered.
 - Games created in quick succession often share the layout (seed looks time-based); waiting a minute varies it.
-- Same trick is a candidate for Tal Rasha's real tomb in the Canyon of the Magi (different preset than the fakes).
+- **Tal Rasha's real tomb** (levels 66–72): the orifice chamber is its own preset. Confirmed: 462 in tomb 72 (orifice
+  object 152 inside it); a fake tomb's chest chamber was 473 in tomb 71. Assumed pattern: orifice chamber = level+390
+  (456–462), chest chamber = level+402 (468–474). Drawn with the same gold star; only 462 is confirmed so far.
 
 ## User feedback, first live session (Act 1, 2026-11-14)
 - Minimap "already helps drastically"; ~1% CPU, 7 MB RSS.

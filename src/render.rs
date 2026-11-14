@@ -14,24 +14,35 @@ use crate::items::{DropKind, GemColour};
 pub const WAYPOINT_IDS: &[u32] = &[
     119, 145, 156, 157, 237, 238, 288, 323, 324, 398, 402, 429, 494, 496, 511, 539,
 ];
-/// A room that marks a landmark: a room of level `level_id` whose level-preset id (lvlprest row)
+/// A room that marks a landmark: a room of a level in `level_ids` whose level-preset id (lvlprest row)
 /// is in `preset_ids` gets a [`Marker::Landmark`] at its centre.
 #[derive(Debug)]
 pub struct LandmarkRule {
-    pub level_id: u32,
+    pub level_ids: std::ops::RangeInclusive<u32>,
     pub preset_ids: std::ops::RangeInclusive<u32>,
     /// What the landmark is (not drawn; for tests and debugging).
     pub label: &'static str,
 }
 
-/// Landmark rules. Arcane Sanctuary (74): the arm end holding the Summoner's platform has its own
-/// preset per direction, live-verified 2026-11-15: 525 (+x), 526 (−x), 527 (−y), 528 (+y), all four confirmed in game.
-/// Ordinary arm ends use other ids (510, 511, 513, 517 seen).
-pub const LANDMARKS: &[LandmarkRule] = &[LandmarkRule {
-    level_id: 74,
-    preset_ids: 525..=528,
-    label: "summoner",
-}];
+/// Landmark rules.
+/// - Arcane Sanctuary (74): the arm end holding the Summoner's platform has its own preset per
+///   direction: 525 (+x), 526 (−x), 527 (−y), 528 (+y), all four confirmed in game (2026-11-15).
+///   Ordinary arm ends use other ids (510, 511, 513, 517 seen).
+/// - Tal Rasha's tombs (66–72): the real tomb's orifice chamber. Confirmed: 462 in tomb 72 (orifice
+///   object 152 inside it). A fake tomb's chest chamber was 473 in tomb 71. Pattern assumed: orifice
+///   chamber = level + 390 (456–462), chest chamber = level + 402 (468–474); only 462 is confirmed.
+pub const LANDMARKS: &[LandmarkRule] = &[
+    LandmarkRule {
+        level_ids: 74..=74,
+        preset_ids: 525..=528,
+        label: "summoner",
+    },
+    LandmarkRule {
+        level_ids: 66..=72,
+        preset_ids: 456..=462,
+        label: "orifice",
+    },
+];
 
 /// Monster flag bits for superunique (0x02), champion (0x04) and unique/boss (0x08); minion is 0x10.
 const ELITE_FLAGS: u8 = 0x0E;
@@ -213,7 +224,7 @@ pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f
     let level = &snap.level;
     rules
         .iter()
-        .filter(|rule| rule.level_id == level.id)
+        .filter(|rule| rule.level_ids.contains(&level.id))
         .flat_map(|rule| {
             level
                 .rooms
@@ -919,6 +930,23 @@ mod tests {
             })
             .collect();
         snap
+    }
+
+    #[test]
+    fn orifice_rule_marks_the_real_tomb_chamber_only() {
+        let orifice = Marker::Landmark("orifice");
+        // Real tomb 72, orifice chamber 462 (confirmed in game).
+        let mut snap = sanctuary([Some(462), Some(424), None, None]);
+        snap.level.id = 72;
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![(orifice, 30.0, 30.0)]);
+        // Fake tomb 71: its chest chamber 473 is no landmark.
+        let mut snap = sanctuary([Some(473), Some(424), None, None]);
+        snap.level.id = 71;
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+        // The orifice id outside the tombs is nothing either.
+        let mut snap = sanctuary([Some(462), None, None, None]);
+        snap.level.id = 73;
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
     }
 
     #[test]
