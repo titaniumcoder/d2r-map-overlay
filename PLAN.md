@@ -112,7 +112,12 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 ## Flayer Jungle (78), 2026-11-15
 - 192 rooms in 9 large piece types (16 or 32 Room2 each): 534, 535, 538, 539, 565, 570, 574, 601, 602.
 - **601 = waypoint area** (player and waypoint object 237 inside it). **602 = Gidbinn altar candidate** (only other
-  outlier id) — awaiting user confirmation; then add a landmark rule {78, 602, "gidbinn"}.
+  outlier id) — **confirmed**: the Gidbinn altar (object 252) is in 602; landmark rule added.
+
+## Research journal
+Live mode appends deduped events to `~/.local/share/d2r-map-overlay/journal/YYYY-MM-DD.jsonl` (UTC date):
+level (room pieces), arrival, marker (+ piece), link, elite monster, killed, drop. Files are never rotated;
+delete old ones by hand. Use it to find more landmark patterns offline.
 
 ## User feedback, first live session (Act 1, 2026-11-14)
 - Minimap "already helps drastically"; ~1% CPU, 7 MB RSS.
