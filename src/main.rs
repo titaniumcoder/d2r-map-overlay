@@ -3,7 +3,9 @@
 //! See `PLAN.md` for the architecture and milestones.
 
 mod game;
+mod hypr;
 mod image;
+mod live;
 mod offset_cache;
 mod offsets;
 mod overlay;
@@ -12,17 +14,26 @@ mod render;
 #[cfg(test)]
 mod testutil;
 
-use anyhow::{Context, Result, bail};
+use std::thread;
+
+use anyhow::{Context, Result, anyhow, bail};
+use smithay_client_toolkit::reexports::calloop::channel;
+
+use overlay::Msg;
 
 /// Overlay / render size in px when none is given.
 const DEFAULT_SIZE: (u32, u32) = (400, 400);
 
+const USAGE: &str = "usage: d2r-map-overlay [--player NAME] [--size WxH]   (live overlay)\n       \
+                     d2r-map-overlay --probe | --dump [--player NAME] \
+                     | --render SNAPSHOT.json OUT.png [WxH] | --show SNAPSHOT.json [WxH]";
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
-        [] => {
-            println!("d2r-map-overlay: not implemented yet (see PLAN.md)");
-            Ok(())
+        _ if args.first().is_none_or(|a| a == "--player" || a == "--size") => {
+            let (player, size) = parse_live_args(&args)?;
+            live(player, size)
         }
         [flag] if flag == "--probe" => probe(),
         [flag] if flag == "--dump" => dump(None),
@@ -31,11 +42,42 @@ fn main() -> Result<()> {
         [flag, snap, out, size] if flag == "--render" => render_png(snap, out, parse_size(size)?),
         [flag, snap] if flag == "--show" => show(snap, DEFAULT_SIZE),
         [flag, snap, size] if flag == "--show" => show(snap, parse_size(size)?),
-        _ => bail!(
-            "usage: d2r-map-overlay [--probe | --dump [--player NAME] | --render SNAPSHOT.json OUT.png [WxH] \
-             | --show SNAPSHOT.json [WxH]]"
-        ),
+        _ => bail!("{USAGE}"),
     }
+}
+
+/// Parses live-mode options: `--player NAME` and `--size WxH`, in any order.
+fn parse_live_args(args: &[String]) -> Result<(Option<String>, (u32, u32))> {
+    let mut player = None;
+    let mut size = DEFAULT_SIZE;
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let value = it
+            .next()
+            .with_context(|| format!("{flag} needs a value\n{USAGE}"))?;
+        match flag.as_str() {
+            "--player" => player = Some(value.clone()),
+            "--size" => size = parse_size(value)?,
+            _ => bail!("unknown option {flag:?}\n{USAGE}"),
+        }
+    }
+    Ok((player, size))
+}
+
+/// Live overlay: a reader thread (game memory → frames) and a focus thread (Hyprland) feed the
+/// UI loop on this thread. Runs until killed.
+fn live(player: Option<String>, size: (u32, u32)) -> Result<()> {
+    let (tx, rx) = channel::channel();
+    let reader_tx = tx.clone();
+    thread::Builder::new()
+        .name("reader".into())
+        .spawn(move || live::run(&reader_tx, player.as_deref(), size))
+        .context("starting the reader thread")?;
+    thread::Builder::new()
+        .name("hypr".into())
+        .spawn(move || hypr::watch(&tx))
+        .context("starting the focus thread")?;
+    overlay::run(rx, size)
 }
 
 /// Locates the game, its image and the unit table, and prints what it found.
@@ -100,9 +142,17 @@ fn render_png(snap: &str, out: &str, (w, h): (u32, u32)) -> Result<()> {
     Ok(())
 }
 
-/// Shows a `--dump` JSON snapshot in the overlay window until killed.
+/// Shows a `--dump` JSON snapshot in the overlay window until killed (always, focus is ignored).
 fn show(snap: &str, (w, h): (u32, u32)) -> Result<()> {
-    overlay::show(render::render(&load_snapshot(snap)?, w, h)?)
+    let frame = render::render(&load_snapshot(snap)?, w, h)?;
+    let (tx, rx) = channel::channel();
+    for msg in [Msg::Frame(frame), Msg::Focus(true)] {
+        tx.send(msg).map_err(|_| anyhow!("overlay channel closed"))?;
+    }
+    // `tx` stays alive until `run` returns, so the loop never sees the channel close.
+    let shown = overlay::run(rx, (w, h));
+    drop(tx);
+    shown
 }
 
 #[cfg(test)]
@@ -116,6 +166,23 @@ mod tests {
         for bad in ["400", "x300", "400x", "0x10", "10x0", "-1x5", "9000x10", "axb"] {
             assert!(parse_size(bad).is_err(), "{bad} accepted");
         }
+        Ok(())
+    }
+
+    fn strings(args: &[&str]) -> Vec<String> {
+        args.iter().map(|&a| a.to_owned()).collect()
+    }
+
+    #[test]
+    fn parses_live_args() -> Result<()> {
+        assert_eq!(parse_live_args(&[])?, (None, DEFAULT_SIZE));
+        assert_eq!(
+            parse_live_args(&strings(&["--size", "300x200", "--player", "BigWolf"]))?,
+            (Some("BigWolf".to_owned()), (300, 200))
+        );
+        assert!(parse_live_args(&strings(&["--player"])).is_err());
+        assert!(parse_live_args(&strings(&["--size", "big"])).is_err());
+        assert!(parse_live_args(&strings(&["--player", "a", "--bogus", "b"])).is_err());
         Ok(())
     }
 }

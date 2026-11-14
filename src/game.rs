@@ -47,7 +47,7 @@ impl<'de> Deserialize<'de> for Addr {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Snapshot {
     pub player: Player,
     pub player_candidates: Vec<Candidate>,
@@ -59,7 +59,7 @@ pub struct Snapshot {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Player {
     pub addr: Addr,
     pub id: u32,
@@ -77,7 +77,7 @@ pub struct Candidate {
     pub name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Level {
     pub id: u32,
     /// `None` if the level has no readable rooms.
