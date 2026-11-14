@@ -99,6 +99,14 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - **Packs/uniques**: live monsters with unique/champion flag (minions clustered to their leader); dead skipped.
 - **Accumulate per game**: markers persist in a cache keyed by (levelId, x, y) once seen, until the game (act ptr / seed) changes — so explored exits/waypoints stay on the map.
 
+## Arcane Sanctuary Summoner (live-verified 2026-11-15, nine games)
+- Room2 `+0x40` → level-preset record, u32 at `+0x00` = preset id (lvlprest row).
+- The Summoner's arm end uses a dedicated id per direction: **525 (+x / down-right), 526 (−x / up-left),
+  527 (−y / up-right), 528 (+y / down-left)** — all four confirmed by the user in game. Normal arm ends use
+  other ids (510, 511, 513, 517 seen). Drawn as a gold haloed star from the moment the level is entered.
+- Games created in quick succession often share the layout (seed looks time-based); waiting a minute varies it.
+- Same trick is a candidate for Tal Rasha's real tomb in the Canyon of the Magi (different preset than the fakes).
+
 ## User feedback, first live session (Act 1, 2026-11-14)
 - Minimap "already helps drastically"; ~1% CPU, 7 MB RSS.
 - Hide in towns (level ids 1, 40, 75, 103, 109).

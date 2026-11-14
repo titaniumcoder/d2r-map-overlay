@@ -25,7 +25,7 @@ pub struct LandmarkRule {
 }
 
 /// Landmark rules. Arcane Sanctuary (74): the arm end holding the Summoner's platform has its own
-/// preset per direction, live-verified 2026-11-15: 525 (+x), 527 (−y), 528 (+y); 526 (−x) presumed.
+/// preset per direction, live-verified 2026-11-15: 525 (+x), 526 (−x), 527 (−y), 528 (+y), all four confirmed in game.
 /// Ordinary arm ends use other ids (510, 511, 513, 517 seen).
 pub const LANDMARKS: &[LandmarkRule] = &[LandmarkRule {
     level_id: 74,
