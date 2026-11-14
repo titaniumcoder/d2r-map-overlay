@@ -120,7 +120,7 @@ Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each re
 - [x] **M0 setup**: mise Rust pin, `cargo init`, lint config, rustfmt, PLAN.md + CLAUDE.md + .gitignore, `git init`, first commit.
    From here on the user can start sessions directly in `~/Work/d2r_map_overlay`.
 - [x] **M1 reader** (verified live in Jail 1, 2026-11-14; fixture tests/fixtures/jail1-snapshot.json): `d2r-map-overlay --dump` prints one JSON snapshot. Validate against `research/rooms.py` / `presets.py` output in Jail 1 and Tower 5; confirm player chain `+0x150` and the elite flag bits.
-- [ ] **M2 overlay**: draw a static snapshot file (no game needed) — layer-shell, click-through, iso render.
+- [x] **M2 overlay**: draw a static snapshot file (no game needed) — layer-shell, click-through, iso render.
 - [ ] **M3 live**: reader thread + Hyprland focus hide/show; ~5 Hz redraw.
 - [ ] **M4 markers**: classification tables, per-game accumulation, exit labels.
 - [ ] **M4b item drops**: verify item unit/quality offsets live, show unique/set/gem/rune drops on the minimap.
