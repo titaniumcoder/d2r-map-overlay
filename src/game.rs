@@ -11,8 +11,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::items::{self, DropKind};
 use crate::offsets::{
-    ROOM_TILE_SCALE, item_data, item_mode, level, monster_data, path, player_data, preset, room_tile, room1,
-    room2, static_path, unit, unit_table,
+    ROOM_TILE_SCALE, item_data, item_mode, level, level_preset, monster_data, path, player_data, preset,
+    room_tile, room1, room2, static_path, unit, unit_table,
 };
 use crate::process::ReadMem;
 
@@ -119,6 +119,9 @@ pub struct Room {
     pub w: u32,
     pub h: u32,
     pub loaded: bool,
+    /// Level-preset id (lvlprest row) of the room; `None` if unreadable (and in old fixtures).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -551,7 +554,15 @@ impl<M: ReadMem> Reader<'_, M> {
             w: world(self.u32(room, room2::W)?)?,
             h: world(self.u32(room, room2::H)?)?,
             loaded: self.ptr(room, room2::ROOM1)?.is_some(),
+            preset: self.room_preset(room),
         })
+    }
+
+    /// The room's level-preset id. Optional data: a null or unreadable record is `None`, not a
+    /// warning (it would repeat for every room).
+    fn room_preset(&self, room: u64) -> Option<u32> {
+        let record = self.ptr(room, room2::LEVEL_PRESET).ok().flatten()?;
+        self.u32(record, level_preset::ID).ok()
     }
 
     fn presets(&mut self, room: u64, pos: RoomPos, out: &mut Vec<Preset>) {
@@ -813,11 +824,28 @@ mod tests {
         presets: u64,
         tiles: u64,
     ) -> Result<()> {
+        room_with_preset(mem, addr, (x, y, w, h), next, room1, level, presets, tiles, 0)
+    }
+
+    /// Like [`room`], with a level-preset record pointer at `room2::LEVEL_PRESET`.
+    #[allow(clippy::too_many_arguments)] // reason: test fixture mirroring the Room2 fields
+    fn room_with_preset(
+        mem: &mut FakeMem,
+        addr: u64,
+        (x, y, w, h): (u32, u32, u32, u32),
+        next: u64,
+        room1: u64,
+        level: u64,
+        presets: u64,
+        tiles: u64,
+        level_preset: u64,
+    ) -> Result<()> {
         put(
             mem,
             addr,
             0xA0,
             &[
+                (room2::LEVEL_PRESET, &level_preset.to_le_bytes()),
                 (room2::NEXT, &next.to_le_bytes()),
                 (room2::ROOM1, &room1.to_le_bytes()),
                 (room2::X, &x.to_le_bytes()),
@@ -982,21 +1010,24 @@ mod tests {
                     y: 100,
                     w: 40,
                     h: 30,
-                    loaded: true
+                    loaded: true,
+                    preset: None
                 },
                 Room {
                     x: 90,
                     y: 100,
                     w: 40,
                     h: 40,
-                    loaded: false
+                    loaded: false,
+                    preset: None
                 },
                 Room {
                     x: 50,
                     y: 130,
                     w: 20,
                     h: 20,
-                    loaded: false
+                    loaded: false,
+                    preset: None
                 },
             ]
         );
@@ -1009,6 +1040,26 @@ mod tests {
                 max_y: 150
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn room_preset_ids() -> Result<()> {
+        const LP0: u64 = 0x33_0000;
+        let mut m = world()?;
+        // R0 points at a record with id 525; R1 at an unmapped record; R2 keeps a null pointer.
+        room_with_preset(&mut m, R0, (10, 20, 8, 6), R1, ROOM1_0, LEVEL, PR_OBJ, RT0, LP0)?;
+        room_with_preset(&mut m, R1, (18, 20, 8, 8), R2, 0, LEVEL, PR_MON, 0, UNMAPPED)?;
+        put(&mut m, LP0, 0x10, &[(level_preset::ID, &525u32.to_le_bytes())])?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        let ids: Vec<Option<u32>> = s.level.rooms.iter().map(|r| r.preset).collect();
+        assert_eq!(ids, vec![Some(525), None, None]);
+        // Optional data: the unmapped record adds no warning (only the bad room-tile link does).
+        assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
+        // `None` is left out of the JSON, so old fixtures and dumps stay as they were.
+        let v = serde_json::to_value(&s.level.rooms)?;
+        assert_eq!(v.pointer("/0/preset"), Some(&serde_json::json!(525)));
+        assert_eq!(v.pointer("/1/preset"), None);
         Ok(())
     }
 

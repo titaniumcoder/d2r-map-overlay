@@ -51,6 +51,8 @@ pub mod room1 {
 
 /// `Room2` (level layout; present for the whole level).
 pub mod room2 {
+    /// ptr to the room's level-preset record (`level_preset`). Live-verified 2026-11-15 over 8 games.
+    pub const LEVEL_PRESET: u64 = 0x40;
     /// ptr to the next `Room2` of the level.
     pub const NEXT: u64 = 0x48;
     /// ptr to the `Room1`; non-null if the room is loaded.
@@ -66,6 +68,12 @@ pub mod room2 {
     pub const LEVEL: u64 = 0x90;
     /// ptr to the first `PresetUnit`.
     pub const PRESETS: u64 = 0x98;
+}
+
+/// Level-preset record of a `Room2` (one lvlprest.txt row).
+pub mod level_preset {
+    /// u32 preset id (lvlprest row). Arcane Sanctuary arm ends: 525–528 hold the Summoner.
+    pub const ID: u64 = 0x00;
 }
 
 /// Room units are 5 world tiles wide.

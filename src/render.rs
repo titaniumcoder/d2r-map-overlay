@@ -4,7 +4,7 @@
 //! Wayland shm buffer.
 
 use anyhow::{Context, Result};
-use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, Transform};
+use tiny_skia::{FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use crate::game::{Bounds, Monster, Preset, PresetKind, Room, Snapshot};
 use crate::items::{DropKind, GemColour};
@@ -14,6 +14,25 @@ use crate::items::{DropKind, GemColour};
 pub const WAYPOINT_IDS: &[u32] = &[
     119, 145, 156, 157, 237, 238, 288, 323, 324, 398, 402, 429, 494, 496, 511, 539,
 ];
+/// A room that marks a landmark: a room of level `level_id` whose level-preset id (lvlprest row)
+/// is in `preset_ids` gets a [`Marker::Landmark`] at its centre.
+#[derive(Debug)]
+pub struct LandmarkRule {
+    pub level_id: u32,
+    pub preset_ids: std::ops::RangeInclusive<u32>,
+    /// What the landmark is (not drawn; for tests and debugging).
+    pub label: &'static str,
+}
+
+/// Landmark rules. Arcane Sanctuary (74): the arm end holding the Summoner's platform has its own
+/// preset per direction, live-verified 2026-11-15: 525 (+x), 527 (−y), 528 (+y); 526 (−x) presumed.
+/// Ordinary arm ends use other ids (510, 511, 513, 517 seen).
+pub const LANDMARKS: &[LandmarkRule] = &[LandmarkRule {
+    level_id: 74,
+    preset_ids: 525..=528,
+    label: "summoner",
+}];
+
 /// Monster flag bits for superunique (0x02), champion (0x04) and unique/boss (0x08); minion is 0x10.
 const ELITE_FLAGS: u8 = 0x0E;
 
@@ -26,6 +45,10 @@ type Rgba = [u8; 4];
 const ROOM: Rgba = [70, 74, 84, 120];
 const ROOM_LOADED: Rgba = [125, 130, 142, 160];
 const MARKER_OUTLINE: Rgba = [0, 0, 0, 220];
+/// Landmark star: gold fill, a thick dark outline and a gold halo ring around it.
+const LANDMARK_GOLD: Rgba = [255, 200, 30, 255];
+/// Halo ring radius in px, beyond the star's tips.
+const LANDMARK_RING: f32 = 13.0;
 
 /// Outline shape of a marker. Monsters and presets are circles (the level entry a square); drops
 /// are diamonds and squares.
@@ -36,6 +59,8 @@ pub enum Shape {
     Diamond,
     /// Axis-aligned; the size is half the side.
     Square,
+    /// Five-pointed star, one tip up; the size is the centre-to-tip distance.
+    Star,
 }
 
 /// Something drawn on the map. Variant order is draw order (player last, on top).
@@ -48,6 +73,9 @@ pub enum Marker {
     Waypoint,
     /// Monster preset: superunique or other special spawn.
     Special,
+    /// A landmark room (see [`LANDMARKS`]), with the rule's label. Drawn below live elites so the
+    /// boss standing on it stays visible.
+    Landmark(&'static str),
     /// Live superunique, champion or unique monster.
     Elite,
     /// An item on the ground worth picking up.
@@ -63,6 +91,7 @@ impl Marker {
             Self::Entry => ([40, 200, 200, 255], 4.5, Shape::Square),
             Self::Waypoint => ([60, 140, 255, 255], 5.0, Shape::Circle),
             Self::Special => ([255, 110, 40, 255], 4.5, Shape::Circle),
+            Self::Landmark(_) => (LANDMARK_GOLD, 9.0, Shape::Star),
             Self::Elite => ([230, 30, 30, 255], 3.5, Shape::Circle),
             Self::Drop(DropKind::Unique) => ([235, 190, 60, 255], 5.0, Shape::Diamond),
             Self::Drop(DropKind::Set) => ([30, 220, 30, 255], 5.0, Shape::Diamond),
@@ -179,6 +208,26 @@ pub fn preset_marker(p: &Preset) -> Option<Marker> {
     }
 }
 
+/// Landmark markers at the centre of each room matching a rule in `rules`.
+pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f64)> {
+    let level = &snap.level;
+    rules
+        .iter()
+        .filter(|rule| rule.level_id == level.id)
+        .flat_map(|rule| {
+            level
+                .rooms
+                .iter()
+                .filter(|r| r.preset.is_some_and(|id| rule.preset_ids.contains(&id)))
+                .map(|r| {
+                    let x = f64::from(r.w).mul_add(0.5, f64::from(r.x));
+                    let y = f64::from(r.h).mul_add(0.5, f64::from(r.y));
+                    (Marker::Landmark(rule.label), x, y)
+                })
+        })
+        .collect()
+}
+
 /// Every marker of the snapshot with its world position, in draw order.
 pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
     let mut out: Vec<(Marker, f64, f64)> = snap
@@ -196,6 +245,7 @@ pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
                 .iter()
                 .map(|d| (Marker::Drop(d.kind), f64::from(d.x), f64::from(d.y))),
         )
+        .chain(landmarks(snap, LANDMARKS))
         .collect();
     out.push((Marker::Player, f64::from(snap.player.x), f64::from(snap.player.y)));
     // Stable sort: keeps snapshot order within one kind.
@@ -238,17 +288,59 @@ pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
         width: 1.5,
         ..Stroke::default()
     };
+    // The landmark star's outline is stroked under its fill: half of it shows, a clean 2 px dark
+    // border, and the star's narrow inner corners keep their gold.
+    // Round joins: a miter on the sharp tips would spike out into the halo.
+    let star_outline = Stroke {
+        width: 4.0,
+        line_join: LineJoin::Round,
+        ..Stroke::default()
+    };
+    let halo_ring = Stroke {
+        width: 2.0,
+        ..Stroke::default()
+    };
+    let halo_backing = Stroke {
+        width: 4.5,
+        ..Stroke::default()
+    };
+    let solid = |pm: &mut Pixmap, path: &Path, colour: Rgba| {
+        pm.fill_path(
+            path,
+            &paint(colour),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    };
     for (marker, x, y) in markers(snap) {
         let (colour, size, shape) = marker.style();
         let (cx, cy) = view.to_screen(x, y);
-        if let Some(dot) = marker_path(shape, cx, cy, size) {
-            pm.fill_path(
+        let Some(dot) = marker_path(shape, cx, cy, size) else {
+            continue;
+        };
+        if shape == Shape::Star {
+            // Halo: a gold ring on a wider dark ring, so it reads on any background.
+            if let Some(halo) = PathBuilder::from_circle(cx, cy, LANDMARK_RING) {
+                pm.stroke_path(
+                    &halo,
+                    &paint(MARKER_OUTLINE),
+                    &halo_backing,
+                    Transform::identity(),
+                    None,
+                );
+                pm.stroke_path(&halo, &paint(colour), &halo_ring, Transform::identity(), None);
+            }
+            pm.stroke_path(
                 &dot,
-                &paint(colour),
-                FillRule::Winding,
+                &paint(MARKER_OUTLINE),
+                &star_outline,
                 Transform::identity(),
                 None,
             );
+            solid(&mut pm, &dot, colour);
+        } else {
+            solid(&mut pm, &dot, colour);
             pm.stroke_path(&dot, &paint(MARKER_OUTLINE), &ring, Transform::identity(), None);
         }
     }
@@ -268,6 +360,23 @@ fn marker_path(shape: Shape, cx: f32, cy: f32, size: f32) -> Option<Path> {
             pb.line_to(cx + size, cy);
             pb.line_to(cx, cy + size);
             pb.line_to(cx - size, cy);
+            pb.close();
+            pb.finish()
+        }
+        Shape::Star => {
+            // Ten points alternating tip and inner corner, starting at the top tip.
+            let inner = size * 0.45;
+            let mut pb = PathBuilder::new();
+            for i in 0..10u8 {
+                let r = if i % 2 == 0 { size } else { inner };
+                let angle = f32::from(i).mul_add(std::f32::consts::PI / 5.0, -std::f32::consts::FRAC_PI_2);
+                let (x, y) = (r.mul_add(angle.cos(), cx), r.mul_add(angle.sin(), cy));
+                if i == 0 {
+                    pb.move_to(x, y);
+                } else {
+                    pb.line_to(x, y);
+                }
+            }
             pb.close();
             pb.finish()
         }
@@ -445,6 +554,7 @@ mod tests {
                 w: 5,
                 h: 5,
                 loaded: false,
+                preset: None,
             },
             Room {
                 x: 0,
@@ -452,6 +562,7 @@ mod tests {
                 w: 5,
                 h: 10,
                 loaded: true,
+                preset: None,
             },
         ];
         assert_eq!(
@@ -587,6 +698,7 @@ mod tests {
             w: 60,
             h: 60,
             loaded,
+            preset: None,
         }
     }
 
@@ -791,6 +903,116 @@ mod tests {
         let (hits, dx, dy) = colour_spread(&pm, exit, at)?;
         assert!(hits >= 9, "only {hits} exit pixels");
         assert!(dx.hypot(dy) <= f64::from(radius) * 1.5, "exit spread {dx},{dy}");
+        Ok(())
+    }
+
+    /// Level 74 with four 60x60 rooms in a row along x, carrying the given preset ids.
+    fn sanctuary(presets: [Option<u32>; 4]) -> Snapshot {
+        let mut snap = empty_snapshot(5, 115);
+        snap.level.id = 74;
+        snap.level.rooms = presets
+            .iter()
+            .zip(0u32..)
+            .map(|(&preset, i)| Room {
+                preset,
+                ..room(i * 60, 0, false)
+            })
+            .collect();
+        snap
+    }
+
+    #[test]
+    fn summoner_rule_marks_the_room_centre() {
+        // Every Summoner arm-end preset is matched, at the centre of its room.
+        let snap = sanctuary([Some(525), Some(526), Some(527), Some(528)]);
+        let summoner = Marker::Landmark("summoner");
+        assert_eq!(
+            landmarks(&snap, LANDMARKS),
+            vec![
+                (summoner, 30.0, 30.0),
+                (summoner, 90.0, 30.0),
+                (summoner, 150.0, 30.0),
+                (summoner, 210.0, 30.0),
+            ]
+        );
+        // Ordinary arm ends, the neighbouring ids and unknown presets: nothing.
+        let snap = sanctuary([Some(510), Some(524), Some(529), None]);
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+        // The same preset ids in another level: nothing.
+        let mut snap = sanctuary([Some(525), None, None, None]);
+        snap.level.id = 73;
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+        // It is part of the drawn markers, below elites and the player.
+        snap.level.id = 74;
+        snap.monsters = vec![monster(0x02, 1)];
+        let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
+        assert_eq!(kinds, vec![summoner, Marker::Elite, Marker::Player]);
+    }
+
+    #[test]
+    fn summoner_renders_as_a_haloed_gold_star() -> Result<()> {
+        let snap = sanctuary([None, Some(527), None, None]);
+        let (w, h) = (400, 400);
+        let pm = render(&snap, w, h)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+        let at = v.to_screen(90.0, 30.0);
+        let (gold, size, shape) = Marker::Landmark("summoner").style();
+        assert_eq!(shape, Shape::Star);
+        // Unlike every other marker: its own colour, bigger than all of them.
+        for other in [
+            Marker::Exit,
+            Marker::Entry,
+            Marker::Waypoint,
+            Marker::Special,
+            Marker::Elite,
+            Marker::Drop(DropKind::Unique),
+            Marker::Drop(DropKind::Set),
+            Marker::Player,
+        ] {
+            let (colour, other_size, _) = other.style();
+            assert_ne!(colour, gold, "{other:?}");
+            assert!(other_size < size, "{other:?}");
+        }
+        #[allow(
+            clippy::cast_sign_loss,
+            clippy::cast_possible_truncation,
+            reason = "test points are inside the canvas"
+        )]
+        // The pixel whose centre is nearest to the point.
+        let pixel = |dx: f32, dy: f32| ((at.0 + dx - 0.5).round() as u32, (at.1 + dy - 0.5).round() as u32);
+
+        let (cx, cy) = pixel(0.0, 0.0);
+        assert_eq!(rgba(&pm, cx, cy)?, gold, "star centre");
+        let (tx, ty) = pixel(0.0, 3.0 - size);
+        assert_eq!(rgba(&pm, tx, ty)?, gold, "top tip");
+        // Dark outline just above the top tip.
+        let (ox, oy) = pixel(0.0, -size - 1.0);
+        let outline = rgba(&pm, ox, oy)?;
+        assert!(
+            outline[0] < 100 && outline[3] > 150,
+            "outline above the tip: {outline:?}"
+        );
+        // Between star and halo: no gold (the room shows through).
+        let (gx, gy) = pixel(0.0, size + 3.0);
+        assert_ne!(rgba(&pm, gx, gy)?, gold, "gap below the star");
+        // The gold halo ring around it, on all four sides.
+        for (dx, dy) in [
+            (LANDMARK_RING, 0.0),
+            (-LANDMARK_RING, 0.0),
+            (0.0, LANDMARK_RING),
+            (0.0, -LANDMARK_RING),
+        ] {
+            let (hx, hy) = pixel(dx, dy);
+            let p = rgba(&pm, hx, hy)?;
+            assert!(p[0] > 200 && p[1] > 140 && p[2] < 120, "halo at {dx},{dy}: {p:?}");
+        }
+        // All gold pixels belong to this marker.
+        let (hits, dx, dy) = colour_spread(&pm, gold, at)?;
+        assert!(hits >= 60, "only {hits} gold pixels");
+        assert!(
+            dx.hypot(dy) <= f64::from(LANDMARK_RING) * 1.5,
+            "gold spread {dx},{dy}"
+        );
         Ok(())
     }
 }
