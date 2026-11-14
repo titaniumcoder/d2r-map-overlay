@@ -102,7 +102,9 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 ## User feedback, first live session (Act 1, 2026-11-14)
 - Minimap "already helps drastically"; ~1% CPU, 7 MB RSS.
 - Hide in towns (level ids 1, 40, 75, 103, 109).
-- Wants corridors/openings, not just room tiles → draw CollMap walls for loaded rooms, keep them per game.
+- Wanted corridors/openings at first, then **reverted**: the in-game automap shows rooms; the minimap should be a
+  coarse orientation shape — rooms as one continuous fill, no outlines, no background panel (fully transparent).
+- Waypoints missing in Act 2 → full waypoint object id set (156 = Act 2 outdoor, live-verified).
 - Orange monster-preset dots appeared where nothing was (non-superunique presets) → only presets learned as
   superunique (live monster with flag 0x02 near the preset; persisted list); remove once that monster is dead.
 - A killed superunique's marker stayed → same fix.
@@ -115,8 +117,13 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - Quality from ItemData (unitData `+0x10`; classic D2 quality at ItemData+0x00: 5 set, 7 unique); gems/runes by base
   item txt id ranges (from items/misc txt).
 - Live (Jail 1, 2026-11-14): ground items have **mode 3**; ItemData+0x00 = 2 (normal) on all 5 ground items — quality
-  location consistent. Items' path is a different struct: `+0x02/+0x06` give garbage (22407, 0); classic StaticPath
-  puts x/y at `+0x10/+0x14` — **verify** with a known drop. Unique/set ids still to observe.
+  location consistent.
+- **Verified with a dropped chipped emerald** (Act 2, 2026-11-14): item path is a static path, **x = u32 `+0x10`,
+  y = u32 `+0x14`** (gem at 5323,5622 next to the player). txt 587 = `gcg`.
+- **Items table in memory** (heap, address varies): records of stride **0x1C0**, 4-char code at record start.
+  Index 0 `hax`, 1 `axe`, 2 `2ax`, 572 `gcv`, 587 `gcg`, 625 `r01`, 657 `r33` → D2R index = classic + 15. Locate at
+  runtime by the `hax`/`axe`/`2ax`/… sequence, then classify gems/skulls/runes by code. Unique/set quality values
+  (5/7) still to observe live.
 - Drawn as distinct icons (unique gold, set green, rune orange, gem by colour), dropped from the map once picked up.
 
 ## Overlay
