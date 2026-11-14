@@ -11,6 +11,8 @@ mod offsets;
 mod overlay;
 mod process;
 mod render;
+mod session;
+mod superuniques;
 #[cfg(test)]
 mod testutil;
 
@@ -71,13 +73,32 @@ fn live(player: Option<String>, size: (u32, u32)) -> Result<()> {
     let reader_tx = tx.clone();
     thread::Builder::new()
         .name("reader".into())
-        .spawn(move || live::run(&reader_tx, player.as_deref(), size))
+        .spawn(move || {
+            let _exit = ExitOnDrop;
+            live::run(&reader_tx, player.as_deref(), size);
+        })
         .context("starting the reader thread")?;
     thread::Builder::new()
         .name("hypr".into())
         .spawn(move || hypr::watch(&tx))
         .context("starting the focus thread")?;
     overlay::run(rx, size)
+}
+
+/// Ends the process (status 1) if the reader thread panics, so the overlay doesn't stay up with a frame
+/// that never updates. (A panic in a spawned thread otherwise only ends that thread; the guard's `drop`
+/// runs during the unwind.)
+#[derive(Debug)]
+struct ExitOnDrop;
+
+impl Drop for ExitOnDrop {
+    fn drop(&mut self) {
+        // A normal return only happens once the UI is gone and main is exiting anyway.
+        if thread::panicking() {
+            eprintln!("reader thread panicked; exiting");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Locates the game, its image and the unit table, and prints what it found.
@@ -91,7 +112,7 @@ fn probe() -> Result<()> {
     println!("alias_base  {:#x}", img.alias_base);
     println!("size        {:#x}", img.size);
     let cache = offset_cache::default_path();
-    let table = img.unit_table(&mem, cache.as_deref())?;
+    let table = img.unit_table(&mem, cache.as_deref(), true)?;
     println!("build       {}", table.build);
     println!(
         "unit_table  {:#x} (rva {:#x}, via {:?})",
@@ -110,7 +131,7 @@ fn dump(player: Option<&str>) -> Result<()> {
     let maps = process::read_maps(pid)?;
     let mem = process::ProcMem::open(pid)?;
     let img = image::find_image(&maps, &mem).context("locating D2R.exe image")?;
-    let table = img.unit_table(&mem, offset_cache::default_path().as_deref())?;
+    let table = img.unit_table(&mem, offset_cache::default_path().as_deref(), true)?;
     let snap = game::snapshot(&mem, table.addr, player)?;
     println!("{}", serde_json::to_string_pretty(&snap)?);
     Ok(())
@@ -134,9 +155,20 @@ fn load_snapshot(path: &str) -> Result<game::Snapshot> {
     serde_json::from_str(&json).with_context(|| format!("parsing snapshot {path}"))
 }
 
+/// Loads a `--dump` snapshot and filters it like live mode does (known superuniques only).
+fn load_for_drawing(path: &str) -> Result<game::Snapshot> {
+    let mut snap = load_snapshot(path)?;
+    let known = match superuniques::default_path() {
+        Some(p) => superuniques::read(&p)?,
+        None => std::collections::BTreeSet::new(),
+    };
+    session::Session::new(known).apply(&mut snap);
+    Ok(snap)
+}
+
 /// Renders a `--dump` JSON snapshot to a PNG file.
 fn render_png(snap: &str, out: &str, (w, h): (u32, u32)) -> Result<()> {
-    let pixmap = render::render(&load_snapshot(snap)?, w, h)?;
+    let pixmap = render::render(&load_for_drawing(snap)?, w, h)?;
     pixmap.save_png(out).with_context(|| format!("writing {out}"))?;
     println!("wrote {out} ({w}x{h})");
     Ok(())
@@ -144,7 +176,7 @@ fn render_png(snap: &str, out: &str, (w, h): (u32, u32)) -> Result<()> {
 
 /// Shows a `--dump` JSON snapshot in the overlay window until killed (always, focus is ignored).
 fn show(snap: &str, (w, h): (u32, u32)) -> Result<()> {
-    let frame = render::render(&load_snapshot(snap)?, w, h)?;
+    let frame = render::render(&load_for_drawing(snap)?, w, h)?;
     let (tx, rx) = channel::channel();
     for msg in [Msg::Frame(frame), Msg::Focus(true)] {
         tx.send(msg).map_err(|_| anyhow!("overlay channel closed"))?;

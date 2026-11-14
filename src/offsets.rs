@@ -117,6 +117,8 @@ pub mod monster_data {
     pub const NAME_SEED: u64 = 0x18;
     /// u8 flag byte (observed 0x08, 0x0C on elites; bits to confirm).
     pub const FLAGS: u64 = 0x1A;
+    /// `FLAGS` bit of a superunique (classic D2 bit; champion 0x04, unique 0x08, minion 0x10).
+    pub const SUPERUNIQUE: u8 = 0x02;
 }
 
 /// `ItemData`: offsets unverified; `--dump` prints the raw head for live verification.

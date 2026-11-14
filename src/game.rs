@@ -27,6 +27,15 @@ const MAX_LINKS_PER_ROOM: usize = 100;
 /// Warnings kept in the snapshot; the rest are only counted.
 const MAX_WARNINGS: usize = 50;
 
+/// Level ids of the five towns (levels.txt): Rogue Encampment, Lut Gholein, Kurast Docks,
+/// Pandemonium Fortress, Harrogath.
+pub const TOWN_LEVELS: [u32; 5] = [1, 40, 75, 103, 109];
+
+/// True if `level_id` is a town (the overlay is hidden there).
+pub fn is_town(level_id: u32) -> bool {
+    TOWN_LEVELS.contains(&level_id)
+}
+
 /// A game address, serialized as a hex string (JSON numbers lose precision above 2^53).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Addr(pub u64);
@@ -69,6 +78,9 @@ pub struct Player {
     pub x: u16,
     pub y: u16,
     pub level_id: u32,
+    /// The player's act; changes with a new game (and on act travel). `None` in old fixtures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub act: Option<Addr>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,7 +116,7 @@ pub struct Room {
     pub loaded: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum PresetKind {
     Monster,
@@ -127,7 +139,7 @@ impl PresetKind {
 }
 
 /// A preset unit in world tiles.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Preset {
     pub kind: PresetKind,
     pub txt: u32,
@@ -159,6 +171,15 @@ pub struct Monster {
     pub y: u16,
     pub flags: u8,
     pub name_seed: u16,
+}
+
+/// Monster modes of a dead or dying unit.
+const DEAD_MODES: [u32; 2] = [0, 12];
+
+impl Monster {
+    pub fn is_dead(&self) -> bool {
+        DEAD_MODES.contains(&self.mode)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -244,6 +265,7 @@ pub fn snapshot(mem: &impl ReadMem, unit_table: u64, player_name: Option<&str>) 
         level.rooms.push(room);
     }
     level.bounds = bounds(&level.rooms);
+    dedup_presets(&mut presets);
 
     let mut monsters = Vec::new();
     for addr in r.units(unit_table, unit_table::MONSTER) {
@@ -273,6 +295,15 @@ pub fn snapshot(mem: &impl ReadMem, unit_table: u64, player_name: Option<&str>) 
         items,
         warnings: r.warnings,
     })
+}
+
+/// Drops repeated presets (same kind, txt and position), keeping the first of each.
+///
+/// Live (Dry Hills, 2026-11-14) the same preset came back 3–5 times: a Room2's preset list is
+/// reachable more than once or holds repeats.
+fn dedup_presets(presets: &mut Vec<Preset>) {
+    let mut seen = HashSet::new();
+    presets.retain(|p| seen.insert(p.clone()));
 }
 
 /// Bounding box over rooms, or `None` if there are none (or a room's end overflows).
@@ -491,6 +522,7 @@ impl<M: ReadMem> Reader<'_, M> {
             x,
             y,
             level_id: self.u32(level, level::ID)?,
+            act: head.act.map(Addr),
         };
         Ok((player, level))
     }
@@ -647,6 +679,9 @@ mod tests {
     const PR_TILE: u64 = 0x45_1000;
     const PR_ODD: u64 = 0x45_2000;
     const PR_MON: u64 = 0x45_3000;
+    const PR_DUP0: u64 = 0x45_4000;
+    const PR_DUP1: u64 = 0x45_5000;
+    const PR_DUP2: u64 = 0x45_6000;
     const RT0: u64 = 0x50_0000;
     const RT_BAD: u64 = 0x50_1000;
     const R_OTHER: u64 = 0x60_0000;
@@ -1100,6 +1135,42 @@ mod tests {
             r.warn(format!("w{i}"));
         }
         assert_eq!((r.warnings.len(), r.suppressed), (MAX_WARNINGS, 10));
+    }
+
+    #[test]
+    fn repeated_presets_are_kept_once() -> Result<()> {
+        let mut m = world()?;
+        // R2 moves onto R0's origin and gets a list repeating R0's waypoint twice, plus a
+        // monster preset at the same spot (different kind: kept).
+        room(&mut m, R2, (10, 20, 4, 4), 0, 0, LEVEL, PR_DUP0, 0)?;
+        preset_unit(&mut m, PR_DUP0, preset::OBJECT, 119, 3, 4, PR_DUP1)?;
+        preset_unit(&mut m, PR_DUP1, preset::OBJECT, 119, 3, 4, PR_DUP2)?;
+        preset_unit(&mut m, PR_DUP2, preset::MONSTER, 119, 3, 4, 0)?;
+        let s = snapshot(&m, TABLE, None)?;
+        let got: Vec<(PresetKind, u32, u32, u32)> =
+            s.presets.iter().map(|p| (p.kind, p.txt, p.x, p.y)).collect();
+        assert_eq!(
+            got,
+            vec![
+                (PresetKind::Object, 119, 53, 104),
+                (PresetKind::Tile, 7, 51, 102),
+                (PresetKind::Other(9), 1, 50, 100),
+                (PresetKind::Monster, 853, 92, 103),
+                (PresetKind::Monster, 119, 53, 104),
+            ],
+            "first occurrence order, repeats dropped"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn towns() {
+        for id in [1, 40, 75, 103, 109] {
+            assert!(is_town(id), "{id}");
+        }
+        for id in [0, 2, 29, 39, 41, 108, 110] {
+            assert!(!is_town(id), "{id}");
+        }
     }
 
     #[test]

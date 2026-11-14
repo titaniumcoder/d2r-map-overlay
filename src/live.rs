@@ -1,8 +1,11 @@
 //! Live mode reader thread: follows the game process and sends rendered frames to the UI loop.
 //!
 //! Waits for D2R, opens its memory, locates the image and unit table once per process, then
-//! snapshots and renders ~5 times a second. Unchanged snapshots are not re-rendered or sent.
+//! snapshots and renders ~5 times a second. Each snapshot is folded into a [`Session`]
+//! (superunique kills); unchanged results are not re-rendered or sent. The overlay is
+//! hidden in towns and outside a game.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 use std::thread;
@@ -13,12 +16,22 @@ use smithay_client_toolkit::reexports::calloop::channel::Sender;
 use crate::game::{self, Snapshot};
 use crate::overlay::Msg;
 use crate::process::ProcMem;
-use crate::{image, offset_cache, process, render};
+use crate::session::Session;
+use crate::{image, offset_cache, process, render, superuniques};
 
 /// Snapshot interval (~5 Hz).
 const TICK: Duration = Duration::from_millis(200);
-/// Wait between attempts to find the game, open its memory or find the unit table.
+/// Wait between attempts to find the game or open its memory.
 const RETRY: Duration = Duration::from_secs(2);
+
+/// Wait before the next unit-table attempt after `failures` failed ones: 2 s, 5 s, then 10 s.
+const fn table_retry_delay(failures: u32) -> Duration {
+    match failures {
+        0 | 1 => Duration::from_secs(2),
+        2 => Duration::from_secs(5),
+        _ => Duration::from_secs(10),
+    }
+}
 
 /// The UI loop dropped its end of the channel: stop.
 #[derive(Debug)]
@@ -31,7 +44,8 @@ fn send(tx: &Sender<Msg>, msg: Msg) -> Result<(), UiGone> {
 /// Runs until the UI is gone. `player` picks among several player units; `size` is the frame size.
 pub fn run(tx: &Sender<Msg>, player: Option<&str>, size: (u32, u32)) {
     let cache = offset_cache::default_path();
-    let mut ptrace_hint_shown = false;
+    // The last open error printed: a repeat isn't printed again, a different one is.
+    let mut open_err = String::new();
     let mut waiting_logged = false;
     loop {
         let Ok(pid) = process::find_d2r_pid() else {
@@ -45,17 +59,19 @@ pub fn run(tx: &Sender<Msg>, player: Option<&str>, size: (u32, u32)) {
         let mem = match ProcMem::open(pid) {
             Ok(mem) => mem,
             Err(e) => {
-                if !ptrace_hint_shown {
-                    eprintln!("{e:#}");
+                let msg = format!("{e:#}");
+                if msg != open_err {
+                    eprintln!("{msg}");
                     if is_permission_denied(&e) {
                         eprintln!("{}", ptrace_hint());
                     }
-                    ptrace_hint_shown = true;
+                    open_err = msg;
                 }
                 thread::sleep(RETRY);
                 continue;
             }
         };
+        open_err.clear();
         eprintln!("attached to D2R (pid {pid})");
         waiting_logged = false;
         let follow = find_table(pid, &mem, cache.as_deref())
@@ -68,14 +84,16 @@ pub fn run(tx: &Sender<Msg>, player: Option<&str>, size: (u32, u32)) {
     }
 }
 
-/// Finds the unit table, retrying while the process lives (the structural search needs a game
-/// in progress). `None` once the process is gone.
+/// Finds the unit table, retrying with [`table_retry_delay`] while the process lives (the
+/// structural search needs a game in progress). Only the first attempt reads the whole image;
+/// retries read just its header and `.data`. `None` once the process is gone.
 fn find_table(pid: u32, mem: &ProcMem, cache: Option<&Path>) -> Option<u64> {
     let mut last_err = String::new();
+    let mut failures = 0u32;
     while is_alive(pid) {
         let found = process::read_maps(pid).and_then(|maps| {
             let img = image::find_image(&maps, mem)?;
-            img.unit_table(mem, cache)
+            img.unit_table(mem, cache, failures == 0)
         });
         match found {
             Ok(table) => {
@@ -93,7 +111,8 @@ fn find_table(pid: u32, mem: &ProcMem, cache: Option<&Path>) -> Option<u64> {
                 }
             }
         }
-        thread::sleep(RETRY);
+        failures = failures.saturating_add(1);
+        thread::sleep(table_retry_delay(failures));
     }
     None
 }
@@ -107,12 +126,36 @@ fn follow_game(
     player: Option<&str>,
     (w, h): (u32, u32),
 ) -> Result<(), UiGone> {
+    let su_path = superuniques::default_path();
+    let known = su_path.as_deref().map_or_else(BTreeSet::default, |p| {
+        superuniques::read(p).unwrap_or_else(|e| {
+            eprintln!("warning: {e:#}; starting with no known superuniques");
+            BTreeSet::default()
+        })
+    });
+    let mut session = Session::new(known);
     let mut dedup = Dedup::default();
     loop {
         let start = Instant::now();
         match game::snapshot(mem, table, player) {
-            Ok(snap) => {
-                if let Some(snap) = dedup.changed(snap) {
+            Ok(mut snap) => {
+                let update = session.apply(&mut snap);
+                if update.new_game {
+                    eprintln!("new game (player id or act changed): superunique kills cleared");
+                }
+                if !update.learned.is_empty() {
+                    eprintln!("learned superunique preset ids {:?}", update.learned);
+                    if let Some(p) = &su_path
+                        && let Err(e) = superuniques::write(p, &session.superuniques)
+                    {
+                        eprintln!("warning: could not save superuniques: {e:#}");
+                    }
+                }
+                if game::is_town(snap.level.id) {
+                    if dedup.hide(Hidden::Town) {
+                        send(tx, Msg::Hide)?;
+                    }
+                } else if let Some(snap) = dedup.changed(snap) {
                     match render::render(snap, w, h) {
                         Ok(frame) => send(tx, Msg::Frame(frame))?,
                         Err(e) => eprintln!("rendering failed: {e:#}"),
@@ -123,7 +166,7 @@ fn follow_game(
                 if !is_alive(pid) {
                     return Ok(());
                 }
-                if dedup.failed() {
+                if dedup.hide(Hidden::NoGame) {
                     eprintln!("no game state (menu or loading?): {e:#}");
                     send(tx, Msg::Hide)?;
                 }
@@ -133,31 +176,40 @@ fn follow_game(
     }
 }
 
+/// Why the overlay is hidden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hidden {
+    /// The player is in a town (quietly hidden).
+    Town,
+    /// No snapshot could be read (menu, loading).
+    NoGame,
+}
+
 /// Suppresses repeated work: the same snapshot twice in a row is not re-rendered, and a run of
-/// failed snapshots sends one [`Msg::Hide`].
+/// hidden ticks (for the same reason) sends one [`Msg::Hide`].
 #[derive(Debug, Default)]
 struct Dedup {
-    /// The last snapshot sent as a frame; `None` after a failure (the UI is hidden then).
+    /// The last snapshot sent as a frame; `None` while hidden.
     last: Option<Snapshot>,
-    /// The previous tick failed (a hide was already sent).
-    failing: bool,
+    /// Why the previous tick hid the overlay, if it did (a hide was already sent).
+    hidden: Option<Hidden>,
 }
 
 impl Dedup {
     /// The snapshot to render, or `None` if it equals the one on screen.
     fn changed(&mut self, snap: Snapshot) -> Option<&Snapshot> {
-        self.failing = false;
+        self.hidden = None;
         if self.last.as_ref() == Some(&snap) {
             return None;
         }
         Some(self.last.insert(snap))
     }
 
-    /// Records a failed snapshot; true if this starts a failure run (send a hide).
-    fn failed(&mut self) -> bool {
+    /// Records a hidden tick; true if this starts a run for `why` (send a hide, log the reason).
+    fn hide(&mut self, why: Hidden) -> bool {
         // Forget the frame: after the hide, even an identical snapshot must be sent again.
         self.last = None;
-        !std::mem::replace(&mut self.failing, true)
+        self.hidden.replace(why) != Some(why)
     }
 }
 
@@ -206,15 +258,42 @@ mod tests {
     fn failures_hide_once_and_resend_after() -> Result<()> {
         let mut d = Dedup::default();
         assert!(d.changed(fixture()?).is_some());
-        assert!(d.failed(), "first failure hides");
-        assert!(!d.failed(), "later failures don't repeat the hide");
+        assert!(d.hide(Hidden::NoGame), "first failure hides");
+        assert!(!d.hide(Hidden::NoGame), "later failures don't repeat the hide");
         assert!(
             d.changed(fixture()?).is_some(),
             "same snapshot after a hide is sent again"
         );
         assert!(d.changed(fixture()?).is_none());
-        assert!(d.failed(), "a new failure run hides again");
+        assert!(d.hide(Hidden::NoGame), "a new failure run hides again");
         Ok(())
+    }
+
+    #[test]
+    fn towns_hide_quietly() -> Result<()> {
+        let mut town = fixture()?;
+        town.level.id = 1;
+        assert!(game::is_town(town.level.id));
+        assert!(!game::is_town(fixture()?.level.id), "Jail 1 is not a town");
+        let mut d = Dedup::default();
+        assert!(d.changed(fixture()?).is_some());
+        assert!(d.hide(Hidden::Town), "entering town hides once");
+        assert!(!d.hide(Hidden::Town), "staying in town sends nothing");
+        // Town → menu: a different reason, so the menu is logged and hidden (again, harmless).
+        assert!(d.hide(Hidden::NoGame));
+        assert!(d.hide(Hidden::Town));
+        assert!(
+            d.changed(fixture()?).is_some(),
+            "leaving town shows the map again"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn table_retry_backs_off() {
+        let secs: Vec<u64> = (1..=5).map(|n| table_retry_delay(n).as_secs()).collect();
+        assert_eq!(secs, vec![2, 5, 10, 10, 10]);
+        assert_eq!(table_retry_delay(u32::MAX).as_secs(), 10);
     }
 
     #[test]

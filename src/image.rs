@@ -210,13 +210,26 @@ impl Image {
     /// 2. the RVA cached for this build in `cache` (if given);
     /// 3. a structural search of `.data` (needs a game in progress).
     ///
+    /// With `scan_code` false, step 1 is skipped and only the PE header and `.data` are read
+    /// instead of the whole image (~40 MiB): for retries while waiting for a game, where the
+    /// signature already missed once and only the structural search can newly succeed.
+    ///
     /// A result from 1 or 3 is written to `cache`; a write failure is only a warning on stderr.
     ///
     /// # Errors
     /// Fails if the image can't be read, has no PE header, or all three methods fail.
-    pub fn unit_table(&self, mem: &impl ReadMem, cache: Option<&Path>) -> Result<UnitTable> {
-        let image = self.read_all(mem)?;
-        let build = build_key(&image).context("no PE header in the image alias")?;
+    pub fn unit_table(&self, mem: &impl ReadMem, cache: Option<&Path>, scan_code: bool) -> Result<UnitTable> {
+        let image = if scan_code {
+            Some(self.read_all(mem)?)
+        } else {
+            None
+        };
+        let header_len = usize::try_from(HEADER_LEN.min(self.size))?;
+        let header = match &image {
+            Some(img) => img.get(..header_len).unwrap_or(img).to_vec(),
+            None => self.read_alias(mem, 0, header_len)?,
+        };
+        let build = build_key(&header).context("no PE header in the image alias")?;
         let found = |rva: u64, source| {
             if source != UnitTableSource::Cache
                 && let Some(path) = cache
@@ -236,10 +249,11 @@ impl Image {
             })
         };
 
-        let sig_err = match signature_rva(&image) {
-            Ok(rva) if rva < self.size => return found(rva, UnitTableSource::Signature),
-            Ok(rva) => anyhow::anyhow!("rva {rva:#x} outside the image"),
-            Err(e) => e,
+        let sig_err = match image.as_deref().map(signature_rva) {
+            Some(Ok(rva)) if rva < self.size => return found(rva, UnitTableSource::Signature),
+            Some(Ok(rva)) => anyhow::anyhow!("rva {rva:#x} outside the image"),
+            Some(Err(e)) => e,
+            None => anyhow::anyhow!("not scanned on retry"),
         };
         let cache_note = match cache.map(offset_cache::read) {
             None => "no cache path (neither $XDG_CACHE_HOME nor $HOME set)".to_owned(),
@@ -250,7 +264,7 @@ impl Image {
                 None => format!("no cached offset for build {build}"),
             },
         };
-        let structure_err = match structural_rva(mem, &image) {
+        let structure_err = match self.structural_rva(mem, &header, image.as_deref()) {
             Ok(rva) => return found(rva, UnitTableSource::Structure),
             Err(e) => e,
         };
@@ -259,15 +273,24 @@ impl Image {
              structural search: {structure_err:#})"
         )
     }
-}
 
-/// Structural search for the unit table in the image's `.data` (see [`find_unit_table`]).
-fn structural_rva(mem: &impl ReadMem, image: &[u8]) -> Result<u64> {
-    let (rva, vsize) = section(image, b".data").context("no .data section in the PE header")?;
-    let start = usize::try_from(rva)?;
-    let end = start.saturating_add(usize::try_from(vsize)?).min(image.len());
-    let data = image.get(start..end).context(".data starts outside the image")?;
-    find_unit_table(mem, data, u64::from(rva))
+    /// Structural search for the unit table in `.data` (see [`find_unit_table`]); `.data` is
+    /// taken from `image` if it was read, else read on its own.
+    fn structural_rva(&self, mem: &impl ReadMem, header: &[u8], image: Option<&[u8]>) -> Result<u64> {
+        let (rva, vsize) = section(header, b".data").context("no .data section in the PE header")?;
+        let start = usize::try_from(rva)?;
+        let size = usize::try_from(self.size)?;
+        let end = start.saturating_add(usize::try_from(vsize)?).min(size);
+        let read;
+        let data = if let Some(img) = image {
+            img.get(start..end).context(".data starts outside the image")?
+        } else {
+            let len = end.checked_sub(start).context(".data starts outside the image")?;
+            read = self.read_alias(mem, u64::from(rva), len)?;
+            &read
+        };
+        find_unit_table(mem, data, u64::from(rva))
+    }
 }
 
 /// How [`Image::unit_table`] found the table.
@@ -745,7 +768,7 @@ mod tests {
         let cache = temp_dir("sig")?.join("offsets.toml");
         // Straddles the first 1 MiB chunk boundary.
         let (img, mem) = image_fixture(&[0x10_0000 - 3], 0x12_3450, false);
-        let t = img.unit_table(&mem, Some(&cache))?;
+        let t = img.unit_table(&mem, Some(&cache), true)?;
         assert_eq!(t.source, UnitTableSource::Signature);
         assert_eq!((t.addr, t.rva), (img.live_base + 0x12_3450, 0x12_3450));
         assert_eq!(t.build, BUILD);
@@ -759,12 +782,15 @@ mod tests {
         offset_cache::store(&cache, BUILD, 0x1234)?;
         // No signature, and the table is present: the cache still wins over the search.
         let (img, mem) = image_fixture(&[], 0, true);
-        let t = img.unit_table(&mem, Some(&cache))?;
+        let t = img.unit_table(&mem, Some(&cache), true)?;
         assert_eq!(t.source, UnitTableSource::Cache);
         assert_eq!(t.addr, img.live_base + 0x1234);
         // Two hits are a miss too.
         let (img, mem) = image_fixture(&[0x100, 0x200], 0x10, false);
-        assert_eq!(img.unit_table(&mem, Some(&cache))?.source, UnitTableSource::Cache);
+        assert_eq!(
+            img.unit_table(&mem, Some(&cache), true)?.source,
+            UnitTableSource::Cache
+        );
         Ok(())
     }
 
@@ -773,12 +799,38 @@ mod tests {
         let cache = temp_dir("structure")?.join("offsets.toml");
         offset_cache::store(&cache, "00000000-1", 0x99)?; // another build
         let (img, mem) = image_fixture(&[], 0, true);
-        let t = img.unit_table(&mem, Some(&cache))?;
+        let t = img.unit_table(&mem, Some(&cache), true)?;
         assert_eq!(t.source, UnitTableSource::Structure);
         assert_eq!(t.addr, img.live_base + TABLE_RVA);
         assert_eq!(offset_cache::read(&cache)?.get(BUILD), Some(&TABLE_RVA));
-        let t = img.unit_table(&mem, Some(&cache))?;
+        let t = img.unit_table(&mem, Some(&cache), true)?;
         assert_eq!((t.source, t.rva), (UnitTableSource::Cache, TABLE_RVA));
+        Ok(())
+    }
+
+    #[test]
+    fn unit_table_retry_reads_only_header_and_data() -> Result<()> {
+        let cache = temp_dir("retry")?.join("offsets.toml");
+        let (img, full) = image_fixture(&[0x10_0000], 0x1234, true);
+        let bytes = full.read_bytes(img.alias_base, FIXTURE_SIZE as usize)?;
+        // Map only the header and `.data` of the alias: a full read fails.
+        let mut mem = heap_mem();
+        mem.add(img.alias_base, bytes.get(..0x400).context("header")?.to_vec());
+        let data = DATA_RVA as usize..(DATA_RVA + DATA_VSIZE) as usize;
+        mem.add(
+            img.alias_base + u64::from(DATA_RVA),
+            bytes.get(data).context("data")?.to_vec(),
+        );
+        assert!(
+            img.unit_table(&mem, Some(&cache), true).is_err(),
+            "full read needs the whole image"
+        );
+        let t = img.unit_table(&mem, Some(&cache), false)?;
+        assert_eq!(
+            (t.source, t.rva),
+            (UnitTableSource::Structure, TABLE_RVA),
+            "signature skipped"
+        );
         Ok(())
     }
 
@@ -787,7 +839,7 @@ mod tests {
         let cache = temp_dir("fail")?.join("offsets.toml");
         let (img, mem) = image_fixture(&[0x100, 0x200], 0, false);
         let err = img
-            .unit_table(&mem, Some(&cache))
+            .unit_table(&mem, Some(&cache), true)
             .err()
             .context("expected error")?;
         let msg = err.to_string();
@@ -799,11 +851,11 @@ mod tests {
         );
         assert!(msg.contains("no candidate"), "{msg}");
         assert!(!cache.exists(), "nothing cached on failure");
-        let err = img.unit_table(&mem, None).err().context("expected error")?;
+        let err = img.unit_table(&mem, None, true).err().context("expected error")?;
         assert!(err.to_string().contains("no cache path"), "{err}");
         // A negative rel32 is rejected rather than used.
         let (img, mem) = image_fixture(&[0x7_1fd3], -0x1000, false);
-        let err = img.unit_table(&mem, None).err().context("expected error")?;
+        let err = img.unit_table(&mem, None, true).err().context("expected error")?;
         assert!(err.to_string().contains("negative rel32"), "{err}");
         Ok(())
     }

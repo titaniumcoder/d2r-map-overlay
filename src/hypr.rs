@@ -22,6 +22,8 @@ const D2R_CLASS: &str = "steam_app_battlenet";
 const D2R_TITLE: &str = "Diablo II: Resurrected";
 /// Wait before reconnecting after the event socket closed or failed.
 const RECONNECT: Duration = Duration::from_secs(1);
+/// Wait while the same error repeats.
+const RECONNECT_MAX: Duration = Duration::from_secs(5);
 /// Longest wait for the command socket's answer.
 const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -35,12 +37,42 @@ pub fn watch(tx: &Sender<Msg>) {
         return;
     };
     let mut last = None;
+    let mut reconnect = Reconnect::default();
     loop {
-        match follow(&dir, tx, &mut last) {
+        let wait = match follow(&dir, tx, &mut last, &mut reconnect) {
             Ok(()) => return, // UI gone
-            Err(e) => eprintln!("hyprland socket: {e:#}; reconnecting"),
+            Err(e) => {
+                let (log, wait) = reconnect.failed(format!("{e:#}"));
+                if let Some(msg) = log {
+                    eprintln!("hyprland socket: {msg}; reconnecting");
+                }
+                wait
+            }
+        };
+        thread::sleep(wait);
+    }
+}
+
+/// Reconnect pacing: an error is logged only when its text differs from the previous one since
+/// the last good connection, and a repeat waits [`RECONNECT_MAX`] instead of [`RECONNECT`].
+#[derive(Debug, Default)]
+struct Reconnect {
+    last: Option<String>,
+}
+
+impl Reconnect {
+    /// The line to log (if any) and the wait before the next attempt.
+    fn failed(&mut self, err: String) -> (Option<String>, Duration) {
+        if self.last.as_ref() == Some(&err) {
+            return (None, RECONNECT_MAX);
         }
-        thread::sleep(RECONNECT);
+        self.last = Some(err.clone());
+        (Some(err), RECONNECT)
+    }
+
+    /// A connection worked: the next failure is logged and retried quickly again.
+    fn connected(&mut self) {
+        self.last = None;
     }
 }
 
@@ -52,10 +84,11 @@ fn socket_dir() -> Option<PathBuf> {
 }
 
 /// Follows one event-socket connection. `Ok(())` means the UI is gone; `Err` means reconnect.
-fn follow(dir: &Path, tx: &Sender<Msg>, last: &mut Option<bool>) -> Result<()> {
+fn follow(dir: &Path, tx: &Sender<Msg>, last: &mut Option<bool>, reconnect: &mut Reconnect) -> Result<()> {
     // Connect to the event socket before asking, so no change between the two is lost.
     let events = UnixStream::connect(dir.join(".socket2.sock")).context("connecting to .socket2.sock")?;
     let initial = query_active(&dir.join(".socket.sock"))?;
+    reconnect.connected();
     if !report(tx, last, initial) {
         return Ok(());
     }
@@ -152,6 +185,21 @@ mod tests {
         assert_eq!(parse_event("activewindowv2>>55d1e0a0b0c0"), None);
         assert_eq!(parse_event("workspace>>2"), None);
         assert_eq!(parse_event(""), None);
+    }
+
+    #[test]
+    fn reconnect_logs_each_error_once_and_backs_off() {
+        let mut r = Reconnect::default();
+        assert_eq!(
+            r.failed("no socket".into()),
+            (Some("no socket".into()), RECONNECT)
+        );
+        assert_eq!(r.failed("no socket".into()), (None, RECONNECT_MAX));
+        assert_eq!(r.failed("no socket".into()), (None, RECONNECT_MAX));
+        assert_eq!(r.failed("refused".into()), (Some("refused".into()), RECONNECT));
+        assert_eq!(r.failed("refused".into()), (None, RECONNECT_MAX));
+        r.connected();
+        assert_eq!(r.failed("refused".into()), (Some("refused".into()), RECONNECT));
     }
 
     #[test]

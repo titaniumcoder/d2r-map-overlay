@@ -6,27 +6,24 @@
 use anyhow::{Context, Result};
 use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 
-use crate::game::{Bounds, Monster, Preset, PresetKind, Snapshot};
+use crate::game::{Bounds, Monster, Preset, PresetKind, Room, Snapshot};
 
-/// Object txt ids of waypoints (seen live: 119 town, 157 Jail 1). Full list: objects.txt waypoint rows.
-pub const WAYPOINT_IDS: &[u32] = &[119, 157];
+/// Object txt ids of waypoints: every waypoint row of classic objects.txt. Live-verified: 119
+/// (Act 1 town), 156 (Act 2 outdoor, Dry Hills), 157 (Act 1 indoor, Jail 1).
+pub const WAYPOINT_IDS: &[u32] = &[
+    119, 145, 156, 157, 237, 238, 288, 323, 324, 398, 402, 429, 494, 496, 511, 539,
+];
 /// Monster flag bits for superunique (0x02), champion (0x04) and unique/boss (0x08); minion is 0x10.
 const ELITE_FLAGS: u8 = 0x0E;
-/// Monster modes of a dead or dying unit.
-const DEAD_MODES: &[u32] = &[0, 12];
 
 /// Canvas px kept free around the level so markers on its edge stay inside the canvas.
 const MARGIN: f64 = 14.0;
-/// Corner radius of the background panel in px.
-const CORNER: f32 = 10.0;
 /// Half-size in tiles of the box drawn around the player when the level has no rooms.
 const FALLBACK_SPAN: u32 = 50;
 
 type Rgba = [u8; 4];
-const BACKGROUND: Rgba = [12, 14, 18, 110];
 const ROOM: Rgba = [70, 74, 84, 120];
 const ROOM_LOADED: Rgba = [125, 130, 142, 160];
-const ROOM_OUTLINE: Rgba = [190, 195, 205, 170];
 const MARKER_OUTLINE: Rgba = [0, 0, 0, 220];
 
 /// Something drawn as a dot on the map. Variant order is draw order (player last, on top).
@@ -135,7 +132,7 @@ pub fn level_bounds(snap: &Snapshot) -> Bounds {
 
 /// Live superunique/champion/unique, not dead. Minion-only (0x10) and normal (0) monsters are skipped.
 pub fn is_elite(m: &Monster) -> bool {
-    m.flags & ELITE_FLAGS != 0 && !DEAD_MODES.contains(&m.mode)
+    m.flags & ELITE_FLAGS != 0 && !m.is_dead()
 }
 
 /// The marker a preset is drawn as, if any.
@@ -167,48 +164,35 @@ pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
     out
 }
 
-/// Renders the snapshot's level into a new `width`×`height` pixmap (transparent outside the panel).
+/// Renders the snapshot's level into a new `width`×`height` pixmap. There is no background panel:
+/// everything outside the level shape and the markers is fully transparent.
 ///
 /// # Errors
 /// Fails if the canvas size is zero or too large for tiny-skia.
 pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
     let mut pm =
         Pixmap::new(width, height).with_context(|| format!("invalid canvas size {width}x{height}"))?;
-    if let Some(panel) = rounded_rect(px(f64::from(width)), px(f64::from(height)), CORNER) {
-        pm.fill_path(
-            &panel,
-            &paint(BACKGROUND),
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
-    }
-
     let view = View::fit(level_bounds(snap), width, height);
-    let outline = Stroke {
-        width: 1.0,
-        ..Stroke::default()
-    };
-    for room in &snap.level.rooms {
-        let (x0, y0) = (f64::from(room.x), f64::from(room.y));
-        let (x1, y1) = (f64::from(room.x + room.w), f64::from(room.y + room.h));
-        let Some(path) = polygon([
-            view.to_screen(x0, y0),
-            view.to_screen(x1, y0),
-            view.to_screen(x1, y1),
-            view.to_screen(x0, y1),
-        ]) else {
-            continue;
-        };
-        let fill = if room.loaded { ROOM_LOADED } else { ROOM };
-        pm.fill_path(
-            &path,
-            &paint(fill),
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
-        pm.stroke_path(&path, &paint(ROOM_OUTLINE), &outline, Transform::identity(), None);
+    // The level is one continuous shape: all rooms in one path, then the loaded ones in a second
+    // path on top. Separate fills per room would leave anti-aliasing seams along shared edges;
+    // within one path the edges' coverage adds up, and the loaded layer blends onto the base fill
+    // rather than onto the transparent canvas.
+    for (rooms, fill) in [
+        (rooms_path(view, snap.level.rooms.iter()), ROOM),
+        (
+            rooms_path(view, snap.level.rooms.iter().filter(|r| r.loaded)),
+            ROOM_LOADED,
+        ),
+    ] {
+        if let Some(path) = rooms {
+            pm.fill_path(
+                &path,
+                &paint(fill),
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
     }
 
     let ring = Stroke {
@@ -232,6 +216,23 @@ pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
     Ok(pm)
 }
 
+/// One path with a parallelogram per room, all wound the same way (`None` if there are none).
+fn rooms_path<'a>(view: View, rooms: impl Iterator<Item = &'a Room>) -> Option<Path> {
+    let mut pb = PathBuilder::new();
+    for room in rooms {
+        let (x0, y0) = (f64::from(room.x), f64::from(room.y));
+        let (x1, y1) = (f64::from(room.x + room.w), f64::from(room.y + room.h));
+        let (ax, ay) = view.to_screen(x0, y0);
+        pb.move_to(ax, ay);
+        for (x, y) in [(x1, y0), (x1, y1), (x0, y1)] {
+            let (sx, sy) = view.to_screen(x, y);
+            pb.line_to(sx, sy);
+        }
+        pb.close();
+    }
+    pb.finish()
+}
+
 fn paint([r, g, b, a]: Rgba) -> Paint<'static> {
     let mut paint = Paint::default();
     paint.set_color_rgba8(r, g, b, a);
@@ -239,37 +240,10 @@ fn paint([r, g, b, a]: Rgba) -> Paint<'static> {
     paint
 }
 
-fn polygon(points: [(f32, f32); 4]) -> Option<Path> {
-    let mut pb = PathBuilder::new();
-    let [(x, y), rest @ ..] = points;
-    pb.move_to(x, y);
-    for (x, y) in rest {
-        pb.line_to(x, y);
-    }
-    pb.close();
-    pb.finish()
-}
-
-fn rounded_rect(w: f32, h: f32, r: f32) -> Option<Path> {
-    let r = r.min(w / 2.0).min(h / 2.0);
-    let mut pb = PathBuilder::new();
-    pb.move_to(r, 0.0);
-    pb.line_to(w - r, 0.0);
-    pb.quad_to(w, 0.0, w, r);
-    pb.line_to(w, h - r);
-    pb.quad_to(w, h, w - r, h);
-    pb.line_to(r, h);
-    pb.quad_to(0.0, h, 0.0, h - r);
-    pb.line_to(0.0, r);
-    pb.quad_to(0.0, 0.0, r, 0.0);
-    pb.close();
-    pb.finish()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::{Addr, Level, Player, Room};
+    use crate::game::{Addr, Level, Player};
 
     const FIXTURE: &str = include_str!("../tests/fixtures/jail1-snapshot.json");
 
@@ -309,6 +283,7 @@ mod tests {
                 x: px,
                 y: py,
                 level_id: 1,
+                act: None,
             },
             player_candidates: vec![],
             level: Level {
@@ -449,10 +424,13 @@ mod tests {
             preset_marker(&preset(PresetKind::Object, 157)),
             Some(Marker::Waypoint)
         );
-        assert_eq!(
-            preset_marker(&preset(PresetKind::Object, 119)),
-            Some(Marker::Waypoint)
-        );
+        for wp in [119, 156, 157, 539] {
+            assert_eq!(
+                preset_marker(&preset(PresetKind::Object, wp)),
+                Some(Marker::Waypoint),
+                "{wp}"
+            );
+        }
         assert_eq!(preset_marker(&preset(PresetKind::Object, 16)), None);
         assert_eq!(preset_marker(&preset(PresetKind::Tile, 13)), Some(Marker::Exit));
         assert_eq!(
@@ -504,12 +482,14 @@ mod tests {
         let pm = render(&snap, w, h)?;
         assert_eq!((pm.width(), pm.height()), (w, h));
 
-        // Rounded corner stays transparent; the panel edge has the background alpha.
+        // No background panel: corners and edges are fully transparent.
         assert_eq!(
             pm.pixel(0, 0).map(tiny_skia::PremultipliedColorU8::alpha),
             Some(0)
         );
-        assert_eq!(pm.pixel(3, h / 2).context("edge pixel")?.alpha(), BACKGROUND[3]);
+        for (x, y) in [(3, h / 2), (w / 2, 0), (w - 1, h - 1), (w / 2, h - 3)] {
+            assert_eq!(pm.pixel(x, y).context("edge pixel")?.alpha(), 0, "{x},{y}");
+        }
 
         // Pixels in exactly the (opaque) player colour exist and all sit on the projected player.
         let v = View::fit(level_bounds(&snap), w, h);
@@ -527,6 +507,68 @@ mod tests {
             }
         }
         assert!(hits >= 9, "only {hits} player pixels");
+        Ok(())
+    }
+
+    fn rgba(pm: &Pixmap, x: u32, y: u32) -> Result<Rgba> {
+        let p = pm.pixel(x, y).with_context(|| format!("pixel {x},{y}"))?;
+        Ok([p.red(), p.green(), p.blue(), p.alpha()])
+    }
+
+    fn room(x: u32, y: u32, loaded: bool) -> Room {
+        Room {
+            x,
+            y,
+            w: 60,
+            h: 60,
+            loaded,
+        }
+    }
+
+    #[test]
+    fn adjacent_rooms_render_without_seams() -> Result<()> {
+        // Two unloaded rooms side by side in x, sharing the edge x = 60. The player is far off.
+        let mut snap = empty_snapshot(5, 115);
+        snap.level.rooms = vec![room(0, 0, false), room(60, 0, false)];
+        let (w, h) = (400, 400);
+        let pm = render(&snap, w, h)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+        let inside = |x: f64, y: f64| -> Result<Rgba> {
+            let (sx, sy) = v.to_screen(x, y);
+            #[allow(
+                clippy::cast_sign_loss,
+                clippy::cast_possible_truncation,
+                reason = "test points are inside the canvas"
+            )]
+            let (px, py) = (sx.floor() as u32, sy.floor() as u32);
+            rgba(&pm, px, py)
+        };
+        let fill = inside(30.0, 30.0)?;
+        // Every pixel along the shared edge looks like the inside of a room: no outline, no seam.
+        for i in 1..60 {
+            assert_eq!(inside(60.0, f64::from(i))?, fill, "seam at edge tile {i}");
+        }
+        assert_eq!(inside(90.0, 30.0)?, fill, "both rooms in the same colour");
+
+        // A loaded room next to an unloaded one: brighter, and no gap along the shared edge.
+        snap.level.rooms = vec![room(0, 0, false), room(60, 0, true)];
+        let pm2 = render(&snap, w, h)?;
+        let at = |x: f64, y: f64| -> Result<Rgba> {
+            let (sx, sy) = v.to_screen(x, y);
+            #[allow(
+                clippy::cast_sign_loss,
+                clippy::cast_possible_truncation,
+                reason = "test points are inside the canvas"
+            )]
+            let (px, py) = (sx.floor() as u32, sy.floor() as u32);
+            rgba(&pm2, px, py)
+        };
+        let (dim, bright) = (at(30.0, 30.0)?, at(90.0, 30.0)?);
+        assert!(bright[0] > dim[0] && bright[3] > dim[3], "{bright:?} vs {dim:?}");
+        for i in 1..60 {
+            let edge = at(60.0, f64::from(i))?;
+            assert!(edge[3] >= dim[3], "edge tile {i} darker than the rooms: {edge:?}");
+        }
         Ok(())
     }
 
