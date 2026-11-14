@@ -90,6 +90,14 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - **Packs/uniques**: live monsters with unique/champion flag (minions clustered to their leader); dead skipped.
 - **Accumulate per game**: markers persist in a cache keyed by (levelId, x, y) once seen, until the game (act ptr / seed) changes — so explored exits/waypoints stay on the map.
 
+## Item drops (added 2026-11-14, user request)
+- Show **important drops on the ground**: unique, set, gems, runes. Nothing else.
+- Ground items are units of type 4 in the same unit hash table (slot block 4). On the ground = item mode to confirm live
+  (classic D2: 3 = on floor). Like monsters, the client only knows items near the player — fine for drops.
+- Quality from ItemData (unitData `+0x10`; classic D2 quality at ItemData+0x00: 5 set, 7 unique); gems/runes by base
+  item txt id ranges (from items/misc txt). All offsets/ids **to verify live** before use.
+- Drawn as distinct icons (unique gold, set green, rune orange, gem by colour), dropped from the map once picked up.
+
 ## Overlay
 - Layer-shell surface, layer `overlay`, anchored top-right, default 400×400 (config), **empty input region** (click-through), no keyboard.
 - Draw current level only: room footprints (loaded rooms brighter), player dot, waypoint (blue), exits (purple + target name),
@@ -104,10 +112,11 @@ Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each re
 ## Milestones
 - [x] **M0 setup**: mise Rust pin, `cargo init`, lint config, rustfmt, PLAN.md + CLAUDE.md + .gitignore, `git init`, first commit.
    From here on the user can start sessions directly in `~/Work/d2r_map_overlay`.
-- [ ] **M1 reader**: `d2r-map-overlay --dump` prints one JSON snapshot. Validate against `research/rooms.py` / `presets.py` output in Jail 1 and Tower 5; confirm player chain `+0x150` and the elite flag bits.
+- [ ] **M1 reader** (a: process/image ✓, b: game snapshot + --dump): `d2r-map-overlay --dump` prints one JSON snapshot. Validate against `research/rooms.py` / `presets.py` output in Jail 1 and Tower 5; confirm player chain `+0x150` and the elite flag bits.
 - [ ] **M2 overlay**: draw a static snapshot file (no game needed) — layer-shell, click-through, iso render.
 - [ ] **M3 live**: reader thread + Hyprland focus hide/show; ~5 Hz redraw.
 - [ ] **M4 markers**: classification tables, per-game accumulation, exit labels.
+- [ ] **M4b item drops**: verify item unit/quality offsets live, show unique/set/gem/rune drops on the minimap.
 - [ ] **Cleanup**: remove D2RMH exe/launcher (`~/.local/bin/d2rmh`); keep classic 1.13c files for phase 2.
 - [ ] **Phase 2 (separate plan)**: map seed RE → d2mapapi-backed full markers from entry.
 
