@@ -112,6 +112,18 @@ pub mod preset {
     pub const TILE: u32 = 5;
 }
 
+/// `Act` (the unit's act; `unit::ACT`).
+pub mod act {
+    /// ptr to `ActMisc`. Live-verified 2026-11-15; older builds had it at +0x78 (now points into code).
+    pub const MISC: u64 = 0x70;
+}
+
+/// `ActMisc` (per-act game data).
+pub mod act_misc {
+    /// u16 difficulty: 0 Normal, 1 Nightmare, 2 Hell. Live-verified 2026-11-15 (Normal only).
+    pub const DIFFICULTY: u64 = 0x830;
+}
+
 /// `PlayerData` (unit data of a player).
 pub mod player_data {
     /// Character name, NUL-terminated.

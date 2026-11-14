@@ -3,10 +3,12 @@
 //! Pure: no I/O. The `--render` CLI writes the pixmap as PNG; the overlay copies it into a
 //! Wayland shm buffer.
 
+use ab_glyph::FontVec;
 use anyhow::{Context, Result};
 use tiny_skia::{FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use crate::game::{Bounds, Monster, Preset, PresetKind, Room, Snapshot};
+use crate::info;
 use crate::items::{DropKind, GemColour};
 
 /// Object txt ids of waypoints: every waypoint row of classic objects.txt. Live-verified: 119
@@ -275,15 +277,30 @@ pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
     out
 }
 
-/// Renders the snapshot's level into a new `width`×`height` pixmap. There is no background panel:
-/// everything outside the level shape and the markers is fully transparent.
+/// Renders the snapshot's level into a new `width`×`height` pixmap, with the info line (see
+/// [`info`]) at the bottom if a font is available. There is no background panel: everything
+/// outside the level shape, the markers and the text is fully transparent.
 ///
 /// # Errors
 /// Fails if the canvas size is zero or too large for tiny-skia.
 pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
+    render_with(snap, width, height, info::font())
+}
+
+/// The canvas height the map is fitted into: all of it, less the info line's band if there is a
+/// font to draw it with.
+pub fn map_height(height: u32, font: Option<&FontVec>) -> u32 {
+    font.map_or(height, |f| height.saturating_sub(info::band_height(f)).max(1))
+}
+
+/// [`render`] with an explicit font; `None` draws no info line and gives the map the full canvas.
+///
+/// # Errors
+/// Fails if the canvas size is zero or too large for tiny-skia.
+pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontVec>) -> Result<Pixmap> {
     let mut pm =
         Pixmap::new(width, height).with_context(|| format!("invalid canvas size {width}x{height}"))?;
-    let view = View::fit(level_bounds(snap), width, height);
+    let view = View::fit(level_bounds(snap), width, map_height(height, font));
     // The level is one continuous shape: all rooms in one path, then the loaded ones in a second
     // path on top. Separate fills per room would leave anti-aliasing seams along shared edges;
     // within one path the edges' coverage adds up, and the loaded layer blends onto the base fill
@@ -366,6 +383,9 @@ pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
             pm.stroke_path(&dot, &paint(MARKER_OUTLINE), &ring, Transform::identity(), None);
         }
     }
+    if let Some(font) = font {
+        info::draw(&mut pm, font, &info::info_line(snap.level.id, snap.difficulty));
+    }
     Ok(pm)
 }
 
@@ -436,6 +456,12 @@ mod tests {
 
     const FIXTURE: &str = include_str!("../tests/fixtures/jail1-snapshot.json");
 
+    /// Shadows `super::render` (a local item wins over the glob import): the map tests render
+    /// without the info line, so they don't depend on the fonts installed on this machine.
+    fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
+        render_with(snap, width, height, None)
+    }
+
     fn fixture() -> Result<Snapshot> {
         serde_json::from_str(FIXTURE).context("parsing the fixture")
     }
@@ -486,6 +512,7 @@ mod tests {
             monsters: vec![],
             ground_items: 0,
             drops: vec![],
+            difficulty: None,
             warnings: vec![],
         }
     }
@@ -873,6 +900,89 @@ mod tests {
         );
         let (gx, gy) = centre(at);
         assert_eq!(rgba(&pm, gx, gy)?, gem, "gem centre");
+        Ok(())
+    }
+
+    /// Light grey to white: the info line's glyph cores (13 px strokes are thin, so few are pure white).
+    fn is_text_white(p: Rgba) -> bool {
+        p.iter().all(|&c| c >= 200)
+    }
+
+    #[test]
+    fn info_line_is_drawn_in_the_bottom_band_only() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let mut snap = fixture()?;
+        snap.difficulty = Some(0);
+        let (w, h) = (400, 400);
+        let pm = render_with(&snap, w, h, Some(font))?;
+        let top = map_height(h, Some(font));
+        assert!(top < h && h - top < 40, "band {top}..{h}");
+        let (mut band, mut above) = (0, 0);
+        for y in 0..h {
+            for x in 0..w {
+                if is_text_white(rgba(&pm, x, y)?) {
+                    if y >= top { band += 1 } else { above += 1 }
+                }
+            }
+        }
+        assert!(band >= 50, "only {band} white text pixels in the band");
+        assert_eq!(above, 0, "white pixels above the band");
+        // The dark outline is there too: some opaque, dark pixels in the band.
+        let mut dark = 0;
+        for y in top..h {
+            for x in 0..w {
+                let p = rgba(&pm, x, y)?;
+                if p[3] >= 200 && p[0] < 40 {
+                    dark += 1;
+                }
+            }
+        }
+        assert!(dark >= 50, "only {dark} outline pixels");
+        // Without a font: no text, and the map gets the whole canvas.
+        let plain = render_with(&snap, w, h, None)?;
+        assert_eq!(map_height(h, None), h);
+        for y in top..h {
+            for x in 0..w {
+                assert!(!is_text_white(rgba(&plain, x, y)?), "{x},{y}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn map_fit_leaves_the_text_band_free() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let snap = fixture()?;
+        let (w, h) = (400, 400);
+        let top = map_height(h, Some(font));
+        let v = View::fit(level_bounds(&snap), w, top);
+        for r in &snap.level.rooms {
+            for (x, y) in [
+                (r.x, r.y),
+                (r.x + r.w, r.y),
+                (r.x + r.w, r.y + r.h),
+                (r.x, r.y + r.h),
+            ] {
+                let (_, sy) = v.to_screen(f64::from(x), f64::from(y));
+                assert!(sy <= px(f64::from(top)), "room corner at y {sy}, band from {top}");
+            }
+        }
+        // In the drawn pixmap the band holds no room fill: every non-transparent pixel there is
+        // text (white, grey edges) or its outline (black), never the rooms' blue-grey.
+        let pm = render_with(&snap, w, h, Some(font))?;
+        for y in top..h {
+            for x in 0..w {
+                let p = rgba(&pm, x, y)?;
+                let grey = p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1;
+                assert!(p[3] == 0 || grey, "non-text pixel {p:?} at {x},{y}");
+            }
+        }
         Ok(())
     }
 

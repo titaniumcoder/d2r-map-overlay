@@ -11,8 +11,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::items::{self, DropKind};
 use crate::offsets::{
-    ROOM_TILE_SCALE, item_data, item_mode, level, level_preset, monster_data, path, player_data, preset,
-    room_tile, room1, room2, static_path, unit, unit_table,
+    ROOM_TILE_SCALE, act, act_misc, item_data, item_mode, level, level_preset, monster_data, path,
+    player_data, preset, room_tile, room1, room2, static_path, unit, unit_table,
 };
 use crate::process::ReadMem;
 
@@ -70,7 +70,20 @@ pub struct Snapshot {
     /// The ground items worth showing.
     #[serde(default)]
     pub drops: Vec<ItemDrop>,
+    /// 0 Normal, 1 Nightmare, 2 Hell; `None` if unreadable (and in old fixtures).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<u8>,
     pub warnings: Vec<String>,
+}
+
+/// The difficulty from the raw `ActMisc` value; anything above Hell (2) is unknown.
+pub const fn difficulty_from_raw(raw: u16) -> Option<u8> {
+    match raw {
+        0 => Some(0),
+        1 => Some(1),
+        2 => Some(2),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -294,6 +307,7 @@ pub fn snapshot(
         }
     }
     let (ground_items, drops) = r.drops(unit_table, items_table);
+    let difficulty = player.act.and_then(|a| r.difficulty(a.0));
 
     if r.suppressed > 0 {
         r.warnings.push(format!("... and {} more warnings", r.suppressed));
@@ -307,6 +321,7 @@ pub fn snapshot(
         monsters,
         ground_items,
         drops,
+        difficulty,
         warnings: r.warnings,
     })
 }
@@ -566,6 +581,13 @@ impl<M: ReadMem> Reader<'_, M> {
     fn room_preset(&self, room: u64) -> Option<u32> {
         let record = self.ptr(room, room2::LEVEL_PRESET).ok().flatten()?;
         self.u32(record, level_preset::ID).ok()
+    }
+
+    /// The game's difficulty via act → `ActMisc`. Optional data like [`Reader::room_preset`]: an
+    /// unreadable chain is `None`, not a warning.
+    fn difficulty(&self, act_addr: u64) -> Option<u8> {
+        let misc = self.ptr(act_addr, act::MISC).ok().flatten()?;
+        difficulty_from_raw(self.u16(misc, act_misc::DIFFICULTY).ok()?)
     }
 
     fn presets(&mut self, room: u64, pos: RoomPos, out: &mut Vec<Preset>) {
@@ -1369,6 +1391,38 @@ mod tests {
             ],
             "first occurrence order, repeats dropped"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn difficulty_values() {
+        assert_eq!(difficulty_from_raw(0), Some(0));
+        assert_eq!(difficulty_from_raw(1), Some(1));
+        assert_eq!(difficulty_from_raw(2), Some(2));
+        for raw in [3, 7, 0x100, u16::MAX] {
+            assert_eq!(difficulty_from_raw(raw), None, "{raw}");
+        }
+    }
+
+    #[test]
+    fn difficulty_via_act_misc() -> Result<()> {
+        const ACT_MISC: u64 = 0x23_0000;
+        let mut m = world()?;
+        // The act isn't mapped in the base world: no difficulty, no warning, not in the JSON.
+        let s = snapshot(&m, TABLE, None, None)?;
+        assert_eq!(s.difficulty, None);
+        assert_eq!(serde_json::to_value(&s)?.pointer("/difficulty"), None);
+        put(&mut m, ACT, 0x80, &[(act::MISC, &ACT_MISC.to_le_bytes())])?;
+        for (raw, want) in [(0u16, Some(0)), (2, Some(2)), (5, None)] {
+            put(
+                &mut m,
+                ACT_MISC,
+                0x840,
+                &[(act_misc::DIFFICULTY, &raw.to_le_bytes())],
+            )?;
+            let s = snapshot(&m, TABLE, None, None)?;
+            assert_eq!(s.difficulty, want, "raw {raw}");
+        }
         Ok(())
     }
 

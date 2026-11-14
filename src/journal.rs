@@ -484,6 +484,7 @@ mod tests {
             monsters: vec![],
             ground_items: 0,
             drops: vec![],
+            difficulty: None,
             warnings: vec![],
         }
     }
