@@ -1,0 +1,28 @@
+[package]
+name = "d2r-map-overlay"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+description = "Read-only Diablo II: Resurrected minimap overlay for Hyprland (Linux, Proton)"
+publish = false
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+indexing_slicing = "warn"
+cast_possible_truncation = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,4 @@
+/target
+# captured memory fixtures can be large; only small, checked-in ones live in tests/fixtures/
+/captures/
+*.png
