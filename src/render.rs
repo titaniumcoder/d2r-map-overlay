@@ -4,9 +4,10 @@
 //! Wayland shm buffer.
 
 use anyhow::{Context, Result};
-use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use crate::game::{Bounds, Monster, Preset, PresetKind, Room, Snapshot};
+use crate::items::{DropKind, GemColour};
 
 /// Object txt ids of waypoints: every waypoint row of classic objects.txt. Live-verified: 119
 /// (Act 1 town), 156 (Act 2 outdoor, Dry Hills), 157 (Act 1 indoor, Jail 1).
@@ -26,7 +27,17 @@ const ROOM: Rgba = [70, 74, 84, 120];
 const ROOM_LOADED: Rgba = [125, 130, 142, 160];
 const MARKER_OUTLINE: Rgba = [0, 0, 0, 220];
 
-/// Something drawn as a dot on the map. Variant order is draw order (player last, on top).
+/// Outline shape of a marker. Monsters and presets are circles; drops are diamonds and squares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    Circle,
+    /// Square on its tip; the size is the centre-to-tip distance.
+    Diamond,
+    /// Axis-aligned; the size is half the side.
+    Square,
+}
+
+/// Something drawn on the map. Variant order is draw order (player last, on top).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Marker {
     /// Tile preset: a level exit.
@@ -36,19 +47,37 @@ pub enum Marker {
     Special,
     /// Live superunique, champion or unique monster.
     Elite,
+    /// An item on the ground worth picking up.
+    Drop(DropKind),
     Player,
 }
 
 impl Marker {
-    /// Fill colour and radius in px.
-    const fn style(self) -> (Rgba, f32) {
+    /// Fill colour, size in px (radius, or see [`Shape`]) and shape.
+    const fn style(self) -> (Rgba, f32, Shape) {
         match self {
-            Self::Exit => ([170, 90, 255, 255], 5.0),
-            Self::Waypoint => ([60, 140, 255, 255], 5.0),
-            Self::Special => ([255, 110, 40, 255], 4.5),
-            Self::Elite => ([230, 30, 30, 255], 3.5),
-            Self::Player => ([40, 255, 60, 255], 4.5),
+            Self::Exit => ([170, 90, 255, 255], 5.0, Shape::Circle),
+            Self::Waypoint => ([60, 140, 255, 255], 5.0, Shape::Circle),
+            Self::Special => ([255, 110, 40, 255], 4.5, Shape::Circle),
+            Self::Elite => ([230, 30, 30, 255], 3.5, Shape::Circle),
+            Self::Drop(DropKind::Unique) => ([235, 190, 60, 255], 5.0, Shape::Diamond),
+            Self::Drop(DropKind::Set) => ([30, 220, 30, 255], 5.0, Shape::Diamond),
+            Self::Drop(DropKind::Rune(_)) => ([255, 150, 20, 255], 3.5, Shape::Square),
+            Self::Drop(DropKind::Gem(colour)) => (gem_colour(colour), 3.5, Shape::Diamond),
+            Self::Player => ([40, 255, 60, 255], 4.5, Shape::Circle),
         }
+    }
+}
+
+const fn gem_colour(c: GemColour) -> Rgba {
+    match c {
+        GemColour::Amethyst => [175, 80, 235, 255],
+        GemColour::Topaz => [255, 230, 40, 255],
+        GemColour::Sapphire => [60, 120, 255, 255],
+        GemColour::Emerald => [40, 200, 90, 255],
+        GemColour::Ruby => [235, 30, 50, 255],
+        GemColour::Diamond => [245, 245, 245, 255],
+        GemColour::Skull => [185, 185, 185, 255],
     }
 }
 
@@ -157,6 +186,11 @@ pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
                 .filter(|m| is_elite(m))
                 .map(|m| (Marker::Elite, f64::from(m.x), f64::from(m.y))),
         )
+        .chain(
+            snap.drops
+                .iter()
+                .map(|d| (Marker::Drop(d.kind), f64::from(d.x), f64::from(d.y))),
+        )
         .collect();
     out.push((Marker::Player, f64::from(snap.player.x), f64::from(snap.player.y)));
     // Stable sort: keeps snapshot order within one kind.
@@ -200,9 +234,9 @@ pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
         ..Stroke::default()
     };
     for (marker, x, y) in markers(snap) {
-        let (colour, radius) = marker.style();
+        let (colour, size, shape) = marker.style();
         let (cx, cy) = view.to_screen(x, y);
-        if let Some(dot) = PathBuilder::from_circle(cx, cy, radius) {
+        if let Some(dot) = marker_path(shape, cx, cy, size) {
             pm.fill_path(
                 &dot,
                 &paint(colour),
@@ -214,6 +248,25 @@ pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
         }
     }
     Ok(pm)
+}
+
+/// The outline of a marker centred on (`cx`, `cy`); `None` for a degenerate size.
+fn marker_path(shape: Shape, cx: f32, cy: f32, size: f32) -> Option<Path> {
+    match shape {
+        Shape::Circle => PathBuilder::from_circle(cx, cy, size),
+        Shape::Square => {
+            Rect::from_xywh(cx - size, cy - size, 2.0 * size, 2.0 * size).map(PathBuilder::from_rect)
+        }
+        Shape::Diamond => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx, cy - size);
+            pb.line_to(cx + size, cy);
+            pb.line_to(cx, cy + size);
+            pb.line_to(cx - size, cy);
+            pb.close();
+            pb.finish()
+        }
+    }
 }
 
 /// One path with a parallelogram per room, all wound the same way (`None` if there are none).
@@ -243,7 +296,7 @@ fn paint([r, g, b, a]: Rgba) -> Paint<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::{Addr, Level, Player};
+    use crate::game::{Addr, ItemDrop, Level, Player};
 
     const FIXTURE: &str = include_str!("../tests/fixtures/jail1-snapshot.json");
 
@@ -294,7 +347,8 @@ mod tests {
             presets: vec![],
             room_links: vec![],
             monsters: vec![],
-            items: vec![],
+            ground_items: 0,
+            drops: vec![],
             warnings: vec![],
         }
     }
@@ -494,7 +548,7 @@ mod tests {
         // Pixels in exactly the (opaque) player colour exist and all sit on the projected player.
         let v = View::fit(level_bounds(&snap), w, h);
         let (cx, cy) = v.to_screen(f64::from(snap.player.x), f64::from(snap.player.y));
-        let (player, radius) = Marker::Player.style();
+        let (player, radius, _) = Marker::Player.style();
         let mut hits = 0;
         for y in 0..h {
             for x in 0..w {
@@ -569,6 +623,110 @@ mod tests {
             let edge = at(60.0, f64::from(i))?;
             assert!(edge[3] >= dim[3], "edge tile {i} darker than the rooms: {edge:?}");
         }
+        Ok(())
+    }
+
+    fn drop_at(kind: DropKind, x: u32, y: u32) -> ItemDrop {
+        ItemDrop {
+            id: 1,
+            code: None,
+            kind,
+            x,
+            y,
+        }
+    }
+
+    #[test]
+    fn drops_are_markers_above_elites() {
+        let mut snap = empty_snapshot(5, 5);
+        snap.monsters = vec![monster(0x08, 1)];
+        snap.drops = vec![
+            drop_at(DropKind::Unique, 1, 1),
+            drop_at(DropKind::Rune(8), 2, 2),
+            drop_at(DropKind::Gem(GemColour::Ruby), 3, 3),
+        ];
+        let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                Marker::Elite,
+                Marker::Drop(DropKind::Gem(GemColour::Ruby)),
+                Marker::Drop(DropKind::Rune(8)),
+                Marker::Drop(DropKind::Unique),
+                Marker::Player,
+            ],
+            "unique on top of the other drops, the player on top of all"
+        );
+        // Drops never look like a dot: every drop style has a non-circle shape.
+        for kind in [
+            DropKind::Unique,
+            DropKind::Set,
+            DropKind::Rune(1),
+            DropKind::Gem(GemColour::Skull),
+        ] {
+            assert_ne!(Marker::Drop(kind).style().2, Shape::Circle, "{kind:?}");
+        }
+    }
+
+    /// Pixels in exactly `colour`: (count, max |dx|, max |dy|) from (`cx`, `cy`).
+    fn colour_spread(pm: &Pixmap, colour: Rgba, (cx, cy): (f32, f32)) -> Result<(u32, f64, f64)> {
+        let (mut hits, mut dx, mut dy) = (0, 0.0f64, 0.0f64);
+        for y in 0..pm.height() {
+            for x in 0..pm.width() {
+                if rgba(pm, x, y)? == colour {
+                    hits += 1;
+                    dx = dx.max((f64::from(x) + 0.5 - f64::from(cx)).abs());
+                    dy = dy.max((f64::from(y) + 0.5 - f64::from(cy)).abs());
+                }
+            }
+        }
+        Ok((hits, dx, dy))
+    }
+
+    #[test]
+    fn rune_and_gem_markers_render_where_the_drop_is() -> Result<()> {
+        let mut snap = empty_snapshot(5, 115);
+        snap.level.rooms = vec![room(0, 0, false), room(60, 0, true)];
+        snap.drops = vec![
+            drop_at(DropKind::Rune(30), 30, 30),
+            drop_at(DropKind::Gem(GemColour::Sapphire), 90, 30),
+        ];
+        let (w, h) = (400, 400);
+        let pm = render(&snap, w, h)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+
+        let (rune, half, shape) = Marker::Drop(DropKind::Rune(30)).style();
+        assert_eq!(shape, Shape::Square);
+        let at = v.to_screen(30.0, 30.0);
+        let (hits, dx, dy) = colour_spread(&pm, rune, at)?;
+        assert!(hits >= 9, "only {hits} rune pixels");
+        assert!(
+            dx <= f64::from(half) && dy <= f64::from(half),
+            "rune spread {dx},{dy}"
+        );
+        #[allow(
+            clippy::cast_sign_loss,
+            clippy::cast_possible_truncation,
+            reason = "test points are inside the canvas"
+        )]
+        let centre = |(x, y): (f32, f32)| (x.floor() as u32, y.floor() as u32);
+        let (rx, ry) = centre(at);
+        assert_eq!(rgba(&pm, rx, ry)?, rune, "rune centre");
+        // The dark outline sits on the square's edge.
+        let (edge_x, _) = centre((at.0 + half, at.1));
+        let edge = rgba(&pm, edge_x, ry)?;
+        assert!(edge[0] < 150 && edge[3] > 150, "outline at the edge: {edge:?}");
+
+        let (gem, size, _) = Marker::Drop(DropKind::Gem(GemColour::Sapphire)).style();
+        let at = v.to_screen(90.0, 30.0);
+        let (hits, dx, dy) = colour_spread(&pm, gem, at)?;
+        assert!(hits >= 4, "only {hits} gem pixels");
+        assert!(
+            dx + dy <= f64::from(size) + 1.0,
+            "gem pixels outside the diamond: {dx},{dy}"
+        );
+        let (gx, gy) = centre(at);
+        assert_eq!(rgba(&pm, gx, gy)?, gem, "gem centre");
         Ok(())
     }
 

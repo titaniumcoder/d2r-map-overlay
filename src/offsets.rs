@@ -121,8 +121,35 @@ pub mod monster_data {
     pub const SUPERUNIQUE: u8 = 0x02;
 }
 
-/// `ItemData`: offsets unverified; `--dump` prints the raw head for live verification.
+/// `StaticPath`: the path of a unit that doesn't move (items; `path` is for moving units).
+pub mod static_path {
+    /// u32 world x (tiles). Live-verified 2026-11-14 with a dropped gem next to the player.
+    pub const X: u64 = 0x10;
+    /// u32 world y (tiles).
+    pub const Y: u64 = 0x14;
+}
+
+/// Item unit modes (`unit::MODE` of an item).
+pub mod item_mode {
+    /// Lying on the ground (live-verified 2026-11-14).
+    pub const ON_GROUND: u32 = 3;
+}
+
+/// `ItemData` (unit data of an item).
 pub mod item_data {
-    /// Bytes of item unit data dumped raw.
-    pub const HEAD_LEN: usize = 0x20;
+    /// u32 quality (classic D2: 1 low, 2 normal, 3 superior, 4 magic, 5 set, 6 rare, 7 unique,
+    /// 8 crafted). Live-verified: a normal gem reads 2.
+    pub const QUALITY: u64 = 0x00;
+    /// Classic values; to verify live with a set and a unique drop.
+    pub const QUALITY_SET: u32 = 5;
+    pub const QUALITY_UNIQUE: u32 = 7;
+}
+
+/// The game's items table (one record per items.txt row, weapons then armor then misc; D2R row =
+/// classic row + 15). Found at run time on the heap (`items::find_table`).
+pub mod items_txt {
+    /// Bytes per record.
+    pub const STRIDE: u64 = 0x1C0;
+    /// 4-byte item code, space-padded (`gcg `, `r01 `).
+    pub const CODE: u64 = 0x00;
 }

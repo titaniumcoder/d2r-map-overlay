@@ -143,7 +143,8 @@ mod tests {
             presets: vec![],
             room_links: vec![],
             monsters: vec![],
-            items: vec![],
+            ground_items: 0,
+            drops: vec![],
             warnings: vec![],
         }
     }

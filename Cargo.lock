@@ -113,6 +113,7 @@ name = "d2r-map-overlay"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "memchr",
  "serde",
  "serde_json",
  "smithay-client-toolkit",

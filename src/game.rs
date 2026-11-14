@@ -1,18 +1,18 @@
-//! Reads one snapshot of the game state (player, level layout, presets, monsters, items).
+//! Reads one snapshot of the game state (player, level layout, presets, monsters, ground drops).
 //!
 //! Lists in game memory change under us while we read, so a single bad pointer deep in a
 //! list only skips that entry and is recorded in `Snapshot::warnings`; only a missing
 //! player (or its level) fails the snapshot.
 
 use std::collections::HashSet;
-use std::fmt::Write as _;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::items::{self, DropKind};
 use crate::offsets::{
-    ROOM_TILE_SCALE, item_data, level, monster_data, path, player_data, preset, room_tile, room1, room2,
-    unit, unit_table,
+    ROOM_TILE_SCALE, item_data, item_mode, level, monster_data, path, player_data, preset, room_tile, room1,
+    room2, static_path, unit, unit_table,
 };
 use crate::process::ReadMem;
 
@@ -64,7 +64,12 @@ pub struct Snapshot {
     pub presets: Vec<Preset>,
     pub room_links: Vec<RoomLink>,
     pub monsters: Vec<Monster>,
-    pub items: Vec<Item>,
+    /// Item units lying on the ground (shown or not). Defaults keep older dumps loadable.
+    #[serde(default)]
+    pub ground_items: u32,
+    /// The ground items worth showing.
+    #[serde(default)]
+    pub drops: Vec<ItemDrop>,
     pub warnings: Vec<String>,
 }
 
@@ -182,25 +187,29 @@ impl Monster {
     }
 }
 
+/// A ground item worth showing (see [`items::classify`]).
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Item {
-    pub addr: Addr,
+pub struct ItemDrop {
     pub id: u32,
-    pub txt: u32,
-    pub mode: u32,
-    /// `None` if the item has no path (position struct to verify live).
-    pub x: Option<u16>,
-    pub y: Option<u16>,
-    /// Hex of the first `item_data::HEAD_LEN` bytes of the unit data; `None` if unreadable.
-    pub unit_data_head: Option<String>,
+    /// Item code (`"gcg"`); `None` if the items table is unknown.
+    pub code: Option<String>,
+    pub kind: DropKind,
+    pub x: u32,
+    pub y: u32,
 }
 
-/// Reads one snapshot. `unit_table` is the hash table address from [`crate::image::Image::unit_table`].
+/// Reads one snapshot. `unit_table` is the hash table address from [`crate::image::Image::unit_table`];
+/// `items_table` is the item-code table from [`items::find_table`] (`None`: unique and set drops only).
 ///
 /// # Errors
 /// Fails if no live player unit is found (or none named `player_name`), or the player's level
 /// can't be read. Unreadable entries elsewhere become warnings.
-pub fn snapshot(mem: &impl ReadMem, unit_table: u64, player_name: Option<&str>) -> Result<Snapshot> {
+pub fn snapshot(
+    mem: &impl ReadMem,
+    unit_table: u64,
+    items_table: Option<u64>,
+    player_name: Option<&str>,
+) -> Result<Snapshot> {
     let mut r = Reader {
         mem,
         warnings: Vec::new(),
@@ -274,13 +283,7 @@ pub fn snapshot(mem: &impl ReadMem, unit_table: u64, player_name: Option<&str>) 
             Err(e) => r.warn(format!("monster {addr:#x}: {e:#}")),
         }
     }
-    let mut items = Vec::new();
-    for addr in r.units(unit_table, unit_table::ITEM) {
-        match r.item(addr) {
-            Ok(i) => items.push(i),
-            Err(e) => r.warn(format!("item {addr:#x}: {e:#}")),
-        }
-    }
+    let (ground_items, drops) = r.drops(unit_table, items_table);
 
     if r.suppressed > 0 {
         r.warnings.push(format!("... and {} more warnings", r.suppressed));
@@ -292,7 +295,8 @@ pub fn snapshot(mem: &impl ReadMem, unit_table: u64, player_name: Option<&str>) 
         presets,
         room_links,
         monsters,
-        items,
+        ground_items,
+        drops,
         warnings: r.warnings,
     })
 }
@@ -609,23 +613,49 @@ impl<M: ReadMem> Reader<'_, M> {
         })
     }
 
-    fn item(&self, addr: u64) -> Result<Item> {
-        let head = self.unit_head(addr, unit_table::ITEM)?;
-        let pos = head.path.map(|p| self.pos(p)).transpose()?;
-        // Unit data is raw diagnostics only: an unreadable one is reported as null, not skipped.
-        let unit_data_head = head
-            .unit_data
-            .and_then(|d| self.bytes(d, 0, item_data::HEAD_LEN).ok())
-            .map(|b| hex(&b));
-        Ok(Item {
-            addr: Addr(addr),
+    /// The number of items on the ground, and those worth showing.
+    fn drops(&mut self, unit_table: u64, items_table: Option<u64>) -> (u32, Vec<ItemDrop>) {
+        let mut ground = 0u32;
+        let mut drops = Vec::new();
+        for addr in self.units(unit_table, unit_table::ITEM) {
+            let head = match self.unit_head(addr, unit_table::ITEM) {
+                Ok(head) => head,
+                Err(e) => {
+                    self.warn(format!("item {addr:#x}: {e:#}"));
+                    continue;
+                }
+            };
+            // Inventory, equipped, cursor and belt items are units too; only the ground counts.
+            if head.mode != item_mode::ON_GROUND {
+                continue;
+            }
+            ground = ground.saturating_add(1);
+            match self.item_drop(&head, items_table) {
+                Ok(Some(d)) => drops.push(d),
+                Ok(None) => {}
+                Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
+            }
+        }
+        (ground, drops)
+    }
+
+    /// The ground item `head` as a drop, or `None` if it isn't one worth showing.
+    fn item_drop(&self, head: &UnitHead, items_table: Option<u64>) -> Result<Option<ItemDrop>> {
+        let data = head.unit_data.context("item has no unit data")?;
+        let quality = self.u32(data, item_data::QUALITY)?;
+        let code = items_table.and_then(|t| items::read_code(self.mem, t, head.txt));
+        let Some(kind) = items::classify(quality, code) else {
+            return Ok(None);
+        };
+        // Items have a static path: u32 position at other offsets than a moving unit's path.
+        let path = head.path.context("ground item has no path")?;
+        Ok(Some(ItemDrop {
             id: head.id,
-            txt: head.txt,
-            mode: head.mode,
-            x: pos.map(|p| p.0),
-            y: pos.map(|p| p.1),
-            unit_data_head,
-        })
+            code: code.map(items::code_text),
+            kind,
+            x: self.u32(path, static_path::X)?,
+            y: self.u32(path, static_path::Y)?,
+        }))
     }
 }
 
@@ -640,15 +670,6 @@ fn world(room_units: u32) -> Result<u32> {
     room_units
         .checked_mul(ROOM_TILE_SCALE)
         .with_context(|| format!("room coordinate {room_units} overflows world tiles"))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len().saturating_mul(2));
-    for b in bytes {
-        // Writing to a String can't fail.
-        let _ = write!(s, "{b:02x}");
-    }
-    s
 }
 
 #[cfg(test)]
@@ -903,7 +924,7 @@ mod tests {
 
     #[test]
     fn player_selection() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None)?;
+        let s = snapshot(&world()?, TABLE, None, None)?;
         assert_eq!(
             s.player.addr,
             Addr(P_ALICE),
@@ -935,18 +956,18 @@ mod tests {
         let mut m = world()?;
         // R2 now claims to belong to another level: the walk keeps R0, R1 and stops with a warning.
         room(&mut m, R2, (10, 26, 4, 4), 0, 0, L_OTHER, 0, 0)?;
-        let s = snapshot(&m, TABLE, None)?;
+        let s = snapshot(&m, TABLE, None, None)?;
         assert_eq!(s.level.rooms.len(), 2);
         assert!(s.warnings.iter().any(|w| w.contains("room walk stopped")));
         // A foreign first room means the level offsets are wrong: that's an error, not an empty map.
         level_struct(&mut m, LEVEL, 21, R_OTHER)?;
-        assert!(snapshot(&m, TABLE, None).is_err());
+        assert!(snapshot(&m, TABLE, None, None).is_err());
         Ok(())
     }
 
     #[test]
     fn level_rooms_in_world_tiles() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None)?;
+        let s = snapshot(&world()?, TABLE, None, None)?;
         assert_eq!(s.level.id, 21);
         assert_eq!(
             s.level.rooms,
@@ -988,7 +1009,7 @@ mod tests {
 
     #[test]
     fn presets_and_links() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None)?;
+        let s = snapshot(&world()?, TABLE, None, None)?;
         assert_eq!(
             s.presets,
             vec![
@@ -1035,7 +1056,7 @@ mod tests {
 
     #[test]
     fn monsters_and_items() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None)?;
+        let s = snapshot(&world()?, TABLE, None, None)?;
         let monster = |addr, txt, x, y, flags, name_seed| Monster {
             addr: Addr(addr),
             id: u32::try_from(addr >> 12).unwrap_or_default(),
@@ -1052,18 +1073,134 @@ mod tests {
             "M0 -> M1 chain via unit NEXT"
         );
         assert_eq!(
-            s.items,
-            vec![Item {
-                addr: Addr(I0),
-                id: 0x800,
-                txt: 600,
-                mode: 1,
-                x: None,
-                y: None,
-                unit_data_head: Some(
-                    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f".into()
+            (s.ground_items, s.drops.len()),
+            (0, 0),
+            "the only item is not on the ground"
+        );
+        Ok(())
+    }
+
+    const ITEMS: u64 = 0x90_0000;
+    const I1: u64 = 0x80_1000;
+    const I2: u64 = 0x80_2000;
+    const I3: u64 = 0x80_3000;
+    const I4: u64 = 0x80_4000;
+    const I5: u64 = 0x80_5000;
+    const I6: u64 = 0x80_6000;
+
+    /// An item unit with its `ItemData` (quality) and static path (position) at `addr + 0x200`/`+ 0x400`.
+    fn item(
+        mem: &mut FakeMem,
+        addr: u64,
+        (txt, mode, quality): (u32, u32, u32),
+        (x, y): (u32, u32),
+        next: u64,
+    ) -> Result<()> {
+        let (data, path) = (addr + 0x200, addr + 0x400);
+        put(
+            mem,
+            addr,
+            UNIT_SIZE,
+            &[
+                (unit::TYPE, &unit_table::ITEM.to_le_bytes()),
+                (unit::TXT, &txt.to_le_bytes()),
+                (unit::ID, &(u32::try_from(addr >> 12)?).to_le_bytes()),
+                (unit::MODE, &mode.to_le_bytes()),
+                (unit::UNIT_DATA, &data.to_le_bytes()),
+                (unit::PATH, &path.to_le_bytes()),
+                (unit::NEXT, &next.to_le_bytes()),
+            ],
+        )?;
+        put(mem, data, 0x20, &[(item_data::QUALITY, &quality.to_le_bytes())])?;
+        // A dynamic path's u16 x/y offsets hold something else on a static path (live: 22407, 0).
+        put(
+            mem,
+            path,
+            0x20,
+            &[
+                (path::X, &22407u16.to_le_bytes()),
+                (static_path::X, &x.to_le_bytes()),
+                (static_path::Y, &y.to_le_bytes()),
+            ],
+        )
+    }
+
+    /// Items table with codes for rows 1 (axe), 587 (chipped emerald) and 625 (El rune).
+    fn items_table(mem: &mut FakeMem) -> Result<()> {
+        let stride = usize::try_from(crate::offsets::items_txt::STRIDE)?;
+        let mut b = vec![0u8; 700 * stride];
+        for (row, code) in [(1, b"axe "), (587, b"gcg "), (625, b"r01 ")] {
+            b.get_mut(row * stride..row * stride + 4)
+                .context("row in table")?
+                .copy_from_slice(code);
+        }
+        mem.add(ITEMS, b);
+        Ok(())
+    }
+
+    /// I0 (no path, mode 1) → ground gem, ground normal axe, ground unique axe, ground rune,
+    /// rune in the inventory (mode 0), ground set item.
+    fn world_with_items() -> Result<FakeMem> {
+        let mut m = world()?;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        item(&mut m, I1, (587, 3, 2), (5323, 5622), I2)?;
+        item(&mut m, I2, (1, 3, 2), (10, 11), I3)?;
+        item(&mut m, I3, (1, 3, 7), (12, 13), I4)?;
+        item(&mut m, I4, (625, 3, 2), (14, 15), I5)?;
+        item(&mut m, I5, (625, 0, 2), (16, 17), I6)?;
+        item(&mut m, I6, (1, 3, 5), (18, 19), 0)?;
+        items_table(&mut m)?;
+        Ok(m)
+    }
+
+    fn drop_of(addr: u64, code: Option<&str>, kind: DropKind, (x, y): (u32, u32)) -> ItemDrop {
+        ItemDrop {
+            id: u32::try_from(addr >> 12).unwrap_or_default(),
+            code: code.map(str::to_owned),
+            kind,
+            x,
+            y,
+        }
+    }
+
+    #[test]
+    fn ground_drops() -> Result<()> {
+        let m = world_with_items()?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), None)?;
+        assert_eq!(
+            s.ground_items, 5,
+            "I0 (mode 1) and I5 (mode 0) are not on the ground"
+        );
+        assert_eq!(
+            s.drops,
+            vec![
+                drop_of(
+                    I1,
+                    Some("gcg"),
+                    DropKind::Gem(items::GemColour::Emerald),
+                    (5323, 5622)
                 ),
-            }]
+                drop_of(I3, Some("axe"), DropKind::Unique, (12, 13)),
+                drop_of(I4, Some("r01"), DropKind::Rune(1), (14, 15)),
+                drop_of(I6, Some("axe"), DropKind::Set, (18, 19)),
+            ],
+            "static-path positions; the normal axe and the inventory rune are left out"
+        );
+        assert!(
+            s.warnings.iter().all(|w| !w.starts_with("item")),
+            "{:?}",
+            s.warnings
+        );
+
+        // Without the items table only quality tells: unique and set, no codes.
+        let s = snapshot(&m, TABLE, None, None)?;
+        assert_eq!(s.ground_items, 5);
+        assert_eq!(
+            s.drops,
+            vec![
+                drop_of(I3, None, DropKind::Unique, (12, 13)),
+                drop_of(I6, None, DropKind::Set, (18, 19)),
+            ]
         );
         Ok(())
     }
@@ -1071,9 +1208,9 @@ mod tests {
     #[test]
     fn player_by_name() -> Result<()> {
         let mem = world()?;
-        let s = snapshot(&mem, TABLE, Some("Bob"))?;
+        let s = snapshot(&mem, TABLE, None, Some("Bob"))?;
         assert_eq!((s.player.addr, s.player.class, s.player.x), (Addr(P_BOB), 5, 95));
-        let err = snapshot(&mem, TABLE, Some("Ghost"))
+        let err = snapshot(&mem, TABLE, None, Some("Ghost"))
             .err()
             .context("stale player must not match")?;
         assert!(err.to_string().contains("\"Alice\", \"Bob\""), "{err}");
@@ -1085,7 +1222,9 @@ mod tests {
         let mut mem = world()?;
         table(&mut mem, &[(unit_table::PLAYER, 3, P_STALE)])?;
         unit(&mut mem, P_STALE, 0, 1, PD_STALE, 0, 0, 0)?;
-        let err = snapshot(&mem, TABLE, None).err().context("expected error")?;
+        let err = snapshot(&mem, TABLE, None, None)
+            .err()
+            .context("expected error")?;
         assert!(err.to_string().contains("not in a game?"), "{err}");
         Ok(())
     }
@@ -1098,7 +1237,7 @@ mod tests {
         table(&mut mem, &slots)?;
         unit(&mut mem, M2, 1, 42, MD0, ACT, PATH_M2, M2)?;
         unit_path(&mut mem, PATH_M2, 70, 120, ROOM1_0)?;
-        let s = snapshot(&mem, TABLE, None)?;
+        let s = snapshot(&mem, TABLE, None, None)?;
         assert_eq!(
             s.monsters.iter().map(|m| m.txt).collect::<Vec<_>>(),
             vec![40, 41, 42]
@@ -1111,7 +1250,7 @@ mod tests {
     fn unreadable_unit_is_a_warning() -> Result<()> {
         let mut mem = world()?;
         unit(&mut mem, M1, 1, 41, MD1, ACT, PATH_M1, UNMAPPED)?;
-        let s = snapshot(&mem, TABLE, None)?;
+        let s = snapshot(&mem, TABLE, None, None)?;
         assert_eq!(s.monsters.len(), 2);
         assert!(
             s.warnings
@@ -1146,7 +1285,7 @@ mod tests {
         preset_unit(&mut m, PR_DUP0, preset::OBJECT, 119, 3, 4, PR_DUP1)?;
         preset_unit(&mut m, PR_DUP1, preset::OBJECT, 119, 3, 4, PR_DUP2)?;
         preset_unit(&mut m, PR_DUP2, preset::MONSTER, 119, 3, 4, 0)?;
-        let s = snapshot(&m, TABLE, None)?;
+        let s = snapshot(&m, TABLE, None, None)?;
         let got: Vec<(PresetKind, u32, u32, u32)> =
             s.presets.iter().map(|p| (p.kind, p.txt, p.x, p.y)).collect();
         assert_eq!(
@@ -1175,13 +1314,22 @@ mod tests {
 
     #[test]
     fn json_shape() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None)?;
+        let s = snapshot(&world()?, TABLE, None, None)?;
         let v = serde_json::to_value(&s)?;
         let at = |p: &str| v.pointer(p).cloned().unwrap_or_default();
         assert_eq!(at("/player/addr"), "0x201000");
         assert_eq!(at("/presets/0/kind"), "object");
         assert_eq!(at("/presets/2/kind"), 9);
-        assert_eq!(v.pointer("/items/0/x"), Some(&serde_json::Value::Null));
+        let s = snapshot(&world_with_items()?, TABLE, Some(ITEMS), None)?;
+        let v = serde_json::to_value(&s)?;
+        assert_eq!(
+            v.pointer("/drops/0"),
+            Some(
+                &serde_json::json!({"id": 0x801, "code": "gcg", "kind": {"gem": "emerald"}, "x": 5323, "y": 5622})
+            )
+        );
+        assert_eq!(v.pointer("/drops/1/kind"), Some(&serde_json::json!("unique")));
+        assert_eq!(v.pointer("/drops/2/kind"), Some(&serde_json::json!({"rune": 1})));
         Ok(())
     }
 }

@@ -144,7 +144,7 @@ Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each re
 - [x] **M2 overlay**: draw a static snapshot file (no game needed) — layer-shell, click-through, iso render.
 - [x] **M3 live**: reader thread + Hyprland focus hide/show; ~5 Hz redraw.
 - [ ] **M4 markers**: classification tables, per-game accumulation, exit labels.
-- [ ] **M4b item drops**: verify item unit/quality offsets live, show unique/set/gem/rune drops on the minimap.
+- [ ] **M4b item drops**: implemented 2026-11-14 (items table found live; static path verified with a gem). Open: confirm unique (7) and set (5) quality with real drops, then tick.
 - [ ] **Cleanup**: remove D2RMH exe/launcher (`~/.local/bin/d2rmh`); keep classic 1.13c files for phase 2.
 - [ ] **Phase 2 (separate plan)**: map seed RE → d2mapapi-backed full markers from entry.
 

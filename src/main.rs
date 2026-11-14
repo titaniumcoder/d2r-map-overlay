@@ -5,6 +5,7 @@
 mod game;
 mod hypr;
 mod image;
+mod items;
 mod live;
 mod offset_cache;
 mod offsets;
@@ -132,7 +133,8 @@ fn dump(player: Option<&str>) -> Result<()> {
     let mem = process::ProcMem::open(pid)?;
     let img = image::find_image(&maps, &mem).context("locating D2R.exe image")?;
     let table = img.unit_table(&mem, offset_cache::default_path().as_deref(), true)?;
-    let snap = game::snapshot(&mem, table.addr, player)?;
+    let items_table = items::locate(pid, &mem);
+    let snap = game::snapshot(&mem, table.addr, items_table, player)?;
     println!("{}", serde_json::to_string_pretty(&snap)?);
     Ok(())
 }

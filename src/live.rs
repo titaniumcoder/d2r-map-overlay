@@ -3,11 +3,13 @@
 //! Waits for D2R, opens its memory, locates the image and unit table once per process, then
 //! snapshots and renders ~5 times a second. Each snapshot is folded into a [`Session`]
 //! (superunique kills); unchanged results are not re-rendered or sent. The overlay is
-//! hidden in towns and outside a game.
+//! hidden in towns and outside a game. The item-code table is searched once per process, in a
+//! background thread, when the first item lies on the ground.
 
 use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -17,7 +19,7 @@ use crate::game::{self, Snapshot};
 use crate::overlay::Msg;
 use crate::process::ProcMem;
 use crate::session::Session;
-use crate::{image, offset_cache, process, render, superuniques};
+use crate::{image, items, offset_cache, process, render, superuniques};
 
 /// Snapshot interval (~5 Hz).
 const TICK: Duration = Duration::from_millis(200);
@@ -135,10 +137,14 @@ fn follow_game(
     });
     let mut session = Session::new(known);
     let mut dedup = Dedup::default();
+    let mut items_table = ItemsTable::NotSearched;
     loop {
         let start = Instant::now();
-        match game::snapshot(mem, table, player) {
+        match game::snapshot(mem, table, items_table.base(), player) {
             Ok(mut snap) => {
+                if snap.ground_items > 0 {
+                    items_table.search(pid);
+                }
                 let update = session.apply(&mut snap);
                 if update.new_game {
                     eprintln!("new game (player id or act changed): superunique kills cleared");
@@ -173,6 +179,65 @@ fn follow_game(
             }
         }
         thread::sleep(TICK.saturating_sub(start.elapsed()));
+    }
+}
+
+/// The item-code table of the attached process ([`items::locate`]). The search reads gigabytes
+/// (about a second or more), so it runs on its own thread with its own `/proc/<pid>/mem` handle
+/// while the snapshots go on; until it's done, only unique and set drops are shown.
+#[derive(Debug)]
+enum ItemsTable {
+    NotSearched,
+    Searching(Receiver<Option<u64>>),
+    /// Searched once: found or not, it isn't searched again for this process.
+    Done(Option<u64>),
+}
+
+impl ItemsTable {
+    /// Starts the search, unless it already ran or is running.
+    fn search(&mut self, pid: u32) {
+        if !matches!(self, Self::NotSearched) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let spawned = thread::Builder::new().name("items-scan".into()).spawn(move || {
+            let found = ProcMem::open(pid).map_or_else(
+                |e| {
+                    eprintln!("items table: {e:#}");
+                    None
+                },
+                |mem| items::locate(pid, &mem),
+            );
+            // The reader may have moved on to another process: nobody to tell, that's fine.
+            let _ = tx.send(found);
+        });
+        *self = match spawned {
+            Ok(_) => Self::Searching(rx),
+            Err(e) => {
+                eprintln!("items table: could not start the search thread: {e}");
+                Self::Done(None)
+            }
+        };
+    }
+
+    /// The table's address once the search found it.
+    fn base(&mut self) -> Option<u64> {
+        match self {
+            Self::NotSearched => None,
+            Self::Done(base) => *base,
+            Self::Searching(rx) => match rx.try_recv() {
+                Ok(base) => {
+                    *self = Self::Done(base);
+                    base
+                }
+                Err(TryRecvError::Empty) => None,
+                // The search thread died without an answer (panicked): give up for this process.
+                Err(TryRecvError::Disconnected) => {
+                    *self = Self::Done(None);
+                    None
+                }
+            },
+        }
     }
 }
 
@@ -287,6 +352,27 @@ mod tests {
             "leaving town shows the map again"
         );
         Ok(())
+    }
+
+    #[test]
+    fn items_table_is_taken_once_found() {
+        let mut t = ItemsTable::NotSearched;
+        assert_eq!(t.base(), None);
+        let (tx, rx) = mpsc::channel();
+        t = ItemsTable::Searching(rx);
+        assert_eq!(t.base(), None, "still searching");
+        assert!(tx.send(Some(0x1234)).is_ok());
+        assert_eq!(t.base(), Some(0x1234));
+        drop(tx);
+        assert_eq!(t.base(), Some(0x1234), "kept after the thread is gone");
+        t.search(1);
+        assert!(matches!(t, ItemsTable::Done(Some(0x1234))), "not searched again");
+
+        let (tx, rx) = mpsc::channel::<Option<u64>>();
+        let mut t = ItemsTable::Searching(rx);
+        drop(tx);
+        assert_eq!(t.base(), None);
+        assert!(matches!(t, ItemsTable::Done(None)), "a dead search gives up");
     }
 
     #[test]
