@@ -20,7 +20,6 @@ mod overlay;
 mod process;
 mod render;
 mod session;
-mod superuniques;
 #[cfg(test)]
 mod testutil;
 
@@ -184,14 +183,10 @@ fn load_snapshot(path: &str) -> Result<game::Snapshot> {
     serde_json::from_str(&json).with_context(|| format!("parsing snapshot {path}"))
 }
 
-/// Loads a `--dump` snapshot and filters it like live mode does (known superuniques only).
+/// Loads a `--dump` snapshot and filters it like live mode does (superunique presets only).
 fn load_for_drawing(path: &str) -> Result<game::Snapshot> {
     let mut snap = load_snapshot(path)?;
-    let known = match superuniques::default_path() {
-        Some(p) => superuniques::read(&p)?,
-        None => std::collections::BTreeSet::new(),
-    };
-    session::Session::new(known).apply(&mut snap);
+    session::Session::default().apply(&mut snap);
     Ok(snap)
 }
 

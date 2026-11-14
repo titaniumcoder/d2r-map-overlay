@@ -1,0 +1,2250 @@
+{
+  "schema": 1,
+  "generated": "2026-11-15",
+  "game": "Diablo II: Resurrected 3.x (Reign of the Warlock, ladder season 15/16)",
+  "codes_source": "blizzhackers/d2data json (commit 2026-11-14 \"Updated for new patch\")",
+  "conventions": {
+    "quality": "normal = white runeword base (normal OR superior, not low-quality/cracked); superior = superior only; any = ignore quality",
+    "sockets": "[min,max] inclusive; [0,0] = unsocketed; null = ignore",
+    "ethereal": "true/false = required; null = ignore",
+    "item_names": "exact uniqueitems.json / setitems.json \"index\" strings (incl. data typos); when present the rule should only fire if the resolved unique/set name matches. If the overlay cannot resolve names, fall back to code+quality and expect false positives on shared bases (rin, amu, jew, cm3, xsk, uar, 7cr, ...).",
+    "needs_stats": "true = base/quality/sockets/eth alone cannot decide value; highlight as \"check me\"",
+    "tiers": "S always highlight, A highlight, B optional",
+    "precedence": "if several rules match, use the highest tier"
+  },
+  "rules": [
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "r26",
+        "r27",
+        "r28",
+        "r29",
+        "r30",
+        "r31",
+        "r32",
+        "r33"
+      ],
+      "quality": "any",
+      "sockets": null,
+      "ethereal": null,
+      "name": "High runes Vex-Zod",
+      "note": "Vex..Zod are the high-rune trade currency (maxroll). Ber/Jah top.",
+      "base_names": [
+        "Vex Rune",
+        "Ohm Rune",
+        "Lo Rune",
+        "Sur Rune",
+        "Ber Rune",
+        "Jah Rune",
+        "Cham Rune",
+        "Zod Rune"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "r20",
+        "r21",
+        "r22",
+        "r23",
+        "r24",
+        "r25"
+      ],
+      "quality": "any",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Mid runes Lem-Gul",
+      "note": "Mid-rune currency for smaller trades (maxroll). Ist/Gul/Mal most liquid.",
+      "base_names": [
+        "Lem Rune",
+        "Pul Rune",
+        "Um Rune",
+        "Mal Rune",
+        "Ist Rune",
+        "Gul Rune"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Annihilus",
+      "note": "Dropped by Uber Diablo / DClone. Value depends on roll but always keep.",
+      "item_names": [
+        "Annihilus"
+      ],
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "cm2"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Hellfire Torch",
+      "note": "Uber Tristram. Class + roll decide price; every one sells.",
+      "item_names": [
+        "Hellfire Torch"
+      ],
+      "base_names": [
+        "Large Charm"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Unique grand charms (Latent Sunders, Gheed's)",
+      "note": "RotW: Sunders drop as latent (PreCrafted) grand charms; every unique cm3 on the ground is a keeper. Lightning/Cold/Fire Sunders highest. Gheed's alone is A-tier.",
+      "item_names": [
+        "Gheed's Fortune",
+        "PreCrafted Cold Rupture",
+        "PreCrafted Flame Rift",
+        "PreCrafted Crack of the Heavens",
+        "PreCrafted Rotting Fissure",
+        "PreCrafted Bone Break",
+        "PreCrafted Black Cleft"
+      ],
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "uap"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Harlequin Crest (Shako)",
+      "note": "Staple caster helm, always liquid.",
+      "item_names": [
+        "Harlequin Crest"
+      ],
+      "base_names": [
+        "Shako"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "ci3"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Griffon's Eye",
+      "note": "Lightning sorc/LS assassin; high value.",
+      "item_names": [
+        "Griffon's Eye"
+      ],
+      "base_names": [
+        "Diadem"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "rin"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Stone of Jordan",
+      "note": "Secondary currency; DClone trigger.",
+      "item_names": [
+        "The Stone of Jordan"
+      ],
+      "base_names": [
+        "Ring"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "amu"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Top unique amulets",
+      "note": "Mara's (+2 skills, 20-30 res) and Highlord's (Zeal/Fury builds). Shared base \"amu\" with ~12 other uniques: needs the unique name.",
+      "item_names": [
+        "Mara's Kaleidoscope",
+        "Highlord's Wrath"
+      ],
+      "base_names": [
+        "Amulet"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "rin"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Top unique rings",
+      "note": "BK (+1 skills), Raven Frost (CBF), Wisp Projector. Shared base \"rin\": needs the unique name.",
+      "item_names": [
+        "Bul Katho's Wedding Band",
+        "Raven Frost",
+        "Wisp"
+      ],
+      "base_names": [
+        "Ring"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "obf",
+        "7gw",
+        "urn",
+        "ulc",
+        "uar",
+        "uvg",
+        "umc",
+        "uhm",
+        "uit",
+        "6lw"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "High-value elite uniques",
+      "note": "Death's Fathom (data index \"Fathom\"), Death's Web (data index \"Deaths's Web\"), CoA, Arachnid, Tyrael's, Dracul's, Verdugo's, Nightwing's, Stormshield, Windforce.",
+      "item_names": [
+        "Fathom",
+        "Deaths's Web",
+        "Crown of Ages",
+        "Arachnid Mesh",
+        "Tyrael's Might",
+        "Dracul's Grasp",
+        "Verdugo's Hearty Cord",
+        "Nightwing's Veil",
+        "Stormshield",
+        "Windforce"
+      ],
+      "base_names": [
+        "Dimensional Shard",
+        "Unearthed Wand",
+        "Corona",
+        "Spiderweb Sash",
+        "Sacred Armor",
+        "Vampirebone Gloves",
+        "Mithril Coil",
+        "Spired Helm",
+        "Monarch",
+        "Hydra Bow"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "usk",
+        "7s8",
+        "ama",
+        "7b8",
+        "7wa",
+        "xpl"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": true,
+      "name": "Ethereal-only uniques",
+      "note": "Only ethereal copies have real trade value (merc/indestructible).",
+      "item_names": [
+        "Andariel's Visage",
+        "The Reaper's Toll",
+        "Titan's Revenge",
+        "Lacerator",
+        "Deathcleaver",
+        "Skullder's Ire"
+      ],
+      "base_names": [
+        "Demonhead",
+        "Thresher",
+        "Ceremonial Javelin",
+        "Winged Axe",
+        "Berserker Axe",
+        "Russet Armor"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "xtb",
+        "xhb",
+        "zhb",
+        "pa9",
+        "baa",
+        "dra",
+        "nea",
+        "obc",
+        "jew",
+        "ulm"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Mid-value uniques",
+      "note": "War Traveler, Gore Rider, Thundergod's (data typo \"Thudergod's\"), +2 class uniques (Herald/Arreat/Jalal/Homunculus), Eschuta's (+3 skill rolls matter), Rainbow Facets (perfect rolls only).",
+      "item_names": [
+        "Wartraveler",
+        "Gorerider",
+        "Thudergod's Vigor",
+        "Herald of Zakarum",
+        "Arreat's Face",
+        "Jalal's Mane",
+        "Homunculus",
+        "Eschuta's temper",
+        "Rainbow Facet",
+        "Steelshade"
+      ],
+      "needs_stats": true,
+      "base_names": [
+        "Battle Boots",
+        "War Boots",
+        "War Belt",
+        "Gilded Shield",
+        "Slayer Guard",
+        "Totemic Mask",
+        "Heirophant Trophy",
+        "Eldritch Orb",
+        "Jewel",
+        "Armet"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "xea",
+        "mgl",
+        "tgl",
+        "xhn",
+        "tbl",
+        "uui",
+        "uvc",
+        "uld",
+        "upl",
+        "uow",
+        "6ws",
+        "6cs",
+        "ci2",
+        "uvb",
+        "umb",
+        "xvb",
+        "ush",
+        "uh9",
+        "xh9",
+        "7pa",
+        "uhg",
+        "amb",
+        "xsh",
+        "xlm",
+        "7dg"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Useful build uniques (low/medium value)",
+      "note": "Sell to new-ladder players or keep for builds. Several only sell with sockets/eth/good rolls (Headhunter 3os, Giantskull 2os, Tomb Reaver eth 3os, Sandstorm eth).",
+      "item_names": [
+        "Skin of the Vipermagi",
+        "Chance Guards",
+        "Magefist",
+        "Shaftstop",
+        "Goldwrap",
+        "Ormus' Robes",
+        "Nosferatu's Coil",
+        "Leviathan",
+        "Arkaine's Valor",
+        "Medusa's Gaze",
+        "Mang Song's Lesson",
+        "Ondal's Wisdom",
+        "Kira's Guardian",
+        "Sandstorm Trek",
+        "Marrowwalk",
+        "Waterwalk",
+        "Headhunter's Glory",
+        "Giantskull",
+        "Vampiregaze",
+        "Tomb Reaver",
+        "Steelrend",
+        "Bloodraven's Charge",
+        "Lidless Wall",
+        "Stealskull",
+        "Wizardspike"
+      ],
+      "needs_stats": true,
+      "base_names": [
+        "Serpentskin Armor",
+        "Chain Gloves",
+        "Light Gauntlets",
+        "Mesh Armor",
+        "Heavy Belt",
+        "Dusk Shroud",
+        "Vampirefang Belt",
+        "Kraken Shell",
+        "Balrog Skin",
+        "Aegis",
+        "Archon Staff",
+        "Elder Staff",
+        "Tiara",
+        "Scarabshell Boots",
+        "Boneweave Boots",
+        "Sharkskin Boots",
+        "Troll Nest",
+        "Bone Visage",
+        "Grim Helm",
+        "Cryptic Axe",
+        "Ogre Gauntlets",
+        "Matriarchal Bow",
+        "Grim Shield",
+        "Casque",
+        "Bone Knife"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "waf",
+        "wae",
+        "wac",
+        "wa6",
+        "72h",
+        "utb",
+        "7di",
+        "rin",
+        "amu",
+        "utc",
+        "xsk"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Reign of the Warlock uniques",
+      "note": "New Feb 2026 uniques (grimoires, rings, amulet, belt, boots, dagger). No settled price consensus found; highlight so you notice them. \"Unique Warlock Helm\" is the data placeholder name on Death Mask.",
+      "item_names": [
+        "Ars Al'Diablolos",
+        "Ars Tor'Baalos",
+        "Ars Dul'Mephistos",
+        "Measured Wrath",
+        "Dreadfang",
+        "Wraithstep",
+        "Bloodpact Shard",
+        "Sling",
+        "Opalvein",
+        "Entropy Locket",
+        "Gheed's Wager",
+        "Unique Warlock Helm"
+      ],
+      "base_names": [
+        "Blasphemous Grimoire",
+        "Blasphemous Compendium",
+        "Occult Tome",
+        "Burnt Text",
+        "Legend Sword",
+        "Mirrored Boots",
+        "Mithral Point",
+        "Ring",
+        "Amulet",
+        "Troll Belt",
+        "Death Mask"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cjw"
+      ],
+      "quality": "unique",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Colossal Jewels",
+      "note": "Unique Colossal Jewels from the Colossal Ancients fight (lvl 75 req). Reward items, rarely seen on the ground.",
+      "item_names": [
+        "Defender's Bile",
+        "Guardian's Thunder",
+        "Protector's Frost",
+        "Defender's Fire",
+        "Protector's Stone",
+        "Guardian's Light"
+      ],
+      "base_names": [
+        "Colossal Jewel"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "uth",
+        "amu",
+        "xsk",
+        "zmb",
+        "oba"
+      ],
+      "quality": "set",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Tal Rasha's Wrappings",
+      "note": "Armor (Guardianship/Howling Wind) and amulet sell best. Base \"amu\"/\"xsk\" shared with other sets/uniques: needs the set name.",
+      "item_names": [
+        "Tal Rasha's Howling Wind",
+        "Tal Rasha's Adjudication",
+        "Tal Rasha's Horadric Crest",
+        "Tal Rasha's Fire-Spun Cloth",
+        "Tal Rasha's Lidless Eye"
+      ],
+      "base_names": [
+        "Lacquered Plate",
+        "Amulet",
+        "Death Mask",
+        "Mesh Belt",
+        "Swirling Crystal"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "uar",
+        "7m7",
+        "xhg",
+        "zhb",
+        "xhb",
+        "ba5"
+      ],
+      "quality": "set",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Immortal King",
+      "note": "Stone Crusher only tradable with 40% CB; whole set popular early ladder.",
+      "item_names": [
+        "Immortal King's Soul Cage",
+        "Immortal King's Stone Crusher",
+        "Immortal King's Forge",
+        "Immortal King's Detail",
+        "Immortal King's Pillar",
+        "Immortal King's Will"
+      ],
+      "needs_stats": true,
+      "base_names": [
+        "Sacred Armor",
+        "Ogre Maul",
+        "War Gauntlets",
+        "War Belt",
+        "War Boots",
+        "Avenger Guard"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "xmg",
+        "uh9",
+        "xul",
+        "utc",
+        "ne9"
+      ],
+      "quality": "set",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Trang-Oul's Avatar",
+      "note": "Claws are used outside the set; rest early-ladder demand.",
+      "item_names": [
+        "Trang-Oul's Claws",
+        "Trang-Oul's Guise",
+        "Trang-Oul's Scales",
+        "Trang-Oul's Girth",
+        "Trang-Oul's Wing"
+      ],
+      "base_names": [
+        "Heavy Bracers",
+        "Bone Visage",
+        "Chaos Armor",
+        "Troll Belt",
+        "Cantor Trophy"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "ulg"
+      ],
+      "quality": "set",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Laying of Hands",
+      "note": "Bramble Mitts; demand from Paladins/Barbs (IAS + dmg vs demons).",
+      "item_names": [
+        "Laying of Hands"
+      ],
+      "base_names": [
+        "Bramble Mitts"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "xar",
+        "paf",
+        "urn",
+        "7ws",
+        "7qr",
+        "ucl",
+        "xmb",
+        "xh9",
+        "amc",
+        "uld",
+        "xtg",
+        "zvb",
+        "ci3",
+        "xtb",
+        "uul",
+        "9mt",
+        "dr8",
+        "7gd",
+        "7wd",
+        "xhm",
+        "upl",
+        "7ls",
+        "xhl"
+      ],
+      "quality": "set",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Other elite set items",
+      "note": "Low-medium value; Griswold's Redemption needs 4os, Guillaume's / Bul-Kathos used in builds.",
+      "item_names": [
+        "Griswold's Heart",
+        "Griswold's Honor",
+        "Griswold's Valor",
+        "Griswolds's Redemption",
+        "Natalya's Mark",
+        "Natalya's Shadow",
+        "Natalya's Soul",
+        "Natalya's Totem",
+        "M'avina's Caster",
+        "M'avina's Embrace",
+        "M'avina's Icy Clutch",
+        "M'avina's Tenet",
+        "M'avina's True Sight",
+        "Aldur's Advance",
+        "Aldur's Deception",
+        "Aldur's Gauntlet",
+        "Aldur's Stony Gaze",
+        "Bul-Kathos' Sacred Charge",
+        "Bul-Kathos' Tribal Guardian",
+        "Guillaume's Face",
+        "Sazabi's Ghost Liberator",
+        "Sazabi's Cobalt Redeemer",
+        "Sazabi's Mental Sheath"
+      ],
+      "needs_stats": true,
+      "base_names": [
+        "Ornate Armor",
+        "Vortex Shield",
+        "Corona",
+        "Caduceus",
+        "Scissors Suwayyah",
+        "Loricated Mail",
+        "Mesh Boots",
+        "Grim Helm",
+        "Grand Matron Bow",
+        "Kraken Shell",
+        "Battle Gauntlets",
+        "Sharkskin Belt",
+        "Diadem",
+        "Battle Boots",
+        "Shadow Plate",
+        "Jagged Star",
+        "Hunter's Guise",
+        "Colossus Blade",
+        "Mythical Sword",
+        "Winged Helm",
+        "Balrog Skin",
+        "Cryptic Sword",
+        "Basinet"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "pk1",
+        "pk2",
+        "pk3"
+      ],
+      "quality": "any",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Uber keys",
+      "note": "Terror/Hate/Destruction; sold in 3x3 sets.",
+      "base_names": [
+        "Key of Terror",
+        "Key of Hate",
+        "Key of Destruction"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "dhn",
+        "bey",
+        "mbr"
+      ],
+      "quality": "any",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Uber organs",
+      "note": "Diablo's Horn, Baal's Eye, Mephisto's Brain (Uber Tristram).",
+      "base_names": [
+        "Diablo's Horn",
+        "Baal's Eye",
+        "Mephisto's Brain"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "ua1",
+        "ua2",
+        "ua3",
+        "ua4",
+        "ua5"
+      ],
+      "quality": "any",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Colossal Ancient Statues",
+      "note": "RotW: 5 needed (one per act) to open the Colossal Summit; drop from terrorized act bosses in Hell. Drop rate nerfed in 3.3.",
+      "base_names": [
+        "Uber Ancient Summon Material Act 1",
+        "Uber Ancient Summon Material Act 2",
+        "Uber Ancient Summon Material Act 3",
+        "Uber Ancient Summon Material Act 4",
+        "Uber Ancient Summon Material Act5"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "um1",
+        "um2",
+        "um3",
+        "um4",
+        "um5",
+        "um6"
+      ],
+      "quality": "any",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Colossal Jewel upgrade materials",
+      "note": "RotW Uber Ancient upgrade materials (named Defender's Fire, Guardian's Light, ...).",
+      "base_names": [
+        "Uber Ancient Upgrade Material  Fire",
+        "Uber Ancient Upgrade Material Poison",
+        "Uber Ancient Upgrade Material  Cold",
+        "Uber Ancient Upgrade Material Physical",
+        "Uber Ancient Upgrade Material Lightning",
+        "Uber Ancient Upgrade Material Magic"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "xa1",
+        "xa2",
+        "xa3",
+        "xa4",
+        "xa5"
+      ],
+      "quality": "any",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Worldstone Shards",
+      "note": "RotW Terror Zone drop; rate reduced in 3.3.",
+      "base_names": [
+        "Western Worldstone Shard",
+        "Eastern Worldstone Shard",
+        "Southern Worldstone Shard",
+        "Deep Worldstone Shard",
+        "Northern Worldstone Shard"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "toa",
+        "tes",
+        "ceh",
+        "bet",
+        "fed"
+      ],
+      "quality": "any",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Token of Absolution + essences",
+      "note": "Respec token and its essences.",
+      "base_names": [
+        "Token of Absolution",
+        "Twisted Essence of Suffering",
+        "Charged Essense of Hatred",
+        "Burning Essence of Terror",
+        "Festering Essence of Destruction"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "gpv",
+        "gpw",
+        "gpr",
+        "gpb",
+        "gpy",
+        "gpg",
+        "skz"
+      ],
+      "quality": "any",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Perfect gems",
+      "note": "Sell in bulk (40 PGems), Perfect Amethyst needed for caster-amulet crafting.",
+      "base_names": [
+        "Perfect Amethyst",
+        "Perfect Diamond",
+        "Perfect Ruby",
+        "Perfect Sapphire",
+        "Perfect Topaz",
+        "Perfect Emerald",
+        "Perfect Skull"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Magic grand charms",
+      "note": "Skillers (+1 skill tab) and 20+ life skillers are the value; most are trash. Needs identified stats.",
+      "needs_stats": true,
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Magic small charms",
+      "note": "Valuable: 5 all res, 20 life, 7 MF, 3/20/20. Needs stats.",
+      "needs_stats": true,
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "cm2"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Magic large charms",
+      "note": "Only 5-6 max dmg/20-35 life (sharp) sells. Needs stats.",
+      "needs_stats": true,
+      "base_names": [
+        "Large Charm"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "jew"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Magic jewels",
+      "note": "40/15 IAS jewels, 30-40 ED (Fervor), 10-15 all res. Needs stats.",
+      "needs_stats": true,
+      "base_names": [
+        "Jewel"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "jew"
+      ],
+      "quality": "rare",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Rare jewels",
+      "note": "ED/IAS/res/-req rares can sell. Needs stats.",
+      "needs_stats": true,
+      "base_names": [
+        "Jewel"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "ci0",
+        "ci1",
+        "ci2",
+        "ci3"
+      ],
+      "quality": "magic",
+      "sockets": [
+        2,
+        3
+      ],
+      "ethereal": null,
+      "name": "Socketed magic circlets/tiaras/diadems",
+      "note": "2-3 os magic circlets (Artisan's, +2 class skills/FCR/FRW). Sockets are visible; affixes need stats.",
+      "needs_stats": true,
+      "base_names": [
+        "Circlet",
+        "Coronet",
+        "Tiara",
+        "Diadem"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "ci0",
+        "ci1",
+        "ci2",
+        "ci3"
+      ],
+      "quality": "rare",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Rare circlets",
+      "note": "+2 skills / FCR / FRW / sockets. Needs stats.",
+      "needs_stats": true,
+      "base_names": [
+        "Circlet",
+        "Coronet",
+        "Tiara",
+        "Diadem"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "uit"
+      ],
+      "quality": "magic",
+      "sockets": [
+        4,
+        4
+      ],
+      "ethereal": null,
+      "name": "Jeweler's Monarch (magic 4os)",
+      "note": "A magic Monarch with 4 sockets is necessarily the Jeweler's prefix; \"of Deflecting\" suffix makes it very high.",
+      "base_names": [
+        "Monarch"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "utp",
+        "uui"
+      ],
+      "quality": "magic",
+      "sockets": [
+        4,
+        4
+      ],
+      "ethereal": null,
+      "name": "Jeweler's Archon Plate / Dusk Shroud (magic 4os)",
+      "note": "Value comes from the suffix (of the Whale 80-100 life).",
+      "needs_stats": true,
+      "base_names": [
+        "Archon Plate",
+        "Dusk Shroud"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "rin",
+        "amu"
+      ],
+      "quality": "rare",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Rare rings and amulets",
+      "note": "Caster (FCR + skills/str/dex/res) and melee (LL/AR/str/dex) rares. Needs stats.",
+      "needs_stats": true,
+      "base_names": [
+        "Ring",
+        "Amulet"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "7ar",
+        "7cs",
+        "7lw",
+        "7qr",
+        "7tw",
+        "7wb",
+        "7xf",
+        "9ar",
+        "9cs",
+        "9lw",
+        "9qr",
+        "9tw",
+        "9wb",
+        "9xf",
+        "am1",
+        "am2",
+        "am3",
+        "am4",
+        "am5",
+        "am6",
+        "am7",
+        "am8",
+        "am9",
+        "ama",
+        "amb",
+        "amc",
+        "amd",
+        "ame",
+        "amf",
+        "axf",
+        "ba1",
+        "ba2",
+        "ba3",
+        "ba4",
+        "ba5",
+        "ba6",
+        "ba7",
+        "ba8",
+        "ba9",
+        "baa",
+        "bab",
+        "bac",
+        "bad",
+        "bae",
+        "baf",
+        "btl",
+        "ces",
+        "clw",
+        "dr1",
+        "dr2",
+        "dr3",
+        "dr4",
+        "dr5",
+        "dr6",
+        "dr7",
+        "dr8",
+        "dr9",
+        "dra",
+        "drb",
+        "drc",
+        "drd",
+        "dre",
+        "drf",
+        "ktr",
+        "ne1",
+        "ne2",
+        "ne3",
+        "ne4",
+        "ne5",
+        "ne6",
+        "ne7",
+        "ne8",
+        "ne9",
+        "nea",
+        "neb",
+        "ned",
+        "nee",
+        "nef",
+        "neg",
+        "ob1",
+        "ob2",
+        "ob3",
+        "ob4",
+        "ob5",
+        "ob6",
+        "ob7",
+        "ob8",
+        "ob9",
+        "oba",
+        "obb",
+        "obc",
+        "obd",
+        "obe",
+        "obf",
+        "skr",
+        "wrb"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Class-specific magic items",
+      "note": "+3 skill/+6 single skill items (Paladin shields, Sorc orbs, Assassin claws, Barb helms, Druid pelts, Necro heads, Amazon weapons). Only rolls with +3 class / high single skills sell. Needs stats.",
+      "needs_stats": true,
+      "base_names": [
+        "Suwayyah",
+        "Battle Cestus",
+        "Feral Claws",
+        "Scissors Suwayyah",
+        "Runic Talons",
+        "Wrist Sword",
+        "War Fist",
+        "Quhab",
+        "Hand Scythe",
+        "Greater Claws",
+        "Scissors Quhab",
+        "Greater Talons",
+        "Wrist Spike",
+        "Fascia",
+        "Stag Bow",
+        "Reflex Bow",
+        "Maiden Spear",
+        "Maiden Pike",
+        "Maiden Javelin",
+        "Ashwood Bow",
+        "Ceremonial Bow",
+        "Ceremonial Spear",
+        "Ceremonial Pike",
+        "Ceremonial Javelin",
+        "Matriarchal Bow",
+        "Grand Matron Bow",
+        "Matriarchal Spear",
+        "Matriarchal Pike",
+        "Matriarchal Javelin",
+        "Hatchet Hands",
+        "Jawbone Cap",
+        "Fanged Helm",
+        "Horned Helm",
+        "Assault Helmet",
+        "Avenger Guard",
+        "Jawbone Visor",
+        "Lion Helm",
+        "Rage Mask",
+        "Savage Helmet",
+        "Slayer Guard",
+        "Carnage Helm",
+        "Fury Visor",
+        "Destroyer Helm",
+        "Conqueror Crown",
+        "Guardian Crown",
+        "Blade Talons",
+        "Cestus",
+        "Claws",
+        "Wolf Head",
+        "Hawk Helm",
+        "Antlers",
+        "Falcon Mask",
+        "Spirit Mask",
+        "Alpha Helm",
+        "Griffon Headress",
+        "Hunter's Guise",
+        "Sacred Feathers",
+        "Totemic Mask",
+        "Blood Spirit",
+        "Sun Spirit",
+        "Earth Spirit",
+        "Sky Spirit",
+        "Dream Spirit",
+        "Katar",
+        "Preserved Head",
+        "Zombie Head",
+        "Unraveller Head",
+        "Gargoyle Head",
+        "Demon Head",
+        "Mummified Trophy",
+        "Fetish Trophy",
+        "Sexton Trophy",
+        "Cantor Trophy",
+        "Heirophant Trophy",
+        "Minion Skull",
+        "Overseer Skull",
+        "Succubus Skull",
+        "Bloodlord Skull",
+        "Hellspawn Skull",
+        "Eagle Orb",
+        "Sacred Globe",
+        "Smoked Sphere",
+        "Clasped Orb",
+        "Jared's Stone",
+        "Glowing Orb",
+        "Crystalline Globe",
+        "Cloudy Sphere",
+        "Sparkling Ball",
+        "Swirling Crystal",
+        "Heavenly Stone",
+        "Eldritch Orb",
+        "Demon Heart",
+        "Vortex Orb",
+        "Dimensional Shard",
+        "Scissors Katar",
+        "Wrist Blade"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "twink",
+      "item_codes": [
+        "utp",
+        "uui"
+      ],
+      "quality": "normal",
+      "sockets": [
+        3,
+        4
+      ],
+      "ethereal": null,
+      "name": "Archon Plate / Dusk Shroud 3-4os",
+      "note": "3os: Enigma (Jah Ith Ber). 4os: Chains of Honor / Fortitude. Superior (+def%) preferred. Unsocketed superior ones also worth keeping: Larzuk gives 4.",
+      "runewords": [
+        "Enigma",
+        "Chains of Honor",
+        "Fortitude"
+      ],
+      "base_names": [
+        "Archon Plate",
+        "Dusk Shroud"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "uar",
+        "uea",
+        "urs",
+        "uul",
+        "uld",
+        "ult",
+        "upl",
+        "uth"
+      ],
+      "quality": "normal",
+      "sockets": [
+        3,
+        4
+      ],
+      "ethereal": null,
+      "name": "Other elite body armor 3-4os",
+      "note": "Enigma/CoH/Fortitude on Sacred Armor, Wyrmhide, Great Hauberk, Shadow/Lacquered/Hellforge/Balrog, Kraken. Superior preferred.",
+      "runewords": [
+        "Enigma",
+        "Chains of Honor",
+        "Fortitude"
+      ],
+      "base_names": [
+        "Sacred Armor",
+        "Wyrmhide",
+        "Great Hauberk",
+        "Shadow Plate",
+        "Kraken Shell",
+        "Hellforge Plate",
+        "Balrog Skin",
+        "Lacquered Plate"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "uar",
+        "urs",
+        "uld",
+        "ult",
+        "uul"
+      ],
+      "quality": "normal",
+      "sockets": [
+        4,
+        4
+      ],
+      "ethereal": true,
+      "name": "Ethereal elite armor 4os (merc)",
+      "note": "Merc Fortitude / CoH; eth Sacred Armor (850+ def) is the best Fortitude merc base.",
+      "runewords": [
+        "Fortitude",
+        "Chains of Honor"
+      ],
+      "base_names": [
+        "Sacred Armor",
+        "Great Hauberk",
+        "Kraken Shell",
+        "Hellforge Plate",
+        "Shadow Plate"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "twink",
+      "item_codes": [
+        "7s8",
+        "7wc",
+        "7pa",
+        "7vo",
+        "7h7",
+        "7br",
+        "amd"
+      ],
+      "quality": "normal",
+      "sockets": [
+        4,
+        4
+      ],
+      "ethereal": true,
+      "name": "Ethereal elite polearm/spear 4os",
+      "note": "Merc Infinity (Ber Mal Ber Ist) or Insight. Ethereal superior Thresher / Giant Thresher / Colossus Voulge / Cryptic Axe / Great Poleaxe / Mancatcher / Matriarchal Spear.",
+      "runewords": [
+        "Infinity",
+        "Insight"
+      ],
+      "base_names": [
+        "Thresher",
+        "Giant Thresher",
+        "Cryptic Axe",
+        "Colossus Voulge",
+        "Great Poleaxe",
+        "Mancatcher",
+        "Matriarchal Spear"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "7vo"
+      ],
+      "quality": "normal",
+      "sockets": [
+        0,
+        0
+      ],
+      "ethereal": true,
+      "name": "Ethereal Colossus Voulge 0os (Larzuk to 4)",
+      "note": "Colossus Voulge max sockets is 4, so Larzuk always yields 4 -> Infinity/Insight. Other elite polearms Larzuk to 5-6 (too many for Infinity).",
+      "runewords": [
+        "Infinity",
+        "Insight"
+      ],
+      "base_names": [
+        "Colossus Voulge"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "vou",
+        "scy",
+        "pax",
+        "hal",
+        "wsc",
+        "9vo",
+        "9s8",
+        "9pa",
+        "9h9",
+        "9wc",
+        "7s8",
+        "7wc",
+        "7pa",
+        "7vo",
+        "7h7"
+      ],
+      "quality": "normal",
+      "sockets": [
+        4,
+        4
+      ],
+      "ethereal": null,
+      "name": "Polearms 4os (any tier)",
+      "note": "Insight (Ral Tir Tal Sol) for the Act 2 merc. Normal-difficulty Voulge/Scythe/Poleaxe/Halberd/War Scythe already works; eth preferred but not required.",
+      "runewords": [
+        "Insight"
+      ],
+      "base_names": [
+        "Voulge",
+        "Scythe",
+        "Poleaxe",
+        "Halberd",
+        "War Scythe",
+        "Bill",
+        "Battle Scythe",
+        "Partizan",
+        "Bec-de-Corbin",
+        "Grim Scythe",
+        "Thresher",
+        "Giant Thresher",
+        "Cryptic Axe",
+        "Colossus Voulge",
+        "Great Poleaxe"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "7s8",
+        "7wc",
+        "7pa",
+        "7vo",
+        "7h7",
+        "7br",
+        "amd",
+        "7st",
+        "7p7"
+      ],
+      "quality": "normal",
+      "sockets": [
+        5,
+        5
+      ],
+      "ethereal": true,
+      "name": "Ethereal elite polearm/spear 5os",
+      "note": "Pride (Cham Sur Io Lo), Obedience (Hel Ko Thul Eth Fal), Doom on polearms.",
+      "runewords": [
+        "Pride",
+        "Obedience",
+        "Doom"
+      ],
+      "base_names": [
+        "Thresher",
+        "Giant Thresher",
+        "Cryptic Axe",
+        "Colossus Voulge",
+        "Great Poleaxe",
+        "Mancatcher",
+        "Matriarchal Spear",
+        "Ghost Spear",
+        "War Pike"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "twink",
+      "item_codes": [
+        "7cr"
+      ],
+      "quality": "normal",
+      "sockets": [
+        5,
+        6
+      ],
+      "ethereal": null,
+      "name": "Phase Blade 5-6os",
+      "note": "5os: Grief (Eth Tir Lo Mal Ral). 6os: Last Wish / BotD. Superior (ED) preferred; no durability so eth irrelevant.",
+      "runewords": [
+        "Grief",
+        "Last Wish",
+        "Breath of the Dying"
+      ],
+      "base_names": [
+        "Phase Blade"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "7wa",
+        "7gd",
+        "7gm",
+        "6ws",
+        "7p7",
+        "6lw"
+      ],
+      "quality": "normal",
+      "sockets": [
+        5,
+        6
+      ],
+      "ethereal": null,
+      "name": "Berserker Axe / Colossus Blade / Thunder Maul / Archon Staff / War Pike / Hydra Bow 5-6os",
+      "note": "5os: Death, Doom, Beast, Grief (axe). 6os: Breath of the Dying, Last Wish (axe/hammer). Ethereal superior strongly preferred (BotD/Death are indestructible).",
+      "runewords": [
+        "Breath of the Dying",
+        "Death",
+        "Doom",
+        "Beast",
+        "Last Wish",
+        "Grief"
+      ],
+      "base_names": [
+        "Berserker Axe",
+        "Colossus Blade",
+        "Thunder Maul",
+        "Archon Staff",
+        "War Pike",
+        "Hydra Bow"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "crs",
+        "9cr",
+        "7cr",
+        "lsd",
+        "9ls",
+        "bsd",
+        "9bs"
+      ],
+      "quality": "normal",
+      "sockets": [
+        4,
+        4
+      ],
+      "ethereal": null,
+      "name": "Swords 4os (Crystal/Dimensional/Phase/Long/Broad)",
+      "note": "Spirit sword (Tal Thul Ort Amn); 4os Crystal Sword drops in Normal (ilvl 26+). Also Hand of Justice / Phoenix on Phase Blade.",
+      "runewords": [
+        "Spirit",
+        "Phoenix",
+        "Hand of Justice"
+      ],
+      "base_names": [
+        "Crystal Sword",
+        "Dimensional Blade",
+        "Phase Blade",
+        "Long Sword",
+        "Rune Sword",
+        "Broad Sword",
+        "Battle Sword"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "crs",
+        "9cr",
+        "7cr",
+        "fla",
+        "9fl",
+        "7fl"
+      ],
+      "quality": "normal",
+      "sockets": [
+        5,
+        5
+      ],
+      "ethereal": null,
+      "name": "Crystal Sword / Flail 5os",
+      "note": "Call to Arms (Amn Ral Mal Ist Ohm) swap weapon. Eth for style only.",
+      "runewords": [
+        "Call to Arms"
+      ],
+      "base_names": [
+        "Crystal Sword",
+        "Dimensional Blade",
+        "Phase Blade",
+        "Flail",
+        "Knout",
+        "Scourge"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "fla",
+        "9fl",
+        "7fl"
+      ],
+      "quality": "normal",
+      "sockets": [
+        4,
+        4
+      ],
+      "ethereal": null,
+      "name": "Flail/Knout/Scourge 4os",
+      "note": "Heart of the Oak (Ko Vex Pul Thul) swap/caster weapon.",
+      "runewords": [
+        "Heart of the Oak"
+      ],
+      "base_names": [
+        "Flail",
+        "Knout",
+        "Scourge"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "uit"
+      ],
+      "quality": "normal",
+      "sockets": [
+        4,
+        4
+      ],
+      "ethereal": null,
+      "name": "Monarch 4os",
+      "note": "Spirit shield (or Phoenix). Superior preferred. 0os superior Monarch also keeps value (Larzuk -> 4).",
+      "runewords": [
+        "Spirit",
+        "Phoenix",
+        "Dream"
+      ],
+      "base_names": [
+        "Monarch"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "pa1",
+        "pa2",
+        "pa3",
+        "pa4",
+        "pa5",
+        "pa6",
+        "pa7",
+        "pa8",
+        "pa9",
+        "paa",
+        "pab",
+        "pac",
+        "pad",
+        "pae",
+        "paf"
+      ],
+      "quality": "normal",
+      "sockets": [
+        4,
+        4
+      ],
+      "ethereal": null,
+      "name": "Paladin shields 4os (any tier)",
+      "note": "Spirit / Exile / Phoenix. Value is in the implicit res/ED roll (needs stats): superior 4os Sacred Targe/Rondache/Vortex with 40+ res = high. Normal-tier Targe/Rondache 4os = great twink Spirit.",
+      "runewords": [
+        "Spirit",
+        "Exile",
+        "Phoenix"
+      ],
+      "needs_stats": true,
+      "base_names": [
+        "Targe",
+        "Rondache",
+        "Heraldic Shield",
+        "Aerin Shield",
+        "Crown Shield",
+        "Akaran Targe",
+        "Akaran Rondache",
+        "Protector Shield",
+        "Gilded Shield",
+        "Royal Shield",
+        "Sacred Targe",
+        "Sacred Rondache",
+        "Ancient Shield",
+        "Zakarum Shield",
+        "Vortex Shield"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "pa1",
+        "pa2",
+        "pa3",
+        "pa4",
+        "pa5",
+        "pa6",
+        "pa7",
+        "pa8",
+        "pa9",
+        "paa",
+        "pab",
+        "pac",
+        "pad",
+        "pae",
+        "paf"
+      ],
+      "quality": "normal",
+      "sockets": [
+        4,
+        4
+      ],
+      "ethereal": true,
+      "name": "Ethereal paladin shields 4os",
+      "note": "Exile (Vex Ohm Ist Dol) self-repairs, so eth Sacred Targe/Vortex preferred.",
+      "runewords": [
+        "Exile"
+      ],
+      "base_names": [
+        "Targe",
+        "Rondache",
+        "Heraldic Shield",
+        "Aerin Shield",
+        "Crown Shield",
+        "Akaran Targe",
+        "Akaran Rondache",
+        "Protector Shield",
+        "Gilded Shield",
+        "Royal Shield",
+        "Sacred Targe",
+        "Sacred Rondache",
+        "Ancient Shield",
+        "Zakarum Shield",
+        "Vortex Shield"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "amc",
+        "amb"
+      ],
+      "quality": "normal",
+      "sockets": [
+        4,
+        4
+      ],
+      "ethereal": null,
+      "name": "Grand Matron / Matriarchal Bow 4os",
+      "note": "Faith (Ohm Jah Lem Eld) for Act 2 merc / Rogue, Insight on bows.",
+      "runewords": [
+        "Faith",
+        "Insight"
+      ],
+      "base_names": [
+        "Grand Matron Bow",
+        "Matriarchal Bow"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "am1",
+        "am2",
+        "am6",
+        "am7",
+        "amb",
+        "amc"
+      ],
+      "quality": "normal",
+      "sockets": [
+        5,
+        5
+      ],
+      "ethereal": null,
+      "name": "Amazon bows 5os",
+      "note": "Mist (Cham Shael Gul Thul Ith), Wrath/Ice-type builds.",
+      "runewords": [
+        "Mist"
+      ],
+      "base_names": [
+        "Stag Bow",
+        "Reflex Bow",
+        "Ashwood Bow",
+        "Ceremonial Bow",
+        "Matriarchal Bow",
+        "Grand Matron Bow"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "uh9",
+        "ci3",
+        "ci2",
+        "ush"
+      ],
+      "quality": "normal",
+      "sockets": [
+        3,
+        3
+      ],
+      "ethereal": null,
+      "name": "Bone Visage / Diadem / Tiara / Troll Nest 3os",
+      "note": "Dream (Io Jah Pul), Coven (Ist Ral Io, RotW), Flickering Flame, Metamorphosis. Best Dream bases are +skill Barb helms/Druid pelts (see class rule).",
+      "runewords": [
+        "Dream",
+        "Coven",
+        "Flickering Flame",
+        "Metamorphosis"
+      ],
+      "base_names": [
+        "Bone Visage",
+        "Diadem",
+        "Tiara",
+        "Troll Nest"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "ba1",
+        "ba2",
+        "ba3",
+        "ba4",
+        "ba5",
+        "ba6",
+        "ba7",
+        "ba8",
+        "ba9",
+        "baa",
+        "bab",
+        "bac",
+        "bad",
+        "bae",
+        "baf",
+        "dr1",
+        "dr2",
+        "dr3",
+        "dr4",
+        "dr5",
+        "dr6",
+        "dr7",
+        "dr8",
+        "dr9",
+        "dra",
+        "drb",
+        "drc",
+        "drd",
+        "dre",
+        "drf"
+      ],
+      "quality": "normal",
+      "sockets": [
+        2,
+        3
+      ],
+      "ethereal": null,
+      "name": "Barbarian helms / Druid pelts 2-3os",
+      "note": "White class helms with +3 skills (e.g. +3 BO Barb helm, +3 Fury/Tornado pelt) for Dream/Lore/Metamorphosis/Coven. Implicit skills need stats.",
+      "runewords": [
+        "Dream",
+        "Lore",
+        "Metamorphosis",
+        "Coven"
+      ],
+      "needs_stats": true,
+      "base_names": [
+        "Jawbone Cap",
+        "Fanged Helm",
+        "Horned Helm",
+        "Assault Helmet",
+        "Avenger Guard",
+        "Jawbone Visor",
+        "Lion Helm",
+        "Rage Mask",
+        "Savage Helmet",
+        "Slayer Guard",
+        "Carnage Helm",
+        "Fury Visor",
+        "Destroyer Helm",
+        "Conqueror Crown",
+        "Guardian Crown",
+        "Wolf Head",
+        "Hawk Helm",
+        "Antlers",
+        "Falcon Mask",
+        "Spirit Mask",
+        "Alpha Helm",
+        "Griffon Headress",
+        "Hunter's Guise",
+        "Sacred Feathers",
+        "Totemic Mask",
+        "Blood Spirit",
+        "Sun Spirit",
+        "Earth Spirit",
+        "Sky Spirit",
+        "Dream Spirit"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "xtp"
+      ],
+      "quality": "normal",
+      "sockets": [
+        3,
+        3
+      ],
+      "ethereal": null,
+      "name": "Mage Plate 3os",
+      "note": "Treachery, Duress, Smoke, Bone, Hustle, Authority (RotW). Eth for merc Treachery.",
+      "runewords": [
+        "Treachery",
+        "Duress",
+        "Smoke",
+        "Bone",
+        "Hustle",
+        "Authority"
+      ],
+      "base_names": [
+        "Mage Plate"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "qui",
+        "lea",
+        "hla",
+        "stu",
+        "rng",
+        "brs"
+      ],
+      "quality": "normal",
+      "sockets": [
+        2,
+        3
+      ],
+      "ethereal": null,
+      "name": "Light body armor 2-3os (normal difficulty)",
+      "note": "2os: Stealth (Tal Eth). 3os Ring Mail/Breast Plate: Smoke/Treachery/Authority twink.",
+      "runewords": [
+        "Stealth",
+        "Smoke",
+        "Treachery",
+        "Authority"
+      ],
+      "base_names": [
+        "Quilted Armor",
+        "Leather Armor",
+        "Hard Leather Armor",
+        "Studded Leather",
+        "Ring Mail",
+        "Breast Plate"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "kit",
+        "lrg",
+        "xit",
+        "xrg"
+      ],
+      "quality": "normal",
+      "sockets": [
+        3,
+        3
+      ],
+      "ethereal": null,
+      "name": "Kite / Large / Dragon shield 3os",
+      "note": "Ancient's Pledge (Ral Ort Tal) leveling shield.",
+      "runewords": [
+        "Ancient's Pledge"
+      ],
+      "base_names": [
+        "Kite Shield",
+        "Large Shield",
+        "Dragon Shield",
+        "Scutum"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "cap",
+        "skp",
+        "hlm",
+        "fhl",
+        "xap",
+        "xkp",
+        "uap",
+        "ukp",
+        "ci0",
+        "ci1"
+      ],
+      "quality": "normal",
+      "sockets": [
+        2,
+        2
+      ],
+      "ethereal": null,
+      "name": "Helms 2os",
+      "note": "Lore (Ort Sol) leveling helm.",
+      "runewords": [
+        "Lore"
+      ],
+      "base_names": [
+        "Cap",
+        "Skull Cap",
+        "Helm",
+        "Full Helm",
+        "War Hat",
+        "Sallet",
+        "Shako",
+        "Hydraskull",
+        "Circlet",
+        "Coronet"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "7lw",
+        "7tw",
+        "9lw",
+        "clw"
+      ],
+      "quality": "normal",
+      "sockets": [
+        3,
+        3
+      ],
+      "ethereal": null,
+      "name": "Claws 3os",
+      "note": "Mosaic (Mal Gul Amn) / Plague. Best with +3 trap/martial arts implicits (needs stats).",
+      "runewords": [
+        "Mosaic",
+        "Plague"
+      ],
+      "needs_stats": true,
+      "base_names": [
+        "Feral Claws",
+        "Runic Talons",
+        "Greater Claws",
+        "Claws"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "7cr",
+        "crs",
+        "9cr",
+        "72h"
+      ],
+      "quality": "normal",
+      "sockets": [
+        3,
+        3
+      ],
+      "ethereal": null,
+      "name": "Phase Blade / Crystal Sword / Legend Sword 3os",
+      "note": "Lawbringer / Crescent Moon (merc). Cheap.",
+      "runewords": [
+        "Lawbringer",
+        "Crescent Moon"
+      ],
+      "base_names": [
+        "Phase Blade",
+        "Crystal Sword",
+        "Dimensional Blade",
+        "Legend Sword"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "kri",
+        "bld",
+        "9kr",
+        "9bl",
+        "7kr",
+        "7bl"
+      ],
+      "quality": "normal",
+      "sockets": [
+        3,
+        3
+      ],
+      "ethereal": null,
+      "name": "Daggers 3os",
+      "note": "RotW Void (Thul Zod Ist) and Ritual (Amn Shael Ohm) for Warlock. Prefer Fanged Knife / Legend Spike; demand not settled.",
+      "runewords": [
+        "Void",
+        "Ritual"
+      ],
+      "base_names": [
+        "Kriss",
+        "Blade",
+        "Cinquedeas",
+        "Stilleto",
+        "Fanged Knife",
+        "Legend Spike"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "wa1",
+        "wa2",
+        "wa3",
+        "wa4",
+        "wa5",
+        "wa6",
+        "wa7",
+        "wa8",
+        "wa9",
+        "waa",
+        "wab",
+        "wac",
+        "wad",
+        "wae",
+        "waf"
+      ],
+      "quality": "normal",
+      "sockets": [
+        2,
+        2
+      ],
+      "ethereal": null,
+      "name": "Grimoires 2os",
+      "note": "RotW Vigilance (Dol Gul) on Warlock books; also fits shields/heads.",
+      "runewords": [
+        "Vigilance"
+      ],
+      "base_names": [
+        "Old Book",
+        "Tome",
+        "Codex",
+        "Compendium",
+        "Grimoire",
+        "Burnt Text",
+        "Dark Tome",
+        "Dark Codex",
+        "Possessed Compendium",
+        "Possessed Grimoire",
+        "Forgotten Volume",
+        "Occult Tome",
+        "Occult Codex",
+        "Blasphemous Compendium",
+        "Blasphemous Grimoire"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "twink",
+      "item_codes": [
+        "r01",
+        "r02",
+        "r03",
+        "r04",
+        "r05",
+        "r06",
+        "r07",
+        "r08",
+        "r09",
+        "r10",
+        "r11",
+        "r12",
+        "r13",
+        "r14",
+        "r15",
+        "r16",
+        "r17",
+        "r18",
+        "r19"
+      ],
+      "quality": "any",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Low runes El-Fal",
+      "note": "Spirit (Tal Thul Ort Amn), Insight (Ral Tir Tal Sol), Stealth/Lore/Ancient's Pledge sets; Ko/Fal/Hel/Io/Lum feed mid runewords. Spirit and Insight rune sets trade.",
+      "base_names": [
+        "El Rune",
+        "Eld Rune",
+        "Tir Rune",
+        "Nef Rune",
+        "Eth Rune",
+        "Ith Rune",
+        "Tal Rune",
+        "Ral Rune",
+        "Ort Rune",
+        "Thul Rune",
+        "Amn Rune",
+        "Sol Rune",
+        "Shael Rune",
+        "Dol Rune",
+        "Hel Rune",
+        "Io Rune",
+        "Lum Rune",
+        "Ko Rune",
+        "Fal Rune"
+      ]
+    }
+  ]
+}

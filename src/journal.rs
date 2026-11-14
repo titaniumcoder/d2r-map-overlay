@@ -18,6 +18,7 @@ use serde::Serialize;
 
 use crate::game::{Bounds, PresetKind, Room, Snapshot};
 use crate::items::DropKind;
+use crate::session;
 
 /// Monster flag bits of an elite: superunique 0x02, champion 0x04, unique 0x08.
 const ELITE: u8 = 0x0E;
@@ -61,6 +62,10 @@ pub enum Event {
         x: u32,
         y: u32,
         piece: Option<u32>,
+        /// The superunique's name, for a monster preset whose txt id is one (see
+        /// `session::superunique`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        superunique: Option<&'static str>,
     },
     /// A room-tile link from the room at `x`,`y` to another level.
     Link {
@@ -202,6 +207,10 @@ impl Recorder {
                     x: p.x,
                     y: p.y,
                     piece: piece(p.x, p.y),
+                    superunique: match p.kind {
+                        PresetKind::Monster => session::superunique(p.txt),
+                        _ => None,
+                    },
                 });
             }
         }
@@ -683,6 +692,34 @@ mod tests {
         assert_eq!(
             v,
             json!({"ev": "killed", "level": 74, "id": 77, "txt": 250, "x": 45, "y": 5, "piece": 510})
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn monster_preset_markers_name_their_superunique() -> Result<()> {
+        let mut r = Recorder::default();
+        let mut s = snap(1, 74);
+        let monster_preset = |txt| Preset {
+            kind: PresetKind::Monster,
+            txt,
+            ..marker(10)
+        };
+        s.presets = vec![monster_preset(757), monster_preset(840)];
+        let values = r
+            .observe(&s)
+            .iter()
+            .filter(|e| matches!(e, Event::Marker { .. }))
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            values,
+            [
+                json!({"ev": "marker", "level": 74, "kind": "monster", "txt": 757, "x": 10,
+                    "y": 10, "piece": 525, "superunique": "The Countess"}),
+                json!({"ev": "marker", "level": 74, "kind": "monster", "txt": 840, "x": 10,
+                    "y": 10, "piece": 525}),
+            ]
         );
         Ok(())
     }

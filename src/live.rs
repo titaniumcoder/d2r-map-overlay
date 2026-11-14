@@ -6,7 +6,6 @@
 //! hidden in towns and outside a game. The item-code table is searched once per process, in a
 //! background thread, when the first item lies on the ground.
 
-use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -20,7 +19,7 @@ use crate::journal::Journal;
 use crate::overlay::Msg;
 use crate::process::ProcMem;
 use crate::session::Session;
-use crate::{image, items, offset_cache, process, render, superuniques};
+use crate::{image, items, offset_cache, process, render};
 
 /// Snapshot interval (~5 Hz).
 const TICK: Duration = Duration::from_millis(200);
@@ -132,14 +131,7 @@ fn follow_game(
     (w, h): (u32, u32),
     journal: &mut Journal,
 ) -> Result<(), UiGone> {
-    let su_path = superuniques::default_path();
-    let known = su_path.as_deref().map_or_else(BTreeSet::default, |p| {
-        superuniques::read(p).unwrap_or_else(|e| {
-            eprintln!("warning: {e:#}; starting with no known superuniques");
-            BTreeSet::default()
-        })
-    });
-    let mut session = Session::new(known);
+    let mut session = Session::default();
     let mut dedup = Dedup::default();
     let mut items_table = ItemsTable::NotSearched;
     loop {
@@ -157,14 +149,6 @@ fn follow_game(
                 }
                 if update.new_game {
                     eprintln!("new game (player id or act changed): superunique kills cleared");
-                }
-                if !update.learned.is_empty() {
-                    eprintln!("learned superunique preset ids {:?}", update.learned);
-                    if let Some(p) = &su_path
-                        && let Err(e) = superuniques::write(p, &session.superuniques)
-                    {
-                        eprintln!("warning: could not save superuniques: {e:#}");
-                    }
                 }
                 if game::is_town(snap.level.id) {
                     if dedup.hide(Hidden::Town) {

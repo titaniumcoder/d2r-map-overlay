@@ -1,9 +1,10 @@
 """Generate src/levels_data.rs from blizzhackers/d2data (D2R JSON game tables).
 
-Usage: python3 -I research/gen_levels.py <dir with levels.json and monstats.json> > src/levels_data.rs
+Usage: python3 -I research/gen_levels.py <dir with levels.json, monstats.json, superuniques.json> > src/levels_data.rs
 Fetch the tables with:
   gh api repos/blizzhackers/d2data/contents/json/levels.json -H "Accept: application/vnd.github.raw" > levels.json
   gh api repos/blizzhackers/d2data/contents/json/monstats.json -H "Accept: application/vnd.github.raw" > monstats.json
+  gh api repos/blizzhackers/d2data/contents/json/superuniques.json -H "Accept: application/vnd.github.raw" > superuniques.json
 Monster levels are the expansion columns (MonLvlEx, MonLvlEx(N), MonLvlEx(H)).
 """
 import json
@@ -15,6 +16,11 @@ monstats = json.load(open(f"{src}/monstats.json"))
 levels = levels if isinstance(levels, list) else list(levels.values())
 monstats = monstats if isinstance(monstats, list) else list(monstats.values())
 mon = {r.get("Id"): r for r in monstats}
+supers = json.load(open(f"{src}/superuniques.json"))
+supers = supers if isinstance(supers, list) else list(supers.values())
+
+# Monster preset txt id of a superunique's spawn point = this + hcIdx.
+SUPERUNIQUE_PRESET_BASE = 751
 
 # Quest bosses with a fixed level (monstats Level columns), and the level id they live in.
 BOSSES = [
@@ -53,4 +59,10 @@ print("pub const BOSSES: &[(&str, u32, [u8; 3])] = &[")
 for name, key, lid in BOSSES:
     r = mon[key]
     print(f"    ({rs_str(name)}, {lid}, [{r['Level']}, {r['Level(N)']}, {r['Level(H)']}]),")
+print("];")
+print()
+print("/// (monster preset txt id = 751 + hcIdx, superunique name), sorted by id.")
+print("pub const SUPERUNIQUES: &[(u32, &str)] = &[")
+for r in sorted(supers, key=lambda r: r["hcIdx"]):
+    print(f"    ({SUPERUNIQUE_PRESET_BASE + r['hcIdx']}, {rs_str(r['Superunique'])}),")
 print("];")

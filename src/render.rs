@@ -8,8 +8,8 @@ use anyhow::{Context, Result};
 use tiny_skia::{FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use crate::game::{Bounds, Monster, Preset, PresetKind, Room, Snapshot};
-use crate::info;
 use crate::items::{CharmSize, DropKind, GemColour};
+use crate::{info, session};
 
 /// Object txt ids of waypoints: every waypoint row of classic objects.txt. Live-verified: 119
 /// (Act 1 town), 156 (Act 2 outdoor, Dry Hills), 157 (Act 1 indoor, Jail 1).
@@ -38,6 +38,8 @@ pub struct LandmarkRule {
 /// - Flayer Jungle (78): the Gidbinn altar (object 252) lies in piece 602, live-verified 2026-11-15
 ///   (player in a 602 room 5 tiles from the altar). 602 spans 16 Room2 cells; 601 is the waypoint
 ///   area (waypoint object 237).
+/// - Kurast Sewers Level 1 (92): the sewer lever (object 367) and the stairs down (object 366) both
+///   sat in room preset 739 (live 2026-11-15, one game; the user then went down to level 2).
 pub const LANDMARKS: &[LandmarkRule] = &[
     LandmarkRule {
         level_ids: 74..=74,
@@ -53,6 +55,11 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 78..=78,
         preset_ids: 602..=602,
         label: "gidbinn",
+    },
+    LandmarkRule {
+        level_ids: 92..=92,
+        preset_ids: 739..=739,
+        label: "sewer stairs",
     },
 ];
 
@@ -98,8 +105,9 @@ pub enum Marker {
     /// The tile preset the player entered the level by (see `Session::apply`).
     Entry,
     Waypoint,
-    /// Monster preset: superunique or other special spawn.
-    Special,
+    /// Monster preset: superunique or other special spawn, with the superunique's name when its
+    /// txt id is in the table (see `session::superunique`). Not drawn as text; kept for later use.
+    Special(Option<&'static str>),
     /// A landmark room (see [`LANDMARKS`]), with the rule's label. Drawn below live elites so the
     /// boss standing on it stays visible.
     Landmark(&'static str),
@@ -117,7 +125,7 @@ impl Marker {
             Self::Exit => ([170, 90, 255, 255], 5.0, Shape::Circle),
             Self::Entry => ([40, 200, 200, 255], 4.5, Shape::Square),
             Self::Waypoint => ([60, 140, 255, 255], 5.0, Shape::Circle),
-            Self::Special => ([255, 110, 40, 255], 4.5, Shape::Circle),
+            Self::Special(_) => ([255, 110, 40, 255], 4.5, Shape::Circle),
             Self::Landmark(_) => (LANDMARK_GOLD, 9.0, Shape::Star),
             Self::Elite => ([230, 30, 30, 255], 3.5, Shape::Circle),
             Self::Drop(DropKind::Unique) => (UNIQUE_GOLD, 5.0, Shape::Diamond),
@@ -239,7 +247,7 @@ pub fn preset_marker(p: &Preset) -> Option<Marker> {
         PresetKind::Object if WAYPOINT_IDS.contains(&p.txt) => Some(Marker::Waypoint),
         PresetKind::Tile if p.entry => Some(Marker::Entry),
         PresetKind::Tile => Some(Marker::Exit),
-        PresetKind::Monster => Some(Marker::Special),
+        PresetKind::Monster => Some(Marker::Special(session::superunique(p.txt))),
         PresetKind::Object | PresetKind::Other(_) => None,
     }
 }
@@ -673,7 +681,12 @@ mod tests {
         assert_eq!(preset_marker(&entry), Some(Marker::Entry));
         assert_eq!(
             preset_marker(&preset(PresetKind::Monster, 771)),
-            Some(Marker::Special)
+            Some(Marker::Special(Some("The Smith")))
+        );
+        assert_eq!(
+            preset_marker(&preset(PresetKind::Monster, 840)),
+            Some(Marker::Special(None)),
+            "unfiltered generic preset: same marker, no name"
         );
         assert_eq!(preset_marker(&preset(PresetKind::Other(9), 1)), None);
     }
@@ -701,7 +714,7 @@ mod tests {
         let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
         assert_eq!(
             kinds,
-            vec![Marker::Exit, Marker::Special, Marker::Elite, Marker::Player]
+            vec![Marker::Exit, Marker::Special(None), Marker::Elite, Marker::Player]
         );
     }
 
@@ -1212,6 +1225,17 @@ mod tests {
     }
 
     #[test]
+    fn sewer_stairs_rule_marks_piece_739_in_sewers_1() {
+        let stairs = Marker::Landmark("sewer stairs");
+        let mut snap = sanctuary([None, Some(739), None, None]);
+        snap.level.id = 92;
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![(stairs, 90.0, 30.0)]);
+        // 739 in another level: nothing.
+        snap.level.id = 93;
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+    }
+
+    #[test]
     fn summoner_renders_as_a_haloed_gold_star() -> Result<()> {
         let snap = sanctuary([None, Some(527), None, None]);
         let (w, h) = (400, 400);
@@ -1225,7 +1249,7 @@ mod tests {
             Marker::Exit,
             Marker::Entry,
             Marker::Waypoint,
-            Marker::Special,
+            Marker::Special(None),
             Marker::Elite,
             Marker::Drop(DropKind::Unique),
             Marker::Drop(DropKind::Set),

@@ -1,5 +1,11 @@
-//! State accumulated over snapshots: superuniques killed in this game, where the player arrived
-//! in each level, and the (persistent) set of superunique preset ids.
+//! State accumulated over snapshots: superuniques killed in this game and where the player
+//! arrived in each level.
+//!
+//! **Superunique presets**: a monster preset is drawn iff its txt id is in
+//! [`SUPERUNIQUES`](crate::levels_data::SUPERUNIQUES) (751 + the superuniques.txt row, see
+//! `research/gen_levels.py`) and it wasn't killed in this game. Other monster presets are
+//! ordinary fixed spawns. Older versions learned the ids in play and kept them in a
+//! `superuniques.txt` next to the offset cache; that file is no longer read and can be deleted.
 //!
 //! Pure: no I/O. [`Session::apply`] folds each snapshot in and rewrites it for drawing, so the
 //! renderer stays a function of the snapshot alone.
@@ -20,13 +26,16 @@
 //! very first snapshot of a session has no previous level (the overlay may start mid-level),
 //! so it records no arrival.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
-use crate::game::{Addr, Preset, PresetKind, Snapshot};
+use crate::game::{Addr, PresetKind, Snapshot};
+use crate::levels_data::SUPERUNIQUES;
 use crate::offsets::monster_data;
 
-/// Most distance in tiles between a superunique and the monster preset it spawned from.
-const LEARN_RADIUS: f64 = 6.0;
+/// Most distance in tiles between a dead superunique and the superunique preset it is credited
+/// to. Generous: it only picks which marker to remove (the nearest), and superunique presets of
+/// one level lie far apart.
+const KILL_RADIUS: f64 = 30.0;
 /// Most distance in tiles between the arrival point and the entry tile preset.
 const ENTRY_RADIUS: f64 = 25.0;
 /// Tile presets this close to the entry tile are part of the same entry (multi-tile stairs).
@@ -46,16 +55,12 @@ struct GameKey {
 pub struct Update {
     /// The game changed since the previous snapshot; the per-game state was cleared.
     pub new_game: bool,
-    /// Preset txt ids learned as superuniques by this snapshot (to persist).
-    pub learned: Vec<u32>,
     /// The arrival point settled in this snapshot: (level id, x, y). Once per level per game.
     pub arrival: Option<(u32, u16, u16)>,
 }
 
 #[derive(Debug, Default)]
 pub struct Session {
-    /// Monster preset txt ids known to be superuniques (kept across games).
-    pub superuniques: BTreeSet<u32>,
     game: Option<GameKey>,
     /// Superunique presets whose monster was seen dead in this game, by (level id, preset x, y).
     killed: HashSet<LevelPos>,
@@ -72,16 +77,19 @@ pub struct Session {
 /// level's position, or 0,0 mid-load.
 const ARRIVAL_SETTLE: u8 = 5;
 
-impl Session {
-    pub fn new(superuniques: BTreeSet<u32>) -> Self {
-        Self {
-            superuniques,
-            ..Self::default()
-        }
-    }
+/// Name of the superunique whose monster preset has txt id `txt`, if it is one.
+#[must_use]
+pub fn superunique(txt: u32) -> Option<&'static str> {
+    SUPERUNIQUES
+        .binary_search_by_key(&txt, |&(id, _)| id)
+        .ok()
+        .and_then(|i| SUPERUNIQUES.get(i))
+        .map(|&(_, name)| name)
+}
 
+impl Session {
     /// Folds `snap` into the session and rewrites it for drawing: monster presets are kept only
-    /// if their txt id is a known superunique not killed in this game.
+    /// if they are a superunique's (see [`superunique`]) not killed in this game.
     pub fn apply(&mut self, snap: &mut Snapshot) -> Update {
         let mut update = Update::default();
         let key = GameKey {
@@ -120,44 +128,28 @@ impl Session {
             }
         }
 
+        // A dead superunique removes the nearest superunique preset's marker for the game.
         for m in snap
             .monsters
             .iter()
-            .filter(|m| m.flags & monster_data::SUPERUNIQUE != 0)
+            .filter(|m| m.flags & monster_data::SUPERUNIQUE != 0 && m.is_dead())
         {
             let (mx, my) = (f64::from(m.x), f64::from(m.y));
-            // Monster presets within the learn radius; the nearest one is the candidate.
-            let nearby: Vec<(f64, &Preset)> = snap
+            let nearest = snap
                 .presets
                 .iter()
-                .filter(|p| p.kind == PresetKind::Monster)
+                .filter(|p| p.kind == PresetKind::Monster && superunique(p.txt).is_some())
                 .map(|p| ((f64::from(p.x) - mx).hypot(f64::from(p.y) - my), p))
-                .filter(|&(d, _)| d <= LEARN_RADIUS)
-                .collect();
-            let Some(&(_, p)) = nearby.iter().min_by(|a, b| a.0.total_cmp(&b.0)) else {
-                continue;
-            };
-            // Learn only when the evidence is unambiguous: the candidate is the only monster preset
-            // within the radius, and its id occurs once among the loaded presets (a superunique has
-            // one spawn point per level). Live: Witch Doctor Endugu stood 2 tiles from one of many
-            // generic 840 presets with a 328 at 6 tiles — both rules reject that. The count covers
-            // loaded presets only (outdoors far ones aren't loaded), hence the first rule too.
-            let occurrences = snap
-                .presets
-                .iter()
-                .filter(|q| q.kind == PresetKind::Monster && q.txt == p.txt)
-                .count();
-            if nearby.len() == 1 && occurrences == 1 && self.superuniques.insert(p.txt) {
-                update.learned.push(p.txt);
-            }
-            if m.is_dead() {
+                .filter(|&(d, _)| d <= KILL_RADIUS)
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((_, p)) = nearest {
                 self.killed.insert((level, p.x, p.y));
             }
         }
 
         snap.presets.retain(|p| {
             p.kind != PresetKind::Monster
-                || (self.superuniques.contains(&p.txt) && !self.killed.contains(&(level, p.x, p.y)))
+                || (superunique(p.txt).is_some() && !self.killed.contains(&(level, p.x, p.y)))
         });
         update
     }
@@ -258,77 +250,53 @@ mod tests {
     }
 
     #[test]
-    fn superunique_presets_are_learned_from_nearby_live_superuniques() {
+    fn superunique_table_is_751_plus_hc_idx() {
+        assert_eq!(SUPERUNIQUES.len(), 66);
+        assert!(SUPERUNIQUES.is_sorted_by(|a, b| a.0 < b.0), "sorted, unique ids");
+        assert_eq!(SUPERUNIQUES.first().map(|r| r.0), Some(751));
+        assert_eq!(SUPERUNIQUES.last().map(|r| r.0), Some(816));
+        assert_eq!(superunique(751), Some("Bishibosh"));
+        assert_eq!(superunique(757), Some("The Countess"));
+        assert_eq!(superunique(771), Some("The Smith"));
+        assert_eq!(superunique(775), Some("Sarina the Battlemaid"));
+        assert_eq!(superunique(776), Some("Icehawk Riftwing"));
+        for generic in [750, 817, 328, 840] {
+            assert_eq!(superunique(generic), None, "{generic}");
+        }
+    }
+
+    #[test]
+    fn only_superunique_monster_presets_are_drawn() {
         let mut s = Session::default();
         let mut a = snap(1, 0xa000, 25);
         a.presets = vec![
-            preset(PresetKind::Monster, 853, 100, 100),
-            preset(PresetKind::Monster, 40, 108, 100),
-            preset(PresetKind::Monster, 41, 300, 300),
+            preset(PresetKind::Monster, 757, 100, 100),
+            preset(PresetKind::Monster, 328, 108, 100),
+            preset(PresetKind::Monster, 840, 300, 300),
             preset(PresetKind::Tile, 7, 100, 100),
         ];
-        a.monsters = vec![
-            monster(0x02, 1, 101, 101), // superunique next to 853 (40 is farther)
-            monster(0x08, 1, 300, 300), // unique: teaches nothing
-            monster(0x02, 1, 200, 200), // superunique with no preset within the learn radius
-        ];
-        let up = s.apply(&mut a);
-        assert_eq!(up.learned, vec![853]);
-        assert_eq!(s.superuniques, BTreeSet::from([853]));
+        // A live superunique next to a generic preset changes nothing (no learning).
+        a.monsters = vec![monster(0x02, 1, 300, 301)];
+        s.apply(&mut a);
         let kept: Vec<u32> = a.presets.iter().map(|p| p.txt).collect();
-        assert_eq!(kept, vec![853, 7], "unknown monster presets dropped, tiles kept");
-
-        // Seen again: nothing new to persist.
-        let mut b = snap(1, 0xa000, 25);
-        b.presets = vec![preset(PresetKind::Monster, 853, 100, 100)];
-        b.monsters = vec![monster(0x02, 1, 100, 95)];
-        assert_eq!(s.apply(&mut b).learned, Vec::<u32>::new());
-        assert_eq!(b.presets.len(), 1);
-    }
-
-    #[test]
-    fn repeated_preset_ids_are_never_learned() {
-        // Live case: Witch Doctor Endugu stood 2 tiles from one of many 840 spawn points.
-        let mut s = Session::default();
-        let mut a = snap(1, 0xa000, 91);
-        a.presets = vec![
-            preset(PresetKind::Monster, 840, 100, 100),
-            preset(PresetKind::Monster, 840, 160, 140),
-            preset(PresetKind::Monster, 840, 220, 90),
-        ];
-        a.monsters = vec![monster(0x02, 1, 101, 101)];
-        assert_eq!(s.apply(&mut a).learned, Vec::<u32>::new());
-        assert!(s.superuniques.is_empty());
-        assert!(a.presets.is_empty(), "unlearned repeated presets are not drawn");
-    }
-
-    #[test]
-    fn two_presets_within_the_radius_teach_nothing() {
-        // Endugu geometry with only one copy of each id loaded: 840 at 2 tiles, 328 at 6.
-        let mut s = Session::default();
-        let mut a = snap(1, 0xa000, 91);
-        a.presets = vec![
-            preset(PresetKind::Monster, 840, 102, 100),
-            preset(PresetKind::Monster, 328, 106, 100),
-        ];
-        a.monsters = vec![monster(0x02, 1, 100, 100)];
-        assert_eq!(s.apply(&mut a).learned, Vec::<u32>::new());
+        assert_eq!(kept, vec![757, 7], "generic monster presets dropped, tiles kept");
     }
 
     #[test]
     fn killed_superunique_marker_is_removed_for_the_game() {
-        let countess = || preset(PresetKind::Monster, 853, 100, 100);
-        let mut session = Session::new(BTreeSet::from([853]));
+        let countess = || preset(PresetKind::Monster, 757, 100, 100);
+        let mut session = Session::default();
         let mut alive = snap(1, 0xa000, 25);
         alive.presets = vec![countess()];
+        alive.monsters = vec![monster(0x02, 1, 101, 100)];
         session.apply(&mut alive);
-        assert_eq!(alive.presets.len(), 1, "known id drawn without a live monster");
+        assert_eq!(alive.presets.len(), 1, "living superunique keeps its marker");
 
         for dead_mode in [0, 12] {
-            let mut session = Session::new(BTreeSet::from([853]));
+            let mut session = Session::default();
             let mut killed = snap(1, 0xa000, 25);
             killed.presets = vec![countess()];
-            killed.monsters = vec![monster(0x02, dead_mode, 103, 98)];
+            killed.monsters = vec![monster(0x02, dead_mode, 120, 115)];
             session.apply(&mut killed);
             assert_eq!(
                 killed.presets,
@@ -340,12 +308,48 @@ mod tests {
             later.presets = vec![countess()];
             session.apply(&mut later);
             assert_eq!(later.presets, vec![]);
+            // The same spot in another level is another preset.
+            let mut other_level = snap(1, 0xa000, 26);
+            other_level.presets = vec![countess()];
+            session.apply(&mut other_level);
+            assert_eq!(other_level.presets.len(), 1);
             // A new game brings it back.
             let mut next_game = snap(2, 0xc000, 25);
             next_game.presets = vec![countess()];
             session.apply(&mut next_game);
             assert_eq!(next_game.presets.len(), 1);
         }
+    }
+
+    #[test]
+    fn a_kill_is_credited_to_the_nearest_superunique_preset() {
+        let presets = || {
+            vec![
+                preset(PresetKind::Monster, 771, 100, 100), // superunique, 19 tiles from the corpse
+                preset(PresetKind::Monster, 775, 140, 100), // superunique, 21 tiles from the corpse
+                preset(PresetKind::Monster, 840, 119, 101), // generic, nearest: never credited
+                preset(PresetKind::Monster, 776, 500, 500), // beyond the radius
+            ]
+        };
+        let mut s = Session::default();
+        let mut a = snap(1, 0xa000, 28);
+        a.presets = presets();
+        a.monsters = vec![
+            monster(0x02, 0, 119, 100), // dead superunique between 771 and 775
+            monster(0x08, 0, 140, 100), // dead unique on 775: not a superunique
+            monster(0x02, 1, 500, 500), // living superunique on 776
+        ];
+        s.apply(&mut a);
+        let kept: Vec<u32> = a.presets.iter().map(|p| p.txt).collect();
+        assert_eq!(kept, vec![775, 776]);
+
+        // A dead superunique with no superunique preset within the radius removes nothing.
+        let mut s = Session::default();
+        let mut far = snap(1, 0xa000, 28);
+        far.presets = presets();
+        far.monsters = vec![monster(0x02, 0, 300, 300)];
+        s.apply(&mut far);
+        assert_eq!(far.presets.len(), 3);
     }
 
     fn at(mut s: Snapshot, x: u16, y: u16, presets: &[Preset]) -> Snapshot {
