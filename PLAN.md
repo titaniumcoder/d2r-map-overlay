@@ -109,6 +109,11 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   object 152 inside it); a fake tomb's chest chamber was 473 in tomb 71. Assumed pattern: orifice chamber = level+390
   (456–462), chest chamber = level+402 (468–474). Drawn with the same gold star; only 462 is confirmed so far.
 
+## Flayer Jungle (78), 2026-11-15
+- 192 rooms in 9 large piece types (16 or 32 Room2 each): 534, 535, 538, 539, 565, 570, 574, 601, 602.
+- **601 = waypoint area** (player and waypoint object 237 inside it). **602 = Gidbinn altar candidate** (only other
+  outlier id) — awaiting user confirmation; then add a landmark rule {78, 602, "gidbinn"}.
+
 ## User feedback, first live session (Act 1, 2026-11-14)
 - Minimap "already helps drastically"; ~1% CPU, 7 MB RSS.
 - Hide in towns (level ids 1, 40, 75, 103, 109).
