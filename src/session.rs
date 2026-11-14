@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::game::{Addr, PresetKind, Snapshot};
+use crate::game::{Addr, Preset, PresetKind, Snapshot};
 use crate::offsets::monster_data;
 
 /// Most distance in tiles between a superunique and the monster preset it spawned from.
@@ -126,16 +126,28 @@ impl Session {
             .filter(|m| m.flags & monster_data::SUPERUNIQUE != 0)
         {
             let (mx, my) = (f64::from(m.x), f64::from(m.y));
-            // The nearest monster preset only: other fixed spawns nearby must not be learned.
-            let nearest = snap
+            // Monster presets within the learn radius; the nearest one is the candidate.
+            let nearby: Vec<(f64, &Preset)> = snap
                 .presets
                 .iter()
                 .filter(|p| p.kind == PresetKind::Monster)
                 .map(|p| ((f64::from(p.x) - mx).hypot(f64::from(p.y) - my), p))
                 .filter(|&(d, _)| d <= LEARN_RADIUS)
-                .min_by(|a, b| a.0.total_cmp(&b.0));
-            let Some((_, p)) = nearest else { continue };
-            if self.superuniques.insert(p.txt) {
+                .collect();
+            let Some(&(_, p)) = nearby.iter().min_by(|a, b| a.0.total_cmp(&b.0)) else {
+                continue;
+            };
+            // Learn only when the evidence is unambiguous: the candidate is the only monster preset
+            // within the radius, and its id occurs once among the loaded presets (a superunique has
+            // one spawn point per level). Live: Witch Doctor Endugu stood 2 tiles from one of many
+            // generic 840 presets with a 328 at 6 tiles — both rules reject that. The count covers
+            // loaded presets only (outdoors far ones aren't loaded), hence the first rule too.
+            let occurrences = snap
+                .presets
+                .iter()
+                .filter(|q| q.kind == PresetKind::Monster && q.txt == p.txt)
+                .count();
+            if nearby.len() == 1 && occurrences == 1 && self.superuniques.insert(p.txt) {
                 update.learned.push(p.txt);
             }
             if m.is_dead() {
@@ -272,6 +284,35 @@ mod tests {
         b.monsters = vec![monster(0x02, 1, 100, 95)];
         assert_eq!(s.apply(&mut b).learned, Vec::<u32>::new());
         assert_eq!(b.presets.len(), 1);
+    }
+
+    #[test]
+    fn repeated_preset_ids_are_never_learned() {
+        // Live case: Witch Doctor Endugu stood 2 tiles from one of many 840 spawn points.
+        let mut s = Session::default();
+        let mut a = snap(1, 0xa000, 91);
+        a.presets = vec![
+            preset(PresetKind::Monster, 840, 100, 100),
+            preset(PresetKind::Monster, 840, 160, 140),
+            preset(PresetKind::Monster, 840, 220, 90),
+        ];
+        a.monsters = vec![monster(0x02, 1, 101, 101)];
+        assert_eq!(s.apply(&mut a).learned, Vec::<u32>::new());
+        assert!(s.superuniques.is_empty());
+        assert!(a.presets.is_empty(), "unlearned repeated presets are not drawn");
+    }
+
+    #[test]
+    fn two_presets_within_the_radius_teach_nothing() {
+        // Endugu geometry with only one copy of each id loaded: 840 at 2 tiles, 328 at 6.
+        let mut s = Session::default();
+        let mut a = snap(1, 0xa000, 91);
+        a.presets = vec![
+            preset(PresetKind::Monster, 840, 102, 100),
+            preset(PresetKind::Monster, 328, 106, 100),
+        ];
+        a.monsters = vec![monster(0x02, 1, 100, 100)];
+        assert_eq!(s.apply(&mut a).learned, Vec::<u32>::new());
     }
 
     #[test]

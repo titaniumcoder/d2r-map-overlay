@@ -9,7 +9,7 @@ use tiny_skia::{FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stro
 
 use crate::game::{Bounds, Monster, Preset, PresetKind, Room, Snapshot};
 use crate::info;
-use crate::items::{DropKind, GemColour};
+use crate::items::{CharmSize, DropKind, GemColour};
 
 /// Object txt ids of waypoints: every waypoint row of classic objects.txt. Live-verified: 119
 /// (Act 1 town), 156 (Act 2 outdoor, Dry Hills), 157 (Act 1 indoor, Jail 1).
@@ -72,6 +72,10 @@ const MARKER_OUTLINE: Rgba = [0, 0, 0, 220];
 const LANDMARK_GOLD: Rgba = [255, 200, 30, 255];
 /// Halo ring radius in px, beyond the star's tips.
 const LANDMARK_RING: f32 = 13.0;
+/// Unique items, and unique charms.
+const UNIQUE_GOLD: Rgba = [235, 190, 60, 255];
+/// Charms: a light blue, apart from the rune orange and the entry teal.
+const CHARM_BLUE: Rgba = [120, 170, 255, 255];
 
 /// Outline shape of a marker. Monsters and presets are circles (the level entry a square); drops
 /// are diamonds and squares.
@@ -116,9 +120,18 @@ impl Marker {
             Self::Special => ([255, 110, 40, 255], 4.5, Shape::Circle),
             Self::Landmark(_) => (LANDMARK_GOLD, 9.0, Shape::Star),
             Self::Elite => ([230, 30, 30, 255], 3.5, Shape::Circle),
-            Self::Drop(DropKind::Unique) => ([235, 190, 60, 255], 5.0, Shape::Diamond),
+            Self::Drop(DropKind::Unique) => (UNIQUE_GOLD, 5.0, Shape::Diamond),
             Self::Drop(DropKind::Set) => ([30, 220, 30, 255], 5.0, Shape::Diamond),
             Self::Drop(DropKind::Rune(_)) => ([255, 150, 20, 255], 3.5, Shape::Square),
+            Self::Drop(DropKind::Charm { size, unique }) => {
+                let colour = if unique { UNIQUE_GOLD } else { CHARM_BLUE };
+                let half = match size {
+                    CharmSize::Small => 2.5,
+                    CharmSize::Large => 3.0,
+                    CharmSize::Grand => 3.5,
+                };
+                (colour, half, Shape::Square)
+            }
             Self::Drop(DropKind::Gem(colour)) => (gem_colour(colour), 3.5, Shape::Diamond),
             Self::Player => ([40, 255, 60, 255], 4.5, Shape::Circle),
         }
@@ -836,6 +849,10 @@ mod tests {
             DropKind::Set,
             DropKind::Rune(1),
             DropKind::Gem(GemColour::Skull),
+            DropKind::Charm {
+                size: CharmSize::Small,
+                unique: false,
+            },
         ] {
             assert_ne!(Marker::Drop(kind).style().2, Shape::Circle, "{kind:?}");
         }
@@ -900,6 +917,74 @@ mod tests {
         );
         let (gx, gy) = centre(at);
         assert_eq!(rgba(&pm, gx, gy)?, gem, "gem centre");
+        Ok(())
+    }
+
+    const fn charm(size: CharmSize, unique: bool) -> DropKind {
+        DropKind::Charm { size, unique }
+    }
+
+    #[test]
+    fn charm_styles() {
+        let (entry, entry_half, _) = Marker::Entry.style();
+        let (rune, rune_half, _) = Marker::Drop(DropKind::Rune(1)).style();
+        let mut last = 0.0;
+        for size in [CharmSize::Small, CharmSize::Large, CharmSize::Grand] {
+            let (colour, half, shape) = Marker::Drop(charm(size, false)).style();
+            assert_eq!((colour, shape), (CHARM_BLUE, Shape::Square), "{size:?}");
+            assert_ne!(colour, entry);
+            assert_ne!(colour, rune);
+            assert!(
+                half > last && half < entry_half && half <= rune_half,
+                "{size:?}: {half}"
+            );
+            last = half;
+            let (gold, unique_half, unique_shape) = Marker::Drop(charm(size, true)).style();
+            assert_eq!(
+                gold,
+                Marker::Drop(DropKind::Unique).style().0,
+                "unique charm colour"
+            );
+            assert_eq!((unique_half, unique_shape), (half, shape), "unique charm shape");
+        }
+    }
+
+    #[test]
+    fn charm_markers_render_where_the_drop_is() -> Result<()> {
+        let mut snap = empty_snapshot(5, 115);
+        snap.level.rooms = vec![room(0, 0, false), room(60, 0, true)];
+        snap.drops = vec![
+            drop_at(charm(CharmSize::Grand, false), 30, 30),
+            drop_at(charm(CharmSize::Small, true), 90, 30),
+        ];
+        let (w, h) = (400, 400);
+        let pm = render(&snap, w, h)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+        #[allow(
+            clippy::cast_sign_loss,
+            clippy::cast_possible_truncation,
+            reason = "test points are inside the canvas"
+        )]
+        let centre = |(x, y): (f32, f32)| (x.floor() as u32, y.floor() as u32);
+
+        for (kind, (x, y)) in [
+            (charm(CharmSize::Grand, false), (30.0, 30.0)),
+            (charm(CharmSize::Small, true), (90.0, 30.0)),
+        ] {
+            let (colour, half, _) = Marker::Drop(kind).style();
+            let at = v.to_screen(x, y);
+            let (hits, dx, dy) = colour_spread(&pm, colour, at)?;
+            assert!(hits >= 4, "only {hits} pixels of {kind:?}");
+            assert!(
+                dx <= f64::from(half) && dy <= f64::from(half),
+                "{kind:?} spread {dx},{dy}"
+            );
+            let (cx, cy) = centre(at);
+            assert_eq!(rgba(&pm, cx, cy)?, colour, "{kind:?} centre");
+            let (edge_x, _) = centre((at.0 + half, at.1));
+            let edge = rgba(&pm, edge_x, cy)?;
+            assert!(edge[0] < 150 && edge[3] > 150, "outline at the edge: {edge:?}");
+        }
         Ok(())
     }
 

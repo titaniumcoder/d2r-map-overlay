@@ -1,4 +1,4 @@
-//! Ground drops worth showing (unique, set, gems, runes) and the game's item-code table.
+//! Ground drops worth showing (unique, set, gems, runes, charms) and the game's item-code table.
 //!
 //! An item unit only carries its items.txt row (`unit::TXT`); the 4-character item code
 //! (`gcg `, `r01 `) lives in the game's items table, an array on the heap whose address differs
@@ -25,6 +25,15 @@ pub enum GemColour {
     Skull,
 }
 
+/// Charm size: small (`cm1`), large (`cm2`), grand (`cm3`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CharmSize {
+    Small,
+    Large,
+    Grand,
+}
+
 /// Why a ground item is shown. Variant order is draw order (unique on top).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -32,6 +41,13 @@ pub enum DropKind {
     Gem(GemColour),
     /// Rune number 1 (El) ..= 33 (Zod).
     Rune(u8),
+    /// A charm of any quality; `unique` (Annihilus, Torch, Gheed's) keeps the unique colour.
+    /// JSON: `{"charm":{"size":"grand"}}`, plus `"unique":true` for a unique one.
+    Charm {
+        size: CharmSize,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        unique: bool,
+    },
     Set,
     Unique,
 }
@@ -82,9 +98,20 @@ const GEMS: [([u8; 3], GemColour); 35] = {
 /// Highest rune number (`r33`, Zod).
 const MAX_RUNE: u8 = 33;
 
-/// The kind of a gem, skull or rune by its 4-byte code (3 letters + space); `None` otherwise.
+/// Charm codes of classic misc.txt.
+const CHARMS: [([u8; 3], CharmSize); 3] = [
+    (*b"cm1", CharmSize::Small),
+    (*b"cm2", CharmSize::Large),
+    (*b"cm3", CharmSize::Grand),
+];
+
+/// The kind of a gem, skull, rune or charm by its 4-byte code (3 letters + space); `None`
+/// otherwise. A charm comes back as not unique: only [`classify`] knows the quality.
 pub fn code_kind(code: [u8; 4]) -> Option<DropKind> {
     let [a, b, c, b' '] = code else { return None };
+    if let Some(&(_, size)) = CHARMS.iter().find(|(ch, _)| *ch == [a, b, c]) {
+        return Some(DropKind::Charm { size, unique: false });
+    }
     if let Some(&(_, colour)) = GEMS.iter().find(|(g, _)| *g == [a, b, c]) {
         return Some(DropKind::Gem(colour));
     }
@@ -97,13 +124,21 @@ pub fn code_kind(code: [u8; 4]) -> Option<DropKind> {
     None
 }
 
-/// Whether a ground item is shown: unique or set by quality (any base), else gem/rune by code.
+/// Whether a ground item is shown: a charm of any quality first (so a unique charm stays a
+/// charm), then unique or set by quality (any base), else gem/rune by code.
 /// `code` is `None` if the items table wasn't found; then only unique and set items are shown.
 pub fn classify(quality: u32, code: Option<[u8; 4]>) -> Option<DropKind> {
+    let kind = code.and_then(code_kind);
+    if let Some(DropKind::Charm { size, .. }) = kind {
+        return Some(DropKind::Charm {
+            size,
+            unique: quality == item_data::QUALITY_UNIQUE,
+        });
+    }
     match quality {
         item_data::QUALITY_UNIQUE => Some(DropKind::Unique),
         item_data::QUALITY_SET => Some(DropKind::Set),
-        _ => code.and_then(code_kind),
+        _ => kind,
     }
 }
 
@@ -266,6 +301,74 @@ mod tests {
         for code in [b"r00 ", b"r34 ", b"r99 ", b"r1  ", b"rab ", b"r01x"] {
             assert_eq!(code_kind(*code), None, "{:?}", code_text(*code));
         }
+    }
+
+    #[test]
+    fn every_charm() {
+        let charm = |size| Some(DropKind::Charm { size, unique: false });
+        assert_eq!(code_kind(*b"cm1 "), charm(CharmSize::Small));
+        assert_eq!(code_kind(*b"cm2 "), charm(CharmSize::Large));
+        assert_eq!(code_kind(*b"cm3 "), charm(CharmSize::Grand));
+        for code in [b"cm0 ", b"cm4 ", b"cm  ", b"cm1\0", b"cm1x", b"cn1 ", b"CM1 "] {
+            assert_eq!(code_kind(*code), None, "{:?}", code_text(*code));
+        }
+    }
+
+    #[test]
+    fn charms_before_quality() {
+        assert_eq!(
+            classify(7, Some(*b"cm3 ")),
+            Some(DropKind::Charm {
+                size: CharmSize::Grand,
+                unique: true
+            }),
+            "Gheed's: a charm, still marked unique"
+        );
+        assert_eq!(
+            classify(4, Some(*b"cm1 ")),
+            Some(DropKind::Charm {
+                size: CharmSize::Small,
+                unique: false
+            }),
+            "magic small charm"
+        );
+        for q in [1, 2, 3, 5, 6] {
+            assert_eq!(
+                classify(q, Some(*b"cm2 ")),
+                Some(DropKind::Charm {
+                    size: CharmSize::Large,
+                    unique: false
+                }),
+                "quality {q}"
+            );
+        }
+        assert_eq!(classify(4, None), None, "charm without a table");
+    }
+
+    #[test]
+    fn charm_json() -> serde_json::Result<()> {
+        let plain = DropKind::Charm {
+            size: CharmSize::Grand,
+            unique: false,
+        };
+        let unique = DropKind::Charm {
+            size: CharmSize::Small,
+            unique: true,
+        };
+        assert_eq!(serde_json::to_string(&plain)?, r#"{"charm":{"size":"grand"}}"#);
+        assert_eq!(
+            serde_json::to_string(&unique)?,
+            r#"{"charm":{"size":"small","unique":true}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<DropKind>(r#"{"charm":{"size":"grand"}}"#)?,
+            plain
+        );
+        assert_eq!(
+            serde_json::from_str::<DropKind>(r#"{"charm":{"size":"small","unique":true}}"#)?,
+            unique
+        );
+        Ok(())
     }
 
     #[test]

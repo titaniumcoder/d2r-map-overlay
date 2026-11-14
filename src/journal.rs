@@ -447,6 +447,7 @@ fn utc_date(t: u64) -> String {
 mod tests {
     use super::*;
     use crate::game::{Addr, ItemDrop, Level, Monster, Player, Preset, RoomLink, RoomPos};
+    use crate::items::CharmSize;
     use anyhow::{Context, Result};
     use serde_json::json;
 
@@ -594,6 +595,34 @@ mod tests {
             r.observe(&s).is_empty(),
             "minions and normal monsters are not elites"
         );
+    }
+
+    #[test]
+    fn charm_drop_event_shape() -> Result<()> {
+        let mut r = Recorder::default();
+        let mut s = snap(0xbeef, 74);
+        s.drops = vec![ItemDrop {
+            id: 9,
+            code: Some("cm3".into()),
+            kind: DropKind::Charm {
+                size: CharmSize::Grand,
+                unique: true,
+            },
+            quality: 7,
+            x: 12,
+            y: 13,
+        }];
+        let events = r.observe(&s);
+        let drop = events
+            .iter()
+            .find(|e| matches!(e, Event::Drop { .. }))
+            .context("drop event")?;
+        assert_eq!(
+            serde_json::to_value(drop)?,
+            json!({"ev": "drop", "level": 74, "id": 9, "code": "cm3",
+                "kind": {"charm": {"size": "grand", "unique": true}}, "quality": 7, "x": 12, "y": 13})
+        );
+        Ok(())
     }
 
     #[test]
