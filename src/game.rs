@@ -150,6 +150,10 @@ pub struct Preset {
     pub txt: u32,
     pub x: u32,
     pub y: u32,
+    /// Tile preset the player entered the level by; set by `Session::apply`, never read from
+    /// memory. Omitted from JSON when false, so dumps and fixtures stay unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub entry: bool,
 }
 
 /// World-tile origin of a room.
@@ -571,6 +575,7 @@ impl<M: ReadMem> Reader<'_, M> {
             txt: self.u32(p, preset::TXT)?,
             x: room.x.checked_add(rel_x).context("preset x overflow")?,
             y: room.y.checked_add(rel_y).context("preset y overflow")?,
+            entry: false,
         })
     }
 
@@ -1017,25 +1022,29 @@ mod tests {
                     kind: PresetKind::Object,
                     txt: 119,
                     x: 53,
-                    y: 104
+                    y: 104,
+                    entry: false
                 },
                 Preset {
                     kind: PresetKind::Tile,
                     txt: 7,
                     x: 51,
-                    y: 102
+                    y: 102,
+                    entry: false
                 },
                 Preset {
                     kind: PresetKind::Other(9),
                     txt: 1,
                     x: 50,
-                    y: 100
+                    y: 100,
+                    entry: false
                 },
                 Preset {
                     kind: PresetKind::Monster,
                     txt: 853,
                     x: 92,
-                    y: 103
+                    y: 103,
+                    entry: false
                 },
             ]
         );

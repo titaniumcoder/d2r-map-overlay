@@ -27,7 +27,8 @@ const ROOM: Rgba = [70, 74, 84, 120];
 const ROOM_LOADED: Rgba = [125, 130, 142, 160];
 const MARKER_OUTLINE: Rgba = [0, 0, 0, 220];
 
-/// Outline shape of a marker. Monsters and presets are circles; drops are diamonds and squares.
+/// Outline shape of a marker. Monsters and presets are circles (the level entry a square); drops
+/// are diamonds and squares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     Circle,
@@ -42,6 +43,8 @@ pub enum Shape {
 pub enum Marker {
     /// Tile preset: a level exit.
     Exit,
+    /// The tile preset the player entered the level by (see `Session::apply`).
+    Entry,
     Waypoint,
     /// Monster preset: superunique or other special spawn.
     Special,
@@ -57,6 +60,7 @@ impl Marker {
     const fn style(self) -> (Rgba, f32, Shape) {
         match self {
             Self::Exit => ([170, 90, 255, 255], 5.0, Shape::Circle),
+            Self::Entry => ([40, 200, 200, 255], 4.5, Shape::Square),
             Self::Waypoint => ([60, 140, 255, 255], 5.0, Shape::Circle),
             Self::Special => ([255, 110, 40, 255], 4.5, Shape::Circle),
             Self::Elite => ([230, 30, 30, 255], 3.5, Shape::Circle),
@@ -168,6 +172,7 @@ pub fn is_elite(m: &Monster) -> bool {
 pub fn preset_marker(p: &Preset) -> Option<Marker> {
     match p.kind {
         PresetKind::Object if WAYPOINT_IDS.contains(&p.txt) => Some(Marker::Waypoint),
+        PresetKind::Tile if p.entry => Some(Marker::Entry),
         PresetKind::Tile => Some(Marker::Exit),
         PresetKind::Monster => Some(Marker::Special),
         PresetKind::Object | PresetKind::Other(_) => None,
@@ -323,6 +328,7 @@ mod tests {
             txt,
             x: 10,
             y: 20,
+            entry: false,
         }
     }
 
@@ -487,6 +493,11 @@ mod tests {
         }
         assert_eq!(preset_marker(&preset(PresetKind::Object, 16)), None);
         assert_eq!(preset_marker(&preset(PresetKind::Tile, 13)), Some(Marker::Exit));
+        let entry = Preset {
+            entry: true,
+            ..preset(PresetKind::Tile, 13)
+        };
+        assert_eq!(preset_marker(&entry), Some(Marker::Entry));
         assert_eq!(
             preset_marker(&preset(PresetKind::Monster, 771)),
             Some(Marker::Special)
@@ -733,5 +744,53 @@ mod tests {
     #[test]
     fn render_rejects_zero_size() {
         assert!(render(&empty_snapshot(1, 1), 0, 10).is_err());
+    }
+
+    #[test]
+    fn entry_renders_as_a_teal_square_apart_from_exits() -> Result<()> {
+        let mut snap = empty_snapshot(5, 115);
+        snap.level.rooms = vec![room(0, 0, false), room(60, 0, true)];
+        snap.presets = vec![
+            Preset {
+                kind: PresetKind::Tile,
+                txt: 1,
+                x: 30,
+                y: 30,
+                entry: true,
+            },
+            Preset {
+                kind: PresetKind::Tile,
+                txt: 2,
+                x: 90,
+                y: 30,
+                entry: false,
+            },
+        ];
+        let (w, h) = (400, 400);
+        let pm = render(&snap, w, h)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+
+        let (entry, half, shape) = Marker::Entry.style();
+        assert_eq!(shape, Shape::Square);
+        assert_ne!(entry, Marker::Exit.style().0);
+        assert_ne!(
+            Marker::Waypoint.style().2,
+            Shape::Square,
+            "entry unlike the waypoint"
+        );
+        let at = v.to_screen(30.0, 30.0);
+        let (hits, dx, dy) = colour_spread(&pm, entry, at)?;
+        assert!(hits >= 25, "only {hits} entry pixels");
+        assert!(
+            dx <= f64::from(half) && dy <= f64::from(half),
+            "entry spread {dx},{dy}"
+        );
+        // The exit keeps its colour, at its own spot only.
+        let (exit, radius, _) = Marker::Exit.style();
+        let at = v.to_screen(90.0, 30.0);
+        let (hits, dx, dy) = colour_spread(&pm, exit, at)?;
+        assert!(hits >= 9, "only {hits} exit pixels");
+        assert!(dx.hypot(dy) <= f64::from(radius) * 1.5, "exit spread {dx},{dy}");
+        Ok(())
     }
 }

@@ -1,5 +1,5 @@
-//! State accumulated over snapshots: superuniques killed in this game, and the (persistent) set
-//! of superunique preset ids.
+//! State accumulated over snapshots: superuniques killed in this game, where the player arrived
+//! in each level, and the (persistent) set of superunique preset ids.
 //!
 //! Pure: no I/O. [`Session::apply`] folds each snapshot in and rewrites it for drawing, so the
 //! renderer stays a function of the snapshot alone.
@@ -11,14 +11,26 @@
 //! The act also changes on act travel, which clears the killed set then too: a superunique
 //! killed in an act you return to shows again. That errs towards showing a marker, never
 //! towards hiding a living superunique in a new game.
+//!
+//! **Entry**: the player's position when the level id changes is the level's arrival point (first
+//! visit per game wins; a new game counts as a level change). For [`ARRIVAL_SETTLE`] snapshots it
+//! follows the player while no tile is near it, so a stale first frame can't lock a wrong point.
+//! The tile preset nearest to it, within [`ENTRY_RADIUS`], is the way in and gets
+//! [`Preset::entry`](crate::game::Preset::entry); the other tiles stay exits. Arriving by waypoint or portal has no tile nearby, so no entry. The
+//! very first snapshot of a session has no previous level (the overlay may start mid-level),
+//! so it records no arrival.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::game::{Addr, PresetKind, Snapshot};
 use crate::offsets::monster_data;
 
 /// Most distance in tiles between a superunique and the monster preset it spawned from.
 const LEARN_RADIUS: f64 = 6.0;
+/// Most distance in tiles between the arrival point and the entry tile preset.
+const ENTRY_RADIUS: f64 = 25.0;
+/// Tile presets this close to the entry tile are part of the same entry (multi-tile stairs).
+const ENTRY_CLUSTER: f64 = 5.0;
 
 /// (level id, x, y) in world tiles of a preset.
 type LevelPos = (u32, u32, u32);
@@ -45,7 +57,18 @@ pub struct Session {
     game: Option<GameKey>,
     /// Superunique presets whose monster was seen dead in this game, by (level id, preset x, y).
     killed: HashSet<LevelPos>,
+    /// Level id of the previous snapshot (kept across games: only its change matters).
+    last_level: Option<u32>,
+    /// Player position on arriving in each level of this game, by level id.
+    arrivals: HashMap<u32, (u16, u16)>,
+    /// Level whose arrival point may still move, and how many more snapshots it may.
+    settling: Option<(u32, u8)>,
 }
+
+/// Snapshots (~1 s at 5 Hz) after an arrival during which the arrival point follows the player
+/// while no tile lies near it: the first snapshot after a level change can still carry the old
+/// level's position, or 0,0 mid-load.
+const ARRIVAL_SETTLE: u8 = 5;
 
 impl Session {
     pub fn new(superuniques: BTreeSet<u32>) -> Self {
@@ -65,9 +88,31 @@ impl Session {
         };
         if self.game.replace(key).is_some_and(|old| old != key) {
             self.killed.clear();
+            self.arrivals.clear();
             update.new_game = true;
         }
         let level = snap.level.id;
+        let level_changed = self.last_level.replace(level).is_some_and(|old| old != level);
+        let here = (snap.player.x, snap.player.y);
+        if (level_changed || update.new_game) && !self.arrivals.contains_key(&level) {
+            self.arrivals.insert(level, here);
+            self.settling = Some((level, ARRIVAL_SETTLE));
+        }
+        if let Some(&arrival) = self.arrivals.get(&level) {
+            let found = mark_entry(snap, arrival);
+            self.settling = match self.settling {
+                Some((l, left)) if l == level && !found && left > 0 => {
+                    self.arrivals.insert(level, here);
+                    if mark_entry(snap, here) {
+                        None
+                    } else {
+                        Some((l, left - 1))
+                    }
+                }
+                Some((l, _)) if l == level => None,
+                other => other,
+            };
+        }
 
         for m in snap
             .monsters
@@ -100,6 +145,28 @@ impl Session {
     }
 }
 
+/// Marks the tile preset nearest to `arrival` (within [`ENTRY_RADIUS`]) and the tiles clustered
+/// around it as the entry. Returns whether one was found.
+fn mark_entry(snap: &mut Snapshot, (ax, ay): (u16, u16)) -> bool {
+    let dist = |x: u32, y: u32, (ox, oy): (f64, f64)| (f64::from(x) - ox).hypot(f64::from(y) - oy);
+    let arrival = (f64::from(ax), f64::from(ay));
+    let nearest = snap
+        .presets
+        .iter()
+        .filter(|p| p.kind == PresetKind::Tile)
+        .map(|p| (dist(p.x, p.y, arrival), p))
+        .filter(|&(d, _)| d <= ENTRY_RADIUS)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, p)| (f64::from(p.x), f64::from(p.y)));
+    let Some(centre) = nearest else { return false };
+    for p in &mut snap.presets {
+        if p.kind == PresetKind::Tile && dist(p.x, p.y, centre) <= ENTRY_CLUSTER {
+            p.entry = true;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,7 +186,13 @@ mod tests {
     }
 
     fn preset(kind: PresetKind, txt: u32, x: u32, y: u32) -> Preset {
-        Preset { kind, txt, x, y }
+        Preset {
+            kind,
+            txt,
+            x,
+            y,
+            entry: false,
+        }
     }
 
     fn snap(player_id: u32, act: u64, level: u32) -> Snapshot {
@@ -225,5 +298,147 @@ mod tests {
             session.apply(&mut next_game);
             assert_eq!(next_game.presets.len(), 1);
         }
+    }
+
+    fn at(mut s: Snapshot, x: u16, y: u16, presets: &[Preset]) -> Snapshot {
+        s.player.x = x;
+        s.player.y = y;
+        s.presets = presets.to_vec();
+        s
+    }
+
+    /// (txt, entry) of the tile presets after `apply`.
+    fn tiles(s: &Snapshot) -> Vec<(u32, bool)> {
+        s.presets
+            .iter()
+            .filter(|p| p.kind == PresetKind::Tile)
+            .map(|p| (p.txt, p.entry))
+            .collect()
+    }
+
+    #[test]
+    fn entry_is_the_tile_nearest_to_the_arrival_point() {
+        let level2 = [
+            preset(PresetKind::Tile, 1, 120, 100), // up stairs, 20 tiles from the arrival
+            preset(PresetKind::Tile, 2, 400, 400), // down stairs
+            preset(PresetKind::Object, 119, 101, 100), // waypoint: never an entry
+        ];
+        let mut s = Session::default();
+        // Overlay started mid-level: no arrival known, every tile is an exit.
+        let mut first = at(snap(1, 0xa000, 1), 30, 30, &[preset(PresetKind::Tile, 9, 30, 31)]);
+        s.apply(&mut first);
+        assert_eq!(tiles(&first), vec![(9, false)]);
+
+        let mut arrive = at(snap(1, 0xa000, 2), 100, 100, &level2);
+        s.apply(&mut arrive);
+        assert_eq!(tiles(&arrive), vec![(1, true), (2, false)]);
+        // Walking on: the arrival point stays where the level was entered.
+        let mut walk = at(snap(1, 0xa000, 2), 390, 400, &level2);
+        s.apply(&mut walk);
+        assert_eq!(tiles(&walk), vec![(1, true), (2, false)]);
+        assert!(
+            walk.presets
+                .iter()
+                .all(|p| p.kind == PresetKind::Tile || !p.entry),
+            "objects untouched"
+        );
+
+        // Down to level 3 and back up: level 2 keeps its first arrival.
+        let mut down = at(snap(1, 0xa000, 3), 50, 50, &[preset(PresetKind::Tile, 3, 52, 50)]);
+        s.apply(&mut down);
+        assert_eq!(tiles(&down), vec![(3, true)]);
+        let mut back = at(snap(1, 0xa000, 2), 401, 401, &level2);
+        s.apply(&mut back);
+        assert_eq!(tiles(&back), vec![(1, true), (2, false)]);
+    }
+
+    #[test]
+    fn entry_cluster_and_radius() {
+        let mut s = Session::default();
+        s.apply(&mut snap(1, 0xa000, 1));
+        let presets = [
+            preset(PresetKind::Tile, 1, 110, 100),
+            preset(PresetKind::Tile, 2, 113, 103), // 4.2 from tile 1: same entry
+            preset(PresetKind::Tile, 3, 110, 100), // same spot
+            preset(PresetKind::Tile, 4, 118, 100), // 8 from tile 1: another exit
+        ];
+        let mut arrive = at(snap(1, 0xa000, 2), 100, 100, &presets);
+        s.apply(&mut arrive);
+        assert_eq!(tiles(&arrive), vec![(1, true), (2, true), (3, true), (4, false)]);
+
+        // Nearest tile just beyond 25 tiles: no entry.
+        let mut s = Session::default();
+        s.apply(&mut snap(1, 0xa000, 1));
+        let mut far = at(
+            snap(1, 0xa000, 2),
+            100,
+            100,
+            &[preset(PresetKind::Tile, 1, 126, 100)],
+        );
+        s.apply(&mut far);
+        assert_eq!(tiles(&far), vec![(1, false)]);
+    }
+
+    #[test]
+    fn waypoint_arrival_has_no_entry() {
+        let mut s = Session::default();
+        s.apply(&mut snap(1, 0xa000, 1));
+        let presets = [
+            preset(PresetKind::Object, 157, 200, 200),
+            preset(PresetKind::Tile, 1, 260, 200),
+            preset(PresetKind::Tile, 2, 500, 500),
+        ];
+        let mut wp = at(snap(1, 0xa000, 28), 201, 201, &presets);
+        s.apply(&mut wp);
+        assert_eq!(tiles(&wp), vec![(1, false), (2, false)]);
+        // Standing at the waypoint through the settle window locks "no entry"...
+        for _ in 0..ARRIVAL_SETTLE {
+            s.apply(&mut at(snap(1, 0xa000, 28), 201, 201, &presets));
+        }
+        // ...so walking up to a tile later does not make it the entry.
+        let mut walk = at(snap(1, 0xa000, 28), 259, 200, &presets);
+        s.apply(&mut walk);
+        assert_eq!(tiles(&walk), vec![(1, false), (2, false)]);
+    }
+
+    #[test]
+    fn stale_first_frame_after_level_change_settles() {
+        let mut s = Session::default();
+        s.apply(&mut snap(1, 0xa000, 1));
+        let presets = [
+            preset(PresetKind::Tile, 1, 1000, 1000),
+            preset(PresetKind::Tile, 2, 1300, 1300),
+        ];
+        // First frame in the new level still carries the old level's position (no tile near)...
+        let mut stale = at(snap(1, 0xa000, 29), 5, 5, &presets);
+        s.apply(&mut stale);
+        assert_eq!(tiles(&stale), vec![(1, false), (2, false)]);
+        // ...the next one is at the stairs: that becomes the arrival and stays.
+        let mut real = at(snap(1, 0xa000, 29), 1003, 1002, &presets);
+        s.apply(&mut real);
+        assert_eq!(tiles(&real), vec![(1, true), (2, false)]);
+        let mut later = at(snap(1, 0xa000, 29), 1290, 1290, &presets);
+        s.apply(&mut later);
+        assert_eq!(tiles(&later), vec![(1, true), (2, false)]);
+    }
+
+    #[test]
+    fn game_change_resets_arrivals() {
+        let presets = [
+            preset(PresetKind::Tile, 1, 100, 100),
+            preset(PresetKind::Tile, 2, 300, 300),
+        ];
+        let mut s = Session::default();
+        s.apply(&mut snap(1, 0xa000, 1));
+        let mut a = at(snap(1, 0xa000, 2), 101, 100, &presets);
+        s.apply(&mut a);
+        assert_eq!(tiles(&a), vec![(1, true), (2, false)]);
+
+        // New game, same level id: the new arrival (next to tile 2) decides.
+        let mut b = at(snap(2, 0xb000, 1), 30, 30, &[]);
+        assert!(s.apply(&mut b).new_game);
+        let mut c = at(snap(2, 0xb000, 2), 299, 300, &presets);
+        s.apply(&mut c);
+        assert_eq!(tiles(&c), vec![(1, false), (2, true)]);
     }
 }
