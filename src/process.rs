@@ -11,10 +11,8 @@ const D2R_CMDLINE: &str = "Diablo II Resurrected\\D2R.exe";
 /// The game process's `/proc/<pid>/comm` (Wine names the main thread `Main`).
 const D2R_COMM: &str = "Main";
 
-#[allow(dead_code)] // reason: used by read_ptr, whose first caller is the game reader (M1 b)
 /// Lowest address treated as a plausible user-space pointer (exclusive).
 const MIN_USER_PTR: u64 = 0x10000;
-#[allow(dead_code)] // reason: used by read_ptr, whose first caller is the game reader (M1 b)
 /// Highest address treated as a plausible user-space pointer (exclusive).
 const MAX_USER_PTR: u64 = 0x7fff_ffff_ffff;
 
@@ -155,7 +153,6 @@ pub fn read_maps(pid: u32) -> Result<Vec<MapEntry>> {
 }
 
 /// Read access to another process's address space. Little-endian helpers are provided.
-#[allow(dead_code)] // reason: the integer/pointer helpers' first callers arrive with the game reader (M1 b)
 pub trait ReadMem {
     /// Fills `buf` from `addr`; a short or failed read is an error.
     ///
