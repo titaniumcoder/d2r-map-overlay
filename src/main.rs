@@ -4,6 +4,7 @@
 
 mod config;
 mod game;
+mod game_file;
 mod hypr;
 mod image;
 mod info;

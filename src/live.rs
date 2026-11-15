@@ -2,8 +2,8 @@
 //!
 //! Waits for D2R, opens its memory, locates the image and unit table once per process, then
 //! snapshots and renders ~5 times a second. Each snapshot is folded into a [`Session`]
-//! (superunique kills); unchanged results are not re-rendered or sent. The overlay is
-//! hidden in towns and outside a game. The item-code table is searched once per process, in a
+//! (markers seen, superunique kills; saved by [`game_file`] across overlay restarts); unchanged
+//! results are not re-rendered or sent. The overlay is hidden in towns and outside a game. The item-code table is searched once per process, in a
 //! background thread, when the first item lies on the ground.
 
 use std::io;
@@ -21,7 +21,7 @@ use crate::process::ProcMem;
 use crate::session::Session;
 use ab_glyph::FontVec;
 
-use crate::{config, image, info, items, offset_cache, process, render, valuables};
+use crate::{config, game_file, image, info, items, offset_cache, process, render, valuables};
 
 /// Snapshot interval (~5 Hz).
 const TICK: Duration = Duration::from_millis(200);
@@ -146,6 +146,11 @@ fn follow_game(
     config: &config::Config,
 ) -> Result<(), UiGone> {
     let mut session = Session::default();
+    let state_path = game_file::default_path();
+    if let Some(state) = state_path.as_deref().and_then(game_file::load) {
+        session.restore(state);
+    }
+    let mut saver = game_file::Saver::new(state_path);
     let mut dedup = Dedup::default();
     let mut items_table = ItemsTable::NotSearched;
     loop {
@@ -167,8 +172,9 @@ fn follow_game(
                     journal.arrival(&snap, arrival);
                 }
                 if update.new_game {
-                    eprintln!("new game (player id or act changed): superunique kills cleared");
+                    eprintln!("new game (player id changed): remembered markers and kills cleared");
                 }
+                saver.tick(&mut session, Instant::now());
                 if let Some(msg) = tick_msg(&mut dedup, snap, (w, h), info::font()) {
                     send(tx, msg)?;
                 }

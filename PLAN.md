@@ -97,7 +97,7 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   Entry = the one nearest the arrival position.
 - **Superuniques/specials**: type-1 presets (853/757 Tower 5, 771 Smith…) + live monsters with superunique flag.
 - **Packs/uniques**: live monsters with unique/champion flag (minions clustered to their leader); dead skipped.
-- **Accumulate per game**: markers persist in a cache keyed by (levelId, x, y) once seen, until the game (act ptr / seed) changes — so explored exits/waypoints stay on the map.
+- **Accumulate per game** (done 2026-11-15): presets, shrines, wells, kills, operated seals and arrivals are remembered per level for the game (identity = player unit id; act travel keeps it) and persisted to `~/.cache/d2r-map-overlay/game.json`, so overlay restarts keep them too.
 
 ## Arcane Sanctuary Summoner (live-verified 2026-11-15, nine games)
 - Room2 `+0x40` → level-preset record, u32 at `+0x00` = preset id (lvlprest row).

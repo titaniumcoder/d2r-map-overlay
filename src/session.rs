@@ -1,5 +1,11 @@
-//! State accumulated over snapshots: superuniques killed in this game and where the player
-//! arrived in each level.
+//! State accumulated over snapshots of one game: what was seen in each level, superuniques
+//! killed, seals operated and where the player arrived in each level.
+//!
+//! **Memory**: every preset (raw, before filtering), shrine and well seen is remembered per
+//! level for the game and merged back into later snapshots of that level, so the map keeps what
+//! was explored even after D2R unloads it. The filters below then run over live and remembered
+//! presets alike. A shrine keeps its latest `used`. Monsters, items and the player are live only.
+//! [`GameState`] is that per-game part; `game_file` keeps it on disk across overlay restarts.
 //!
 //! **Superunique presets**: a monster preset is drawn iff its txt id is in
 //! [`SUPERUNIQUES`](crate::levels_data::SUPERUNIQUES) (751 + the superuniques.txt row, see
@@ -13,13 +19,12 @@
 //! Pure: no I/O. [`Session::apply`] folds each snapshot in and rewrites it for drawing, so the
 //! renderer stays a function of the snapshot alone.
 //!
-//! **Game change**: the per-game part is cleared when the player's (unit id, act pointer) pair
-//! changes. The server hands out a new player unit id per game (live ids are large and
-//! random-looking), and a new game allocates a new act; either alone could repeat by chance
-//! (offline ids, or the allocator reusing the act's address), both together practically never.
-//! The act also changes on act travel, which clears the killed set then too: a superunique
-//! killed in an act you return to shows again. That errs towards showing a marker, never
-//! towards hiding a living superunique in a new game.
+//! **Game change**: the per-game part is cleared when the player's unit id changes. Online the
+//! server hands out a random-looking 32-bit player unit id per game, so a repeat is practically
+//! impossible; offline games may reuse small ids, which then carries the old game's state over
+//! (accepted: it only keeps markers hidden or remembered that a fresh look would redraw). The
+//! act pointer is not part of the key on purpose: it changes on act travel, and kills, seals,
+//! entries and explored levels must survive moving between acts within a game.
 //!
 //! **Entry**: the player's position when the level id changes is the level's arrival point (first
 //! visit per game wins; a new game counts as a level change). For [`ARRIVAL_SETTLE`] snapshots it
@@ -31,7 +36,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::game::{Addr, Monster, PresetKind, Snapshot};
+use serde::{Deserialize, Serialize};
+
+use crate::game::{Monster, Preset, PresetKind, Shrine, Snapshot, Well};
 use crate::levels_data::SUPERUNIQUES;
 use crate::offsets::monster_data;
 use crate::render::{is_consumable_quest_object, quest_monster};
@@ -58,12 +65,6 @@ const ENTRY_CLUSTER: f64 = 5.0;
 /// (level id, x, y) in world tiles of a preset.
 type LevelPos = (u32, u32, u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GameKey {
-    player_id: u32,
-    act: Option<Addr>,
-}
-
 /// What [`Session::apply`] found besides rewriting the snapshot.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Update {
@@ -73,22 +74,123 @@ pub struct Update {
     pub arrival: Option<(u32, u16, u16)>,
 }
 
-#[derive(Debug, Default)]
-pub struct Session {
-    game: Option<GameKey>,
+/// The per-game part of a [`Session`]: everything that must survive an overlay restart within
+/// the game. Serialized as JSON by `game_file`. `player_id` is required (a file without it is
+/// rejected, never restored as id 0); the other fields default, so older files still load.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameState {
+    /// Player unit id of the game this state belongs to.
+    pub player_id: u32,
     /// Superunique and quest monster presets whose monster was seen dead in this game, by
     /// (level id, preset x, y).
+    #[serde(default)]
     killed: HashSet<LevelPos>,
-    /// Superunique preset each superunique monster (by unit id) was first seen alive near in
-    /// this game. Its death kills that preset however far it was chased.
-    bound: HashMap<u32, LevelPos>,
     /// Consumable quest objects (Diablo seals) seen operated in this game, by (level id, live
     /// x, y). Their presets are hidden for the game, also once the live object unloads.
+    #[serde(default)]
     operated: HashSet<LevelPos>,
+    /// Player position on arriving in each level of this game, by level id.
+    #[serde(default)]
+    arrivals: HashMap<u32, (u16, u16)>,
+    /// Every preset seen per level id, raw (before filtering, `entry` false), first seen first.
+    #[serde(default)]
+    presets: HashMap<u32, Vec<Preset>>,
+    /// Every shrine seen per level id, with its latest state.
+    #[serde(default)]
+    shrines: HashMap<u32, Vec<Shrine>>,
+    /// Every well seen per level id.
+    #[serde(default)]
+    wells: HashMap<u32, Vec<Well>>,
+}
+
+impl GameState {
+    fn new(player_id: u32) -> Self {
+        Self {
+            player_id,
+            ..Self::default()
+        }
+    }
+
+    /// Remembers the live presets, shrines and wells of `snap`'s level and adds the remembered
+    /// ones it lacks (same kind, txt and position for presets; same position for shrines and
+    /// wells). Returns whether anything was newly remembered or a shrine changed.
+    fn remember(&mut self, snap: &mut Snapshot) -> bool {
+        let level = snap.level.id;
+        let mut changed = false;
+
+        let same = |a: &Preset, b: &Preset| (a.kind, a.txt, a.x, a.y) == (b.kind, b.txt, b.x, b.y);
+        let seen = self.presets.entry(level).or_default();
+        for p in &snap.presets {
+            if !seen.iter().any(|s| same(s, p)) {
+                seen.push(Preset {
+                    entry: false,
+                    ..p.clone()
+                });
+                changed = true;
+            }
+        }
+        let missing: Vec<Preset> = seen
+            .iter()
+            .filter(|s| !snap.presets.iter().any(|p| same(p, s)))
+            .cloned()
+            .collect();
+        snap.presets.extend(missing);
+
+        let seen = self.shrines.entry(level).or_default();
+        for live in &snap.shrines {
+            match seen.iter_mut().find(|s| (s.x, s.y) == (live.x, live.y)) {
+                Some(s) if s == live => {}
+                Some(s) => {
+                    s.clone_from(live);
+                    changed = true;
+                }
+                None => {
+                    seen.push(live.clone());
+                    changed = true;
+                }
+            }
+        }
+        let missing: Vec<Shrine> = seen
+            .iter()
+            .filter(|s| !snap.shrines.iter().any(|l| (l.x, l.y) == (s.x, s.y)))
+            .cloned()
+            .collect();
+        snap.shrines.extend(missing);
+
+        let seen = self.wells.entry(level).or_default();
+        for live in &snap.wells {
+            if !seen.iter().any(|w| (w.x, w.y) == (live.x, live.y)) {
+                seen.push(live.clone());
+                changed = true;
+            }
+        }
+        let missing: Vec<Well> = seen
+            .iter()
+            .filter(|w| !snap.wells.iter().any(|l| (l.x, l.y) == (w.x, w.y)))
+            .cloned()
+            .collect();
+        snap.wells.extend(missing);
+        changed
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Session {
+    /// The current game's state; meaningful once `started`.
+    state: GameState,
+    /// A snapshot has been applied (`state.player_id` is the current game's).
+    started: bool,
+    /// State loaded from disk ([`Session::restore`]), adopted by the first snapshot if its
+    /// player id matches, else dropped.
+    restored: Option<GameState>,
+    /// `state` changed since [`Session::take_changed`] last returned it.
+    changed: bool,
+    /// Superunique preset each superunique monster (by unit id) was first seen alive near in
+    /// this game. Its death kills that preset however far it was chased. Not saved: a restart
+    /// mid-fight falls back to the corpse's nearest preset.
+    bound: HashMap<u32, LevelPos>,
     /// Level id of the previous snapshot (kept across games: only its change matters).
     last_level: Option<u32>,
-    /// Player position on arriving in each level of this game, by level id.
-    arrivals: HashMap<u32, (u16, u16)>,
     /// Level whose arrival point may still move, and how many more snapshots it may.
     settling: Option<(u32, u8)>,
 }
@@ -109,36 +211,61 @@ pub fn superunique(txt: u32) -> Option<&'static str> {
 }
 
 impl Session {
-    /// Folds `snap` into the session and rewrites it for drawing: monster presets are kept only
+    /// Offers a saved game state; the first snapshot adopts it if its player id matches.
+    pub fn restore(&mut self, state: GameState) {
+        self.restored = Some(state);
+    }
+
+    /// The game state if it changed since the last call (which then clears the change).
+    pub fn take_changed(&mut self) -> Option<&GameState> {
+        (self.started && std::mem::take(&mut self.changed)).then_some(&self.state)
+    }
+
+    /// Switches to the game of player unit id `player_id`; returns whether that is a new game
+    /// (the first snapshot is not, unless it discarded a restored state of another game).
+    fn enter_game(&mut self, player_id: u32) -> bool {
+        if self.started && self.state.player_id == player_id {
+            return false;
+        }
+        let first = !std::mem::replace(&mut self.started, true);
+        self.bound.clear();
+        match self.restored.take() {
+            Some(state) if first && state.player_id == player_id => {
+                self.state = state;
+                false
+            }
+            restored => {
+                self.state = GameState::new(player_id);
+                self.changed = true;
+                !first || restored.is_some()
+            }
+        }
+    }
+
+    /// Folds `snap` into the session and rewrites it for drawing: remembered presets, shrines
+    /// and wells of the level are added, then monster presets are kept only
     /// if they are a superunique's (see [`superunique`]) or a quest monster's (see
     /// [`quest_monster`]) not killed in this game, and consumable
     /// quest object presets only if not seen operated in this game.
     pub fn apply(&mut self, snap: &mut Snapshot) -> Update {
-        let mut update = Update::default();
-        let key = GameKey {
-            player_id: snap.player.id,
-            act: snap.player.act,
+        let mut update = Update {
+            new_game: self.enter_game(snap.player.id),
+            ..Update::default()
         };
-        if self.game.replace(key).is_some_and(|old| old != key) {
-            self.killed.clear();
-            self.bound.clear();
-            self.operated.clear();
-            self.arrivals.clear();
-            update.new_game = true;
-        }
+        self.changed |= self.state.remember(snap);
         let level = snap.level.id;
         let level_changed = self.last_level.replace(level).is_some_and(|old| old != level);
         let here = (snap.player.x, snap.player.y);
-        if (level_changed || update.new_game) && !self.arrivals.contains_key(&level) {
-            self.arrivals.insert(level, here);
+        if (level_changed || update.new_game) && !self.state.arrivals.contains_key(&level) {
+            self.changed |= self.state.arrivals.insert(level, here) != Some(here);
             self.settling = Some((level, ARRIVAL_SETTLE));
         }
-        if let Some(&arrival) = self.arrivals.get(&level) {
+        if let Some(&arrival) = self.state.arrivals.get(&level) {
             let found = mark_entry(snap, arrival);
             let was_settling = self.settling.is_some_and(|(l, _)| l == level);
             self.settling = match self.settling {
                 Some((l, left)) if l == level && !found && left > 0 => {
-                    self.arrivals.insert(level, here);
+                    self.changed |= self.state.arrivals.insert(level, here) != Some(here);
                     if mark_entry(snap, here) {
                         None
                     } else {
@@ -149,7 +276,7 @@ impl Session {
                 other => other,
             };
             if was_settling && self.settling.is_none() {
-                update.arrival = self.arrivals.get(&level).map(|&(x, y)| (level, x, y));
+                update.arrival = self.state.arrivals.get(&level).map(|&(x, y)| (level, x, y));
             }
         }
 
@@ -179,7 +306,7 @@ impl Session {
                     .copied()
                     .or_else(|| nearest_preset(m, KILL_RADIUS))
                 {
-                    self.killed.insert(pos);
+                    self.changed |= self.state.killed.insert(pos);
                 }
             } else if !self.bound.contains_key(&m.id)
                 && let Some(pos) = nearest_preset(m, BIND_RADIUS)
@@ -191,10 +318,10 @@ impl Session {
         self.kill_quest_monsters(snap);
 
         for o in &snap.operated_objects {
-            self.operated.insert((level, o.x, o.y));
+            self.changed |= self.state.operated.insert((level, o.x, o.y));
         }
         let operated_near = |x: u32, y: u32| {
-            self.operated.iter().any(|&(l, ox, oy)| {
+            self.state.operated.iter().any(|&(l, ox, oy)| {
                 l == level
                     && (f64::from(x) - f64::from(ox)).hypot(f64::from(y) - f64::from(oy)) <= OPERATED_RADIUS
             })
@@ -203,7 +330,7 @@ impl Session {
         snap.presets.retain(|p| match p.kind {
             PresetKind::Monster => {
                 (superunique(p.txt).is_some() || quest_monster(p.txt).is_some())
-                    && !self.killed.contains(&(level, p.x, p.y))
+                    && !self.state.killed.contains(&(level, p.x, p.y))
             }
             PresetKind::Object => !(is_consumable_quest_object(p.txt) && operated_near(p.x, p.y)),
             _ => true,
@@ -232,7 +359,7 @@ impl Session {
                 .filter(|&(d, _)| d <= QUEST_KILL_RADIUS)
                 .min_by(|a, b| a.0.total_cmp(&b.0))
             {
-                self.killed.insert((level, p.x, p.y));
+                self.changed |= self.state.killed.insert((level, p.x, p.y));
             }
         }
     }
@@ -263,7 +390,7 @@ fn mark_entry(snap: &mut Snapshot, (ax, ay): (u16, u16)) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::{Level, OperatedObject, Player, Preset};
+    use crate::game::{Addr, Level, OperatedObject, Player};
 
     fn monster(flags: u8, mode: u32, x: u16, y: u16) -> Monster {
         Monster {
@@ -322,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn game_change_needs_player_id_or_act() {
+    fn game_change_is_a_new_player_id_not_act_travel() {
         let mut s = Session::default();
         assert!(
             !s.apply(&mut snap(7, 0xa000, 29)).new_game,
@@ -332,8 +459,8 @@ mod tests {
             !s.apply(&mut snap(7, 0xa000, 35)).new_game,
             "level change in the same game"
         );
-        assert!(s.apply(&mut snap(8, 0xa000, 29)).new_game, "new player id");
-        assert!(s.apply(&mut snap(8, 0xb000, 29)).new_game, "new act");
+        assert!(!s.apply(&mut snap(7, 0xb000, 40)).new_game, "act travel");
+        assert!(s.apply(&mut snap(8, 0xb000, 29)).new_game, "new player id");
         assert!(!s.apply(&mut snap(8, 0xb000, 29)).new_game);
     }
 
@@ -783,5 +910,176 @@ mod tests {
         let mut c = at(snap(2, 0xb000, 2), 299, 300, &presets);
         s.apply(&mut c);
         assert_eq!(tiles(&c), vec![(1, false), (2, true)]);
+    }
+    #[test]
+    fn a_revisited_level_shows_what_was_seen_there() {
+        let mut s = Session::default();
+        let mut a = snap(1, 0xa000, 2);
+        a.presets = vec![
+            preset(PresetKind::Object, 119, 100, 100), // waypoint
+            preset(PresetKind::Tile, 5, 300, 300),
+            preset(PresetKind::Monster, 840, 200, 200), // generic: remembered, still filtered
+        ];
+        s.apply(&mut a);
+        let mut b = snap(1, 0xa000, 3);
+        b.presets = vec![preset(PresetKind::Tile, 6, 50, 50)];
+        s.apply(&mut b);
+        assert_eq!(b.presets.len(), 1, "level 3 doesn't get level 2's presets");
+
+        let mut back = snap(1, 0xa000, 2);
+        s.apply(&mut back);
+        let kept: Vec<(u32, u32)> = back.presets.iter().map(|p| (p.txt, p.x)).collect();
+        assert_eq!(kept, vec![(119, 100), (5, 300)]);
+    }
+
+    #[test]
+    fn remembered_and_live_presets_are_not_duplicated() {
+        let presets = || {
+            vec![
+                preset(PresetKind::Tile, 1, 100, 100),
+                preset(PresetKind::Tile, 2, 400, 400),
+                preset(PresetKind::Object, 119, 100, 100), // same spot, other kind: its own
+            ]
+        };
+        let mut s = Session::default();
+        s.apply(&mut snap(1, 0xa000, 1));
+        // Arriving next to tile 1 marks it the entry; the remembered copy stays raw.
+        let mut a = at(snap(1, 0xa000, 2), 101, 100, &presets());
+        s.apply(&mut a);
+        let mut b = at(
+            snap(1, 0xa000, 2),
+            101,
+            100,
+            &[preset(PresetKind::Tile, 1, 100, 100)],
+        );
+        s.apply(&mut b);
+        assert_eq!(b.presets.len(), 3, "live tile 1 + remembered tile 2 and waypoint");
+        assert_eq!(tiles(&b), vec![(1, true), (2, false)]);
+        let mut c = at(snap(1, 0xa000, 2), 101, 100, &presets());
+        s.apply(&mut c);
+        assert_eq!(c.presets, a.presets, "all live again: nothing added twice");
+    }
+
+    #[test]
+    fn a_kill_survives_act_travel() {
+        let countess = || preset(PresetKind::Monster, 757, 100, 100);
+        let mut s = Session::default();
+        let mut killed = snap(1, 0xa000, 25);
+        killed.presets = vec![countess()];
+        killed.monsters = vec![monster(0x02, 0, 101, 100)];
+        s.apply(&mut killed);
+        assert_eq!(killed.presets, vec![]);
+
+        s.apply(&mut snap(1, 0xb000, 40)); // act 2
+        let mut back = snap(1, 0xc000, 25); // act 1 again (a new act address)
+        back.presets = vec![countess()];
+        assert!(!s.apply(&mut back).new_game);
+        assert_eq!(back.presets, vec![], "still killed, live preset");
+        let mut unloaded = snap(1, 0xc000, 25);
+        s.apply(&mut unloaded);
+        assert_eq!(unloaded.presets, vec![], "still killed, remembered preset");
+    }
+
+    fn shrine(used: bool, x: u32) -> Shrine {
+        Shrine {
+            txt: 2,
+            code: 12,
+            used,
+            x,
+            y: 100,
+        }
+    }
+
+    #[test]
+    fn shrines_and_wells_are_remembered_with_their_latest_state() {
+        let well = Well {
+            txt: 130,
+            x: 50,
+            y: 50,
+        };
+        let mut s = Session::default();
+        let mut a = snap(1, 0xa000, 4);
+        a.shrines = vec![shrine(false, 100), shrine(false, 200)];
+        a.wells = vec![well.clone()];
+        s.apply(&mut a);
+        let mut used = snap(1, 0xa000, 4);
+        used.shrines = vec![shrine(true, 100)];
+        s.apply(&mut used);
+        assert_eq!(used.shrines, vec![shrine(true, 100), shrine(false, 200)]);
+        assert_eq!(used.wells, vec![well.clone()]);
+
+        s.apply(&mut snap(1, 0xa000, 5));
+        let mut back = snap(1, 0xa000, 4);
+        s.apply(&mut back);
+        assert_eq!(back.shrines, vec![shrine(true, 100), shrine(false, 200)]);
+        assert_eq!(back.wells, vec![well]);
+        // A new game forgets them.
+        let mut next = snap(2, 0xa000, 4);
+        s.apply(&mut next);
+        assert_eq!((next.shrines.len(), next.wells.len()), (0, 0));
+    }
+
+    #[test]
+    fn take_changed_reports_each_change_once() {
+        let mut s = Session::default();
+        assert!(s.take_changed().is_none(), "nothing before the first snapshot");
+        let mut a = snap(1, 0xa000, 2);
+        a.presets = vec![preset(PresetKind::Tile, 1, 10, 10)];
+        s.apply(&mut a);
+        assert_eq!(s.take_changed().map(|g| g.player_id), Some(1));
+        assert!(s.take_changed().is_none());
+        let mut same = snap(1, 0xa000, 2);
+        same.presets = vec![preset(PresetKind::Tile, 1, 10, 10)];
+        s.apply(&mut same);
+        assert!(s.take_changed().is_none(), "nothing new");
+        let mut more = snap(1, 0xa000, 2);
+        more.presets = vec![preset(PresetKind::Tile, 2, 20, 20)];
+        s.apply(&mut more);
+        assert!(s.take_changed().is_some(), "a new preset");
+    }
+
+    /// A session that saw a killed Countess and a tile in level 25 for player 1.
+    fn saved_state() -> GameState {
+        let mut s = Session::default();
+        let mut a = snap(1, 0xa000, 25);
+        a.presets = vec![
+            preset(PresetKind::Monster, 757, 100, 100),
+            preset(PresetKind::Tile, 3, 300, 300),
+        ];
+        a.monsters = vec![monster(0x02, 0, 101, 100)];
+        s.apply(&mut a);
+        s.take_changed().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn a_saved_state_needs_its_player_id() {
+        // A truncated or foreign file must not be restored as player id 0.
+        assert!(serde_json::from_str::<GameState>("{}").is_err());
+        let state: GameState = serde_json::from_str(r#"{"player_id": 7}"#).unwrap_or_default();
+        assert_eq!(state.player_id, 7, "collections default when missing");
+    }
+
+    #[test]
+    fn a_restored_state_is_used_only_for_the_same_player_id() {
+        let mut s = Session::default();
+        s.restore(saved_state());
+        let mut same = snap(1, 0xb000, 25);
+        same.presets = vec![preset(PresetKind::Monster, 757, 100, 100)];
+        assert!(!s.apply(&mut same).new_game);
+        let kept: Vec<u32> = same.presets.iter().map(|p| p.txt).collect();
+        assert_eq!(kept, vec![3], "kill and remembered tile restored");
+        assert!(
+            s.take_changed().is_none(),
+            "adopting the saved state is no change"
+        );
+
+        let mut s = Session::default();
+        s.restore(saved_state());
+        let mut other = snap(2, 0xb000, 25);
+        other.presets = vec![preset(PresetKind::Monster, 757, 100, 100)];
+        assert!(s.apply(&mut other).new_game, "the saved game was another");
+        let kept: Vec<u32> = other.presets.iter().map(|p| p.txt).collect();
+        assert_eq!(kept, vec![757]);
+        assert_eq!(s.take_changed().map(|g| g.player_id), Some(2));
     }
 }

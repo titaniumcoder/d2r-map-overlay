@@ -22,17 +22,23 @@ const HEADER: &str = "# d2r-map-overlay: offsets found at runtime, per D2R build
                       # [build.\"<TimeDateStamp>-<SizeOfImage>\"] (hex); RVAs are from the image base.\n";
 const UNIT_TABLE_RVA: &str = "unit_table_rva";
 
-/// `$XDG_CACHE_HOME/d2r-map-overlay/offsets.toml`, else `$HOME/.cache/…`; `None` if neither is
+/// `$XDG_CACHE_HOME/d2r-map-overlay`, else `$HOME/.cache/d2r-map-overlay`; `None` if neither is
 /// set to an absolute path.
 #[must_use]
-pub fn default_path() -> Option<PathBuf> {
+pub fn cache_dir() -> Option<PathBuf> {
     let absolute = |var| {
         std::env::var_os(var)
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
     };
     let base = absolute("XDG_CACHE_HOME").or_else(|| absolute("HOME").map(|h| h.join(".cache")))?;
-    Some(base.join("d2r-map-overlay").join("offsets.toml"))
+    Some(base.join("d2r-map-overlay"))
+}
+
+/// `offsets.toml` in [`cache_dir`].
+#[must_use]
+pub fn default_path() -> Option<PathBuf> {
+    cache_dir().map(|d| d.join("offsets.toml"))
 }
 
 /// Parses the cache text into build key → unit table RVA.
