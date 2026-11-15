@@ -28,7 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::game::{Addr, PresetKind, Snapshot};
+use crate::game::{Addr, Monster, PresetKind, Snapshot};
 use crate::levels_data::SUPERUNIQUES;
 use crate::offsets::monster_data;
 use crate::render::is_consumable_quest_object;
@@ -37,6 +37,10 @@ use crate::render::is_consumable_quest_object;
 /// to. Generous: it only picks which marker to remove (the nearest), and superunique presets of
 /// one level lie far apart.
 const KILL_RADIUS: f64 = 30.0;
+/// Most distance in tiles between a living superunique and the superunique preset its unit id is
+/// bound to: it spawns on its preset, so a small radius suffices and keeps a passing
+/// superunique from binding to another's preset.
+const BIND_RADIUS: f64 = 15.0;
 /// Most distance in tiles between an operated consumable quest object (live position) and the
 /// object preset it hides: preset and live positions may differ by a tile or two.
 const OPERATED_RADIUS: f64 = 5.0;
@@ -68,6 +72,9 @@ pub struct Session {
     game: Option<GameKey>,
     /// Superunique presets whose monster was seen dead in this game, by (level id, preset x, y).
     killed: HashSet<LevelPos>,
+    /// Superunique preset each superunique monster (by unit id) was first seen alive near in
+    /// this game. Its death kills that preset however far it was chased.
+    bound: HashMap<u32, LevelPos>,
     /// Consumable quest objects (Diablo seals) seen operated in this game, by (level id, live
     /// x, y). Their presets are hidden for the game, also once the live object unloads.
     operated: HashSet<LevelPos>,
@@ -106,6 +113,7 @@ impl Session {
         };
         if self.game.replace(key).is_some_and(|old| old != key) {
             self.killed.clear();
+            self.bound.clear();
             self.operated.clear();
             self.arrivals.clear();
             update.new_game = true;
@@ -137,22 +145,38 @@ impl Session {
             }
         }
 
-        // A dead superunique removes the nearest superunique preset's marker for the game.
-        for m in snap
-            .monsters
-            .iter()
-            .filter(|m| m.flags & monster_data::SUPERUNIQUE != 0 && m.is_dead())
-        {
+        // A living superunique near its spawn binds its unit id to the nearest superunique
+        // preset; its death kills that preset wherever it happens. A dead superunique never seen
+        // alive there (killed while loading, say) falls back to the nearest preset within
+        // KILL_RADIUS of the corpse.
+        let nearest_preset = |m: &Monster, radius: f64| {
             let (mx, my) = (f64::from(m.x), f64::from(m.y));
-            let nearest = snap
-                .presets
+            snap.presets
                 .iter()
                 .filter(|p| p.kind == PresetKind::Monster && superunique(p.txt).is_some())
                 .map(|p| ((f64::from(p.x) - mx).hypot(f64::from(p.y) - my), p))
-                .filter(|&(d, _)| d <= KILL_RADIUS)
-                .min_by(|a, b| a.0.total_cmp(&b.0));
-            if let Some((_, p)) = nearest {
-                self.killed.insert((level, p.x, p.y));
+                .filter(|&(d, _)| d <= radius)
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, p)| (level, p.x, p.y))
+        };
+        for m in snap
+            .monsters
+            .iter()
+            .filter(|m| m.flags & monster_data::SUPERUNIQUE != 0)
+        {
+            if m.is_dead() {
+                if let Some(pos) = self
+                    .bound
+                    .get(&m.id)
+                    .copied()
+                    .or_else(|| nearest_preset(m, KILL_RADIUS))
+                {
+                    self.killed.insert(pos);
+                }
+            } else if !self.bound.contains_key(&m.id)
+                && let Some(pos) = nearest_preset(m, BIND_RADIUS)
+            {
+                self.bound.insert(m.id, pos);
             }
         }
 
@@ -200,7 +224,7 @@ fn mark_entry(snap: &mut Snapshot, (ax, ay): (u16, u16)) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::{Level, Monster, OperatedObject, Player, Preset};
+    use crate::game::{Level, OperatedObject, Player, Preset};
 
     fn monster(flags: u8, mode: u32, x: u16, y: u16) -> Monster {
         Monster {
@@ -375,6 +399,86 @@ mod tests {
         far.monsters = vec![monster(0x02, 0, 300, 300)];
         s.apply(&mut far);
         assert_eq!(far.presets.len(), 3);
+    }
+
+    fn superunique_with_id(id: u32, mode: u32, x: u16, y: u16) -> Monster {
+        Monster {
+            id,
+            ..monster(0x02, mode, x, y)
+        }
+    }
+
+    #[test]
+    fn a_superunique_seen_on_its_preset_is_killed_however_far_it_is_chased() {
+        // Dac Farren (799) spawns on his preset, chases the player and dies 34+ tiles away.
+        let dac = || preset(PresetKind::Monster, 799, 100, 100);
+        let mut s = Session::default();
+        let mut alive = snap(1, 0xa000, 2);
+        alive.presets = vec![dac()];
+        alive.monsters = vec![superunique_with_id(42, 1, 100, 100)];
+        s.apply(&mut alive);
+        assert_eq!(alive.presets.len(), 1);
+
+        // Another superunique (another unit id) dies far away: the bound preset stays.
+        let mut other = snap(1, 0xa000, 2);
+        other.presets = vec![dac()];
+        other.monsters = vec![superunique_with_id(43, 0, 140, 130)];
+        s.apply(&mut other);
+        assert_eq!(
+            other.presets.len(),
+            1,
+            "a different unit id doesn't kill the bound preset"
+        );
+
+        let mut dead = snap(1, 0xa000, 2);
+        dead.presets = vec![dac()];
+        dead.monsters = vec![superunique_with_id(42, 12, 140, 130)]; // 50 tiles away
+        s.apply(&mut dead);
+        assert_eq!(
+            dead.presets,
+            vec![],
+            "bound superunique's kill credited beyond KILL_RADIUS"
+        );
+    }
+
+    #[test]
+    fn binding_picks_the_nearest_superunique_preset() {
+        let presets = || {
+            vec![
+                preset(PresetKind::Monster, 771, 100, 100), // 10 tiles from the spawn
+                preset(PresetKind::Monster, 775, 116, 100), // 6 tiles from the spawn
+                preset(PresetKind::Monster, 840, 110, 100), // generic, on the spawn: never bound
+            ]
+        };
+        let mut s = Session::default();
+        let mut alive = snap(1, 0xa000, 28);
+        alive.presets = presets();
+        alive.monsters = vec![superunique_with_id(42, 1, 110, 100)];
+        s.apply(&mut alive);
+
+        let mut dead = snap(1, 0xa000, 28);
+        dead.presets = presets();
+        dead.monsters = vec![superunique_with_id(42, 0, 300, 300)];
+        s.apply(&mut dead);
+        let kept: Vec<u32> = dead.presets.iter().map(|p| p.txt).collect();
+        assert_eq!(kept, vec![771]);
+    }
+
+    #[test]
+    fn a_new_game_forgets_bindings() {
+        let dac = || preset(PresetKind::Monster, 799, 100, 100);
+        let mut s = Session::default();
+        let mut alive = snap(1, 0xa000, 2);
+        alive.presets = vec![dac()];
+        alive.monsters = vec![superunique_with_id(42, 1, 100, 100)];
+        s.apply(&mut alive);
+
+        // Same unit id in a new game, dead far from the preset: not a kill of this game's preset.
+        let mut next_game = snap(2, 0xc000, 2);
+        next_game.presets = vec![dac()];
+        next_game.monsters = vec![superunique_with_id(42, 0, 160, 100)];
+        s.apply(&mut next_game);
+        assert_eq!(next_game.presets.len(), 1);
     }
 
     #[test]
