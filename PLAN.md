@@ -225,6 +225,16 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   shared stash) and must be ignored (verified by moving Cathan's Seal through pages 1–5).
 - Open: Hell difficulty value 2; ethereal bit 0x400000; tomb orifice W/E/N, forge W/N, cube W/E/S, lair E/S.
 
+## Findings, third live session (Vex, Nightmare, 2026-11-15/16)
+- Confirmed landmarks: sewer stairs W 337, Radament S 343, orifice W 460 (drawn as a mini orifice), fake-tomb
+  treasure rooms 472–475 (all drawn as stars at the user's request).
+- Unique/set `index` keys are internal names; in-game names come from `allstrings-eng.json` (`DISPLAY_NAMES`).
+- Player stat 12 = character level (live: 39). Level row suggests areas at clvl + 2 until 75.
+- Build colouring uses per-area immunity counts from monstats (`ResDm` = physical). Nightmare has almost no
+  immunities, so it is mostly green; Hell is where red shows up.
+- Trail is kept per level and game; cow counter in level 39 (cows.json for lifetime stats).
+- Valuables rules can say `"keep": "one"` (Sigon's set for twinks).
+
 ## Overlay
 - Layer-shell surface, layer `overlay`, anchored top-right, default 400×400 (config), **empty input region** (click-through), no keyboard.
 - Draw current level only: room footprints (loaded rooms brighter), player dot, waypoint (blue), exits (purple + target name),
