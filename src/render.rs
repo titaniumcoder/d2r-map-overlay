@@ -44,7 +44,36 @@ pub struct LandmarkRule {
 ///   area (waypoint object 237).
 /// - Kurast Sewers Level 1 (92): the sewer lever (object 367) and the stairs down (object 366) both
 ///   sat in room preset 739 (live 2026-11-15, one game; the user then went down to level 2).
+/// - Act 1 caves, level 1 (Cave 9, Underground Passage 10, Hole 11, Pit 12): lvlprest names the
+///   pieces "Cave Next W/E/S/N" (87–90, exit to the next outdoor area) and "Cave Down W/E/S/N"
+///   (91–94, stairs to level 2); Underground Passage 1 had one 90 and one 91 piece (2026-11-15).
+/// - Dark Wood (5): lvlprest 161 "Act 1 - Inifus" (funktree.ds1), the Tree of Inifuss.
+/// - Black Marsh (6): lvlprest 163 "Act 1 - Tower 1" (Tower1.ds1), the Forgotten Tower entrance.
 pub const LANDMARKS: &[LandmarkRule] = &[
+    LandmarkRule {
+        level_ids: 9..=12,
+        preset_ids: 87..=90,
+        label: "cave exit to the next area",
+        confirmed: false,
+    },
+    LandmarkRule {
+        level_ids: 9..=12,
+        preset_ids: 91..=94,
+        label: "cave stairs down",
+        confirmed: false,
+    },
+    LandmarkRule {
+        level_ids: 5..=5,
+        preset_ids: 161..=161,
+        label: "tree of inifuss",
+        confirmed: false,
+    },
+    LandmarkRule {
+        level_ids: 6..=6,
+        preset_ids: 163..=163,
+        label: "forgotten tower",
+        confirmed: false,
+    },
     LandmarkRule {
         level_ids: 74..=74,
         preset_ids: 525..=528,
@@ -1811,13 +1840,22 @@ mod tests {
     }
 
     #[test]
-    fn rules_are_confirmed_except_the_assumed_orifice_pattern() {
+    fn unconfirmed_rules_are_the_known_list() {
         let unconfirmed: Vec<&str> = LANDMARKS
             .iter()
             .filter(|r| !r.confirmed)
             .map(|r| r.label)
             .collect();
-        assert_eq!(unconfirmed, vec!["orifice (assumed level+390 pattern)"]);
+        assert_eq!(
+            unconfirmed,
+            vec![
+                "cave exit to the next area",
+                "cave stairs down",
+                "tree of inifuss",
+                "forgotten tower",
+                "orifice (assumed level+390 pattern)"
+            ]
+        );
     }
 
     fn object(txt: u32, x: u32, y: u32) -> Preset {
