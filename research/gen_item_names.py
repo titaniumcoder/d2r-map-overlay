@@ -1,9 +1,12 @@
 """Generate src/item_names_data.rs from blizzhackers/d2data (D2R JSON game tables).
 
-Usage: python3 -I research/gen_item_names.py <dir with uniqueitems.json, setitems.json> > src/item_names_data.rs
+Usage: python3 -I research/gen_item_names.py <dir with uniqueitems.json, setitems.json, allstrings-eng.json> > src/item_names_data.rs
 Fetch the tables with:
   gh api repos/blizzhackers/d2data/contents/json/uniqueitems.json -H "Accept: application/vnd.github.raw" > uniqueitems.json
   gh api repos/blizzhackers/d2data/contents/json/setitems.json -H "Accept: application/vnd.github.raw" > setitems.json
+  gh api repos/blizzhackers/d2data/contents/json/allstrings-eng.json -H "Accept: application/vnd.github.raw" > allstrings-eng.json
+The `index` strings are internal keys; some differ from the in-game name (Piercerib is shown as
+"Rogue's Bow", live 2026-11-15), so DISPLAY_NAMES maps those through the English string table.
 The row number is the record's `*ID` (ItemData +0x34 of a unique held 127 for uniqueitems
 *ID 127, KhalimFlail, live 2026-11-15). Names are the `index` strings valuables.json uses.
 """
@@ -37,3 +40,15 @@ for const, file, what in [
     for i, name in rows(file):
         print(f"    ({i}, {rust_str(name)}),")
     print("];")
+
+strings = json.load(open(f"{src}/allstrings-eng.json"))
+pairs = sorted(
+    {(name, strings[name]) for f in ("uniqueitems.json", "setitems.json") for _, name in rows(f)
+     if isinstance(strings.get(name), str) and strings[name] != name}
+)
+print()
+print("/// (`index` name, in-game English name) where they differ, sorted by `index` name.")
+print("pub const DISPLAY_NAMES: &[(&str, &str)] = &[")
+for name, shown in pairs:
+    print(f"    ({rust_str(name)}, {rust_str(shown)}),")
+print("];")

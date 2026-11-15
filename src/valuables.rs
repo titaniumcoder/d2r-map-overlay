@@ -154,6 +154,16 @@ fn identity(drop: &ItemDrop) -> Option<&'static str> {
     table.get(row).map(|&(_, name)| name)
 }
 
+/// The in-game name of a unique/set `index` name: some internal keys differ (Piercerib is
+/// shown as "Rogue's Bow"; see `item_names_data::DISPLAY_NAMES`).
+fn shown(index: &'static str) -> &'static str {
+    item_names_data::DISPLAY_NAMES
+        .binary_search_by_key(&index, |&(i, _)| i)
+        .ok()
+        .and_then(|row| item_names_data::DISPLAY_NAMES.get(row))
+        .map_or(index, |&(_, name)| name)
+}
+
 /// The rule's verdict on the drop: `None` if it doesn't match, else `Some(uncertain)`.
 fn check(rule: &Rule, drop: &ItemDrop, name: Option<&str>) -> Option<bool> {
     let code = drop.code.as_deref()?;
@@ -295,7 +305,7 @@ pub fn keep_list(items: &[(ItemDrop, Place)]) -> Vec<Keep> {
 /// (from the rules, else the item code), with "eth" before and the socket count after.
 fn display_name(item: &ItemDrop) -> String {
     if let Some(name) = identity(item) {
-        return name.to_owned();
+        return shown(name).to_owned();
     }
     let code = item.code.as_deref().unwrap_or("?");
     let base = RULES
@@ -456,10 +466,13 @@ pub fn spare_lists(items: &[(ItemDrop, Place)]) -> (Vec<Spare>, Vec<Spare>) {
             Verdict::Sell => &mut sell,
             Verdict::GiveAway => &mut give,
         };
-        match list.iter_mut().find(|s| s.name == name && s.place == *place) {
+        match list
+            .iter_mut()
+            .find(|s| s.name == shown(name) && s.place == *place)
+        {
             Some(s) => s.count = s.count.saturating_add(1),
             None => list.push(Spare {
-                name: name.to_owned(),
+                name: shown(name).to_owned(),
                 place: *place,
                 count: 1,
             }),
@@ -737,6 +750,17 @@ mod tests {
         d.flags = item_data::FLAG_IDENTIFIED;
         d.unique_index = Some(index);
         d
+    }
+
+    #[test]
+    fn internal_names_are_shown_in_game_spelling() {
+        assert_eq!(shown("Piercerib"), "Rogue's Bow");
+        assert_eq!(shown("The Chieftan"), "The Chieftain");
+        assert_eq!(shown("Gravenspine"), "Gravenspine", "same name stays");
+        assert!(
+            item_names_data::DISPLAY_NAMES.is_sorted_by(|a, b| a.0 < b.0),
+            "sorted for binary search"
+        );
     }
 
     #[test]
