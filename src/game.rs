@@ -13,9 +13,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::items::{self, DropKind};
 use crate::objects_data::{SHRINE_OBJECTS, WELL_OBJECTS};
 use crate::offsets::{
-    ROOM_TILE_SCALE, act, act_misc, item_data, item_mode, level, level_preset, monster_data, object_data,
-    object_mode, path, player_data, preset, room_tile, room1, room2, stat_list, state, static_path, unit,
-    unit_table,
+    ROOM_TILE_SCALE, act, act_misc, inventory, item_data, item_mode, level, level_preset, monster_data,
+    object_data, object_mode, path, player_data, preset, room_tile, room1, room2, stat_list, state,
+    static_path, unit, unit_table,
 };
 use crate::process::ReadMem;
 use crate::render::is_consumable_quest_object;
@@ -286,17 +286,17 @@ struct Stored {
 
 /// Where a stored item on `page` with `owner` is, for the player with unit id `player`; `None`
 /// if it isn't the player's. Pages 0 (inventory), 3 (cube) and 4 (stash) count when the player
-/// owns the item. Other owners are left out (see the comment in the body).
-const fn place(page: u8, owner: u32, player: u32, _other_players: &[u32]) -> Option<valuables::Place> {
+/// owns the item; page 4 also when one of the player's `shared_tabs` owns it.
+fn place(page: u8, owner: u32, player: u32, shared_tabs: &[u32]) -> Option<valuables::Place> {
     use valuables::Place;
     match page {
         item_data::PAGE_INVENTORY if owner == player => Some(Place::Inventory),
         item_data::PAGE_CUBE if owner == player => Some(Place::Cube),
         item_data::PAGE_STASH if owner == player => Some(Place::Stash),
-        // Page-4 items of other owners are NOT the online shared stash: live 2026-11-15 they were
-        // stale units from earlier characters/games in the same client session (BigWolf's
-        // Gravenspine showed up while playing Vex, and the user's shared stash held none of them).
-        // Until the real shared tabs are identified, only the player's own items count.
+        // Page-4 items of other owners: only the player's own shared-stash tab units count
+        // ([`Reader::shared_tabs`]). Stale tab units from other characters or the offline shared
+        // stash are left out (live 2026-11-15: BigWolf's Gravenspine showed up while playing Vex).
+        item_data::PAGE_STASH if shared_tabs.contains(&owner) => Some(Place::Shared),
         _ => None,
     }
 }
@@ -311,21 +311,16 @@ fn keep_list(inventory: Vec<(ItemDrop, Option<u32>)>, player: u32) -> Vec<valuab
     valuables::keep_list(&mine)
 }
 
-/// The sell and give-away lists of the `stored` items that are the player's ([`place`]); the
-/// other `candidates` are other players.
+/// The sell and give-away lists of the `stored` items that are the player's ([`place`]), with
+/// the unit ids of the player's `shared_tabs`.
 fn spare_lists(
     stored: Vec<Stored>,
     player: u32,
-    candidates: &[Candidate],
+    shared_tabs: &[u32],
 ) -> (Vec<valuables::Spare>, Vec<valuables::Spare>) {
-    let others: Vec<u32> = candidates
-        .iter()
-        .map(|c| c.id)
-        .filter(|&id| id != player)
-        .collect();
     let mine: Vec<_> = stored
         .into_iter()
-        .filter_map(|s| place(s.page, s.owner, player, &others).map(|p| (s.item, p)))
+        .filter_map(|s| place(s.page, s.owner, player, shared_tabs).map(|p| (s.item, p)))
         .collect();
     valuables::spare_lists(&mine)
 }
@@ -646,7 +641,8 @@ pub fn snapshot(
     let (shrines, wells, operated_objects) = r.objects(unit_table);
     let inventory_items = u32::try_from(scan.inventory.len()).unwrap_or(u32::MAX);
     let inventory_keep = keep_list(scan.inventory, chosen.id);
-    let (sell, give_away) = spare_lists(scan.stored, chosen.id, &candidates);
+    let shared_tabs = r.shared_tabs(unit_table, chosen.id);
+    let (sell, give_away) = spare_lists(scan.stored, chosen.id, &shared_tabs);
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
     let terrorized = is_terrorized(&monsters);
 
@@ -881,6 +877,20 @@ impl<M: ReadMem> Reader<'_, M> {
         let raw = self.bytes(pd, player_data::NAME, player_data::NAME_LEN)?;
         let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
         Ok(String::from_utf8_lossy(raw.get(..end).unwrap_or_default()).into_owned())
+    }
+
+    /// Unit ids of `player`'s shared-stash tabs: other player-type units whose inventory names
+    /// `player` as its owner ([`inventory::OWNER_ID`]). Unreadable units are skipped.
+    fn shared_tabs(&mut self, unit_table: u64, player: u32) -> Vec<u32> {
+        let addrs = self.units(unit_table, unit_table::PLAYER);
+        addrs
+            .into_iter()
+            .filter_map(|addr| {
+                let id = self.u32(addr, unit::ID).ok()?;
+                let inv = self.ptr(addr, unit::INVENTORY).ok()??;
+                (id != player && self.u32(inv, inventory::OWNER_ID).ok()? == player).then_some(id)
+            })
+            .collect()
     }
 
     /// `Some` if the unit is a live player: non-null act and path, non-zero position.
@@ -2566,6 +2576,26 @@ mod tests {
             .copy_from_slice(&owner.to_le_bytes());
         mem.add(data, b);
         Ok(())
+    }
+
+    #[test]
+    fn place_counts_only_the_players_own_shared_tabs() {
+        use valuables::Place;
+        let (me, tab, stale) = (7, 70, 71);
+        let tabs = [tab];
+        assert_eq!(place(item_data::PAGE_STASH, me, me, &tabs), Some(Place::Stash));
+        assert_eq!(place(item_data::PAGE_STASH, tab, me, &tabs), Some(Place::Shared));
+        assert_eq!(
+            place(item_data::PAGE_STASH, stale, me, &tabs),
+            None,
+            "stale tab unit"
+        );
+        assert_eq!(place(item_data::PAGE_STASH, item_data::NO_OWNER, me, &tabs), None);
+        assert_eq!(
+            place(item_data::PAGE_INVENTORY, tab, me, &tabs),
+            None,
+            "tabs only own stash pages"
+        );
     }
 
     #[test]

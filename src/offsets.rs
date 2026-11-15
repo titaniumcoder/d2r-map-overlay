@@ -33,11 +33,23 @@ pub mod unit {
     pub const PATH: u64 = 0x38;
     /// ptr to the unit's `StatList` (verified live on items, 2026-11-15).
     pub const STATS: u64 = 0x88;
+    /// ptr to the unit's `Inventory` (see [`super::inventory`]); live 2026-11-15 on player units.
+    pub const INVENTORY: u64 = 0x90;
     /// ptr to the next unit in the hash chain (same slot = same `id & 127`). Verified live
     /// 2026-11-15 for items (43 chained units), monsters (24) and objects (1): every chained unit
     /// had the slot's type and `id & 127 == slot`. The earlier 0x150 only ever reached slot heads,
     /// so a unit sharing a slot was invisible (a dropped sapphire never showed).
     pub const NEXT: u64 = 0x158;
+}
+
+/// `Inventory` of a unit.
+pub mod inventory {
+    /// u32 unit id of the player the inventory belongs to. Live 2026-11-15: the player's own
+    /// inventory and its shared-stash tab units (player-type units without an act, one per shared
+    /// page) carry the player's id here; stale tab units left from other characters or the
+    /// offline shared stash carry another id. Cathan's Seal moved page 1→5 through tab units
+    /// 3537311729, 4184574968, 2092279292, 1046131454, 523057535, all with this field = Vex's id.
+    pub const OWNER_ID: u64 = 0x48;
 }
 
 /// `Path` (dynamic path of a moving unit).
