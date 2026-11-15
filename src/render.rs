@@ -56,7 +56,7 @@ pub struct LandmarkRule {
 /// - Barracks (28): lvlprest "Barracks Forge W/E/S/N" (202–205) holds the Smith and the Horadric
 ///   Malus; confirmed for 204 (Smith preset 771 and malus object 108 both inside it, 2026-11-15).
 /// - Lut Gholein sewers (47–49): lvlprest "Sewer Radament's Lair W/E/S/N" (341–344) in level 3 (49;
-///   341 present 2026-11-15) and "Sewer Next W/E/S/N" (337–340, stairs down) in levels 1–2.
+///   341 confirmed in game 2026-11-15) and "Sewer Next W/E/S/N" (337–340, stairs down) in levels 1–2.
 /// - Dark Wood (5): lvlprest 161 "Act 1 - Inifus" (funktree.ds1), the Tree of Inifuss (confirmed in
 ///   game 2026-11-15).
 /// - Black Marsh (6): lvlprest 163 "Act 1 - Tower 1" (Tower1.ds1), the Forgotten Tower entrance
@@ -64,8 +64,15 @@ pub struct LandmarkRule {
 pub const LANDMARKS: &[LandmarkRule] = &[
     LandmarkRule {
         level_ids: 49..=49,
-        preset_ids: 341..=344,
+        preset_ids: 341..=341,
         label: "radament's lair",
+        confirmed: true,
+        exit: false,
+    },
+    LandmarkRule {
+        level_ids: 49..=49,
+        preset_ids: 342..=344,
+        label: "radament's lair (E/S/N)",
         confirmed: false,
         exit: false,
     },
@@ -2518,7 +2525,7 @@ mod tests {
         assert_eq!(
             unconfirmed,
             vec![
-                "radament's lair",
+                "radament's lair (E/S/N)",
                 "sewer stairs down",
                 "smith (forge W/E)",
                 "smith (forge N)",
