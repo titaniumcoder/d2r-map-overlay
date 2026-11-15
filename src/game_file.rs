@@ -135,6 +135,7 @@ mod tests {
             give_away: vec![],
             difficulty: None,
             terrorized: false,
+            cows: None,
             warnings: vec![],
         }
     }

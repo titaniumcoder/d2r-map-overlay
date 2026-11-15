@@ -44,6 +44,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::cows;
 use crate::game::{BorderLink, Monster, Preset, PresetKind, RoomLink, RoomRect, Shrine, Snapshot, Well};
 use crate::levels_data::SUPERUNIQUES;
 use crate::offsets::monster_data;
@@ -78,6 +79,10 @@ pub struct Update {
     pub new_game: bool,
     /// The arrival point settled in this snapshot: (level id, x, y). Once per level per game.
     pub arrival: Option<(u32, u16, u16)>,
+    /// First snapshot in the Moo Moo Farm in this game: a new cow run ([`crate::cows`]).
+    pub cow_run: bool,
+    /// Cows newly counted dead in this snapshot.
+    pub new_cows: u32,
 }
 
 /// The per-game part of a [`Session`]: everything that must survive an overlay restart within
@@ -123,6 +128,13 @@ pub struct GameState {
     /// player are dead or unloaded.
     #[serde(default)]
     terrorized: HashSet<u32>,
+    /// Cows (by unit id) seen dead in the Moo Moo Farm in this game: each counts once
+    /// ([`crate::cows`]).
+    #[serde(default)]
+    cows: HashSet<u32>,
+    /// The player was in the Moo Moo Farm in this game (the cow run is counted).
+    #[serde(default)]
+    cow_run: bool,
 }
 
 impl GameState {
@@ -272,6 +284,12 @@ impl Session {
         }
     }
 
+    /// Cows counted dead in the Moo Moo Farm in this game.
+    #[must_use]
+    pub fn cow_kills(&self) -> u64 {
+        u64::try_from(self.state.cows.len()).unwrap_or(u64::MAX)
+    }
+
     /// The game state if it changed since the last call (which then clears the change).
     pub fn take_changed(&mut self) -> Option<&GameState> {
         (self.started && std::mem::take(&mut self.changed)).then_some(&self.state)
@@ -392,6 +410,9 @@ impl Session {
         }
 
         self.kill_quest_monsters(snap);
+        if level == cows::COW_LEVEL {
+            self.count_cows(snap, &mut update);
+        }
 
         for o in &snap.operated_objects {
             self.changed |= self.state.operated.insert((level, o.x, o.y));
@@ -416,6 +437,28 @@ impl Session {
 }
 
 impl Session {
+    /// In the Moo Moo Farm: marks the game as a cow run (once), counts each dead cow once by
+    /// unit id and sets [`Snapshot::cows`] for the info line.
+    fn count_cows(&mut self, snap: &mut Snapshot, update: &mut Update) {
+        if !std::mem::replace(&mut self.state.cow_run, true) {
+            update.cow_run = true;
+            self.changed = true;
+        }
+        let mut alive = 0u32;
+        for m in snap.monsters.iter().filter(|m| cows::is_cow(m.txt)) {
+            if !m.is_dead() {
+                alive = alive.saturating_add(1);
+            } else if self.state.cows.insert(m.id) {
+                update.new_cows = update.new_cows.saturating_add(1);
+                self.changed = true;
+            }
+        }
+        snap.cows = Some(cows::Tally {
+            kills: self.cow_kills(),
+            alive,
+        });
+    }
+
     /// A dead quest monster (prison door broken) kills the nearest quest monster preset of its
     /// txt id within [`QUEST_KILL_RADIUS`]. Normal monsters get no unit-id binding: a door
     /// doesn't move.
@@ -550,6 +593,7 @@ mod tests {
             give_away: vec![],
             difficulty: None,
             terrorized: false,
+            cows: None,
             warnings: vec![],
         }
     }
@@ -1317,5 +1361,80 @@ mod tests {
         let kept: Vec<u32> = other.presets.iter().map(|p| p.txt).collect();
         assert_eq!(kept, vec![757]);
         assert_eq!(s.take_changed().map(|g| g.player_id), Some(2));
+    }
+
+    fn cow(id: u32, mode: u32) -> Monster {
+        Monster {
+            id,
+            ..with_txt(391, mode, 10, 10)
+        }
+    }
+
+    fn farm(player_id: u32, monsters: Vec<Monster>) -> Snapshot {
+        let mut s = snap(player_id, 0xa000, crate::cows::COW_LEVEL);
+        s.monsters = monsters;
+        s
+    }
+
+    #[test]
+    fn a_cow_counts_once_per_unit_id_and_only_dead() {
+        let mut s = Session::default();
+        let mut first = farm(1, vec![cow(1, 1), cow(2, 0), cow(3, 12)]);
+        let update = s.apply(&mut first);
+        assert_eq!(update.new_cows, 2, "modes 0 and 12 are dead, 1 is not");
+        assert_eq!(first.cows, Some(crate::cows::Tally { kills: 2, alive: 1 }));
+        // The same corpses again, and cow 1 dies: only cow 1 is new.
+        let mut b = farm(1, vec![cow(1, 0), cow(2, 0), cow(3, 12)]);
+        assert_eq!(s.apply(&mut b).new_cows, 1);
+        assert_eq!(b.cows, Some(crate::cows::Tally { kills: 3, alive: 0 }));
+        // A dead non-cow doesn't count.
+        let mut c = farm(1, vec![with_txt(410, 0, 1, 1)]);
+        assert_eq!(s.apply(&mut c).new_cows, 0);
+        assert_eq!(s.cow_kills(), 3);
+    }
+
+    #[test]
+    fn cows_count_in_level_39_only() {
+        let mut s = Session::default();
+        let mut elsewhere = snap(1, 0xa000, 4);
+        elsewhere.monsters = vec![cow(1, 0)];
+        let u = s.apply(&mut elsewhere);
+        assert_eq!((u.new_cows, u.cow_run), (0, false));
+        assert_eq!(elsewhere.cows, None, "no counter outside the farm");
+        assert_eq!(s.cow_kills(), 0);
+    }
+
+    #[test]
+    fn a_new_game_resets_the_run_and_starts_a_new_one() {
+        let mut s = Session::default();
+        assert!(s.apply(&mut farm(1, vec![cow(1, 0)])).cow_run, "first arrival");
+        assert!(!s.apply(&mut farm(1, vec![])).cow_run, "once per game");
+        s.apply(&mut snap(1, 0xa000, 1));
+        assert!(
+            !s.apply(&mut farm(1, vec![])).cow_run,
+            "back in the farm, same game"
+        );
+        assert_eq!(s.cow_kills(), 1);
+
+        let u = s.apply(&mut farm(2, vec![cow(5, 1)]));
+        assert!(u.new_game && u.cow_run, "a new game is a new run");
+        assert_eq!(s.cow_kills(), 0, "the count starts over");
+    }
+
+    #[test]
+    fn counted_cows_survive_a_restore() -> Result<(), serde_json::Error> {
+        let mut s = Session::default();
+        s.apply(&mut farm(1, vec![cow(1, 0)]));
+        let saved: GameState = serde_json::from_str(&serde_json::to_string(&s.state)?)?;
+        let mut again = Session::default();
+        again.restore(saved);
+        let u = again.apply(&mut farm(1, vec![cow(1, 0)]));
+        assert_eq!(
+            (u.cow_run, u.new_cows),
+            (false, 0),
+            "neither the run nor the cow again"
+        );
+        assert_eq!(again.cow_kills(), 1);
+        Ok(())
     }
 }

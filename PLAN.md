@@ -170,6 +170,15 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 Live mode appends deduped events to `~/.local/share/d2r-map-overlay/journal/YYYY-MM-DD.jsonl` (UTC date):
 level (room pieces), arrival, marker (+ piece), link, elite monster, killed, drop. Files are never rotated;
 delete old ones by hand. Use it to find more landmark patterns offline.
+- **Junk: assassin traps as elites.** Traps (txt 410) carry MonsterData 0x08, so the journal logged them as elite
+  `monster`/`killed` events. Commit 4a31d77 fixed this only in the renderer; the journal recorder still filters by
+  flags alone (`journal::ELITE`), so txt-410 `monster`/`killed` entries are junk before *and* after 4a31d77
+  (5125 of them by 2026-11-15) until the recorder skips allies too. Ignore them when analysing.
+- **Cow counter** (`cows.rs`, user request 2026-11-15): in level 39 the info line shows
+  `kill count: N / victims alive: M` instead of monster levels (cows = txt 391 hellbovine and 735, the Cow King's
+  live unit, seen with superunique+unique flags at his preset). Lifetime total/best/runs in
+  `~/.local/share/d2r-map-overlay/cows.json` (not shown yet), seeded once from the journal: runs = distinct games
+  with a level-39 event (3), total/best = elite cows logged killed (2 / 1); normal cows were never logged.
 
 ## User feedback, first live session (Act 1, 2026-11-14)
 - Minimap "already helps drastically"; ~1% CPU, 7 MB RSS.

@@ -132,6 +132,10 @@ pub struct Snapshot {
     /// it set for the level for the rest of the game, once seen. Left out of the JSON when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub terrorized: bool,
+    /// The cow counter ([`crate::cows`]), set by the session in the Moo Moo Farm only; it
+    /// replaces the monster levels in the info line. Left out of the JSON when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cows: Option<crate::cows::Tally>,
     pub warnings: Vec<String>,
 }
 
@@ -666,6 +670,7 @@ pub fn snapshot(
         give_away,
         difficulty,
         terrorized,
+        cows: None,
         warnings: r.into_warnings(),
     })
 }

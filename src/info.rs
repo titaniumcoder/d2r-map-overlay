@@ -5,12 +5,16 @@
 //! actual monster levels, so in a terrorized level (`Snapshot::terrorized`) the line shows
 //! `terrorized` in violet instead of the table values and boss level:
 //! `Normal · Moo Moo Farm · terrorized`.
+//!
+//! In the Moo Moo Farm with a cow counter (`Snapshot::cows`, see [`crate::cows`]) the monster and
+//! boss levels give way to it: `Normal · Moo Moo Farm · kill count: 57 / victims alive: 23`.
 
 use std::sync::OnceLock;
 
 use ab_glyph::{Font, FontVec, GlyphId, PxScale, ScaleFont, point};
 use tiny_skia::{Mask, Paint, Pixmap, Rect, Transform};
 
+use crate::cows::{COW_LEVEL, Tally};
 use crate::levels_data::{BOSSES, LEVELS};
 use crate::valuables::{Keep, Spare, Tier};
 
@@ -93,13 +97,19 @@ impl InfoLine {
 /// The info line for `level_id`. Without a known difficulty there is no monster-level column to
 /// pick, so only the area name is shown. An area with monster level 0 (towns, the Forgotten
 /// Tower's ground floor) has no monster levels. A `terrorized` level shows [`TERRORIZED`] in
-/// place of monster and boss levels (the table values don't apply in a Terror Zone).
-pub fn info_line(level_id: u32, difficulty: Option<u8>, terrorized: bool) -> InfoLine {
+/// place of monster and boss levels (the table values don't apply in a Terror Zone). In the Moo
+/// Moo Farm, `cows` replaces them (a terrorized farm keeps [`TERRORIZED`] last).
+pub fn info_line(level_id: u32, difficulty: Option<u8>, terrorized: bool, cows: Option<Tally>) -> InfoLine {
     let difficulty = difficulty.filter(|&d| difficulty_name(d).is_some());
     let level = LEVELS.iter().find(|&&(id, _, _)| id == level_id);
     let area = level.map_or_else(|| format!("Level {level_id}"), |&(_, name, _)| name.to_owned());
     let mut stats = Vec::new();
-    if terrorized {
+    if let Some(c) = cows.filter(|_| level_id == COW_LEVEL) {
+        stats.push(format!("kill count: {} / victims alive: {}", c.kills, c.alive));
+        if terrorized {
+            stats.push(TERRORIZED.to_owned());
+        }
+    } else if terrorized {
         stats.push(TERRORIZED.to_owned());
     } else if let Some(d) = difficulty.map(usize::from) {
         if let Some(&mlvl) = level.and_then(|(_, _, lvls)| lvls.get(d))
@@ -538,15 +548,15 @@ mod tests {
     #[test]
     fn line_with_elite_offsets() {
         assert_eq!(
-            info_line(88, Some(0), false).text(),
+            info_line(88, Some(0), false, None).text(),
             "Normal · Flayer Dungeon Level 1 · mlvl 22 · champ 24 · unique 25"
         );
         assert_eq!(
-            info_line(88, Some(1), false).text(),
+            info_line(88, Some(1), false, None).text(),
             "Nightmare · Flayer Dungeon Level 1 · mlvl 51 · champ 53 · unique 54"
         );
         assert_eq!(
-            info_line(88, Some(2), false).text(),
+            info_line(88, Some(2), false, None).text(),
             "Hell · Flayer Dungeon Level 1 · mlvl 81 · champ 83 · unique 84"
         );
     }
@@ -554,28 +564,35 @@ mod tests {
     #[test]
     fn line_with_boss() {
         assert_eq!(
-            info_line(102, Some(0), false).text(),
+            info_line(102, Some(0), false, None).text(),
             "Normal · Durance of Hate Level 3 · mlvl 25 · champ 27 · unique 28 · Mephisto 26"
         );
         assert_eq!(
-            info_line(102, Some(2), false).stats.last().map(String::as_str),
+            info_line(102, Some(2), false, None)
+                .stats
+                .last()
+                .map(String::as_str),
             Some("Mephisto 87")
         );
     }
 
     #[test]
     fn unknown_level_has_no_monster_levels() {
-        let line = info_line(9999, Some(1), false);
+        let line = info_line(9999, Some(1), false, None);
         assert_eq!(line.text(), "Nightmare · Level 9999");
     }
 
     #[test]
     fn unknown_difficulty_is_left_out() {
         for d in [None, Some(3), Some(200)] {
-            assert_eq!(info_line(88, d, false).text(), "Flayer Dungeon Level 1", "{d:?}");
+            assert_eq!(
+                info_line(88, d, false, None).text(),
+                "Flayer Dungeon Level 1",
+                "{d:?}"
+            );
         }
         // Mephisto's level depends on the difficulty too.
-        assert_eq!(info_line(102, None, false).stats, Vec::<String>::new());
+        assert_eq!(info_line(102, None, false, None).stats, Vec::<String>::new());
     }
 
     #[test]
@@ -584,7 +601,7 @@ mod tests {
             eprintln!("skipped: no info-line font on this machine");
             return;
         };
-        let line = info_line(88, Some(0), false);
+        let line = info_line(88, Some(0), false, None);
         let full = line.text();
         assert_eq!(fit_text(font, &line, 10_000.0), full);
         let narrow = text_width(font, &full) - 30.0;
@@ -722,24 +739,51 @@ mod tests {
     #[test]
     fn terrorized_line_drops_table_levels() {
         // Moo Moo Farm (39).
-        let line = info_line(39, Some(0), true);
+        let line = info_line(39, Some(0), true, None);
         assert_eq!(line.text(), "Normal · Moo Moo Farm · terrorized");
         assert!(line.terrorized);
         assert!(
-            info_line(39, Some(0), false).text().contains("mlvl"),
+            info_line(39, Some(0), false, None).text().contains("mlvl"),
             "not terrorized: table values"
         );
         // No boss level either (Mephisto's level is a table value too).
         assert_eq!(
-            info_line(102, Some(2), true).text(),
+            info_line(102, Some(2), true, None).text(),
             "Hell · Durance of Hate Level 3 · terrorized"
         );
-        assert_eq!(info_line(39, None, true).text(), "Moo Moo Farm · terrorized");
+        assert_eq!(
+            info_line(39, None, true, None).text(),
+            "Moo Moo Farm · terrorized"
+        );
     }
 
     #[test]
     fn zero_mlvl_area_has_no_monster_levels() {
         // Rogue Encampment: monster level 0 in the table.
-        assert_eq!(info_line(1, Some(0), false).text(), "Normal · Rogue Encampment");
+        assert_eq!(
+            info_line(1, Some(0), false, None).text(),
+            "Normal · Rogue Encampment"
+        );
+    }
+
+    #[test]
+    fn the_cow_counter_replaces_the_monster_levels_in_level_39_only() {
+        let cows = Some(Tally { kills: 57, alive: 23 });
+        assert_eq!(
+            info_line(39, Some(0), false, cows).text(),
+            "Normal · Moo Moo Farm · kill count: 57 / victims alive: 23"
+        );
+        let terror = info_line(39, Some(2), true, cows);
+        assert_eq!(
+            terror.text(),
+            "Hell · Moo Moo Farm · kill count: 57 / victims alive: 23 · terrorized"
+        );
+        assert!(terror.terrorized, "still ends in the violet part");
+        // Elsewhere, or without a counter, the usual line.
+        assert_eq!(
+            info_line(88, Some(0), false, cows),
+            info_line(88, Some(0), false, None)
+        );
+        assert!(info_line(39, Some(0), false, None).text().contains("mlvl"));
     }
 }

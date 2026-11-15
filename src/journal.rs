@@ -25,16 +25,22 @@ use crate::valuables::{Category, Tier};
 /// Monster flag bits of an elite: superunique 0x02, champion 0x04, unique 0x08.
 const ELITE: u8 = 0x0E;
 
-/// `$XDG_DATA_HOME/d2r-map-overlay/journal` (else `~/.local/share/...`); `None` if neither is set.
+/// `$XDG_DATA_HOME/d2r-map-overlay` (else `~/.local/share/...`); `None` if neither is set.
 #[must_use]
-pub fn default_dir() -> Option<PathBuf> {
+pub fn data_dir() -> Option<PathBuf> {
     let absolute = |var| {
         std::env::var_os(var)
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
     };
     let base = absolute("XDG_DATA_HOME").or_else(|| absolute("HOME").map(|h| h.join(".local/share")))?;
-    Some(base.join("d2r-map-overlay").join("journal"))
+    Some(base.join("d2r-map-overlay"))
+}
+
+/// `journal` in the [`data_dir`]; `None` if there is none.
+#[must_use]
+pub fn default_dir() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("journal"))
 }
 
 /// One journal event; the variant name is the line's `ev`.
@@ -590,6 +596,7 @@ mod tests {
             give_away: vec![],
             difficulty: None,
             terrorized: false,
+            cows: None,
             warnings: vec![],
         }
     }

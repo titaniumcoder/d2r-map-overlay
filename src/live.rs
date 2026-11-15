@@ -21,7 +21,7 @@ use crate::process::ProcMem;
 use crate::session::Session;
 use ab_glyph::FontVec;
 
-use crate::{config, game_file, image, info, items, offset_cache, process, render, valuables};
+use crate::{config, cows, game_file, image, info, items, journal, offset_cache, process, render, valuables};
 
 /// Snapshot interval (~5 Hz).
 const TICK: Duration = Duration::from_millis(200);
@@ -151,6 +151,7 @@ fn follow_game(
         session.restore(state);
     }
     let mut saver = game_file::Saver::new(state_path);
+    let mut cow_stats = cows::Counter::open(cows::default_path(), journal::default_dir().as_deref());
     let mut dedup = Dedup::default();
     let mut items_table = ItemsTable::NotSearched;
     loop {
@@ -181,6 +182,7 @@ fn follow_game(
                         snap.player_candidates.len()
                     );
                 }
+                cow_stats.record(&update, session.cow_kills());
                 saver.tick(&mut session, Instant::now());
                 if let Some(msg) = tick_msg(&mut dedup, snap, (w, h), info::font()) {
                     send(tx, msg)?;
@@ -188,6 +190,7 @@ fn follow_game(
             }
             Err(e) => {
                 if !is_alive(pid) {
+                    cow_stats.flush();
                     return Ok(());
                 }
                 if dedup.hide(Hidden::NoGame) {
@@ -196,6 +199,7 @@ fn follow_game(
                 }
             }
         }
+        cow_stats.tick(Instant::now());
         thread::sleep(TICK.saturating_sub(start.elapsed()));
     }
 }

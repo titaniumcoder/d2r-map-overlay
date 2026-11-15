@@ -1022,7 +1022,7 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         info::draw(
             &mut pm,
             font,
-            &info::info_line(snap.level.id, snap.difficulty, snap.terrorized),
+            &info::info_line(snap.level.id, snap.difficulty, snap.terrorized, snap.cows),
             inset,
         );
         info::draw_keep(&mut pm, font, &keep);
@@ -1492,6 +1492,7 @@ mod tests {
             give_away: vec![],
             difficulty: None,
             terrorized: false,
+            cows: None,
             warnings: vec![],
         }
     }

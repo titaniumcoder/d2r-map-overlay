@@ -3,6 +3,7 @@
 //! See `PLAN.md` for the architecture and milestones.
 
 mod config;
+mod cows;
 mod game;
 mod game_file;
 mod hypr;
