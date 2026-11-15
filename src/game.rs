@@ -122,7 +122,8 @@ pub struct Snapshot {
     /// empty, like `give_away`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sell: Vec<valuables::Spare>,
-    /// The player's stored items to give away (best rule is tier B). Yellow lines below `sell`.
+    /// The player's stored items to give away (best rule is tier B, or a further copy of a
+    /// keep-one item). Yellow lines below `sell`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub give_away: Vec<valuables::Spare>,
     /// 0 Normal, 1 Nightmare, 2 Hell; `None` if unreadable (and in old fixtures).
@@ -278,8 +279,8 @@ struct ItemScan {
     drops: Vec<ItemDrop>,
     /// All items on the inventory page, with their owner id (`None` if unreadable).
     inventory: Vec<(ItemDrop, Option<u32>)>,
-    /// Stored items on the inventory, cube and stash pages that may be spare
-    /// ([`valuables::may_spare`]), any owner: the owner filter needs the chosen player.
+    /// Stored items on the cube and stash pages that may be spare ([`valuables::may_spare`]),
+    /// any owner: the owner filter needs the chosen player. Inventory items are in `inventory`.
     stored: Vec<Stored>,
     stash_owners: OwnerVotes,
     inventory_owners: OwnerVotes,
@@ -310,28 +311,24 @@ fn place(page: u8, owner: u32, player: u32, shared_tabs: &[u32]) -> Option<valua
     }
 }
 
-/// The keep list of the `inventory` items owned by unit id `player`: in a group game the other
-/// players' inventory items are units too.
-fn keep_list(inventory: Vec<(ItemDrop, Option<u32>)>, player: u32) -> Vec<valuables::Keep> {
-    let mine: Vec<ItemDrop> = inventory
-        .into_iter()
-        .filter_map(|(d, owner)| (owner == Some(player)).then_some(d))
-        .collect();
-    valuables::keep_list(&mine)
-}
-
-/// The sell and give-away lists of the `stored` items that are the player's ([`place`]), with
-/// the unit ids of the player's `shared_tabs`.
-fn spare_lists(
+/// The items of unit id `player` with their place, the one set both the keep list and the spare
+/// lists are computed from (a keep-one item is kept once across all places): the `inventory`
+/// items it owns (in a group game the other players' inventory items are units too) and the
+/// `stored` cube and stash items that are its own ([`place`], with the unit ids of its
+/// `shared_tabs`).
+fn player_items(
+    inventory: Vec<(ItemDrop, Option<u32>)>,
     stored: Vec<Stored>,
     player: u32,
     shared_tabs: &[u32],
-) -> (Vec<valuables::Spare>, Vec<valuables::Spare>) {
-    let mine: Vec<_> = stored
+) -> Vec<(ItemDrop, valuables::Place)> {
+    let inv = inventory
         .into_iter()
-        .filter_map(|s| place(s.page, s.owner, player, shared_tabs).map(|p| (s.item, p)))
-        .collect();
-    valuables::spare_lists(&mine)
+        .filter_map(|(d, owner)| (owner == Some(player)).then_some((d, valuables::Place::Inventory)));
+    let stashed = stored
+        .into_iter()
+        .filter_map(|s| place(s.page, s.owner, player, shared_tabs).map(|p| (s.item, p)));
+    inv.chain(stashed).collect()
 }
 
 /// The candidate to use as the player and the rule that picked it; `None` if no candidate fits
@@ -649,9 +646,10 @@ pub fn snapshot(
     }
     let (shrines, wells, operated_objects) = r.objects(unit_table);
     let inventory_items = u32::try_from(scan.inventory.len()).unwrap_or(u32::MAX);
-    let inventory_keep = keep_list(scan.inventory, chosen.id);
     let shared_tabs = r.shared_tabs(unit_table, chosen.id);
-    let (sell, give_away) = spare_lists(scan.stored, chosen.id, &shared_tabs);
+    let mine = player_items(scan.inventory, scan.stored, chosen.id, &shared_tabs);
+    let inventory_keep = valuables::keep_list(&mine);
+    let (sell, give_away) = valuables::spare_lists(&mine);
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
     let terrorized = is_terrorized(&monsters);
 
@@ -1244,18 +1242,7 @@ impl<M: ReadMem> Reader<'_, M> {
             };
             match found {
                 Ok(Some((d, true))) => scan.drops.push(d),
-                Ok(Some((d, false))) => {
-                    if let Some(owner) = owner
-                        && valuables::may_spare(d.quality, d.flags)
-                    {
-                        scan.stored.push(Stored {
-                            item: d.clone(),
-                            page: item_data::PAGE_INVENTORY,
-                            owner,
-                        });
-                    }
-                    scan.inventory.push((d, owner));
-                }
+                Ok(Some((d, false))) => scan.inventory.push((d, owner)),
                 Ok(None) => {}
                 Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
             }
@@ -2651,6 +2638,34 @@ mod tests {
         quiet.give_away.clear();
         let json = serde_json::to_string(&quiet)?;
         assert!(!json.contains("sell") && !json.contains("give_away"), "{json}");
+        Ok(())
+    }
+
+    #[test]
+    fn keep_one_sees_inventory_and_stash_together() -> Result<()> {
+        // items.txt row 43 ghm; setitems 36 Sigon's Visor (keep one).
+        let visor = (43, 5, item_data::FLAG_IDENTIFIED, 36);
+        let stored = item_mode::STORED;
+        let mut m = world()?;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        stored_item(&mut m, I1, visor, (stored, 0), &[], I2)?; // inventory
+        stored_item(&mut m, I2, visor, (stored, 4), &[], 0)?; // personal stash: the kept copy
+        for addr in [I1, I2] {
+            set_owner(&mut m, addr, BOB_ID)?;
+        }
+        let stride = usize::try_from(crate::offsets::items_txt::STRIDE)?;
+        let mut b = vec![0u8; 50 * stride];
+        b.get_mut(43 * stride..43 * stride + 4)
+            .context("row in table")?
+            .copy_from_slice(b"ghm ");
+        m.add(ITEMS, b);
+
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let names =
+            |l: &[valuables::Spare]| -> Vec<String> { l.iter().map(crate::info::spare_entry).collect() };
+        assert_eq!(s.inventory_keep, vec![], "the inventory copy is not kept");
+        assert_eq!(names(&s.sell), Vec::<String>::new());
+        assert_eq!(names(&s.give_away), vec!["Sigon's Visor (inv)"]);
         Ok(())
     }
 

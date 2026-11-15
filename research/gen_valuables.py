@@ -5,13 +5,14 @@ U = json.load(open(f'{D}/uniqueitems.json')); S = json.load(open(f'{D}/setitems.
 BASE = {**W, **A, **M}
 R = lambda a, b: [f'r{i:02d}' for i in range(a, b + 1)]
 rules = []
-def rule(tier, cat, codes, quality, name, note, sockets=None, eth=None, item_names=None, runewords=None, needs_stats=False):
+def rule(tier, cat, codes, quality, name, note, sockets=None, eth=None, item_names=None, runewords=None, needs_stats=False, keep=None):
     r = dict(tier=tier, category=cat, item_codes=codes, quality=quality, sockets=sockets, ethereal=eth, name=name, note=note)
     if item_names: r['item_names'] = item_names
     if runewords: r['runewords'] = runewords
     if needs_stats: r['needs_stats'] = True
+    if keep: r['keep'] = keep
     rules.append(r)
-def named(tier, quality, names, name, note, eth=None, needs_stats=False):
+def named(tier, quality, names, name, note, eth=None, needs_stats=False, cat='trade', keep=None):
     src = U if quality == 'unique' else S
     codes = []
     for n in names:
@@ -19,7 +20,7 @@ def named(tier, quality, names, name, note, eth=None, needs_stats=False):
         assert hits, n
         for c in hits:
             if c not in codes: codes.append(c)
-    rule(tier, 'trade', codes, quality, name, note, eth=eth, item_names=names, needs_stats=needs_stats)
+    rule(tier, cat, codes, quality, name, note, eth=eth, item_names=names, needs_stats=needs_stats, keep=keep)
 
 # ---------------- TRADE: runes ----------------
 rule('S','trade',R(26,33),'any','High runes Vex-Zod','Vex..Zod are the high-rune trade currency (maxroll). Ber/Jah top.')
@@ -98,6 +99,8 @@ rule('B','twink',['7cr','crs','9cr','72h'],'normal','Phase Blade / Crystal Sword
 rule('B','twink',['kri','bld','9kr','9bl','7kr','7bl'],'normal','Daggers 3os','RotW Void (Thul Zod Ist) and Ritual (Amn Shael Ohm) for Warlock. Prefer Fanged Knife / Legend Spike; demand not settled.',sockets=[3,3],runewords=['Void','Ritual'])
 rule('B','twink',sorted([c for c,v in A.items() if v.get('type')=='grim']),'normal','Grimoires 2os','RotW Vigilance (Dol Gul) on Warlock books; also fits shields/heads.',sockets=[2,2],runewords=['Vigilance'])
 rule('B','twink',R(1,19),'any','Low runes El-Fal','Spirit (Tal Thul Ort Amn), Insight (Ral Tir Tal Sol), Stealth/Lore/Ancient\'s Pledge sets; Ko/Fal/Hel/Io/Lum feed mid runewords. Spirit and Insight rune sets trade.')
+# ---------------- TWINK: sets (keep='one': one copy per item name is enough) ----------------
+named('A','set',["Sigon's Visor","Sigon's Shelter","Sigon's Gage","Sigon's Sabot","Sigon's Guard","Sigon's Wrap"],"Sigon's Complete Steel",'Cheap full set for a twink (life leech, def, fire res; full set bonus). One of each piece is enough.',cat='twink',keep='one')
 
 # ---------------- validate ----------------
 for r in rules:
@@ -128,6 +131,7 @@ doc = {
     'needs_stats': 'true = base/quality/sockets/eth alone cannot decide value; highlight as "check me"',
     'tiers': 'S always highlight, A highlight, B optional',
     'precedence': 'if several rules match, use the highest tier',
+    'keep': '"one" = one copy per item name is worth keeping across inventory, cube and stashes; further copies are give-aways. Absent = every copy counts',
   },
   'rules': rules,
 }

@@ -41,6 +41,8 @@ pub const SHRINE_NAMES: [&str; 23] = [
 
 /// Shrines shown when the config doesn't say.
 const DEFAULT_SHRINES: [&str; 5] = ["refilling", "skill", "stamina", "gem", "monster"];
+/// Shrine types shown in Normal only by default: stamina is useless later (user, 2026-11-15).
+const DEFAULT_NORMAL_ONLY: [&str; 1] = ["stamina"];
 
 /// The whole configuration.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -96,10 +98,8 @@ pub struct Shrines {
 impl Default for Shrines {
     fn default() -> Self {
         let (show, _) = shrine_codes(&DEFAULT_SHRINES.map(str::to_owned));
-        Self {
-            show,
-            normal_only: Vec::new(),
-        }
+        let (normal_only, _) = shrine_codes(&DEFAULT_NORMAL_ONLY.map(str::to_owned));
+        Self { show, normal_only }
     }
 }
 
@@ -134,7 +134,7 @@ impl Default for RawShrines {
     fn default() -> Self {
         Self {
             show: DEFAULT_SHRINES.map(str::to_owned).to_vec(),
-            normal_only: Vec::new(),
+            normal_only: DEFAULT_NORMAL_ONLY.map(str::to_owned).to_vec(),
         }
     }
 }

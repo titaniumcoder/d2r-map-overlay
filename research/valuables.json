@@ -10,7 +10,8 @@
     "item_names": "exact uniqueitems.json / setitems.json \"index\" strings (incl. data typos); when present the rule should only fire if the resolved unique/set name matches. If the overlay cannot resolve names, fall back to code+quality and expect false positives on shared bases (rin, amu, jew, cm3, xsk, uar, 7cr, ...).",
     "needs_stats": "true = base/quality/sockets/eth alone cannot decide value; highlight as \"check me\"",
     "tiers": "S always highlight, A highlight, B optional",
-    "precedence": "if several rules match, use the highest tier"
+    "precedence": "if several rules match, use the highest tier",
+    "keep": "\"one\" = one copy per item name is worth keeping across inventory, cube and stashes; further copies are give-aways. Absent = every copy counts"
   },
   "rules": [
     {
@@ -2272,6 +2273,40 @@
         "Lum Rune",
         "Ko Rune",
         "Fal Rune"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "twink",
+      "item_codes": [
+        "ghm",
+        "gth",
+        "hgl",
+        "hbt",
+        "tow",
+        "hbl"
+      ],
+      "quality": "set",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Sigon's Complete Steel",
+      "note": "Cheap full set for a twink (life leech, def, fire res; full set bonus). One of each piece is enough.",
+      "item_names": [
+        "Sigon's Visor",
+        "Sigon's Shelter",
+        "Sigon's Gage",
+        "Sigon's Sabot",
+        "Sigon's Guard",
+        "Sigon's Wrap"
+      ],
+      "keep": "one",
+      "base_names": [
+        "Great Helm",
+        "Gothic Plate",
+        "Gauntlets",
+        "Greaves",
+        "Tower Shield",
+        "Plated Belt"
       ]
     }
   ]

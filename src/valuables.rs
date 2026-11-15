@@ -60,6 +60,17 @@ impl Quality {
     }
 }
 
+/// How many copies of a matching item are worth keeping (`keep` in `valuables.json`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Copies {
+    /// Every copy (the field is absent).
+    #[default]
+    All,
+    /// One per unique/set name; further copies are give-aways (see [`surplus`]).
+    One,
+}
+
 /// One rule of `valuables.json`; fields the matcher doesn't use (`note`, `base_names`,
 /// `runewords`) are ignored.
 #[derive(Debug, Deserialize)]
@@ -82,6 +93,8 @@ struct Rule {
     /// Base item names, one per `item_codes` entry (same order).
     #[serde(default)]
     base_names: Vec<String>,
+    #[serde(default)]
+    keep: Copies,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,6 +205,22 @@ fn best_of(
     name: Option<&str>,
     enabled: &config::Valuables,
 ) -> Option<Highlight> {
+    best_rule(rules, drop, name, enabled).map(|(r, uncertain)| Highlight {
+        tier: r.tier,
+        category: r.category,
+        rule: r.name.clone(),
+        uncertain,
+    })
+}
+
+/// The rule [`best_of`] reports, with its `uncertain` flag.
+// The lifetime ties the returned rule to `rules`, not to `drop` or `name`.
+fn best_rule<'r>(
+    rules: &'r [Rule],
+    drop: &ItemDrop,
+    name: Option<&str>,
+    enabled: &config::Valuables,
+) -> Option<(&'r Rule, bool)> {
     let mut found: Option<(&Rule, bool)> = None;
     for rule in rules.iter().filter(|r| enabled.enabled(r.category, r.tier)) {
         let Some(uncertain) = check(rule, drop, name) else {
@@ -203,12 +232,7 @@ fn best_of(
             found = Some((rule, uncertain));
         }
     }
-    found.map(|(r, uncertain)| Highlight {
-        tier: r.tier,
-        category: r.category,
-        rule: r.name.clone(),
-        uncertain,
-    })
+    found
 }
 
 /// The tiers the inventory keep list shows, whatever the config says for ground drops.
@@ -231,13 +255,17 @@ pub struct Keep {
     pub count: u32,
 }
 
-/// The keep list of the inventory `items`: every certain S or A match ([`keep_tiers`]) and
-/// uncertain S matches (an uncertain A, e.g. a magic grand charm, is left out), identical ones
-/// merged, best tier first, then by name.
-pub fn keep_list(items: &[ItemDrop]) -> Vec<Keep> {
+/// The keep list of the player's `items` in the inventory: every certain S or A match
+/// ([`keep_tiers`]) and uncertain S matches (an uncertain A, e.g. a magic grand charm, is left
+/// out), identical ones merged, best tier first, then by name. A surplus copy of a keep-one item
+/// ([`surplus`], decided over all places) is left out: it is a give-away.
+pub fn keep_list(items: &[(ItemDrop, Place)]) -> Vec<Keep> {
     let tiers = keep_tiers();
     let mut out: Vec<Keep> = Vec::new();
-    for item in items {
+    for ((item, place), spare) in items.iter().zip(surplus(items)) {
+        if *place != Place::Inventory || spare {
+            continue;
+        }
         let Some(h) = best(item, &tiers) else { continue };
         if h.uncertain && h.tier != Tier::S {
             continue;
@@ -320,7 +348,7 @@ pub struct Spare {
     pub count: u32,
 }
 
-/// What to do with a stored item no S or A rule wants.
+/// What to do with a stored item no S or A rule wants (or a [`surplus`] copy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     /// No rule of any tier matches.
@@ -375,12 +403,53 @@ pub fn verdict(item: &ItemDrop) -> Option<Verdict> {
     }
 }
 
-/// The sell and the give-away lists of the stored `items` (see [`verdict`]), identical ones
-/// merged, each sorted by name, then place.
+/// The unique/set name of `item` if its best rule keeps only one copy per name.
+fn keep_one_name(item: &ItemDrop) -> Option<&'static str> {
+    let name = identity(item)?;
+    let (rule, _) = best_rule(&RULES, item, Some(name), &EVERYTHING)?;
+    (rule.keep == Copies::One).then_some(name)
+}
+
+/// For each of the player's `items`: true if it is a surplus copy of a keep-one item. Of the
+/// copies with one name the first in a stash (personal or shared) is kept, else the first in the
+/// cube, else the first in the inventory; every other copy is surplus.
+fn surplus(items: &[(ItemDrop, Place)]) -> Vec<bool> {
+    let rank = |p: Place| match p {
+        Place::Stash | Place::Shared => 0,
+        Place::Cube => 1,
+        Place::Inventory => 2,
+    };
+    let names: Vec<_> = items.iter().map(|(d, _)| keep_one_name(d)).collect();
+    names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            if name.is_none() {
+                return false;
+            }
+            let kept = names
+                .iter()
+                .zip(items)
+                .enumerate()
+                .filter(|(_, (n, _))| *n == name)
+                .min_by_key(|&(j, (_, (_, p)))| (rank(*p), j))
+                .map(|(j, _)| j);
+            kept != Some(i)
+        })
+        .collect()
+}
+
+/// The sell and the give-away lists of the player's `items` (see [`verdict`]; [`surplus`]
+/// copies are give-aways), identical ones merged, each sorted by name, then place.
 pub fn spare_lists(items: &[(ItemDrop, Place)]) -> (Vec<Spare>, Vec<Spare>) {
     let (mut sell, mut give): (Vec<Spare>, Vec<Spare>) = (Vec::new(), Vec::new());
-    for (item, place) in items {
-        let (Some(v), Some(name)) = (verdict(item), identity(item)) else {
+    for ((item, place), spare) in items.iter().zip(surplus(items)) {
+        let v = if spare {
+            Some(Verdict::GiveAway)
+        } else {
+            verdict(item)
+        };
+        let (Some(v), Some(name)) = (v, identity(item)) else {
             continue;
         };
         let list = match v {
@@ -639,6 +708,7 @@ mod tests {
             drop("cm3", 7, 0, false),                        // unidentified unique grand charm: uncertain S
             identified(drop("hax", 2, 0, false), None),      // no rule
         ];
+        let items: Vec<_> = items.into_iter().map(|d| (d, Place::Inventory)).collect();
         let keep: Vec<_> = keep_list(&items)
             .into_iter()
             .map(|k| (k.name, k.tier, k.category, k.count))
@@ -743,6 +813,120 @@ mod tests {
             ]
         );
         assert_eq!(give, vec![spare("Magefist", Place::Stash, 1)]);
+    }
+
+    /// Sigon's Visor (Great Helm, setitems row 36), identified.
+    fn visor() -> ItemDrop {
+        named("ghm", 5, 36)
+    }
+
+    #[test]
+    fn sigon_rule_matches_identified_pieces_and_keeps_one() {
+        let rule = RULES.iter().find(|r| r.name == "Sigon's Complete Steel");
+        assert_eq!(
+            rule.map(|r| (r.tier, r.category, r.keep)),
+            Some((Tier::A, Category::Twink, Copies::One))
+        );
+        // setitems rows 35..=40: Gage, Visor, Shelter, Sabot, Wrap, Guard.
+        for (code, row) in [
+            ("hgl", 35),
+            ("ghm", 36),
+            ("gth", 37),
+            ("hbt", 38),
+            ("hbl", 39),
+            ("tow", 40),
+        ] {
+            let piece = named(code, 5, row);
+            assert_eq!(
+                best(&piece, &all()).map(|h| (h.tier, h.category, h.uncertain, h.rule)),
+                Some((
+                    Tier::A,
+                    Category::Twink,
+                    false,
+                    "Sigon's Complete Steel".to_owned()
+                )),
+                "{code}"
+            );
+            assert_eq!(verdict(&piece), None, "{code}: an A rule, not spare by itself");
+        }
+        let mut unid = visor();
+        unid.flags = 0;
+        assert_eq!(keep_one_name(&unid), None, "unidentified: name unknown");
+        assert_eq!(
+            keep_one_name(&named("uap", 7, 248)),
+            None,
+            "Shako: every copy counts"
+        );
+    }
+
+    #[test]
+    fn keep_one_in_the_inventory_only_is_kept() {
+        let items = vec![
+            (visor(), Place::Inventory),
+            (named("hgl", 5, 35), Place::Inventory),
+        ];
+        let keep: Vec<_> = keep_list(&items).into_iter().map(|k| (k.name, k.count)).collect();
+        assert_eq!(
+            keep,
+            vec![("Sigon's Gage".to_owned(), 1), ("Sigon's Visor".to_owned(), 1)]
+        );
+        assert_eq!(spare_lists(&items), (vec![], vec![]));
+    }
+
+    #[test]
+    fn keep_one_prefers_the_stashed_copy() {
+        let give = |place, count| Spare {
+            name: "Sigon's Visor".into(),
+            place,
+            count,
+        };
+        // A stashed copy: the inventory one is a give-away, the stashed one isn't listed.
+        let items = vec![(visor(), Place::Inventory), (visor(), Place::Shared)];
+        assert_eq!(keep_list(&items), vec![]);
+        assert_eq!(spare_lists(&items), (vec![], vec![give(Place::Inventory, 1)]));
+        // Cube beats the inventory; two in the inventory with one in the cube: both inventory
+        // ones go.
+        let items = vec![
+            (visor(), Place::Inventory),
+            (visor(), Place::Cube),
+            (visor(), Place::Inventory),
+        ];
+        assert_eq!(keep_list(&items), vec![]);
+        assert_eq!(spare_lists(&items), (vec![], vec![give(Place::Inventory, 2)]));
+        // Two in the stash: one goes; two inventory copies: one stays on the keep line.
+        let items = vec![(visor(), Place::Stash), (visor(), Place::Stash)];
+        assert_eq!(spare_lists(&items), (vec![], vec![give(Place::Stash, 1)]));
+        let items = vec![(visor(), Place::Inventory), (visor(), Place::Inventory)];
+        assert_eq!(
+            keep_list(&items).iter().map(|k| k.count).collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(spare_lists(&items), (vec![], vec![give(Place::Inventory, 1)]));
+    }
+
+    #[test]
+    fn keep_one_leaves_other_rules_alone() {
+        // Two Shakos (S, every copy counts) and two Magefists (B): unchanged by keep-one.
+        let items = vec![
+            (named("uap", 7, 248), Place::Inventory),
+            (named("uap", 7, 248), Place::Stash),
+            (named("uap", 7, 248), Place::Inventory),
+            (named("tgl", 7, 105), Place::Stash),
+            (named("tgl", 7, 105), Place::Stash),
+            (visor(), Place::Stash),
+        ];
+        let keep: Vec<_> = keep_list(&items).into_iter().map(|k| (k.name, k.count)).collect();
+        assert_eq!(keep, vec![("Harlequin Crest".to_owned(), 2)]);
+        let (sell, give) = spare_lists(&items);
+        assert_eq!(sell, vec![]);
+        assert_eq!(
+            give,
+            vec![Spare {
+                name: "Magefist".into(),
+                place: Place::Stash,
+                count: 2
+            }]
+        );
     }
 
     #[test]
