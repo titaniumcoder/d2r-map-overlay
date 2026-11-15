@@ -71,7 +71,7 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   (has `---s` encrypted pages; pointers refer to its base) and a fully readable `rw-s` alias → scan the alias,
   compute addresses from the live base.
 - **Unit hash table**: 6 blocks (unit types 0–5) × 128 slots × 8 bytes, in `.data` (rva 0x1ebe5f0 for build
-  `6ad81202-279c000`). A unit sits in slot `id & 127`; chain next `+0x150` (verified live for players and monsters).
+  `6ad81202-279c000`). A unit sits in slot `id & 127`; chain next **`+0x158`** (verified live 2026-11-15 for items, monsters, objects; the earlier `+0x150` only reached slot heads, so units sharing a slot were missed).
   **D2R re-encrypts code pages after use**, so the code sig `48 03 C7 49 8B 8C C6` (rel32 at sig+7) only works
   sometimes. Lookup order: sig → per-build cache (`~/.cache/d2r-map-overlay/offsets.toml`) → structural search of
   `.data` (type + hash-slot check; needs the player in a game).

@@ -1027,7 +1027,7 @@ mod tests {
     /// Plausible but unmapped.
     const UNMAPPED: u64 = 0xdead_0000;
 
-    const UNIT_SIZE: usize = 0x158;
+    const UNIT_SIZE: usize = 0x160;
 
     /// Writes a zeroed struct of `size` bytes at `base` with the given little-endian fields.
     fn put(mem: &mut FakeMem, base: u64, size: usize, fields: &[(u64, &[u8])]) -> Result<()> {

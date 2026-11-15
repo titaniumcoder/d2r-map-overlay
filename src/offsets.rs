@@ -33,8 +33,11 @@ pub mod unit {
     pub const PATH: u64 = 0x38;
     /// ptr to the unit's `StatList` (verified live on items, 2026-11-15).
     pub const STATS: u64 = 0x88;
-    /// ptr to the next unit in the hash chain (verified for monsters only).
-    pub const NEXT: u64 = 0x150;
+    /// ptr to the next unit in the hash chain (same slot = same `id & 127`). Verified live
+    /// 2026-11-15 for items (43 chained units), monsters (24) and objects (1): every chained unit
+    /// had the slot's type and `id & 127 == slot`. The earlier 0x150 only ever reached slot heads,
+    /// so a unit sharing a slot was invisible (a dropped sapphire never showed).
+    pub const NEXT: u64 = 0x158;
 }
 
 /// `Path` (dynamic path of a moving unit).
