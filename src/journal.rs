@@ -131,6 +131,8 @@ pub enum Event {
     },
     /// A well on first sight at its spot.
     Well { level: u32, txt: u32, x: u32, y: u32 },
+    /// The level was first seen terrorized (Terror Zone) in this game.
+    Terror { level: u32, terrorized: bool },
 }
 
 /// Rooms sharing a preset id: how many and their bounding box (world tiles, max exclusive).
@@ -195,6 +197,8 @@ pub struct Recorder {
     /// (level id, x, y) of shrines and of wells.
     shrines: HashSet<(u32, u32, u32)>,
     wells: HashSet<(u32, u32, u32)>,
+    /// Levels seen terrorized.
+    terror: HashSet<u32>,
 }
 
 impl Recorder {
@@ -218,9 +222,7 @@ impl Recorder {
         let piece = |x: u32, y: u32| piece_at(rooms, x, y);
         let mut out = Vec::new();
 
-        if !rooms.is_empty() && self.levels.insert((level, rooms.len())) {
-            out.push(level_event(level, snap.level.bounds, rooms));
-        }
+        self.level(snap, &mut out);
         for p in &snap.presets {
             if !matches!(
                 p.kind,
@@ -307,6 +309,20 @@ impl Recorder {
         }
         self.objects(snap, &mut out);
         out
+    }
+
+    /// The level event of `snap` (once per room count) and its terror event (once per level).
+    fn level(&mut self, snap: &Snapshot, out: &mut Vec<Event>) {
+        let (level, rooms) = (snap.level.id, &snap.level.rooms);
+        if !rooms.is_empty() && self.levels.insert((level, rooms.len())) {
+            out.push(level_event(level, snap.level.bounds, rooms));
+        }
+        if snap.terrorized && self.terror.insert(level) {
+            out.push(Event::Terror {
+                level,
+                terrorized: true,
+            });
+        }
     }
 
     /// The shrine and well events of `snap`, once per spot.
@@ -569,6 +585,7 @@ mod tests {
             inventory_items: 0,
             inventory_keep: vec![],
             difficulty: None,
+            terrorized: false,
             warnings: vec![],
         }
     }
@@ -593,6 +610,7 @@ mod tests {
             y: 5,
             flags: 0x02,
             name_seed: 0,
+            desecrated: false,
         }
     }
 
@@ -609,6 +627,7 @@ mod tests {
                 Event::Drop { .. } => "drop",
                 Event::Shrine { .. } => "shrine",
                 Event::Well { .. } => "well",
+                Event::Terror { .. } => "terror",
             })
             .collect()
     }
@@ -658,6 +677,28 @@ mod tests {
         );
         s.level.rooms.clear();
         assert_eq!(r.observe(&s), vec![], "no rooms (loading): nothing");
+    }
+
+    #[test]
+    fn terror_once_per_level_and_game() -> Result<()> {
+        let mut r = Recorder::default();
+        let mut s = snap(1, 39);
+        assert_eq!(kinds(&r.observe(&s)), vec!["level"], "not terrorized: no event");
+        s.terrorized = true;
+        let events = r.observe(&s);
+        let terror = events.first().context("terror event")?;
+        assert_eq!(
+            serde_json::to_value(terror)?,
+            json!({"ev": "terror", "level": 39, "terrorized": true})
+        );
+        assert!(r.observe(&s).is_empty(), "once per level");
+        s.level.id = 40;
+        s.level.rooms.clear();
+        assert_eq!(kinds(&r.observe(&s)), vec!["terror"], "another level");
+        let mut next = snap(2, 39);
+        next.terrorized = true;
+        assert_eq!(kinds(&r.observe(&next)), vec!["level", "terror"], "a new game");
+        Ok(())
     }
 
     #[test]

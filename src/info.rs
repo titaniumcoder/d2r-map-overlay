@@ -2,8 +2,9 @@
 //! area's boss, e.g. `Normal · Flayer Dungeon Level 1 · mlvl 22 · champ 24 · unique 25`.
 //!
 //! Monster levels are the table values from `levels_data` (expansion). Terror Zones raise the
-//! actual monster levels; this line doesn't know about them yet (terror-zone detection is a
-//! later item) and always shows the table values.
+//! actual monster levels, so in a terrorized level (`Snapshot::terrorized`) the line shows
+//! `terrorized` in violet instead of the table values and boss level:
+//! `Normal · Moo Moo Farm · terrorized`.
 
 use std::sync::OnceLock;
 
@@ -38,6 +39,9 @@ const KEEP_TEXT: [u8; 4] = [90, 230, 90, 255];
 /// Most keep lines; the last one ends in "+N more" when the list is longer.
 pub const MAX_KEEP_LINES: usize = 3;
 const KEEP_PREFIX: &str = "Keep: ";
+/// The last part of a terrorized level's line, drawn in [`TERROR_TEXT`].
+const TERRORIZED: &str = "terrorized";
+const TERROR_TEXT: [u8; 4] = [190, 120, 255, 255];
 const OUTLINE: [u8; 4] = [0, 0, 0, 220];
 
 pub const fn difficulty_name(d: u8) -> Option<&'static str> {
@@ -56,8 +60,11 @@ pub struct InfoLine {
     pub difficulty: Option<&'static str>,
     /// Area name, or `Level <id>` for an id missing from the table.
     pub area: String,
-    /// The monster-level and boss parts after the area name (empty without a known difficulty).
+    /// The monster-level and boss parts after the area name (empty without a known difficulty),
+    /// or just [`TERRORIZED`] in a terrorized level.
     pub stats: Vec<String>,
+    /// The level is terrorized: the last part is drawn in violet.
+    pub terrorized: bool,
 }
 
 impl InfoLine {
@@ -77,13 +84,16 @@ impl InfoLine {
 
 /// The info line for `level_id`. Without a known difficulty there is no monster-level column to
 /// pick, so only the area name is shown. An area with monster level 0 (towns, the Forgotten
-/// Tower's ground floor) has no monster levels.
-pub fn info_line(level_id: u32, difficulty: Option<u8>) -> InfoLine {
+/// Tower's ground floor) has no monster levels. A `terrorized` level shows [`TERRORIZED`] in
+/// place of monster and boss levels (the table values don't apply in a Terror Zone).
+pub fn info_line(level_id: u32, difficulty: Option<u8>, terrorized: bool) -> InfoLine {
     let difficulty = difficulty.filter(|&d| difficulty_name(d).is_some());
     let level = LEVELS.iter().find(|&&(id, _, _)| id == level_id);
     let area = level.map_or_else(|| format!("Level {level_id}"), |&(_, name, _)| name.to_owned());
     let mut stats = Vec::new();
-    if let Some(d) = difficulty.map(usize::from) {
+    if terrorized {
+        stats.push(TERRORIZED.to_owned());
+    } else if let Some(d) = difficulty.map(usize::from) {
         if let Some(&mlvl) = level.and_then(|(_, _, lvls)| lvls.get(d))
             && mlvl > 0
         {
@@ -101,6 +111,7 @@ pub fn info_line(level_id: u32, difficulty: Option<u8>) -> InfoLine {
         difficulty: difficulty.and_then(difficulty_name),
         area,
         stats,
+        terrorized,
     }
 }
 
@@ -265,7 +276,8 @@ pub fn fit_text(font: &FontVec, line: &InfoLine, max_width: f32) -> String {
 }
 
 /// Draws `line` bottom-left into `pm`, `inset` px above the bottom (room for the keep lines):
-/// white text with a dark 1 px outline. Draws nothing if the canvas is smaller than the band.
+/// white text with a dark 1 px outline, a terrorized line's last part in violet. Draws nothing
+/// if the canvas is smaller than the band.
 pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine, inset: u32) {
     let w = pm.width();
     let Some(h) = pm.height().checked_sub(inset) else {
@@ -280,7 +292,16 @@ pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine, inset: u32) {
     let max_width = f32_px(w.saturating_sub(2 * (PAD + 1)));
     let baseline = f32_px(h - PAD - 1) + scaled.descent();
     let text = fit_text(font, line, max_width);
-    draw_outlined(pm, font, TEXT_PX, TEXT, &text, (x0, baseline), false);
+    // Shortening only cuts the area name, so the fitted text still ends in the violet part.
+    let (head, tail) = match text.strip_suffix(TERRORIZED) {
+        Some(head) if line.terrorized => (head, TERRORIZED),
+        _ => (text.as_str(), ""),
+    };
+    draw_outlined(pm, font, TEXT_PX, TEXT, head, (x0, baseline), false);
+    if !tail.is_empty() {
+        let x = x0 + text_width(font, head);
+        draw_outlined(pm, font, TEXT_PX, TERROR_TEXT, tail, (x, baseline), false);
+    }
 }
 
 /// Draws `c` at `size` px in `colour` with the info line's dark 1 px outline, its ink box centred
@@ -470,15 +491,15 @@ mod tests {
     #[test]
     fn line_with_elite_offsets() {
         assert_eq!(
-            info_line(88, Some(0)).text(),
+            info_line(88, Some(0), false).text(),
             "Normal · Flayer Dungeon Level 1 · mlvl 22 · champ 24 · unique 25"
         );
         assert_eq!(
-            info_line(88, Some(1)).text(),
+            info_line(88, Some(1), false).text(),
             "Nightmare · Flayer Dungeon Level 1 · mlvl 51 · champ 53 · unique 54"
         );
         assert_eq!(
-            info_line(88, Some(2)).text(),
+            info_line(88, Some(2), false).text(),
             "Hell · Flayer Dungeon Level 1 · mlvl 81 · champ 83 · unique 84"
         );
     }
@@ -486,28 +507,28 @@ mod tests {
     #[test]
     fn line_with_boss() {
         assert_eq!(
-            info_line(102, Some(0)).text(),
+            info_line(102, Some(0), false).text(),
             "Normal · Durance of Hate Level 3 · mlvl 25 · champ 27 · unique 28 · Mephisto 26"
         );
         assert_eq!(
-            info_line(102, Some(2)).stats.last().map(String::as_str),
+            info_line(102, Some(2), false).stats.last().map(String::as_str),
             Some("Mephisto 87")
         );
     }
 
     #[test]
     fn unknown_level_has_no_monster_levels() {
-        let line = info_line(9999, Some(1));
+        let line = info_line(9999, Some(1), false);
         assert_eq!(line.text(), "Nightmare · Level 9999");
     }
 
     #[test]
     fn unknown_difficulty_is_left_out() {
         for d in [None, Some(3), Some(200)] {
-            assert_eq!(info_line(88, d).text(), "Flayer Dungeon Level 1", "{d:?}");
+            assert_eq!(info_line(88, d, false).text(), "Flayer Dungeon Level 1", "{d:?}");
         }
         // Mephisto's level depends on the difficulty too.
-        assert_eq!(info_line(102, None).stats, Vec::<String>::new());
+        assert_eq!(info_line(102, None, false).stats, Vec::<String>::new());
     }
 
     #[test]
@@ -516,7 +537,7 @@ mod tests {
             eprintln!("skipped: no info-line font on this machine");
             return;
         };
-        let line = info_line(88, Some(0));
+        let line = info_line(88, Some(0), false);
         let full = line.text();
         assert_eq!(fit_text(font, &line, 10_000.0), full);
         let narrow = text_width(font, &full) - 30.0;
@@ -595,8 +616,26 @@ mod tests {
     }
 
     #[test]
+    fn terrorized_line_drops_table_levels() {
+        // Moo Moo Farm (39).
+        let line = info_line(39, Some(0), true);
+        assert_eq!(line.text(), "Normal · Moo Moo Farm · terrorized");
+        assert!(line.terrorized);
+        assert!(
+            info_line(39, Some(0), false).text().contains("mlvl"),
+            "not terrorized: table values"
+        );
+        // No boss level either (Mephisto's level is a table value too).
+        assert_eq!(
+            info_line(102, Some(2), true).text(),
+            "Hell · Durance of Hate Level 3 · terrorized"
+        );
+        assert_eq!(info_line(39, None, true).text(), "Moo Moo Farm · terrorized");
+    }
+
+    #[test]
     fn zero_mlvl_area_has_no_monster_levels() {
         // Rogue Encampment: monster level 0 in the table.
-        assert_eq!(info_line(1, Some(0)).text(), "Normal · Rogue Encampment");
+        assert_eq!(info_line(1, Some(0), false).text(), "Normal · Rogue Encampment");
     }
 }

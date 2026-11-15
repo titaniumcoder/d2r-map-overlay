@@ -227,6 +227,20 @@ pub mod stat_list {
     pub const STAT_SIZE: u64 = 8;
     /// Stat id `item_numsockets` (itemstatcost.txt).
     pub const NUM_SOCKETS: u16 = 194;
+    /// The unit's state bitfield: [`STATE_FLAG_DWORDS`] little-endian u32, state `n` is bit
+    /// `n % 32` of dword `n / 32` (states.txt rows). Live 2026-11-15 on monsters (Moo Moo Farm,
+    /// terrorized): all 24 cows had [`super::state::DESECRATED`] set here, the player and the
+    /// druid's wolves not. A second copy at +0xB50 also had it (synced or previous; not read).
+    pub const STATE_FLAGS: u64 = 0xB30;
+    pub const STATE_FLAG_DWORDS: usize = 8;
+}
+
+/// State ids (states.txt rows), bits of [`stat_list::STATE_FLAGS`].
+pub mod state {
+    /// `desecrated`: the Terror Zone state of a monster. Live-verified 2026-11-15 on monsters of
+    /// a terrorized area; NOT yet checked that monsters of a normal area have it clear.
+    /// (State 56 `terror` is an unrelated fear effect.)
+    pub const DESECRATED: u32 = 189;
 }
 
 /// The game's items table (one record per items.txt row, weapons then armor then misc; D2R row =

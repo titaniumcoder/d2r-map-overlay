@@ -631,7 +631,7 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         info::draw(
             &mut pm,
             font,
-            &info::info_line(snap.level.id, snap.difficulty),
+            &info::info_line(snap.level.id, snap.difficulty, snap.terrorized),
             inset,
         );
         info::draw_keep(&mut pm, font, &keep);
@@ -801,6 +801,7 @@ mod tests {
             y: 0,
             flags,
             name_seed: 0,
+            desecrated: false,
         }
     }
 
@@ -843,6 +844,7 @@ mod tests {
             inventory_items: 0,
             inventory_keep: vec![],
             difficulty: None,
+            terrorized: false,
             warnings: vec![],
         }
     }
@@ -1462,6 +1464,40 @@ mod tests {
                 assert!(!is_text_white(rgba(&plain, x, y)?), "{x},{y}");
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn terrorized_info_line_has_violet_text() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        // Glyph cores of the violet part (190, 120, 255); anti-aliased edges blend into the
+        // dark outline, so only fairly opaque, blue-heavy pixels with red over green count.
+        let violet = |p: Rgba| p[3] >= 200 && p[2] >= 180 && p[0] >= 120 && p[0].saturating_sub(p[1]) >= 40;
+        let (w, h) = (400, 400);
+        // The info band only: map markers may be violet-ish too.
+        let top = map_height(h, Some(font), 0);
+        let count = |pm: &Pixmap| -> Result<u32> {
+            let mut n = 0;
+            for y in top..pm.height() {
+                for x in 0..pm.width() {
+                    n += u32::from(violet(rgba(pm, x, y)?));
+                }
+            }
+            Ok(n)
+        };
+        let mut snap = fixture()?;
+        snap.difficulty = Some(0);
+        assert_eq!(
+            count(&render_with(&snap, w, h, Some(font))?)?,
+            0,
+            "not terrorized"
+        );
+        snap.terrorized = true;
+        let pm = render_with(&snap, w, h, Some(font))?;
+        assert!(count(&pm)? >= 20, "only {} violet pixels", count(&pm)?);
         Ok(())
     }
 

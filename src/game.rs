@@ -14,7 +14,7 @@ use crate::items::{self, DropKind};
 use crate::objects_data::{SHRINE_OBJECTS, WELL_OBJECTS};
 use crate::offsets::{
     ROOM_TILE_SCALE, act, act_misc, item_data, item_mode, level, level_preset, monster_data, object_data,
-    object_mode, path, player_data, preset, room_tile, room1, room2, stat_list, static_path, unit,
+    object_mode, path, player_data, preset, room_tile, room1, room2, stat_list, state, static_path, unit,
     unit_table,
 };
 use crate::process::ReadMem;
@@ -33,6 +33,9 @@ const MAX_ITEM_STATS: u64 = 512;
 const MAX_LINKS_PER_ROOM: usize = 100;
 /// Warnings kept in the snapshot; the rest are only counted.
 const MAX_WARNINGS: usize = 50;
+/// Living desecrated monsters needed to call a level terrorized. Two rather than one, so a
+/// single misread unit can't flip the info line; the player's summons never carry the state.
+pub const TERROR_MIN_MONSTERS: usize = 2;
 
 /// Shrine types (shrines.txt codes, see `config::SHRINE_NAMES`) of a real shrine; 0 is "none".
 const SHRINE_TYPES: std::ops::RangeInclusive<u8> = 1..=22;
@@ -103,7 +106,27 @@ pub struct Snapshot {
     /// 0 Normal, 1 Nightmare, 2 Hell; `None` if unreadable (and in old fixtures).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<u8>,
+    /// The level is a Terror Zone ([`is_terrorized`] over the live monsters). The session keeps
+    /// it set for the level for the rest of the game, once seen. Left out of the JSON when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub terrorized: bool,
     pub warnings: Vec<String>,
+}
+
+/// True if at least [`TERROR_MIN_MONSTERS`] living monsters carry the desecrated state.
+pub fn is_terrorized(monsters: &[Monster]) -> bool {
+    monsters.iter().filter(|m| m.desecrated && !m.is_dead()).count() >= TERROR_MIN_MONSTERS
+}
+
+/// True if state `state` is set in the state bitfield `flags` (see
+/// [`stat_list::STATE_FLAGS`]: little-endian u32 dwords, bit `n % 32` of dword `n / 32`). A
+/// state past the end of `flags` is clear.
+pub fn has_state(flags: &[u8], state: u32) -> bool {
+    let (dwords, _) = flags.as_chunks::<4>();
+    usize::try_from(state / 32)
+        .ok()
+        .and_then(|i| dwords.get(i))
+        .is_some_and(|&d| u32::from_le_bytes(d) & (1 << (state % 32)) != 0)
 }
 
 /// The difficulty from the raw `ActMisc` value; anything above Hell (2) is unknown.
@@ -226,6 +249,9 @@ pub struct Monster {
     pub y: u16,
     pub flags: u8,
     pub name_seed: u16,
+    /// Carries [`state::DESECRATED`] (a Terror Zone monster). Left out of the JSON when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub desecrated: bool,
 }
 
 /// Monster modes of a dead or dying unit.
@@ -402,6 +428,7 @@ pub fn snapshot(
     let inventory_items = u32::try_from(inventory.len()).unwrap_or(u32::MAX);
     let inventory_keep = valuables::keep_list(&inventory);
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
+    let terrorized = is_terrorized(&monsters);
 
     if r.suppressed > 0 {
         r.warnings.push(format!("... and {} more warnings", r.suppressed));
@@ -421,6 +448,7 @@ pub fn snapshot(
         inventory_items,
         inventory_keep,
         difficulty,
+        terrorized,
         warnings: r.warnings,
     })
 }
@@ -757,7 +785,19 @@ impl<M: ReadMem> Reader<'_, M> {
             y,
             flags: self.u8(md, monster_data::FLAGS)?,
             name_seed: self.u16(md, monster_data::NAME_SEED)?,
+            desecrated: self.has_state(addr, state::DESECRATED),
         })
+    }
+
+    /// True if the unit at `addr` has `state` set in its stat list's state bitfield. Optional
+    /// data like [`Reader::room_preset`]: no stat list or an unreadable bitfield is no state, not
+    /// a warning (it would repeat for every monster).
+    fn has_state(&self, addr: u64, state: u32) -> bool {
+        let Ok(Some(list)) = self.ptr(addr, unit::STATS) else {
+            return false;
+        };
+        self.bytes(list, stat_list::STATE_FLAGS, stat_list::STATE_FLAG_DWORDS * 4)
+            .is_ok_and(|flags| has_state(&flags, state))
     }
 
     /// The shrines, wells and operated consumable quest objects among the loaded object units;
@@ -1420,6 +1460,7 @@ mod tests {
             y,
             flags,
             name_seed,
+            desecrated: false,
         };
         assert_eq!(
             s.monsters,
@@ -1432,6 +1473,115 @@ mod tests {
             "the only item is not on the ground"
         );
         Ok(())
+    }
+
+    /// A state bitfield with the given dwords.
+    fn state_field(dwords: [u32; 8]) -> Vec<u8> {
+        dwords.iter().flat_map(|d| d.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn state_bits() {
+        // State 189: dword 5, mask 0x2000_0000 (the live terrorized cows).
+        let flags = state_field([0, 0, 0, 0, 0, 0x2000_0000, 0, 0]);
+        assert!(has_state(&flags, state::DESECRATED));
+        assert!(!has_state(&flags, 188));
+        assert!(!has_state(&flags, 190));
+        assert!(!has_state(&flags, 29), "same mask in dword 0");
+        assert!(!has_state(&flags, 256), "past the end");
+        // Every other bit set: 189 still clear.
+        let mut others = [u32::MAX; 8];
+        others[5] = !0x2000_0000;
+        let others = state_field(others);
+        assert!(!has_state(&others, state::DESECRATED));
+        assert!(has_state(&others, 188) && has_state(&others, 0) && has_state(&others, 255));
+    }
+
+    /// `M0` → `M1` → `M2`, each with a stat list whose state bitfield has `bits` set (`None`: an
+    /// unmapped stat list).
+    fn world_with_states(bits: [Option<&[u32]>; 3]) -> Result<FakeMem> {
+        let mut m = world()?;
+        for (i, (addr, b)) in (0u64..).zip([M0, M1, M2].into_iter().zip(bits)) {
+            let list = 0xA0_0000 + i * 0x1000;
+            let path = [PATH_M0, PATH_M1, PATH_M2]
+                .get(usize::try_from(i)?)
+                .copied()
+                .context("path")?;
+            let next = [M1, M2, 0].get(usize::try_from(i)?).copied().context("next")?;
+            put(
+                &mut m,
+                addr,
+                UNIT_SIZE,
+                &[
+                    (unit::TYPE, &unit_table::MONSTER.to_le_bytes()),
+                    (unit::TXT, &40u32.to_le_bytes()),
+                    (unit::ID, &(u32::try_from(addr >> 12)?).to_le_bytes()),
+                    (unit::MODE, &1u32.to_le_bytes()),
+                    (unit::UNIT_DATA, &MD0.to_le_bytes()),
+                    (unit::PATH, &path.to_le_bytes()),
+                    (
+                        unit::STATS,
+                        &(if b.is_some() { list } else { UNMAPPED }).to_le_bytes(),
+                    ),
+                    (unit::NEXT, &next.to_le_bytes()),
+                ],
+            )?;
+            let mut dwords = [0u32; 8];
+            for &bit in b.unwrap_or_default() {
+                *dwords
+                    .get_mut(usize::try_from(bit / 32)?)
+                    .context("bit in field")? |= 1 << (bit % 32);
+            }
+            put(
+                &mut m,
+                list,
+                0xB60,
+                &[(stat_list::STATE_FLAGS, &state_field(dwords))],
+            )?;
+        }
+        unit_path(&mut m, PATH_M2, 70, 120, ROOM1_0)?;
+        Ok(m)
+    }
+
+    #[test]
+    fn monster_desecrated_state() -> Result<()> {
+        let m = world_with_states([Some(&[189]), Some(&[56, 188, 190]), None])?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        let flags: Vec<_> = s.monsters.iter().map(|m| (m.addr.0, m.desecrated)).collect();
+        assert_eq!(flags, vec![(M0, true), (M1, false), (M2, false)]);
+        assert!(
+            !s.warnings.iter().any(|w| w.starts_with("monster")),
+            "an unreadable state field is no warning: {:?}",
+            s.warnings
+        );
+        assert!(!s.terrorized, "one desecrated monster is not enough");
+
+        let m = world_with_states([Some(&[189]), Some(&[3, 189]), None])?;
+        assert!(snapshot(&m, TABLE, None, None)?.terrorized);
+        Ok(())
+    }
+
+    #[test]
+    fn terrorized_needs_two_living_desecrated_monsters() {
+        let mon = |desecrated, mode| Monster {
+            addr: Addr(0),
+            id: 1,
+            txt: 1,
+            mode,
+            x: 0,
+            y: 0,
+            flags: 0,
+            name_seed: 0,
+            desecrated,
+        };
+        assert!(!is_terrorized(&[]));
+        assert!(!is_terrorized(&[mon(true, 1), mon(false, 1)]));
+        assert!(is_terrorized(&[mon(true, 1), mon(true, 2)]));
+        assert!(
+            !is_terrorized(&[mon(true, 1), mon(true, 0), mon(true, 12)]),
+            "dead ones don't count"
+        );
+        assert!(!is_terrorized(&[mon(false, 1), mon(false, 1), mon(false, 1)]));
     }
 
     const ITEMS: u64 = 0x90_0000;

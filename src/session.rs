@@ -4,7 +4,8 @@
 //! **Memory**: every preset (raw, before filtering), shrine and well seen is remembered per
 //! level for the game and merged back into later snapshots of that level, so the map keeps what
 //! was explored even after D2R unloads it. The filters below then run over live and remembered
-//! presets alike. A shrine keeps its latest `used`. Monsters, items and the player are live only.
+//! presets alike. A shrine keeps its latest `used`. Monsters, items and the player are live only;
+//! a level seen terrorized (Terror Zone) stays so for the current visit (zones rotate hourly).
 //! [`GameState`] is that per-game part; `game_file` keeps it on disk across overlay restarts.
 //!
 //! **Superunique presets**: a monster preset is drawn iff its txt id is in
@@ -101,6 +102,11 @@ pub struct GameState {
     /// Every well seen per level id.
     #[serde(default)]
     wells: HashMap<u32, Vec<Well>>,
+    /// Levels seen terrorized in this game ([`Snapshot::terrorized`]). Kept so the info line
+    /// doesn't drop back to the table monster levels once the desecrated monsters near the
+    /// player are dead or unloaded.
+    #[serde(default)]
+    terrorized: HashSet<u32>,
 }
 
 impl GameState {
@@ -246,7 +252,8 @@ impl Session {
     /// and wells of the level are added, then monster presets are kept only
     /// if they are a superunique's (see [`superunique`]) or a quest monster's (see
     /// [`quest_monster`]) not killed in this game, and consumable
-    /// quest object presets only if not seen operated in this game.
+    /// quest object presets only if not seen operated in this game. A level once seen
+    /// terrorized stays [`Snapshot::terrorized`] until the player leaves it (re-detected on the next visit).
     pub fn apply(&mut self, snap: &mut Snapshot) -> Update {
         let mut update = Update {
             new_game: self.enter_game(snap.player.id),
@@ -254,6 +261,15 @@ impl Session {
         };
         self.changed |= self.state.remember(snap);
         let level = snap.level.id;
+        // Terror Zones rotate hourly: the latch holds for one visit, and a new visit re-detects.
+        if self.last_level != Some(level) {
+            self.changed |= self.state.terrorized.remove(&level);
+        }
+        if snap.terrorized {
+            self.changed |= self.state.terrorized.insert(level);
+        } else {
+            snap.terrorized = self.state.terrorized.contains(&level);
+        }
         let level_changed = self.last_level.replace(level).is_some_and(|old| old != level);
         let here = (snap.player.x, snap.player.y);
         if (level_changed || update.new_game) && !self.state.arrivals.contains_key(&level) {
@@ -402,6 +418,7 @@ mod tests {
             y,
             flags,
             name_seed: 0,
+            desecrated: false,
         }
     }
 
@@ -444,6 +461,7 @@ mod tests {
             inventory_items: 0,
             inventory_keep: vec![],
             difficulty: None,
+            terrorized: false,
             warnings: vec![],
         }
     }
@@ -462,6 +480,31 @@ mod tests {
         assert!(!s.apply(&mut snap(7, 0xb000, 40)).new_game, "act travel");
         assert!(s.apply(&mut snap(8, 0xb000, 29)).new_game, "new player id");
         assert!(!s.apply(&mut snap(8, 0xb000, 29)).new_game);
+    }
+
+    #[test]
+    fn terrorized_level_stays_terrorized_for_the_visit() {
+        let mut s = Session::default();
+        let mut a = snap(7, 0xa000, 39);
+        s.apply(&mut a);
+        assert!(!a.terrorized);
+        a.terrorized = true;
+        s.apply(&mut a);
+        assert!(a.terrorized);
+        // The desecrated monsters are dead or unloaded: still terrorized.
+        let mut later = snap(7, 0xa000, 39);
+        s.apply(&mut later);
+        assert!(later.terrorized, "kept for the level");
+        let mut other = snap(7, 0xa000, 40);
+        s.apply(&mut other);
+        assert!(!other.terrorized, "per level");
+        // Back in 39: zones rotate hourly, so the old latch is dropped until re-detected.
+        let mut revisit = snap(7, 0xa000, 39);
+        s.apply(&mut revisit);
+        assert!(!revisit.terrorized, "re-detected per visit");
+        let mut next_game = snap(8, 0xa000, 39);
+        s.apply(&mut next_game);
+        assert!(!next_game.terrorized, "per game");
     }
 
     #[test]

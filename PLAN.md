@@ -153,6 +153,13 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   mode 0 its star is hidden for the rest of the game. Drawn: unused shrines whose type is in config `[shrines] show` (user list: refilling,
   skill, stamina, experience, gem, monster), all wells. Hellforge (376) is a quest object.
 
+## Terror Zones (2026-11-15)
+- states.txt 189 = "desecrated" = Terror Zone state. Unit stat list (unit +0x88) holds a 256-bit state field at
+  `+0xB30` (8 × u32; bit n in dword n/32). Live in the terrorized Moo Moo Farm: all 24 cows had bit 189, the player
+  and the druid's wolves didn't. A level counts as terrorized when ≥ 2 living monsters carry it; the flag holds for
+  the current visit (zones rotate hourly). Info line: "terrorized" in violet, table monster levels hidden.
+  Still to check: monsters in a non-terrorized area have the bit clear.
+
 ## Research journal
 Live mode appends deduped events to `~/.local/share/d2r-map-overlay/journal/YYYY-MM-DD.jsonl` (UTC date):
 level (room pieces), arrival, marker (+ piece), link, elite monster, killed, drop. Files are never rotated;

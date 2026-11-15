@@ -130,6 +130,7 @@ mod tests {
             inventory_items: 0,
             inventory_keep: vec![],
             difficulty: None,
+            terrorized: false,
             warnings: vec![],
         }
     }
