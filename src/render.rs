@@ -76,7 +76,7 @@ pub enum LandmarkStyle {
 ///   Malus; confirmed for 204 and 203 (Smith preset 771 and malus object 108 inside it, two games
 ///   2026-11-15).
 /// - Lut Gholein sewers (47–49): lvlprest "Sewer Radament's Lair W/E/S/N" (341–344) in level 3 (49;
-///   341 and 344 confirmed in game 2026-11-15, Radament (txt 229) standing in 344); stairs pieces 338 (level 1, link to 48) and 337 (level 2, link to 49) confirmed and "Sewer Next W/E/S/N" (337–340, stairs down) in levels 1–2.
+///   341, 343 and 344 confirmed in game 2026-11-15, Radament (txt 229) standing in 344); stairs pieces 338 (level 1, link to 48) and 337 (level 2, link to 49) confirmed and "Sewer Next W/E/S/N" (337–340, stairs down) in levels 1–2.
 /// - Maggot Lair (62–64): lvlprest "Lair Next W/E/S/N" (501–504) is the stairs down in levels 1–2
 ///   (drawn as stairs at once: the "Next" = stairs-down naming is confirmed for act 1 caves and the
 ///   sewers); "Lair Tight Spot S" (509, MagQueen.ds1) in level 3 is Coldworm's chamber with the staff
@@ -116,8 +116,15 @@ pub const LANDMARKS: &[LandmarkRule] = &[
     },
     LandmarkRule {
         level_ids: 49..=49,
-        preset_ids: 342..=343,
-        label: "radament's lair (E/S)",
+        preset_ids: 343..=343,
+        label: "radament's lair (S)",
+        confirmed: true,
+        style: LandmarkStyle::Star,
+    },
+    LandmarkRule {
+        level_ids: 49..=49,
+        preset_ids: 342..=342,
+        label: "radament's lair (E)",
         confirmed: false,
         style: LandmarkStyle::Star,
     },
@@ -2968,7 +2975,7 @@ mod tests {
         assert_eq!(
             unconfirmed,
             vec![
-                "radament's lair (E/S)",
+                "radament's lair (E)",
                 "sewer stairs down (S/N)",
                 "smith (forge W)",
                 "smith (forge N)",
