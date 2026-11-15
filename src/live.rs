@@ -172,7 +172,13 @@ fn follow_game(
                     journal.arrival(&snap, arrival);
                 }
                 if update.new_game {
-                    eprintln!("new game (player id changed): remembered markers and kills cleared");
+                    eprintln!(
+                        "new game (player id changed): remembered markers and kills cleared; \
+                         player {:?} chosen by {} among {} candidates",
+                        snap.player.name,
+                        snap.player_chosen_by.label(),
+                        snap.player_candidates.len()
+                    );
                 }
                 saver.tick(&mut session, Instant::now());
                 if let Some(msg) = tick_msg(&mut dedup, snap, (w, h), info::font()) {

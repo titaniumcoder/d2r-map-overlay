@@ -195,6 +195,13 @@ pub mod item_data {
     pub const QUALITY_SUPERIOR: u32 = 3;
     pub const QUALITY_MAGIC: u32 = 4;
     pub const QUALITY_RARE: u32 = 6;
+    /// u32 unit id of the player owning the item. Live 2026-11-15: every stash (page 4) and
+    /// inventory (page 0) item carried the local player's unit id; ground items carry
+    /// [`NO_OWNER`]. Only the local client's own stash is in memory, so the stash owner is the
+    /// local player.
+    pub const OWNER: u64 = 0x0C;
+    /// `OWNER` of an item nobody owns (live: ground items).
+    pub const NO_OWNER: u32 = 0xFFFF_FFFF;
     /// u32 item flags. Live: `0x0080_0000` on unidentified magic items. The bit values below are
     /// classic D2 and still to verify in D2R.
     pub const FLAGS: u64 = 0x18;
@@ -214,6 +221,7 @@ pub mod item_data {
     /// over 74 items.
     pub const PAGE: u64 = 0x55;
     pub const PAGE_INVENTORY: u8 = 0;
+    pub const PAGE_STASH: u8 = 4;
     /// Bytes of `ItemData` copied into the journal's drop event for checking the offsets above.
     pub const HEAD_LEN: usize = 0x50;
 }

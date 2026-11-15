@@ -37,6 +37,9 @@ const MAX_WARNINGS: usize = 50;
 /// single misread unit can't flip the info line; the player's summons never carry the state.
 pub const TERROR_MIN_MONSTERS: usize = 2;
 
+/// Agreeing owner ids (`item_data::OWNER`) after which a storage page stops voting.
+const OWNER_VOTES: u32 = 8;
+
 /// Shrine types (shrines.txt codes, see `config::SHRINE_NAMES`) of a real shrine; 0 is "none".
 const SHRINE_TYPES: std::ops::RangeInclusive<u8> = 1..=22;
 
@@ -73,6 +76,10 @@ impl<'de> Deserialize<'de> for Addr {
 pub struct Snapshot {
     pub player: Player,
     pub player_candidates: Vec<Candidate>,
+    /// Which rule picked `player` among `player_candidates`. Left out of the JSON when it is the
+    /// default (first candidate), so older dumps round-trip.
+    #[serde(default, skip_serializing_if = "ChosenBy::is_first_candidate")]
+    pub player_chosen_by: ChosenBy,
     pub level: Level,
     pub presets: Vec<Preset>,
     pub room_links: Vec<RoomLink>,
@@ -157,7 +164,116 @@ pub struct Player {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Candidate {
     pub addr: Addr,
+    /// Unit id; 0 in older dumps (and then left out of the JSON).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub id: u32,
     pub name: String,
+}
+
+/// How [`snapshot`] picked the player among the candidates. In a group game the other players'
+/// units are candidates too; the owner of the stash items is the local player.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChosenBy {
+    /// `--player NAME`.
+    Name,
+    /// The majority owner id of the stash items.
+    StashOwner,
+    /// No stash items (or none of a candidate): the majority owner id of the inventory items.
+    InventoryOwner,
+    /// No owner vote matched: the first candidate in unit-table order.
+    #[default]
+    FirstCandidate,
+}
+
+/// For `skip_serializing_if` (serde passes a reference).
+#[allow(clippy::trivially_copy_pass_by_ref)] // reason: serde's skip_serializing_if signature
+const fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+impl ChosenBy {
+    #[allow(clippy::trivially_copy_pass_by_ref)] // reason: serde's skip_serializing_if signature
+    const fn is_first_candidate(&self) -> bool {
+        matches!(self, Self::FirstCandidate)
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::StashOwner => "stash owner",
+            Self::InventoryOwner => "inventory owner",
+            Self::FirstCandidate => "first candidate",
+        }
+    }
+}
+
+/// Owner unit ids of stored items on one storage page, counted per id.
+#[derive(Debug, Default)]
+struct OwnerVotes(Vec<(u32, u32)>);
+
+impl OwnerVotes {
+    /// Counts `owner`; [`item_data::NO_OWNER`] and 0 (unset or unreadable-looking) don't vote.
+    fn add(&mut self, owner: u32) {
+        if owner == item_data::NO_OWNER || owner == 0 {
+            return;
+        }
+        match self.0.iter_mut().find(|(id, _)| *id == owner) {
+            Some((_, n)) => *n += 1,
+            None => self.0.push((owner, 1)),
+        }
+    }
+
+    /// True once one id has [`OWNER_VOTES`] votes: more items can't change the answer much.
+    fn done(&self) -> bool {
+        self.0.iter().any(|&(_, n)| n >= OWNER_VOTES)
+    }
+
+    /// The id with the most votes (the first seen on a tie); `None` without votes.
+    fn winner(&self) -> Option<u32> {
+        let mut best: Option<(u32, u32)> = None;
+        for &(id, n) in &self.0 {
+            if best.is_none_or(|(_, b)| n > b) {
+                best = Some((id, n));
+            }
+        }
+        best.map(|(id, _)| id)
+    }
+}
+
+/// What one walk over the item units found.
+#[derive(Debug, Default)]
+struct ItemScan {
+    /// Item units on the ground (shown or not).
+    ground: u32,
+    /// Ground items worth showing.
+    drops: Vec<ItemDrop>,
+    /// All items on the inventory page.
+    inventory: Vec<ItemDrop>,
+    stash_owners: OwnerVotes,
+    inventory_owners: OwnerVotes,
+}
+
+/// The candidate to use as the player and the rule that picked it; `None` if no candidate fits
+/// (none named `player_name`, or no candidates at all).
+fn choose_player<'a>(
+    candidates: &'a [Candidate],
+    player_name: Option<&str>,
+    scan: &ItemScan,
+) -> Option<(&'a Candidate, ChosenBy)> {
+    if let Some(name) = player_name {
+        return candidates
+            .iter()
+            .find(|c| c.name == name)
+            .map(|c| (c, ChosenBy::Name));
+    }
+    let by_owner = |votes: &OwnerVotes, by: ChosenBy| {
+        let owner = votes.winner()?;
+        candidates.iter().find(|c| c.id == owner).map(|c| (c, by))
+    };
+    by_owner(&scan.stash_owners, ChosenBy::StashOwner)
+        .or_else(|| by_owner(&scan.inventory_owners, ChosenBy::InventoryOwner))
+        .or_else(|| candidates.first().map(|c| (c, ChosenBy::FirstCandidate)))
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -364,10 +480,9 @@ pub fn snapshot(
             Err(e) => r.warn(format!("player unit {addr:#x}: {e:#}")),
         }
     }
-    let Some(chosen) = candidates
-        .iter()
-        .find(|c| player_name.is_none_or(|n| c.name == n))
-    else {
+    // Items first: their owner ids tell which candidate is the local player.
+    let scan = r.items(unit_table, items_table);
+    let Some((chosen, chosen_by)) = choose_player(&candidates, player_name, &scan) else {
         let names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
         match player_name {
             Some(name) => bail!("no live player named {name:?} (candidates: {names:?})"),
@@ -423,7 +538,12 @@ pub fn snapshot(
             Err(e) => r.warn(format!("monster {addr:#x}: {e:#}")),
         }
     }
-    let (ground_items, drops, inventory) = r.items(unit_table, items_table);
+    let ItemScan {
+        ground: ground_items,
+        drops,
+        inventory,
+        ..
+    } = scan;
     let (shrines, wells, operated_objects) = r.objects(unit_table);
     let inventory_items = u32::try_from(inventory.len()).unwrap_or(u32::MAX);
     let inventory_keep = valuables::keep_list(&inventory);
@@ -436,6 +556,7 @@ pub fn snapshot(
     Ok(Snapshot {
         player,
         player_candidates: candidates,
+        player_chosen_by: chosen_by,
         level,
         presets,
         room_links,
@@ -665,6 +786,7 @@ impl<M: ReadMem> Reader<'_, M> {
         }
         Ok(Some(Candidate {
             addr: Addr(addr),
+            id: head.id,
             name: self.player_name(head.unit_data)?,
         }))
     }
@@ -866,12 +988,11 @@ impl<M: ReadMem> Reader<'_, M> {
         )))
     }
 
-    /// The number of items on the ground, those worth showing, and the items in the player's
-    /// inventory (all of them, position 0,0; the keep list picks from them).
-    fn items(&mut self, unit_table: u64, items_table: Option<u64>) -> (u32, Vec<ItemDrop>, Vec<ItemDrop>) {
-        let mut ground = 0u32;
-        let mut drops = Vec::new();
-        let mut inventory = Vec::new();
+    /// The items on the ground, those worth showing, the items in the inventory (all of them,
+    /// position 0,0; the keep list picks from them), and the owner votes of the stash and
+    /// inventory items.
+    fn items(&mut self, unit_table: u64, items_table: Option<u64>) -> ItemScan {
+        let mut scan = ItemScan::default();
         for addr in self.units(unit_table, unit_table::ITEM) {
             let head = match self.unit_head(addr, unit_table::ITEM) {
                 Ok(head) => head,
@@ -881,34 +1002,48 @@ impl<M: ReadMem> Reader<'_, M> {
                 }
             };
             // Stash, cube, equipped, cursor and belt items are units too: only the ground and
-            // the inventory count.
+            // the inventory count, and the stash and inventory vote on the owner.
+            let page = if head.mode == item_mode::STORED {
+                self.page(&head)
+            } else {
+                None
+            };
+            let votes = match page {
+                Some(item_data::PAGE_STASH) => Some(&mut scan.stash_owners),
+                Some(item_data::PAGE_INVENTORY) => Some(&mut scan.inventory_owners),
+                _ => None,
+            };
+            if let Some(votes) = votes.filter(|v| !v.done()) {
+                // An unreadable owner just doesn't vote.
+                if let Some(owner) = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok()) {
+                    votes.add(owner);
+                }
+            }
             let found = match head.mode {
                 item_mode::ON_GROUND => {
-                    ground = ground.saturating_add(1);
+                    scan.ground = scan.ground.saturating_add(1);
                     self.item_drop(addr, &head, items_table)
                         .map(|d| d.map(|d| (d, true)))
                 }
-                item_mode::STORED if self.in_inventory(&head) => self
+                item_mode::STORED if page == Some(item_data::PAGE_INVENTORY) => self
                     .item_fields(addr, &head, items_table)
                     .map(|d| Some((d, false))),
                 _ => Ok(None),
             };
             match found {
-                Ok(Some((d, true))) => drops.push(d),
-                Ok(Some((d, false))) => inventory.push(d),
+                Ok(Some((d, true))) => scan.drops.push(d),
+                Ok(Some((d, false))) => scan.inventory.push(d),
                 Ok(None) => {}
                 Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
             }
         }
-        (ground, drops, inventory)
+        scan
     }
 
-    /// True for a stored item on the inventory page (not stash or cube). An unreadable page is
-    /// not the inventory.
-    fn in_inventory(&self, head: &UnitHead) -> bool {
+    /// Storage page of a stored item (`item_data::PAGE`); `None` if unreadable.
+    fn page(&self, head: &UnitHead) -> Option<u8> {
         head.unit_data
             .and_then(|data| self.u8(data, item_data::PAGE).ok())
-            == Some(item_data::PAGE_INVENTORY)
     }
 
     /// The fields of item `head` (unit at `addr`) the valuables rules look at; no position.
@@ -1307,15 +1442,150 @@ mod tests {
             vec![
                 Candidate {
                     addr: Addr(P_ALICE),
+                    id: ALICE_ID,
                     name: "Alice".into()
                 },
                 Candidate {
                     addr: Addr(P_BOB),
+                    id: BOB_ID,
                     name: "Bob".into()
                 },
             ]
         );
+        assert_eq!(s.player_chosen_by, ChosenBy::FirstCandidate, "no items to vote");
         Ok(())
+    }
+
+    /// Unit ids of Alice and Bob (the fixture's id is the address >> 12).
+    const ALICE_ID: u32 = 0x201;
+    const BOB_ID: u32 = 0x202;
+
+    /// A normal item in `mode` on storage `page`, owned by unit id `owner` (`item_data::OWNER`).
+    fn owned_item(
+        mem: &mut FakeMem,
+        addr: u64,
+        (mode, page): (u32, u8),
+        owner: u32,
+        next: u64,
+    ) -> Result<()> {
+        item(mem, addr, (1, mode, 2), (30, 31), next)?;
+        put(
+            mem,
+            addr + 0x200,
+            0x60,
+            &[
+                (item_data::QUALITY, &2u32.to_le_bytes()),
+                (item_data::OWNER, &owner.to_le_bytes()),
+                (item_data::PAGE, &[page]),
+            ],
+        )
+    }
+
+    /// [`world`] with the item chain I0 → `items` (mode/page, owner), in order.
+    fn world_with_owned(items: &[((u32, u8), u32)]) -> Result<FakeMem> {
+        let mut m = world()?;
+        let addrs = [I1, I2, I3, I4, I5, I6];
+        let first = if items.is_empty() { 0 } else { I1 };
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, first)?;
+        for (i, &(place, owner)) in items.iter().enumerate() {
+            let addr = *addrs.get(i).context("at most 6 owned items")?;
+            let next = if i + 1 < items.len() {
+                *addrs.get(i + 1).context("at most 6 owned items")?
+            } else {
+                0
+            };
+            owned_item(&mut m, addr, place, owner, next)?;
+        }
+        Ok(m)
+    }
+
+    const STASH: (u32, u8) = (item_mode::STORED, item_data::PAGE_STASH);
+    const INVENTORY: (u32, u8) = (item_mode::STORED, item_data::PAGE_INVENTORY);
+    const GROUND: (u32, u8) = (item_mode::ON_GROUND, 255);
+
+    #[test]
+    fn stash_owner_picks_the_local_player() -> Result<()> {
+        // Stash: Bob, Bob, Alice (majority Bob); the inventory says Alice but the stash wins.
+        let m = world_with_owned(&[
+            (STASH, BOB_ID),
+            (INVENTORY, ALICE_ID),
+            (STASH, ALICE_ID),
+            (STASH, BOB_ID),
+        ])?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        assert_eq!(
+            (s.player.addr, s.player_chosen_by),
+            (Addr(P_BOB), ChosenBy::StashOwner)
+        );
+        assert_eq!(s.player.name, "Bob");
+        assert_eq!(
+            s.inventory_items, 1,
+            "the owner vote doesn't change the inventory scan"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inventory_owner_without_stash_items() -> Result<()> {
+        let m = world_with_owned(&[(INVENTORY, BOB_ID), (INVENTORY, BOB_ID)])?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        assert_eq!(
+            (s.player.addr, s.player_chosen_by),
+            (Addr(P_BOB), ChosenBy::InventoryOwner)
+        );
+        // A stash owner that is no candidate falls through to the inventory vote.
+        let m = world_with_owned(&[(STASH, 0x999), (INVENTORY, BOB_ID)])?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        assert_eq!(
+            (s.player.addr, s.player_chosen_by),
+            (Addr(P_BOB), ChosenBy::InventoryOwner)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn player_name_beats_the_owner_vote() -> Result<()> {
+        let m = world_with_owned(&[(STASH, BOB_ID), (INVENTORY, BOB_ID)])?;
+        let s = snapshot(&m, TABLE, None, Some("Alice"))?;
+        assert_eq!(
+            (s.player.addr, s.player_chosen_by),
+            (Addr(P_ALICE), ChosenBy::Name)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ground_and_unowned_items_dont_vote() -> Result<()> {
+        // Ground items "owned" by Bob (live they carry NO_OWNER) and stash items without owner.
+        let m = world_with_owned(&[
+            (GROUND, BOB_ID),
+            (GROUND, BOB_ID),
+            (STASH, item_data::NO_OWNER),
+            (STASH, item_data::NO_OWNER),
+            (STASH, 0),
+        ])?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        assert_eq!(
+            (s.player.addr, s.player_chosen_by),
+            (Addr(P_ALICE), ChosenBy::FirstCandidate)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn owner_votes_majority_and_cap() {
+        let mut v = OwnerVotes::default();
+        assert_eq!(v.winner(), None);
+        v.add(7);
+        v.add(9);
+        assert_eq!(v.winner(), Some(7), "a tie goes to the first seen");
+        v.add(9);
+        assert_eq!(v.winner(), Some(9));
+        for _ in 0..6 {
+            assert!(!v.done());
+            v.add(9);
+        }
+        assert!(v.done(), "8 agreeing votes end the vote");
     }
 
     #[test]

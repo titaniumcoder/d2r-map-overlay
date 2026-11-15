@@ -445,6 +445,7 @@ mod tests {
                 act: Some(Addr(act)),
             },
             player_candidates: vec![],
+            player_chosen_by: crate::game::ChosenBy::FirstCandidate,
             level: Level {
                 id: level,
                 bounds: None,
