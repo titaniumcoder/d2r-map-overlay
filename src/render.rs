@@ -65,7 +65,8 @@ pub enum LandmarkStyle {
 /// - Stony Field (4): lvlprest 160 "Act 1 - Cairn Stones", the stone circle; the five stones and the
 ///   portal stone (objects 17–22) lay inside it (live 2026-11-15).
 /// - Barracks (28): lvlprest "Barracks Forge W/E/S/N" (202–205) holds the Smith and the Horadric
-///   Malus; confirmed for 204 (Smith preset 771 and malus object 108 both inside it, 2026-11-15).
+///   Malus; confirmed for 204 and 203 (Smith preset 771 and malus object 108 inside it, two games
+///   2026-11-15).
 /// - Lut Gholein sewers (47–49): lvlprest "Sewer Radament's Lair W/E/S/N" (341–344) in level 3 (49;
 ///   341 confirmed in game 2026-11-15) and "Sewer Next W/E/S/N" (337–340, stairs down) in levels 1–2.
 /// - Dark Wood (5): lvlprest 161 "Act 1 - Inifus" (funktree.ds1), the Tree of Inifuss (confirmed in
@@ -96,15 +97,15 @@ pub const LANDMARKS: &[LandmarkRule] = &[
     },
     LandmarkRule {
         level_ids: 28..=28,
-        preset_ids: 204..=204,
+        preset_ids: 203..=204,
         label: "smith (forge)",
         confirmed: true,
         style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 28..=28,
-        preset_ids: 202..=203,
-        label: "smith (forge W/E)",
+        preset_ids: 202..=202,
+        label: "smith (forge W)",
         confirmed: false,
         style: LandmarkStyle::Star,
     },
@@ -2612,7 +2613,7 @@ mod tests {
             vec![
                 "radament's lair (E/S/N)",
                 "sewer stairs down",
-                "smith (forge W/E)",
+                "smith (forge W)",
                 "smith (forge N)",
                 "cave exit to the next area",
                 "cave stairs down",
