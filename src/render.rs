@@ -46,6 +46,8 @@ pub enum LandmarkStyle {
     /// A gold worm ([`Marker::Worm`]): Coldworm's chamber, the most hated spot in act 2 (user's
     /// choice, 2026-11-15).
     Worm,
+    /// A gold chest ([`Marker::Chest`]): a fake Tal Rasha tomb's treasure room.
+    Chest,
 }
 
 /// Landmark rules.
@@ -56,7 +58,7 @@ pub enum LandmarkStyle {
 ///   (460–463), only ever placed in the real tomb. Confirmed: 462 in tomb 72 (orifice object 152
 ///   inside it) and 460 in tomb 69 (user stood on the orifice, Nightmare 2026-11-16); 461 and 463
 ///   are unconfirmed. A fake tomb's chest chamber is "Tomb Chest" (472–475;
-///   473 seen in tomb 71). The 462 chamber spans 4 Room2 cells. (An earlier level+390 guess was
+///   473 seen in tombs 71 and 68, drawn as a gold chest square since 2026-11-16). The 462 chamber spans 4 Room2 cells. (An earlier level+390 guess was
 ///   wrong: 456–459 are the Halls of the Dead cube pieces.)
 /// - Halls of the Dead Level 3 (60): lvlprest "Tomb Cube W/E/S/N" (456–459) holds the Horadric Cube
 ///   chest (object 354) and Bloodwitch's spawn. Confirmed: 459 (chest inside it, 2026-11-15).
@@ -233,6 +235,27 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "orifice",
         confirmed: true,
         style: LandmarkStyle::Star,
+    },
+    LandmarkRule {
+        level_ids: 66..=72,
+        preset_ids: 473..=473,
+        label: "tomb treasure (E)",
+        confirmed: true,
+        style: LandmarkStyle::Chest,
+    },
+    LandmarkRule {
+        level_ids: 66..=72,
+        preset_ids: 472..=472,
+        label: "tomb treasure (W)",
+        confirmed: false,
+        style: LandmarkStyle::Chest,
+    },
+    LandmarkRule {
+        level_ids: 66..=72,
+        preset_ids: 474..=475,
+        label: "tomb treasure (S/N)",
+        confirmed: false,
+        style: LandmarkStyle::Chest,
     },
     LandmarkRule {
         level_ids: 60..=60,
@@ -472,6 +495,8 @@ pub enum Marker {
     Landmark(&'static str),
     /// A confirmed [`LandmarkStyle::Worm`] landmark: a wavy gold worm with a head, landmark size.
     Worm,
+    /// A confirmed [`LandmarkStyle::Chest`] landmark: a gold square, the treasure room's chest.
+    Chest,
     /// A quest object preset (see [`QUEST_OBJECTS`]) or quest monster preset (see
     /// [`QUEST_MONSTERS`]), with its label: a small gold star without
     /// halo, drawn above the landmark star so both show when they overlap.
@@ -521,6 +546,7 @@ impl Marker {
             Self::Suspected(_) => (SUSPECT_TEXT, 7.0, Shape::Circle),
             Self::Landmark(_) => (LANDMARK_GOLD, 9.0, Shape::Star),
             Self::Worm => (LANDMARK_GOLD, 9.0, Shape::Worm),
+            Self::Chest => (LANDMARK_GOLD, 5.0, Shape::Square),
             Self::QuestObject(_) => (LANDMARK_GOLD, 6.0, Shape::Star),
             Self::Well => (WELL_CYAN, 4.5, Shape::Circle),
             Self::Shrine(code) => (shrine_colour(code), 4.0, Shape::Circle),
@@ -740,6 +766,7 @@ pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f
                 (true, LandmarkStyle::Star) => Marker::Landmark(rule.label),
                 (true, LandmarkStyle::StairsDown) => Marker::StairsDown,
                 (true, LandmarkStyle::Worm) => Marker::Worm,
+                (true, LandmarkStyle::Chest) => Marker::Chest,
             };
             Some((marker, x, y))
         })
@@ -2829,10 +2856,10 @@ mod tests {
             },
         ]);
         assert_eq!(landmarks(&snap, LANDMARKS), vec![(orifice, 60.0, 60.0)]);
-        // Fake tomb 71: its chest chamber 473 is no landmark.
+        // Fake tomb 71: its chest chamber 473 is the treasure room, not the orifice.
         let mut snap = sanctuary([Some(473), Some(424), None, None]);
         snap.level.id = 71;
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![(Marker::Chest, 30.0, 30.0)]);
         // Tomb 66 with 460 (Talrasha W): confirmed in tomb 69, so a star in any tomb.
         let mut snap = sanctuary([None, Some(460), None, None]);
         snap.level.id = 66;
@@ -2989,6 +3016,8 @@ mod tests {
                 "smith (forge N)",
                 "cave exit to the next area",
                 "cave stairs down",
+                "tomb treasure (W)",
+                "tomb treasure (S/N)",
                 "horadric cube (W/E/S)",
                 "orifice (E)",
                 "orifice (N)"
