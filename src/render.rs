@@ -50,7 +50,9 @@ pub struct LandmarkRule {
 /// - Act 1 caves, level 1 (Cave 9, Underground Passage 10, Hole 11, Pit 12): lvlprest names the
 ///   pieces "Cave Next W/E/S/N" (87–90, exit to the next outdoor area) and "Cave Down W/E/S/N"
 ///   (91–94, stairs to level 2); Underground Passage 1 had one 90 and one 91 piece (2026-11-15).
-///   Confirmed: the 90 piece holds the exit to Dark Wood (room link to level 5, user stood on it).
+///   Confirmed: the 90 piece holds the exit to Dark Wood (room link to level 5, user stood on it),
+///   drawn as a gold star because it is where the user wants to go (2026-11-15); the 91 piece holds
+///   the stairs to Underground Passage 2 (room link to level 14), drawn as a plain exit.
 /// - Stony Field (4): lvlprest 160 "Act 1 - Cairn Stones", the stone circle; the five stones and the
 ///   portal stone (objects 17–22) lay inside it (live 2026-11-15).
 /// - Barracks (28): lvlprest "Barracks Forge W/E/S/N" (202–205) holds the Smith and the Horadric
@@ -116,21 +118,28 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         preset_ids: 90..=90,
         label: "cave exit to the next area (north)",
         confirmed: true,
-        exit: true,
+        exit: false,
     },
     LandmarkRule {
         level_ids: 9..=12,
         preset_ids: 87..=89,
         label: "cave exit to the next area",
         confirmed: false,
+        exit: false,
+    },
+    LandmarkRule {
+        level_ids: 9..=12,
+        preset_ids: 91..=91,
+        label: "cave stairs down (west)",
+        confirmed: true,
         exit: true,
     },
     LandmarkRule {
         level_ids: 9..=12,
-        preset_ids: 91..=94,
+        preset_ids: 92..=94,
         label: "cave stairs down",
         confirmed: false,
-        exit: false,
+        exit: true,
     },
     LandmarkRule {
         level_ids: 5..=5,
