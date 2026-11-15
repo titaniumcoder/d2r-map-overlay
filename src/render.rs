@@ -241,7 +241,7 @@ impl Marker {
                 let radius = Self::Drop(kind).style().1 + RING_GAP;
                 (tier_colour(tier), radius, Shape::Circle)
             }
-            Self::Player => ([40, 255, 60, 255], 4.5, Shape::Circle),
+            Self::Player => ([40, 255, 60, 255], 2.5, Shape::Circle),
         }
     }
 }
@@ -1031,7 +1031,7 @@ mod tests {
                 }
             }
         }
-        assert!(hits >= 9, "only {hits} player pixels");
+        assert!(hits >= 3, "only {hits} player pixels");
         Ok(())
     }
 
