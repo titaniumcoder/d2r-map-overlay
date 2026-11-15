@@ -286,19 +286,17 @@ struct Stored {
 
 /// Where a stored item on `page` with `owner` is, for the player with unit id `player`; `None`
 /// if it isn't the player's. Pages 0 (inventory), 3 (cube) and 4 (stash) count when the player
-/// owns the item; page-4 items of any other owner are the shared stash tabs (each tab is a
-/// pseudo-owner), except unowned ones ([`item_data::NO_OWNER`], 0) and `other_players`' ids.
-fn place(page: u8, owner: u32, player: u32, other_players: &[u32]) -> Option<valuables::Place> {
+/// owns the item. Other owners are left out (see the comment in the body).
+const fn place(page: u8, owner: u32, player: u32, _other_players: &[u32]) -> Option<valuables::Place> {
     use valuables::Place;
     match page {
         item_data::PAGE_INVENTORY if owner == player => Some(Place::Inventory),
         item_data::PAGE_CUBE if owner == player => Some(Place::Cube),
         item_data::PAGE_STASH if owner == player => Some(Place::Stash),
-        item_data::PAGE_STASH
-            if owner != item_data::NO_OWNER && owner != 0 && !other_players.contains(&owner) =>
-        {
-            Some(Place::Shared)
-        }
+        // Page-4 items of other owners are NOT the online shared stash: live 2026-11-15 they were
+        // stale units from earlier characters/games in the same client session (BigWolf's
+        // Gravenspine showed up while playing Vex, and the user's shared stash held none of them).
+        // Until the real shared tabs are identified, only the player's own items count.
         _ => None,
     }
 }
@@ -2600,7 +2598,8 @@ mod tests {
         let names =
             |l: &[valuables::Spare]| -> Vec<String> { l.iter().map(crate::info::spare_entry).collect() };
         assert_eq!(names(&s.sell), vec!["Gravenspine (inv)", "Gravenspine (cube)"]);
-        assert_eq!(names(&s.give_away), vec!["Magefist (stash)", "Magefist (shared)"]);
+        // Other-owner page-4 items are not the shared stash (stale units); left out for now.
+        assert_eq!(names(&s.give_away), vec!["Magefist (stash)"]);
         assert_eq!(
             s.inventory_items, 2,
             "the keep scan still sees every inventory item"
