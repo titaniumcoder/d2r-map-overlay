@@ -223,6 +223,9 @@ pub enum Marker {
     Well,
     /// An unused shrine of a type the config shows (live object), with its shrines.txt code.
     Shrine(u8),
+    /// Any other living monster, only on levels in [`ALL_MONSTER_LEVELS`]: a small dim red dot
+    /// below the elites.
+    Monster,
     /// Live superunique, champion or unique monster.
     Elite,
     /// The player. Drawn below drops and rings: on big levels a fresh drop lies within a pixel or
@@ -254,6 +257,7 @@ impl Marker {
             Self::QuestObject(_) => (LANDMARK_GOLD, 6.0, Shape::Star),
             Self::Well => (WELL_CYAN, 4.5, Shape::Circle),
             Self::Shrine(code) => (shrine_colour(code), 4.0, Shape::Circle),
+            Self::Monster => ([255, 120, 120, 200], 2.0, Shape::Circle),
             Self::Elite => ([230, 30, 30, 255], 3.5, Shape::Circle),
             Self::Drop(DropKind::Unique) => (UNIQUE_GOLD, 5.0, Shape::Diamond),
             Self::Drop(DropKind::Set) => ([30, 220, 30, 255], 5.0, Shape::Diamond),
@@ -390,6 +394,10 @@ pub fn level_bounds(snap: &Snapshot) -> Bounds {
     }
 }
 
+/// Levels where every living monster is drawn, not just elites: Den of Evil (8), whose quest
+/// needs every monster killed (user request, 2026-11-15).
+pub const ALL_MONSTER_LEVELS: &[u32] = &[8];
+
 /// Live superunique/champion/unique, not dead. Minion-only (0x10) and normal (0) monsters are skipped.
 pub fn is_elite(m: &Monster) -> bool {
     m.flags & ELITE_FLAGS != 0 && !m.is_dead()
@@ -452,12 +460,16 @@ pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
                 .iter()
                 .map(|s| (Marker::Shrine(s.code), f64::from(s.x), f64::from(s.y))),
         )
-        .chain(
-            snap.monsters
-                .iter()
-                .filter(|m| is_elite(m))
-                .map(|m| (Marker::Elite, f64::from(m.x), f64::from(m.y))),
-        )
+        .chain(snap.monsters.iter().filter(|m| !m.is_dead()).filter_map(|m| {
+            let marker = if is_elite(m) {
+                Marker::Elite
+            } else if ALL_MONSTER_LEVELS.contains(&snap.level.id) {
+                Marker::Monster
+            } else {
+                return None;
+            };
+            Some((marker, f64::from(m.x), f64::from(m.y)))
+        }))
         .chain(
             snap.drops
                 .iter()
@@ -828,6 +840,7 @@ mod tests {
                 act: None,
             },
             player_candidates: vec![],
+            player_chosen_by: crate::game::ChosenBy::FirstCandidate,
             level: Level {
                 id: 1,
                 bounds: None,
@@ -1015,6 +1028,29 @@ mod tests {
             ]
         );
         Ok(())
+    }
+
+    #[test]
+    fn den_of_evil_shows_every_living_monster() {
+        let mut snap = empty_snapshot(5, 5);
+        snap.monsters = vec![
+            monster(0x00, 1),
+            monster(0x10, 1),
+            monster(0x08, 1),
+            monster(0x00, 12),
+        ];
+        let kinds = |s: &Snapshot| -> Vec<Marker> { markers(s).into_iter().map(|(m, _, _)| m).collect() };
+        assert_eq!(
+            kinds(&snap),
+            vec![Marker::Elite, Marker::Player],
+            "elsewhere: elites only"
+        );
+        snap.level.id = 8;
+        assert_eq!(
+            kinds(&snap),
+            vec![Marker::Monster, Marker::Monster, Marker::Elite, Marker::Player],
+            "Den of Evil: normals and minions too, dead skipped, below the elite"
+        );
     }
 
     #[test]
