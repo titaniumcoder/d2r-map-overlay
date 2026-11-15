@@ -68,7 +68,7 @@ pub enum LandmarkStyle {
 ///   Malus; confirmed for 204 and 203 (Smith preset 771 and malus object 108 inside it, two games
 ///   2026-11-15).
 /// - Lut Gholein sewers (47–49): lvlprest "Sewer Radament's Lair W/E/S/N" (341–344) in level 3 (49;
-///   341 confirmed in game 2026-11-15) and "Sewer Next W/E/S/N" (337–340, stairs down) in levels 1–2.
+///   341 confirmed in game 2026-11-15); stairs piece 338 confirmed in level 1 (room link to level 48) and "Sewer Next W/E/S/N" (337–340, stairs down) in levels 1–2.
 /// - Dark Wood (5): lvlprest 161 "Act 1 - Inifus" (funktree.ds1), the Tree of Inifuss (confirmed in
 ///   game 2026-11-15).
 /// - Black Marsh (6): lvlprest 163 "Act 1 - Tower 1" (Tower1.ds1), the Forgotten Tower entrance
@@ -90,8 +90,22 @@ pub const LANDMARKS: &[LandmarkRule] = &[
     },
     LandmarkRule {
         level_ids: 47..=48,
-        preset_ids: 337..=340,
+        preset_ids: 338..=338,
+        label: "sewer stairs down (east)",
+        confirmed: true,
+        style: LandmarkStyle::StairsDown,
+    },
+    LandmarkRule {
+        level_ids: 47..=48,
+        preset_ids: 337..=337,
         label: "sewer stairs down",
+        confirmed: false,
+        style: LandmarkStyle::StairsDown,
+    },
+    LandmarkRule {
+        level_ids: 47..=48,
+        preset_ids: 339..=340,
+        label: "sewer stairs down (S/N)",
         confirmed: false,
         style: LandmarkStyle::StairsDown,
     },
@@ -2613,6 +2627,7 @@ mod tests {
             vec![
                 "radament's lair (E/S/N)",
                 "sewer stairs down",
+                "sewer stairs down (S/N)",
                 "smith (forge W)",
                 "smith (forge N)",
                 "cave exit to the next area",
