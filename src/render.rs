@@ -54,7 +54,8 @@ pub enum LandmarkStyle {
 ///   Ordinary arm ends use other ids (510, 511, 513, 517 seen).
 /// - Tal Rasha's tombs (66–72): the real tomb's orifice chamber is lvlprest "Tomb Talrasha W/E/S/N"
 ///   (460–463), only ever placed in the real tomb. Confirmed: 462 in tomb 72 (orifice object 152
-///   inside it); 460, 461, 463 are unconfirmed. A fake tomb's chest chamber is "Tomb Chest" (472–475;
+///   inside it) and 460 in tomb 69 (user stood on the orifice, Nightmare 2026-11-16); 461 and 463
+///   are unconfirmed. A fake tomb's chest chamber is "Tomb Chest" (472–475;
 ///   473 seen in tomb 71). The 462 chamber spans 4 Room2 cells. (An earlier level+390 guess was
 ///   wrong: 456–459 are the Halls of the Dead cube pieces.)
 /// - Halls of the Dead Level 3 (60): lvlprest "Tomb Cube W/E/S/N" (456–459) holds the Horadric Cube
@@ -249,8 +250,15 @@ pub const LANDMARKS: &[LandmarkRule] = &[
     },
     LandmarkRule {
         level_ids: 66..=72,
-        preset_ids: 460..=461,
-        label: "orifice (W/E)",
+        preset_ids: 460..=460,
+        label: "orifice (W)",
+        confirmed: true,
+        style: LandmarkStyle::Star,
+    },
+    LandmarkRule {
+        level_ids: 66..=72,
+        preset_ids: 461..=461,
+        label: "orifice (E)",
         confirmed: false,
         style: LandmarkStyle::Star,
     },
@@ -2825,12 +2833,12 @@ mod tests {
         let mut snap = sanctuary([Some(473), Some(424), None, None]);
         snap.level.id = 71;
         assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
-        // Tomb 66 with 460 (Talrasha W): unconfirmed direction, a "?".
+        // Tomb 66 with 460 (Talrasha W): confirmed in tomb 69, so a star in any tomb.
         let mut snap = sanctuary([None, Some(460), None, None]);
         snap.level.id = 66;
         assert_eq!(
             landmarks(&snap, LANDMARKS),
-            vec![(Marker::Suspected("orifice (W/E)"), 90.0, 30.0)]
+            vec![(Marker::Landmark("orifice (W)"), 90.0, 30.0)]
         );
         // 462 is the orifice in whichever tomb is the real one.
         let mut snap = sanctuary([None, Some(462), None, None]);
@@ -2982,7 +2990,7 @@ mod tests {
                 "cave exit to the next area",
                 "cave stairs down",
                 "horadric cube (W/E/S)",
-                "orifice (W/E)",
+                "orifice (E)",
                 "orifice (N)"
             ]
         );
@@ -3051,7 +3059,7 @@ mod tests {
 
     /// Tomb 66 with an assumed-orifice room (456) at world 90,30 and the orifice object at 150,30.
     fn tomb_66() -> Snapshot {
-        let mut snap = sanctuary([None, Some(460), None, None]);
+        let mut snap = sanctuary([None, Some(461), None, None]);
         snap.level.id = 66;
         snap.presets = vec![object(152, 150, 30)];
         snap
