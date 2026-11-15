@@ -199,7 +199,7 @@ fn load_for_drawing(path: &str, config: &config::Config) -> Result<game::Snapsho
     let mut snap = load_snapshot(path)?;
     valuables::apply(&mut snap.drops, &config.valuables);
     session::Session::default().apply(&mut snap);
-    config.shrines.retain_shown(&mut snap.shrines);
+    config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
     Ok(snap)
 }
 

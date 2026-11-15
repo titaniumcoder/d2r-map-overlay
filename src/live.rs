@@ -169,7 +169,7 @@ fn follow_game(
                 // the journal wants to see.
                 journal.observe(&snap);
                 let update = session.apply(&mut snap);
-                config.shrines.retain_shown(&mut snap.shrines);
+                config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }

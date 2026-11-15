@@ -89,19 +89,29 @@ impl Valuables {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shrines {
     pub show: Vec<u8>,
+    /// Of `show`, the types shown in Normal only (e.g. stamina; user request 2026-11-15).
+    pub normal_only: Vec<u8>,
 }
 
 impl Default for Shrines {
     fn default() -> Self {
         let (show, _) = shrine_codes(&DEFAULT_SHRINES.map(str::to_owned));
-        Self { show }
+        Self {
+            show,
+            normal_only: Vec::new(),
+        }
     }
 }
 
 impl Shrines {
-    /// Keeps the shrines to draw: unused ones whose type is in `show`. Wells are always drawn.
-    pub fn retain_shown(&self, shrines: &mut Vec<Shrine>) {
-        shrines.retain(|s| !s.used && self.show.contains(&s.code));
+    /// Keeps the shrines to draw: unused ones whose type is in `show`, minus the `normal_only`
+    /// types outside Normal (`difficulty` 0; an unknown difficulty shows them). Wells are always
+    /// drawn.
+    pub fn retain_shown(&self, shrines: &mut Vec<Shrine>, difficulty: Option<u8>) {
+        let normal = difficulty.is_none_or(|d| d == 0);
+        shrines.retain(|s| {
+            !s.used && self.show.contains(&s.code) && (normal || !self.normal_only.contains(&s.code))
+        });
     }
 }
 
@@ -117,12 +127,14 @@ struct RawConfig {
 #[serde(default, deny_unknown_fields)]
 struct RawShrines {
     show: Vec<String>,
+    normal_only: Vec<String>,
 }
 
 impl Default for RawShrines {
     fn default() -> Self {
         Self {
             show: DEFAULT_SHRINES.map(str::to_owned).to_vec(),
+            normal_only: Vec::new(),
         }
     }
 }
@@ -148,7 +160,9 @@ fn shrine_codes(names: &[String]) -> (Vec<u8>, Vec<String>) {
 /// Fails on invalid TOML, unknown keys or wrongly typed values (e.g. a tier other than S, A, B).
 pub fn parse(text: &str) -> Result<(Config, Vec<String>), toml::de::Error> {
     let raw: RawConfig = toml::from_str(text)?;
-    let (show, unknown) = shrine_codes(&raw.shrines.show);
+    let (show, mut unknown) = shrine_codes(&raw.shrines.show);
+    let (normal_only, unknown_normal) = shrine_codes(&raw.shrines.normal_only);
+    unknown.extend(unknown_normal);
     let warnings = unknown
         .into_iter()
         .map(|n| {
@@ -161,7 +175,7 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), toml::de::Error> {
     Ok((
         Config {
             valuables: raw.valuables,
-            shrines: Shrines { show },
+            shrines: Shrines { show, normal_only },
         },
         warnings,
     ))
@@ -280,15 +294,32 @@ mod tests {
             shrine(12, true),
             shrine(20, false),
         ];
-        Shrines::default().retain_shown(&mut shrines);
+        Shrines::default().retain_shown(&mut shrines, Some(0));
         assert_eq!(
             shrines,
             vec![shrine(12, false), shrine(20, false)],
             "health not shown by default, used skill shrine dropped"
         );
         let mut shrines = vec![shrine(2, false)];
-        Shrines { show: vec![2] }.retain_shown(&mut shrines);
+        Shrines {
+            show: vec![2],
+            normal_only: vec![],
+        }
+        .retain_shown(&mut shrines, Some(0));
         assert_eq!(shrines.len(), 1, "health shown once configured");
+        let stamina = Shrines {
+            show: vec![14, 12],
+            normal_only: vec![14],
+        };
+        let mut shrines = vec![shrine(14, false), shrine(12, false)];
+        stamina.retain_shown(&mut shrines, Some(1));
+        assert_eq!(shrines, vec![shrine(12, false)], "stamina hidden in Nightmare");
+        let mut shrines = vec![shrine(14, false)];
+        stamina.retain_shown(&mut shrines, Some(0));
+        assert_eq!(shrines.len(), 1, "stamina shown in Normal");
+        let mut shrines = vec![shrine(14, false)];
+        stamina.retain_shown(&mut shrines, None);
+        assert_eq!(shrines.len(), 1, "unknown difficulty shows it");
     }
 
     #[test]
