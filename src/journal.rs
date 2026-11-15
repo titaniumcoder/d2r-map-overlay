@@ -573,6 +573,7 @@ mod tests {
                 y: 30,
                 level_id: level,
                 act: Some(Addr(0xa000)),
+                char_level: None,
             },
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,

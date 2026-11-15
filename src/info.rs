@@ -49,6 +49,21 @@ pub const SELL_PREFIX: &str = "Sell: ";
 /// The give-away lines below the sell lines: yellow.
 pub const GIVE_TEXT: [u8; 4] = [255, 225, 60, 255];
 pub const GIVE_PREFIX: &str = "Give away: ";
+/// The level-suggestion line(s) between the info line and the keep lines: light blue.
+const LEVEL_TEXT: [u8; 4] = [120, 210, 255, 255];
+/// Most level-suggestion lines.
+const MAX_LEVEL_LINES: usize = 2;
+/// From this character level on no areas are suggested (everywhere is fine).
+pub const SUGGEST_UNTIL: u8 = 75;
+/// The suggested areas' monster level is this many above the character level.
+const SUGGEST_BONUS: u8 = 2;
+/// Most suggested areas.
+const MAX_SUGGESTIONS: usize = 2;
+/// Town level ids: never suggested.
+const TOWNS: [u32; 5] = [1, 40, 75, 103, 109];
+/// Level ids from here on are special or uber levels (Pandemonium, Uber Tristram, …): never
+/// suggested.
+const FIRST_SPECIAL_LEVEL: u32 = 133;
 /// Separator of the sell and give-away entries.
 const COMMA: &str = ", ";
 /// The last part of a terrorized level's line, drawn in [`TERROR_TEXT`].
@@ -133,6 +148,55 @@ pub fn info_line(level_id: u32, difficulty: Option<u8>, terrorized: bool, cows: 
     }
 }
 
+/// Areas to level in for a character of `char_level` in `difficulty`: up to [`MAX_SUGGESTIONS`]
+/// areas (name, monster level) whose monster level is the character level +
+/// [`SUGGEST_BONUS`], in level-id order; if none matches exactly, the nearest ones (a monster
+/// level above the target wins a tie). Towns, special levels and areas without monster levels are
+/// never suggested. Empty for an unknown level or difficulty, and from level [`SUGGEST_UNTIL`] on.
+pub fn level_suggestions(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<(&'static str, u8)> {
+    let (Some(lvl), Some(d)) = (char_level.filter(|&l| l < SUGGEST_UNTIL), difficulty) else {
+        return Vec::new();
+    };
+    let target = lvl + SUGGEST_BONUS;
+    let mut areas: Vec<(&'static str, u8)> = LEVELS
+        .iter()
+        .filter(|&&(id, _, _)| !TOWNS.contains(&id) && id < FIRST_SPECIAL_LEVEL)
+        .filter_map(|&(_, name, lvls)| Some((name, *lvls.get(usize::from(d))?)))
+        .filter(|&(_, mlvl)| mlvl > 0)
+        .collect();
+    if areas.iter().any(|&(_, mlvl)| mlvl == target) {
+        areas.retain(|&(_, mlvl)| mlvl == target);
+    } else {
+        // Stable sort: equally near areas stay in level-id order.
+        areas.sort_by_key(|&(_, mlvl)| (mlvl.abs_diff(target), mlvl < target));
+    }
+    areas.truncate(MAX_SUGGESTIONS);
+    areas
+}
+
+/// The level suggestions as lines of at most `max_width` px in `font`:
+/// `Level 34 → Lut Gholein Sewers Level 3 (36), Halls of the Dead Level 2 (36)`, at most
+/// [`MAX_LEVEL_LINES`]. Empty without suggestions.
+pub fn level_lines(
+    font: &FontVec,
+    char_level: Option<u8>,
+    difficulty: Option<u8>,
+    max_width: f32,
+) -> Vec<String> {
+    let (Some(lvl), areas) = (char_level, level_suggestions(char_level, difficulty)) else {
+        return Vec::new();
+    };
+    let entries: Vec<String> = areas
+        .iter()
+        .map(|(name, mlvl)| format!("{name} ({mlvl})"))
+        .collect();
+    let mut lines = wrap(&format!("Level {lvl} → "), COMMA, &entries, |t| {
+        text_width(font, t) <= max_width
+    });
+    lines.truncate(MAX_LEVEL_LINES);
+    lines
+}
+
 /// The info-line font, loaded on first use from [`FONT_PATHS`]; `None` (logged once) if none loads.
 pub fn font() -> Option<&'static FontVec> {
     // `OnceLock` runs the loader once, even if the reader thread and `--render` race for it.
@@ -180,12 +244,23 @@ pub fn spare_lines(font: &FontVec, prefix: &str, spares: &[Spare], max_width: f3
     wrap(prefix, COMMA, &entries, |t| text_width(font, t) <= max_width)
 }
 
-/// The text rows below the info line, top to bottom, each with its colour: the keep lines
-/// (green), the sell lines (grey), the give-away lines (yellow), with an empty gap row before
-/// each non-empty block (so also between the info line and the first block).
-pub fn stack(keep: Vec<String>, sell: Vec<String>, give: Vec<String>) -> Vec<(String, [u8; 4])> {
+/// The text rows below the info line, top to bottom, each with its colour: the level
+/// suggestions (light blue), the keep lines (green), the sell lines (grey), the give-away lines
+/// (yellow), with an empty gap row before each non-empty block (so also between the info line
+/// and the first block).
+pub fn stack(
+    level: Vec<String>,
+    keep: Vec<String>,
+    sell: Vec<String>,
+    give: Vec<String>,
+) -> Vec<(String, [u8; 4])> {
     let mut rows = Vec::new();
-    for (lines, colour) in [(keep, KEEP_TEXT), (sell, SELL_TEXT), (give, GIVE_TEXT)] {
+    for (lines, colour) in [
+        (level, LEVEL_TEXT),
+        (keep, KEEP_TEXT),
+        (sell, SELL_TEXT),
+        (give, GIVE_TEXT),
+    ] {
         if lines.is_empty() {
             continue;
         }
@@ -696,11 +771,14 @@ mod tests {
     fn stack_orders_colours_and_gaps() {
         let l = |s: &str| vec![s.to_owned()];
         let rows = stack(
+            l("Level 3 → a (5)"),
             l("Keep: k"),
             l("Sell: s"),
             vec!["Give away: g".into(), "h".into()],
         );
         let want: Vec<(String, [u8; 4])> = vec![
+            (String::new(), LEVEL_TEXT),
+            ("Level 3 → a (5)".into(), LEVEL_TEXT),
             (String::new(), KEEP_TEXT),
             ("Keep: k".into(), KEEP_TEXT),
             (String::new(), SELL_TEXT),
@@ -711,11 +789,110 @@ mod tests {
         ];
         assert_eq!(rows, want);
         assert_eq!(
-            stack(vec![], vec![], l("Give away: g")),
+            stack(vec![], vec![], vec![], l("Give away: g")),
             vec![(String::new(), GIVE_TEXT), ("Give away: g".to_owned(), GIVE_TEXT)],
             "a gap below the info line even for the only block"
         );
-        assert_eq!(stack(vec![], vec![], vec![]), vec![]);
+        assert_eq!(stack(vec![], vec![], vec![], vec![]), vec![]);
+    }
+
+    #[test]
+    fn level_suggestions_exact_matches_in_id_order() {
+        // Normal level 1 → mlvl 3: Burial Grounds, Crypt, Mausoleum; the first two.
+        assert_eq!(
+            level_suggestions(Some(1), Some(0)),
+            vec![("Burial Grounds", 3), ("Crypt", 3)]
+        );
+        // A single exact match stays alone (no nearest one added).
+        assert_eq!(
+            level_suggestions(Some(34), Some(0)),
+            vec![("Halls of Vaught", 36)]
+        );
+    }
+
+    #[test]
+    fn level_suggestions_nearest_prefers_above() {
+        // Normal 33 → 35: none; 36 (above) before 34 (below), both 1 away.
+        assert_eq!(
+            level_suggestions(Some(33), Some(0)),
+            vec![("Halls of Vaught", 36), ("Halls of Death's Calling", 34)]
+        );
+        // Normal 18 → 20: none; the mlvl 21 areas in id order beat 18 (2 below).
+        assert_eq!(
+            level_suggestions(Some(18), Some(0)),
+            vec![("Spider Forest", 21), ("Great Marsh", 21)]
+        );
+    }
+
+    #[test]
+    fn level_suggestions_use_the_difficulty_and_stop_at_75() {
+        // Nightmare 46 → 48.
+        assert_eq!(
+            level_suggestions(Some(46), Some(1)),
+            vec![("Canyon of the Magi", 48), ("Palace Cellar Level 3", 48)]
+        );
+        // Hell 74 → 76: the last level with suggestions.
+        assert_eq!(
+            level_suggestions(Some(74), Some(2)),
+            vec![("Tower Cellar Level 2", 76), ("Tristram", 76)]
+        );
+        assert!(
+            level_suggestions(Some(75), Some(2)).is_empty(),
+            "75: everywhere is fine"
+        );
+        assert_eq!(level_suggestions(Some(90), Some(0)), Vec::<(&str, u8)>::new());
+        assert_eq!(
+            level_suggestions(None, Some(0)),
+            Vec::<(&str, u8)>::new(),
+            "unknown level"
+        );
+        assert_eq!(
+            level_suggestions(Some(10), None),
+            Vec::<(&str, u8)>::new(),
+            "unknown difficulty"
+        );
+        assert_eq!(
+            level_suggestions(Some(10), Some(3)),
+            Vec::<(&str, u8)>::new(),
+            "bad difficulty"
+        );
+    }
+
+    #[test]
+    fn level_suggestions_skip_towns_and_special_levels() {
+        for d in 0..3 {
+            for lvl in 1..SUGGEST_UNTIL {
+                for (name, mlvl) in level_suggestions(Some(lvl), Some(d)) {
+                    let &(id, _, _) = LEVELS
+                        .iter()
+                        .find(|&&(_, n, lvls)| n == name && lvls.get(usize::from(d)) == Some(&mlvl))
+                        .unwrap_or(&(0, "", [0; 3]));
+                    assert!(
+                        mlvl > 0 && !TOWNS.contains(&id) && id < FIRST_SPECIAL_LEVEL,
+                        "{name}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn level_lines_text_and_cap() {
+        let Some(font) = font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return;
+        };
+        assert_eq!(
+            level_lines(font, Some(1), Some(0), 1000.0),
+            vec!["Level 1 → Burial Grounds (3), Crypt (3)"]
+        );
+        assert_eq!(
+            level_lines(font, Some(1), Some(0), 10.0),
+            vec!["Level 1 → Burial Grounds (3)", "Crypt (3)"],
+            "wraps onto a second line"
+        );
+        assert_eq!(level_lines(font, Some(80), Some(0), 1000.0), Vec::<String>::new());
+        assert_eq!(level_lines(font, None, Some(0), 1000.0), Vec::<String>::new());
     }
 
     #[test]

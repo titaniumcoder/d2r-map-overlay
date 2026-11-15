@@ -260,6 +260,9 @@ pub mod stat_list {
     pub const STAT_SIZE: u64 = 8;
     /// Stat id `item_numsockets` (itemstatcost.txt).
     pub const NUM_SOCKETS: u16 = 194;
+    /// Stat id `level` (itemstatcost.txt): the character level on a player unit. Not yet
+    /// live-verified; the reader also accepts the value shifted left by 8.
+    pub const LEVEL: u16 = 12;
     /// The unit's state bitfield: [`STATE_FLAG_DWORDS`] little-endian u32, state `n` is bit
     /// `n % 32` of dword `n / 32` (states.txt rows). Live 2026-11-15 on monsters (Moo Moo Farm,
     /// terrorized): all 24 cows had [`super::state::DESECRATED`] set here, the player and the

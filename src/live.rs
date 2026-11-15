@@ -263,12 +263,17 @@ impl ItemsTable {
     }
 }
 
-/// What one snapshot's tick sends, if anything. In a town only the keep, sell and give-away lines are
-/// shown (no map, info line or markers), and the overlay hides when there are none; elsewhere
+/// What one snapshot's tick sends, if anything. In a town only the level, keep, sell and
+/// give-away lines are shown (no map, info line or markers), and the overlay hides when there are none; elsewhere
 /// the map. `None`: the screen is up to date (or rendering failed, logged).
 fn tick_msg(dedup: &mut Dedup, snap: Snapshot, (w, h): (u32, u32), font: Option<&FontVec>) -> Option<Msg> {
     let town = game::is_town(snap.level.id);
-    if town && snap.inventory_keep.is_empty() && snap.sell.is_empty() && snap.give_away.is_empty() {
+    if town
+        && snap.inventory_keep.is_empty()
+        && snap.sell.is_empty()
+        && snap.give_away.is_empty()
+        && info::level_suggestions(snap.player.char_level, snap.difficulty).is_empty()
+    {
         return dedup.hide(Hidden::Town).then_some(Msg::Hide);
     }
     let snap = dedup.changed(snap)?;
@@ -437,6 +442,31 @@ mod tests {
             tick_msg(&mut d, town, (200, 200), Some(font)),
             Some(Msg::Frame(_))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn town_with_a_level_suggestion_shows_a_frame() -> Result<()> {
+        let Some(font) = info::font() else {
+            return Ok(());
+        };
+        let mut town = fixture()?;
+        town.level.id = 40;
+        town.difficulty = Some(1);
+        town.player.char_level = Some(46);
+        let mut d = Dedup::default();
+        assert!(matches!(
+            tick_msg(&mut d, town, (200, 200), Some(font)),
+            Some(Msg::Frame(_))
+        ));
+        let mut town = fixture()?;
+        town.level.id = 40;
+        town.difficulty = Some(1);
+        town.player.char_level = Some(80);
+        assert!(
+            matches!(tick_msg(&mut d, town, (200, 200), Some(font)), Some(Msg::Hide)),
+            "level 80 has no suggestion: hidden"
+        );
         Ok(())
     }
 

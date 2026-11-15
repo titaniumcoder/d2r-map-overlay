@@ -895,21 +895,23 @@ pub fn map_height(height: u32, font: Option<&FontVec>, keep_lines: usize) -> u32
     })
 }
 
-/// The text rows below the info line for a `width` px canvas: the inventory keep list, then the
-/// sell and give-away lists, with gap rows ([`info::stack`]); none without a font.
+/// The text rows below the info line for a `width` px canvas: the level suggestions, the
+/// inventory keep list, then the sell and give-away lists, with gap rows ([`info::stack`]); none
+/// without a font.
 fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<(String, Rgba)> {
     let Some(f) = font else {
         return Vec::new();
     };
     let max_width = f32::from(u16::try_from(width).unwrap_or(u16::MAX)) - 8.0;
     info::stack(
+        info::level_lines(f, snap.player.char_level, snap.difficulty, max_width),
         info::keep_lines(f, &snap.inventory_keep, max_width),
         info::spare_lines(f, info::SELL_PREFIX, &snap.sell, max_width),
         info::spare_lines(f, info::GIVE_PREFIX, &snap.give_away, max_width),
     )
 }
 
-/// A frame with only the keep, sell and give-away lines (for towns, where the map is hidden);
+/// A frame with only the level, keep, sell and give-away lines (for towns, where the map is hidden);
 /// `None` if there is nothing to show (empty lists, or no font to draw them with).
 ///
 /// # Errors
@@ -1504,6 +1506,7 @@ mod tests {
                 y: py,
                 level_id: 1,
                 act: None,
+                char_level: None,
             },
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
@@ -2499,6 +2502,69 @@ mod tests {
             }
             assert_eq!(n, 0, "gap row {k}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn level_row_sits_between_the_info_line_and_the_keep_lines() -> Result<()> {
+        use crate::valuables::{Category, Keep, Tier};
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let mut snap = fixture()?;
+        snap.difficulty = Some(0);
+        snap.player.char_level = Some(1);
+        snap.inventory_keep = vec![Keep {
+            name: "Harlequin Crest".into(),
+            tier: Tier::S,
+            category: Category::Trade,
+            count: 1,
+        }];
+        let (w, h) = (400, 400);
+        let rows = keep_lines(&snap, w, Some(font));
+        let texts: Vec<&str> = rows.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "",
+                "Level 1 → Burial Grounds (3), Crypt (3)",
+                "",
+                "Keep: Harlequin Crest (S)"
+            ],
+            "gap, level row, gap, keep"
+        );
+        let lh = info::line_height(font);
+        assert_eq!(
+            map_height(h, Some(font), rows.len()),
+            map_height(h, Some(font), 0) - 4 * lh
+        );
+        let pm = render_with(&snap, w, h, Some(font))?;
+        // Row `k` from the bottom spans `(h - 4 - (k + 1) lh, h - 4 - k lh]` (PAD 3 + 1).
+        let count = |k: u32, pred: &dyn Fn(Rgba) -> bool| -> Result<u32> {
+            let (bottom, top) = (h - 4 - k * lh, h - 4 - (k + 1) * lh);
+            let mut n = 0;
+            for y in top + 1..=bottom {
+                for x in 0..w {
+                    n += u32::from(pred(rgba(&pm, x, y)?));
+                }
+            }
+            Ok(n)
+        };
+        let solid = |p: Rgba| p[3] == 255;
+        let cyan = |p: Rgba| solid(p) && p[2] > 200 && p[1] > 170 && p[0] < 160;
+        let green = |p: Rgba| solid(p) && p[1] > 180 && p[0] < 140 && p[2] < 140;
+        assert!(count(0, &green)? > 20, "keep at the bottom, green");
+        assert_eq!(count(0, &cyan)?, 0, "no light blue in the keep row");
+        assert!(count(2, &cyan)? > 20, "level row above it, light blue");
+        assert_eq!(count(2, &green)?, 0, "no green in the level row");
+
+        snap.player.char_level = Some(75);
+        assert_eq!(
+            keep_lines(&snap, w, Some(font)).len(),
+            2,
+            "no level row from 75 on"
+        );
         Ok(())
     }
 

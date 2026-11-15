@@ -184,6 +184,21 @@ pub struct Player {
     /// The player's act; changes with a new game (and on act travel). `None` in old fixtures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub act: Option<Addr>,
+    /// Character level (stat [`stat_list::LEVEL`], see [`char_level_from_raw`]); `None` if
+    /// unreadable (and in old fixtures, where it is left out of the JSON).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub char_level: Option<u8>,
+}
+
+/// The character level from the raw stat value: 1..=99, or the same shifted left by 8 (some D2
+/// stats, like life, are stored in 1/256 units). Anything else is unknown.
+pub fn char_level_from_raw(raw: u32) -> Option<u8> {
+    let level = if raw > 99 && raw.trailing_zeros() >= 8 {
+        raw >> 8
+    } else {
+        raw
+    };
+    u8::try_from(level).ok().filter(|l| (1..=99).contains(l))
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -936,6 +951,12 @@ impl<M: ReadMem> Reader<'_, M> {
             y,
             level_id: self.u32(level, level::ID)?,
             act: head.act.map(Addr),
+            // Optional data like `room_preset`: an unreadable stat list is no level, not an error.
+            char_level: self
+                .stat(addr, stat_list::LEVEL)
+                .ok()
+                .flatten()
+                .and_then(char_level_from_raw),
         };
         Ok((player, level))
     }
@@ -1316,12 +1337,19 @@ impl<M: ReadMem> Reader<'_, M> {
 
     /// The item's socket count: stat [`stat_list::NUM_SOCKETS`] of its stat list, 0 without one.
     fn sockets(&self, unit_addr: u64) -> Result<u8> {
+        let value = self.stat(unit_addr, stat_list::NUM_SOCKETS)?.unwrap_or(0);
+        Ok(u8::try_from(value).unwrap_or(u8::MAX))
+    }
+
+    /// The value of stat `id` in the unit's stat list (first entry with that id, any layer);
+    /// `None` without a stat list or without the stat.
+    fn stat(&self, unit_addr: u64, id: u16) -> Result<Option<u32>> {
         let Some(list) = self.ptr(unit_addr, unit::STATS)? else {
-            return Ok(0);
+            return Ok(None);
         };
         let count = self.u64(list, stat_list::COUNT)?;
         if count == 0 {
-            return Ok(0);
+            return Ok(None);
         }
         if count > MAX_ITEM_STATS {
             bail!("stat list {list:#x}: {count} entries");
@@ -1334,14 +1362,9 @@ impl<M: ReadMem> Reader<'_, M> {
             .read_bytes(entries, len)
             .with_context(|| format!("reading {count} stats at {entries:#x}"))?;
         let (stats, _) = bytes.as_chunks::<8>();
-        let value = stats
-            .iter()
-            .find_map(|&[_, _, id0, id1, v0, v1, v2, v3]| {
-                (u16::from_le_bytes([id0, id1]) == stat_list::NUM_SOCKETS)
-                    .then(|| u32::from_le_bytes([v0, v1, v2, v3]))
-            })
-            .unwrap_or(0);
-        Ok(u8::try_from(value).unwrap_or(u8::MAX))
+        Ok(stats.iter().find_map(|&[_, _, id0, id1, v0, v1, v2, v3]| {
+            (u16::from_le_bytes([id0, id1]) == id).then(|| u32::from_le_bytes([v0, v1, v2, v3]))
+        }))
     }
 }
 
@@ -1674,6 +1697,81 @@ mod tests {
             ]
         );
         assert_eq!(s.player_chosen_by, ChosenBy::FirstCandidate, "no items to vote");
+        Ok(())
+    }
+
+    #[test]
+    fn char_level_values() {
+        assert_eq!(char_level_from_raw(1), Some(1));
+        assert_eq!(char_level_from_raw(34), Some(34));
+        assert_eq!(char_level_from_raw(99), Some(99));
+        assert_eq!(char_level_from_raw(34 << 8), Some(34), "shifted by 8");
+        assert_eq!(char_level_from_raw(99 << 8), Some(99));
+        for raw in [0, 100, 255, 1 << 16, 100 << 8, 0x1234, u32::MAX] {
+            assert_eq!(char_level_from_raw(raw), None, "{raw:#x}");
+        }
+    }
+
+    /// [`world`] with Alice's unit given a stat list holding `stats` (stat id, value).
+    fn world_with_player_stats(stats: &[(u16, u32)]) -> Result<FakeMem> {
+        use crate::process::ReadMem;
+        const LIST: u64 = 0x90_0000;
+        const ENTRIES: u64 = 0x90_1000;
+        let mut m = world()?;
+        let mut alice = vec![0u8; UNIT_SIZE];
+        m.read(P_ALICE, &mut alice)?;
+        let off = usize::try_from(unit::STATS)?;
+        alice
+            .get_mut(off..off + 8)
+            .context("stats field in unit")?
+            .copy_from_slice(&LIST.to_le_bytes());
+        m.add(P_ALICE, alice);
+        let count = u64::try_from(stats.len())?;
+        put(
+            &mut m,
+            LIST,
+            0x40,
+            &[
+                (stat_list::ENTRIES, &ENTRIES.to_le_bytes()),
+                (stat_list::COUNT, &count.to_le_bytes()),
+            ],
+        )?;
+        let mut b = Vec::new();
+        for &(id, value) in stats {
+            b.extend(0u16.to_le_bytes());
+            b.extend(id.to_le_bytes());
+            b.extend(value.to_le_bytes());
+        }
+        m.add(ENTRIES, b);
+        Ok(m)
+    }
+
+    #[test]
+    fn player_char_level_from_stat_12() -> Result<()> {
+        // Strength, energy, then level among the player's stats.
+        let m = world_with_player_stats(&[(0, 25), (1, 15), (stat_list::LEVEL, 34), (13, 9000)])?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
+        assert_eq!(s.player.char_level, Some(34));
+        assert_eq!(
+            serde_json::to_value(&s)?.pointer("/player/char_level"),
+            Some(&34.into())
+        );
+
+        let m = world_with_player_stats(&[(stat_list::LEVEL, 34 << 8)])?;
+        assert_eq!(
+            snapshot(&m, TABLE, None, None, None)?.player.char_level,
+            Some(34),
+            "shifted"
+        );
+
+        let m = world_with_player_stats(&[(0, 25)])?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
+        assert_eq!(s.player.char_level, None, "no level stat");
+
+        // The base world has no stat list on the player: no level, left out of the JSON.
+        let s = snapshot(&world()?, TABLE, None, None, None)?;
+        assert_eq!(s.player.char_level, None);
+        assert_eq!(serde_json::to_value(&s)?.pointer("/player/char_level"), None);
         Ok(())
     }
 
