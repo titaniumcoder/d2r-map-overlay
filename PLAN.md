@@ -135,7 +135,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   verified; 0x400000 ethereal, 0x4000000 runeword = classic bits, unverified), `+0x34` unique/set row index
   (verified: Khalim's Flail = row 127, Hellforge Hammer = row 126, both identified quest items; an UNIDENTIFIED set item
   (Cleglaw's Claw, row 32) read 0 → the index is only filled once identified, so name rules on unidentified items
-  stay uncertain), `+0x54` body slot,
+  stay uncertain). After identifying (Cain or scroll), the index is filled: Darkglow = unique 83, Cleglaw's Claw = set
+  *ID 7 (set rows are keyed by `*ID`, not file order) — both verified live 2026-11-15; the inventory keep list relies on this., `+0x54` body slot,
   `+0x55` page (0 inventory, 4 stash, 255 elsewhere; verified over 74 items). Inventory = mode 0 + page 0.
 - Item stat list: unit `+0x88` → `+0x30` entries / `+0x38` count, entry {u16 layer, u16 id, u32 value}; sockets = 194.
 - Valuables: research/valuables.json (67 rules, S/A/B, trade/twink) embedded; tiers per category in
