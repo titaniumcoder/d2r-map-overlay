@@ -11,6 +11,7 @@ use ab_glyph::{Font, FontVec, GlyphId, PxScale, ScaleFont, point};
 use tiny_skia::{Mask, Paint, Pixmap, Rect, Transform};
 
 use crate::levels_data::{BOSSES, LEVELS};
+use crate::valuables::{Keep, Tier};
 
 /// Champions are this many levels above the area's monster level (D2 rule).
 const CHAMPION_BONUS: u8 = 2;
@@ -32,6 +33,11 @@ const TEXT_PX: f32 = 16.0;
 /// the text and the map above it.
 const PAD: u32 = 3;
 const TEXT: [u8; 4] = [255, 255, 255, 255];
+/// The inventory keep lines: green, same outline as the info line.
+const KEEP_TEXT: [u8; 4] = [90, 230, 90, 255];
+/// Most keep lines; the last one ends in "+N more" when the list is longer.
+pub const MAX_KEEP_LINES: usize = 3;
+const KEEP_PREFIX: &str = "Keep: ";
 const OUTLINE: [u8; 4] = [0, 0, 0, 220];
 
 pub const fn difficulty_name(d: u8) -> Option<&'static str> {
@@ -115,6 +121,100 @@ pub fn font() -> Option<&'static FontVec> {
     .as_ref()
 }
 
+/// Height in px of one text line with its outline.
+pub fn line_height(font: &FontVec) -> u32 {
+    let scaled = font.as_scaled(PxScale::from(TEXT_PX));
+    // +2: the 1 px outline above and below.
+    ceil_px(scaled.height()) + 2
+}
+
+/// Extra canvas px at the bottom for `lines` keep lines (0 for none).
+pub fn keep_band_height(font: &FontVec, lines: usize) -> u32 {
+    u32::try_from(lines.min(MAX_KEEP_LINES)).map_or(0, |n| n * line_height(font))
+}
+
+/// One keep-list entry as text: `Harlequin Crest (S)`, `Lem Rune ×2 (A)`.
+pub fn keep_entry(k: &Keep) -> String {
+    let tier = match k.tier {
+        Tier::S => "S",
+        Tier::A => "A",
+        Tier::B => "B",
+    };
+    if k.count > 1 {
+        format!("{} ×{} ({tier})", k.name, k.count)
+    } else {
+        format!("{} ({tier})", k.name)
+    }
+}
+
+/// The keep list as lines of at most `max_width` px in `font` (see [`wrap_keep`]).
+pub fn keep_lines(font: &FontVec, keep: &[Keep], max_width: f32) -> Vec<String> {
+    let entries: Vec<String> = keep.iter().map(keep_entry).collect();
+    wrap_keep(&entries, |t| text_width(font, t) <= max_width)
+}
+
+/// Packs `entries` after "Keep: " into lines joined by " · " for which `fits` holds (an entry too
+/// wide for a line of its own gets one anyway), at most [`MAX_KEEP_LINES`]. If they don't all
+/// fit, the last line ends in "+N more" for the rest. Empty for no entries.
+pub fn wrap_keep(entries: &[String], fits: impl Fn(&str) -> bool) -> Vec<String> {
+    let render = |i: usize, line: &[String]| {
+        let body = line.join(SEPARATOR);
+        if i == 0 {
+            format!("{KEEP_PREFIX}{body}")
+        } else {
+            body
+        }
+    };
+    let mut lines: Vec<Vec<String>> = Vec::new();
+    for e in entries {
+        let i = lines.len().saturating_sub(1);
+        match lines.last_mut() {
+            Some(line) => {
+                line.push(e.clone());
+                if line.len() > 1 && !fits(&render(i, line)) {
+                    line.pop();
+                    lines.push(vec![e.clone()]);
+                }
+            }
+            None => lines.push(vec![e.clone()]),
+        }
+    }
+    if lines.len() > MAX_KEEP_LINES {
+        lines.truncate(MAX_KEEP_LINES);
+        let placed: usize = lines.iter().map(Vec::len).sum();
+        let mut rest = entries.len().saturating_sub(placed);
+        if let Some(last) = lines.last_mut() {
+            loop {
+                last.push(format!("+{rest} more"));
+                if last.len() == 1 || fits(&render(MAX_KEEP_LINES - 1, last)) {
+                    break;
+                }
+                // Drop "+N more" and move the line's last entry into the rest.
+                last.pop();
+                last.pop();
+                rest += 1;
+            }
+        }
+    }
+    lines.iter().enumerate().map(|(i, l)| render(i, l)).collect()
+}
+
+/// Draws the keep `lines` bottom-left into `pm` in green, the last one at the bottom. Draws
+/// nothing if the canvas is shorter than the lines.
+pub fn draw_keep(pm: &mut Pixmap, font: &FontVec, lines: &[String]) {
+    let h = pm.height();
+    if h < keep_band_height(font, lines.len()) + 2 * PAD {
+        return;
+    }
+    let scaled = font.as_scaled(PxScale::from(TEXT_PX));
+    let lh = line_height(font);
+    let x0 = f32_px(PAD + 1);
+    for (from_bottom, line) in (0u32..).zip(lines.iter().rev()) {
+        let baseline = f32_px(h - PAD - 1 - from_bottom * lh) + scaled.descent();
+        draw_outlined(pm, font, TEXT_PX, KEEP_TEXT, line, (x0, baseline), false);
+    }
+}
+
 /// Canvas px at the bottom kept free of the map for the info line.
 pub fn band_height(font: &FontVec) -> u32 {
     let scaled = font.as_scaled(PxScale::from(TEXT_PX));
@@ -164,10 +264,13 @@ pub fn fit_text(font: &FontVec, line: &InfoLine, max_width: f32) -> String {
     }
 }
 
-/// Draws `line` bottom-left into `pm`: white text with a dark 1 px outline. Draws nothing if the
-/// canvas is smaller than the text band.
-pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine) {
-    let (w, h) = (pm.width(), pm.height());
+/// Draws `line` bottom-left into `pm`, `inset` px above the bottom (room for the keep lines):
+/// white text with a dark 1 px outline. Draws nothing if the canvas is smaller than the band.
+pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine, inset: u32) {
+    let w = pm.width();
+    let Some(h) = pm.height().checked_sub(inset) else {
+        return;
+    };
     if h < band_height(font) {
         return;
     }
@@ -426,6 +529,69 @@ mod tests {
             fit_text(font, &line, 5.0),
             "Normal · … · mlvl 22 · champ 24 · unique 25"
         );
+    }
+
+    fn keep(name: &str, tier: Tier, count: u32) -> Keep {
+        Keep {
+            name: name.into(),
+            tier,
+            category: crate::valuables::Category::Trade,
+            count,
+        }
+    }
+
+    #[test]
+    fn keep_entries() {
+        assert_eq!(
+            keep_entry(&keep("Harlequin Crest", Tier::S, 1)),
+            "Harlequin Crest (S)"
+        );
+        assert_eq!(keep_entry(&keep("Lem Rune", Tier::A, 2)), "Lem Rune ×2 (A)");
+    }
+
+    #[test]
+    fn keep_lines_wrap_and_cap() {
+        let entries: Vec<String> = [
+            "aaaa", "bbbb", "cccc", "dddd", "eeee", "ffff", "gggg", "hhhh", "iiii", "jjjj",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        // Width by characters: 20 per line.
+        let fits = |t: &str| t.chars().count() <= 20;
+        assert_eq!(wrap_keep(&[], fits), Vec::<String>::new());
+        assert_eq!(
+            wrap_keep(entries.get(..2).unwrap_or_default(), fits),
+            vec!["Keep: aaaa · bbbb"]
+        );
+        assert_eq!(
+            wrap_keep(entries.get(..5).unwrap_or_default(), fits),
+            vec!["Keep: aaaa · bbbb", "cccc · dddd · eeee"]
+        );
+        // Ten entries need four lines: three, the last ending in "+N more" (two entries make
+        // room for it).
+        let capped = wrap_keep(&entries, fits);
+        assert_eq!(
+            capped,
+            vec!["Keep: aaaa · bbbb", "cccc · dddd · eeee", "ffff · +4 more"]
+        );
+        assert!(capped.iter().all(|l| fits(l)), "{capped:?}");
+        // An entry wider than a line still gets one.
+        let long = vec!["x".repeat(30), "y".into()];
+        assert_eq!(wrap_keep(&long, fits).len(), 2);
+    }
+
+    #[test]
+    fn keep_band_heights() {
+        let Some(font) = font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return;
+        };
+        let lh = line_height(font);
+        assert!(lh > 10, "{lh}");
+        assert_eq!(keep_band_height(font, 0), 0, "no lines, no band");
+        assert_eq!(keep_band_height(font, 1), lh);
+        assert_eq!(keep_band_height(font, 3), 3 * lh);
+        assert_eq!(keep_band_height(font, 7), 3 * lh, "capped at three lines");
     }
 
     #[test]

@@ -19,6 +19,7 @@ use serde::Serialize;
 use crate::game::{Bounds, PresetKind, Room, Snapshot};
 use crate::items::DropKind;
 use crate::session;
+use crate::valuables::{Category, Tier};
 
 /// Monster flag bits of an elite: superunique 0x02, champion 0x04, unique 0x08.
 const ELITE: u8 = 0x0E;
@@ -95,7 +96,8 @@ pub enum Event {
         y: u16,
         piece: Option<u32>,
     },
-    /// A shown ground item (unique, set, gem, rune) on first sight.
+    /// A shown ground item (unique, set, gem, rune, charm, valuable base) on first sight, with
+    /// its highlight (`null` tier: none) and raw fields for checking unverified offsets.
     Drop {
         level: u32,
         id: u32,
@@ -104,6 +106,16 @@ pub enum Event {
         quality: u32,
         x: u32,
         y: u32,
+        tier: Option<Tier>,
+        category: Option<Category>,
+        rule: Option<String>,
+        uncertain: bool,
+        sockets: u8,
+        ethereal: bool,
+        flags: u32,
+        unique_index: Option<u32>,
+        /// Hex of the first `item_data::HEAD_LEN` bytes of `ItemData`.
+        item_data_head: String,
     },
 }
 
@@ -255,6 +267,7 @@ impl Recorder {
         }
         for d in &snap.drops {
             if self.drops.insert(d.id) {
+                let h = d.highlight.as_ref();
                 out.push(Event::Drop {
                     level,
                     id: d.id,
@@ -263,6 +276,15 @@ impl Recorder {
                     quality: d.quality,
                     x: d.x,
                     y: d.y,
+                    tier: h.map(|h| h.tier),
+                    category: h.map(|h| h.category),
+                    rule: h.map(|h| h.rule.clone()),
+                    uncertain: h.is_some_and(|h| h.uncertain),
+                    sockets: d.sockets,
+                    ethereal: d.ethereal,
+                    flags: d.flags,
+                    unique_index: d.unique_index,
+                    item_data_head: d.item_data_head.clone(),
                 });
             }
         }
@@ -457,6 +479,7 @@ mod tests {
     use super::*;
     use crate::game::{Addr, ItemDrop, Level, Monster, Player, Preset, RoomLink, RoomPos};
     use crate::items::CharmSize;
+    use crate::valuables::Highlight;
     use anyhow::{Context, Result};
     use serde_json::json;
 
@@ -494,6 +517,8 @@ mod tests {
             monsters: vec![],
             ground_items: 0,
             drops: vec![],
+            inventory_items: 0,
+            inventory_keep: vec![],
             difficulty: None,
             warnings: vec![],
         }
@@ -618,6 +643,17 @@ mod tests {
                 unique: true,
             },
             quality: 7,
+            flags: 0x0080_0000,
+            ethereal: false,
+            sockets: 0,
+            unique_index: Some(370),
+            item_data_head: "07000000".into(),
+            highlight: Some(Highlight {
+                tier: Tier::S,
+                category: Category::Trade,
+                rule: "Unique grand charms".into(),
+                uncertain: true,
+            }),
             x: 12,
             y: 13,
         }];
@@ -629,7 +665,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(drop)?,
             json!({"ev": "drop", "level": 74, "id": 9, "code": "cm3",
-                "kind": {"charm": {"size": "grand", "unique": true}}, "quality": 7, "x": 12, "y": 13})
+                "kind": {"charm": {"size": "grand", "unique": true}}, "quality": 7, "x": 12, "y": 13,
+                "tier": "S", "category": "trade", "rule": "Unique grand charms", "uncertain": true,
+                "sockets": 0, "ethereal": false, "flags": 0x0080_0000, "unique_index": 370,
+                "item_data_head": "07000000"})
         );
         Ok(())
     }
@@ -650,6 +689,12 @@ mod tests {
             code: Some("r01".into()),
             kind: DropKind::Rune(1),
             quality: 2,
+            flags: 0,
+            ethereal: false,
+            sockets: 0,
+            unique_index: None,
+            item_data_head: String::new(),
+            highlight: None,
             x: 12,
             y: 13,
         }];
@@ -679,7 +724,9 @@ mod tests {
             json!({"t": 100, "game": "0000beef-a000", "ev": "monster", "level": 74, "id": 77,
                 "txt": 250, "flags": 2, "x": 45, "y": 5, "piece": 510, "mode": 1}),
             json!({"t": 100, "game": "0000beef-a000", "ev": "drop", "level": 74, "id": 9,
-                "code": "r01", "kind": {"rune": 1}, "quality": 2, "x": 12, "y": 13}),
+                "code": "r01", "kind": {"rune": 1}, "quality": 2, "x": 12, "y": 13,
+                "tier": null, "category": null, "rule": null, "uncertain": false, "sockets": 0,
+                "ethereal": false, "flags": 0, "unique_index": null, "item_data_head": ""}),
             json!({"t": 100, "game": "0000beef-a000", "ev": "arrival", "level": 74, "x": 85,
                 "y": 3, "piece": null}),
         ];

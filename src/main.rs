@@ -2,10 +2,12 @@
 //!
 //! See `PLAN.md` for the architecture and milestones.
 
+mod config;
 mod game;
 mod hypr;
 mod image;
 mod info;
+mod item_names_data;
 mod items;
 mod journal;
 #[allow(
@@ -22,6 +24,7 @@ mod render;
 mod session;
 #[cfg(test)]
 mod testutil;
+mod valuables;
 
 use std::thread;
 
@@ -45,15 +48,17 @@ fn main() -> Result<()> {
             .is_none_or(|a| ["--player", "--size", "--no-journal"].contains(&a.as_str())) =>
         {
             let (player, size, journal) = parse_live_args(&args)?;
-            live(player, size, journal)
+            live(player, size, journal, config::load())
         }
         [flag] if flag == "--probe" => probe(),
-        [flag] if flag == "--dump" => dump(None),
-        [flag, opt, name] if flag == "--dump" && opt == "--player" => dump(Some(name)),
-        [flag, snap, out] if flag == "--render" => render_png(snap, out, DEFAULT_SIZE),
-        [flag, snap, out, size] if flag == "--render" => render_png(snap, out, parse_size(size)?),
-        [flag, snap] if flag == "--show" => show(snap, DEFAULT_SIZE),
-        [flag, snap, size] if flag == "--show" => show(snap, parse_size(size)?),
+        [flag] if flag == "--dump" => dump(None, &config::load()),
+        [flag, opt, name] if flag == "--dump" && opt == "--player" => dump(Some(name), &config::load()),
+        [flag, snap, out] if flag == "--render" => render_png(snap, out, DEFAULT_SIZE, &config::load()),
+        [flag, snap, out, size] if flag == "--render" => {
+            render_png(snap, out, parse_size(size)?, &config::load())
+        }
+        [flag, snap] if flag == "--show" => show(snap, DEFAULT_SIZE, &config::load()),
+        [flag, snap, size] if flag == "--show" => show(snap, parse_size(size)?, &config::load()),
         _ => bail!("{USAGE}"),
     }
 }
@@ -84,7 +89,7 @@ fn parse_live_args(args: &[String]) -> Result<(Option<String>, (u32, u32), bool)
 
 /// Live overlay: a reader thread (game memory → frames) and a focus thread (Hyprland) feed the
 /// UI loop on this thread. Runs until killed.
-fn live(player: Option<String>, size: (u32, u32), journal: bool) -> Result<()> {
+fn live(player: Option<String>, size: (u32, u32), journal: bool, config: config::Config) -> Result<()> {
     let journal = match journal::default_dir() {
         Some(dir) if journal => {
             eprintln!("journal: {}", dir.display());
@@ -102,7 +107,7 @@ fn live(player: Option<String>, size: (u32, u32), journal: bool) -> Result<()> {
         .name("reader".into())
         .spawn(move || {
             let _exit = ExitOnDrop;
-            live::run(&reader_tx, player.as_deref(), size, journal);
+            live::run(&reader_tx, player.as_deref(), size, journal, &config.valuables);
         })
         .context("starting the reader thread")?;
     thread::Builder::new()
@@ -153,14 +158,16 @@ fn probe() -> Result<()> {
 }
 
 /// Prints one JSON snapshot of the game state; `player` picks among several live player units.
-fn dump(player: Option<&str>) -> Result<()> {
+/// Drops carry the highlights of `config`.
+fn dump(player: Option<&str>, config: &config::Config) -> Result<()> {
     let pid = process::find_d2r_pid()?;
     let maps = process::read_maps(pid)?;
     let mem = process::ProcMem::open(pid)?;
     let img = image::find_image(&maps, &mem).context("locating D2R.exe image")?;
     let table = img.unit_table(&mem, offset_cache::default_path().as_deref(), true)?;
     let items_table = items::locate(pid, &mem);
-    let snap = game::snapshot(&mem, table.addr, items_table, player)?;
+    let mut snap = game::snapshot(&mem, table.addr, items_table, player)?;
+    valuables::apply(&mut snap.drops, &config.valuables);
     println!("{}", serde_json::to_string_pretty(&snap)?);
     Ok(())
 }
@@ -183,24 +190,26 @@ fn load_snapshot(path: &str) -> Result<game::Snapshot> {
     serde_json::from_str(&json).with_context(|| format!("parsing snapshot {path}"))
 }
 
-/// Loads a `--dump` snapshot and filters it like live mode does (superunique presets only).
-fn load_for_drawing(path: &str) -> Result<game::Snapshot> {
+/// Loads a `--dump` snapshot and filters it like live mode does (superunique presets only, drop
+/// highlights from `config`).
+fn load_for_drawing(path: &str, config: &config::Config) -> Result<game::Snapshot> {
     let mut snap = load_snapshot(path)?;
+    valuables::apply(&mut snap.drops, &config.valuables);
     session::Session::default().apply(&mut snap);
     Ok(snap)
 }
 
 /// Renders a `--dump` JSON snapshot to a PNG file.
-fn render_png(snap: &str, out: &str, (w, h): (u32, u32)) -> Result<()> {
-    let pixmap = render::render(&load_for_drawing(snap)?, w, h)?;
+fn render_png(snap: &str, out: &str, (w, h): (u32, u32), config: &config::Config) -> Result<()> {
+    let pixmap = render::render(&load_for_drawing(snap, config)?, w, h)?;
     pixmap.save_png(out).with_context(|| format!("writing {out}"))?;
     println!("wrote {out} ({w}x{h})");
     Ok(())
 }
 
 /// Shows a `--dump` JSON snapshot in the overlay window until killed (always, focus is ignored).
-fn show(snap: &str, (w, h): (u32, u32)) -> Result<()> {
-    let frame = render::render(&load_for_drawing(snap)?, w, h)?;
+fn show(snap: &str, (w, h): (u32, u32), config: &config::Config) -> Result<()> {
+    let frame = render::render(&load_for_drawing(snap, config)?, w, h)?;
     let (tx, rx) = channel::channel();
     for msg in [Msg::Frame(frame), Msg::Focus(true)] {
         tx.send(msg).map_err(|_| anyhow!("overlay channel closed"))?;

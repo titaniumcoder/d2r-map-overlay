@@ -12,9 +12,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::items::{self, DropKind};
 use crate::offsets::{
     ROOM_TILE_SCALE, act, act_misc, item_data, item_mode, level, level_preset, monster_data, path,
-    player_data, preset, room_tile, room1, room2, static_path, unit, unit_table,
+    player_data, preset, room_tile, room1, room2, stat_list, static_path, unit, unit_table,
 };
 use crate::process::ReadMem;
+use crate::valuables;
 
 /// Most units walked per unit type (over all hash slots).
 const MAX_UNITS_PER_TYPE: usize = 1000;
@@ -22,6 +23,8 @@ const MAX_UNITS_PER_TYPE: usize = 1000;
 const MAX_ROOMS: usize = 5000;
 /// Most presets walked per room.
 const MAX_PRESETS_PER_ROOM: usize = 500;
+/// Most stat-list entries read per item (a socketed rare has a few dozen).
+const MAX_ITEM_STATS: u64 = 512;
 /// Most room-tile links walked per room.
 const MAX_LINKS_PER_ROOM: usize = 100;
 /// Warnings kept in the snapshot; the rest are only counted.
@@ -70,6 +73,14 @@ pub struct Snapshot {
     /// The ground items worth showing.
     #[serde(default)]
     pub drops: Vec<ItemDrop>,
+    /// Items in the player's inventory (shown or not); live-mode only, not in the JSON.
+    #[serde(skip)]
+    pub inventory_items: u32,
+    /// Inventory items worth keeping (S and A tiers, whatever the config; see
+    /// [`valuables::keep_list`]). Shown as green lines below the info line, also in towns.
+    /// Left out of the JSON when empty, so older dumps and fixtures stay unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inventory_keep: Vec<valuables::Keep>,
     /// 0 Normal, 1 Nightmare, 2 Hell; `None` if unreadable (and in old fixtures).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<u8>,
@@ -207,7 +218,8 @@ impl Monster {
     }
 }
 
-/// A ground item worth showing (see [`items::classify`]).
+/// A ground item worth showing (see [`items::classify`]), or a base a valuables rule matches.
+/// The fields after `quality` default so older dumps stay loadable.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ItemDrop {
     pub id: u32,
@@ -217,6 +229,24 @@ pub struct ItemDrop {
     /// Raw `ItemData` quality (2 normal, 5 set, 7 unique, ...); 0 in snapshots dumped before it existed.
     #[serde(default)]
     pub quality: u32,
+    /// Raw `ItemData` flags (bits mostly unverified; see `item_data::FLAGS`).
+    #[serde(default)]
+    pub flags: u32,
+    #[serde(default)]
+    pub ethereal: bool,
+    /// Socket count (stat 194); 0 if none or unreadable.
+    #[serde(default)]
+    pub sockets: u8,
+    /// uniqueitems / setitems row of a unique or set item (`item_data::FILE_INDEX`).
+    #[serde(default)]
+    pub unique_index: Option<u32>,
+    /// The first `item_data::HEAD_LEN` bytes of `ItemData` as hex, for checking offsets in the
+    /// journal. Not part of the snapshot JSON.
+    #[serde(skip)]
+    pub item_data_head: String,
+    /// Set by [`valuables::apply`] from the config, not by the reader.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<valuables::Highlight>,
     pub x: u32,
     pub y: u32,
 }
@@ -306,7 +336,9 @@ pub fn snapshot(
             Err(e) => r.warn(format!("monster {addr:#x}: {e:#}")),
         }
     }
-    let (ground_items, drops) = r.drops(unit_table, items_table);
+    let (ground_items, drops, inventory) = r.items(unit_table, items_table);
+    let inventory_items = u32::try_from(inventory.len()).unwrap_or(u32::MAX);
+    let inventory_keep = valuables::keep_list(&inventory);
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
 
     if r.suppressed > 0 {
@@ -321,6 +353,8 @@ pub fn snapshot(
         monsters,
         ground_items,
         drops,
+        inventory_items,
+        inventory_keep,
         difficulty,
         warnings: r.warnings,
     })
@@ -394,6 +428,13 @@ impl<M: ReadMem> Reader<'_, M> {
     fn ptr_req(&self, base: u64, off: u64, what: &str) -> Result<u64> {
         self.ptr(base, off)?
             .with_context(|| format!("{what} pointer at {base:#x}+{off:#x} is null"))
+    }
+
+    fn u64(&self, base: u64, off: u64) -> Result<u64> {
+        let a = field(base, off)?;
+        self.mem
+            .read_u64(a)
+            .with_context(|| format!("reading u64 at {a:#x}"))
     }
 
     fn u32(&self, base: u64, off: u64) -> Result<u32> {
@@ -654,10 +695,12 @@ impl<M: ReadMem> Reader<'_, M> {
         })
     }
 
-    /// The number of items on the ground, and those worth showing.
-    fn drops(&mut self, unit_table: u64, items_table: Option<u64>) -> (u32, Vec<ItemDrop>) {
+    /// The number of items on the ground, those worth showing, and the items in the player's
+    /// inventory (all of them, position 0,0; the keep list picks from them).
+    fn items(&mut self, unit_table: u64, items_table: Option<u64>) -> (u32, Vec<ItemDrop>, Vec<ItemDrop>) {
         let mut ground = 0u32;
         let mut drops = Vec::new();
+        let mut inventory = Vec::new();
         for addr in self.units(unit_table, unit_table::ITEM) {
             let head = match self.unit_head(addr, unit_table::ITEM) {
                 Ok(head) => head,
@@ -666,39 +709,125 @@ impl<M: ReadMem> Reader<'_, M> {
                     continue;
                 }
             };
-            // Inventory, equipped, cursor and belt items are units too; only the ground counts.
-            if head.mode != item_mode::ON_GROUND {
-                continue;
-            }
-            ground = ground.saturating_add(1);
-            match self.item_drop(&head, items_table) {
-                Ok(Some(d)) => drops.push(d),
+            // Stash, cube, equipped, cursor and belt items are units too: only the ground and
+            // the inventory count.
+            let found = match head.mode {
+                item_mode::ON_GROUND => {
+                    ground = ground.saturating_add(1);
+                    self.item_drop(addr, &head, items_table)
+                        .map(|d| d.map(|d| (d, true)))
+                }
+                item_mode::STORED if self.in_inventory(&head) => self
+                    .item_fields(addr, &head, items_table)
+                    .map(|d| Some((d, false))),
+                _ => Ok(None),
+            };
+            match found {
+                Ok(Some((d, true))) => drops.push(d),
+                Ok(Some((d, false))) => inventory.push(d),
                 Ok(None) => {}
                 Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
             }
         }
-        (ground, drops)
+        (ground, drops, inventory)
     }
 
-    /// The ground item `head` as a drop, or `None` if it isn't one worth showing.
-    fn item_drop(&self, head: &UnitHead, items_table: Option<u64>) -> Result<Option<ItemDrop>> {
+    /// True for a stored item on the inventory page (not stash or cube). An unreadable page is
+    /// not the inventory.
+    fn in_inventory(&self, head: &UnitHead) -> bool {
+        head.unit_data
+            .and_then(|data| self.u8(data, item_data::PAGE).ok())
+            == Some(item_data::PAGE_INVENTORY)
+    }
+
+    /// The fields of item `head` (unit at `addr`) the valuables rules look at; no position.
+    fn item_fields(&self, addr: u64, head: &UnitHead, items_table: Option<u64>) -> Result<ItemDrop> {
         let data = head.unit_data.context("item has no unit data")?;
         let quality = self.u32(data, item_data::QUALITY)?;
+        let flags = self.u32(data, item_data::FLAGS)?;
         let code = items_table.and_then(|t| items::read_code(self.mem, t, head.txt));
-        let Some(kind) = items::classify(quality, code) else {
-            return Ok(None);
-        };
-        // Items have a static path: u32 position at other offsets than a moving unit's path.
-        let path = head.path.context("ground item has no path")?;
-        Ok(Some(ItemDrop {
+        let unique_index = [item_data::QUALITY_UNIQUE, item_data::QUALITY_SET]
+            .contains(&quality)
+            .then(|| self.u32(data, item_data::FILE_INDEX).ok())
+            .flatten();
+        Ok(ItemDrop {
             id: head.id,
             code: code.map(items::code_text),
-            kind,
+            kind: items::classify(quality, code).unwrap_or(DropKind::Base),
             quality,
-            x: self.u32(path, static_path::X)?,
-            y: self.u32(path, static_path::Y)?,
-        }))
+            flags,
+            ethereal: flags & item_data::FLAG_ETHEREAL != 0,
+            // Optional data like `room_preset`: an unreadable stat list counts as no sockets.
+            sockets: self.sockets(addr).unwrap_or(0),
+            unique_index,
+            item_data_head: String::new(),
+            highlight: None,
+            x: 0,
+            y: 0,
+        })
     }
+
+    /// The ground item `head` (unit at `addr`) as a drop, or `None` if it isn't one worth
+    /// showing: not a unique, set, gem, rune or charm, and no valuables rule of any tier matches
+    /// it. Which tiers are highlighted is decided later ([`valuables::apply`]).
+    fn item_drop(&self, addr: u64, head: &UnitHead, items_table: Option<u64>) -> Result<Option<ItemDrop>> {
+        let mut drop = self.item_fields(addr, head, items_table)?;
+        if drop.kind == DropKind::Base && !valuables::is_candidate(&drop) {
+            return Ok(None);
+        }
+        // Items have a static path: u32 position at other offsets than a moving unit's path.
+        let path = head.path.context("ground item has no path")?;
+        drop.x = self.u32(path, static_path::X)?;
+        drop.y = self.u32(path, static_path::Y)?;
+        let data = head.unit_data.context("item has no unit data")?;
+        drop.item_data_head = self
+            .mem
+            .read_bytes(data, item_data::HEAD_LEN)
+            .map_or_else(|_| String::new(), |b| hex(&b));
+        Ok(Some(drop))
+    }
+
+    /// The item's socket count: stat [`stat_list::NUM_SOCKETS`] of its stat list, 0 without one.
+    fn sockets(&self, unit_addr: u64) -> Result<u8> {
+        let Some(list) = self.ptr(unit_addr, unit::STATS)? else {
+            return Ok(0);
+        };
+        let count = self.u64(list, stat_list::COUNT)?;
+        if count == 0 {
+            return Ok(0);
+        }
+        if count > MAX_ITEM_STATS {
+            bail!("stat list {list:#x}: {count} entries");
+        }
+        let entries = self.ptr_req(list, stat_list::ENTRIES, "stat entries")?;
+        // count <= MAX_ITEM_STATS, so the byte length fits any usize.
+        let len = usize::try_from(count * stat_list::STAT_SIZE)?;
+        let bytes = self
+            .mem
+            .read_bytes(entries, len)
+            .with_context(|| format!("reading {count} stats at {entries:#x}"))?;
+        let (stats, _) = bytes.as_chunks::<8>();
+        let value = stats
+            .iter()
+            .find_map(|&[_, _, id0, id1, v0, v1, v2, v3]| {
+                (u16::from_le_bytes([id0, id1]) == stat_list::NUM_SOCKETS)
+                    .then(|| u32::from_le_bytes([v0, v1, v2, v3]))
+            })
+            .unwrap_or(0);
+        Ok(u8::try_from(value).unwrap_or(u8::MAX))
+    }
+}
+
+/// Lowercase hex of `bytes`, no separators.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            // Writing to a String can't fail.
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 /// `base + off`, failing on overflow.
@@ -717,6 +846,7 @@ fn world(room_units: u32) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config;
     use crate::testutil::FakeMem;
 
     // Synthetic world addresses (all distinct FakeMem regions).
@@ -1250,9 +1380,235 @@ mod tests {
             code: code.map(str::to_owned),
             kind,
             quality,
+            flags: 0,
+            ethereal: false,
+            sockets: 0,
+            unique_index: None,
+            item_data_head: String::new(),
+            highlight: None,
             x,
             y,
         }
+    }
+
+    /// [`item`] on the ground plus `ItemData` flags and file index, and a stat list with `stats`
+    /// (stat id, value) at `addr + 0x600` (entries at `+ 0x700`).
+    fn rich_item(
+        mem: &mut FakeMem,
+        addr: u64,
+        fields: (u32, u32, u32, u32),
+        stats: &[(u16, u32)],
+        next: u64,
+    ) -> Result<()> {
+        stored_item(mem, addr, fields, (item_mode::ON_GROUND, 255), stats, next)
+    }
+
+    /// [`rich_item`] with a unit mode and `ItemData` storage page.
+    fn stored_item(
+        mem: &mut FakeMem,
+        addr: u64,
+        (txt, quality, flags, file_index): (u32, u32, u32, u32),
+        (mode, page): (u32, u8),
+        stats: &[(u16, u32)],
+        next: u64,
+    ) -> Result<()> {
+        item(mem, addr, (txt, mode, quality), (20, 21), next)?;
+        let (data, list, entries) = (addr + 0x200, addr + 0x600, addr + 0x700);
+        put(
+            mem,
+            addr,
+            UNIT_SIZE,
+            &[
+                (unit::TYPE, &unit_table::ITEM.to_le_bytes()),
+                (unit::TXT, &txt.to_le_bytes()),
+                (unit::ID, &(u32::try_from(addr >> 12)?).to_le_bytes()),
+                (unit::MODE, &mode.to_le_bytes()),
+                (unit::UNIT_DATA, &data.to_le_bytes()),
+                (unit::PATH, &(addr + 0x400).to_le_bytes()),
+                (unit::STATS, &list.to_le_bytes()),
+                (unit::NEXT, &next.to_le_bytes()),
+            ],
+        )?;
+        put(
+            mem,
+            data,
+            0x60,
+            &[
+                (item_data::QUALITY, &quality.to_le_bytes()),
+                (item_data::FLAGS, &flags.to_le_bytes()),
+                (item_data::FILE_INDEX, &file_index.to_le_bytes()),
+                (item_data::PAGE, &[page]),
+            ],
+        )?;
+        let count = u64::try_from(stats.len())?;
+        put(
+            mem,
+            list,
+            0x40,
+            &[
+                (stat_list::ENTRIES, &entries.to_le_bytes()),
+                (stat_list::COUNT, &count.to_le_bytes()),
+            ],
+        )?;
+        let mut b = Vec::new();
+        for &(id, value) in stats {
+            b.extend(0u16.to_le_bytes());
+            b.extend(id.to_le_bytes());
+            b.extend(value.to_le_bytes());
+        }
+        mem.add(entries, b);
+        Ok(())
+    }
+
+    /// Items table with `crs` (Crystal Sword) at row 30 and `uap` (Shako) at row 40.
+    fn base_items_table(mem: &mut FakeMem) -> Result<()> {
+        let stride = usize::try_from(crate::offsets::items_txt::STRIDE)?;
+        let mut b = vec![0u8; 50 * stride];
+        for (row, code) in [(30, b"crs "), (40, b"uap ")] {
+            b.get_mut(row * stride..row * stride + 4)
+                .context("row in table")?
+                .copy_from_slice(code);
+        }
+        mem.add(ITEMS, b);
+        Ok(())
+    }
+
+    #[test]
+    fn item_fields_sockets_and_bases() -> Result<()> {
+        let mut m = world()?;
+        let eth = item_data::FLAG_ETHEREAL | 0x0080_0000;
+        // I0 (no path) heads the item chain, as in `world_with_items`.
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        // White eth 4os Crystal Sword: durability and damage stats around the socket stat.
+        rich_item(&mut m, I1, (30, 2, eth, 0), &[(72, 50), (194, 4), (21, 5)], I2)?;
+        // White 2os Crystal Sword: no rule at any tier, not shown.
+        rich_item(&mut m, I2, (30, 2, 0, 0), &[(194, 2)], I3)?;
+        // Unique Shako, identified, row 248; no stats at all.
+        rich_item(&mut m, I3, (40, 7, item_data::FLAG_IDENTIFIED, 248), &[], I4)?;
+        // White 3os Crystal Sword: a B rule, kept by the reader, removed by the default config.
+        rich_item(&mut m, I4, (30, 3, 0, 0), &[(194, 3)], 0)?;
+        base_items_table(&mut m)?;
+
+        let mut s = snapshot(&m, TABLE, Some(ITEMS), None)?;
+        assert!(
+            s.warnings.iter().all(|w| !w.starts_with("item")),
+            "{:?}",
+            s.warnings
+        );
+        let got: Vec<_> = s
+            .drops
+            .iter()
+            .map(|d| {
+                (
+                    d.id,
+                    d.kind,
+                    d.code.as_deref(),
+                    d.sockets,
+                    d.ethereal,
+                    d.flags,
+                    d.unique_index,
+                )
+            })
+            .collect();
+        let id = |a: u64| u32::try_from(a >> 12).unwrap_or_default();
+        assert_eq!(
+            got,
+            vec![
+                (id(I1), DropKind::Base, Some("crs"), 4, true, eth, None),
+                (
+                    id(I3),
+                    DropKind::Unique,
+                    Some("uap"),
+                    0,
+                    false,
+                    item_data::FLAG_IDENTIFIED,
+                    Some(248)
+                ),
+                (id(I4), DropKind::Base, Some("crs"), 3, false, 0, None),
+            ]
+        );
+        let head = s
+            .drops
+            .first()
+            .map_or_else(String::new, |d| d.item_data_head.clone());
+        assert_eq!(head.len(), 2 * item_data::HEAD_LEN);
+        assert_eq!(s.inventory_keep, vec![], "nothing in the inventory");
+        assert!(head.starts_with("02000000"), "quality first: {head}");
+        assert!(
+            s.drops.iter().all(|d| d.highlight.is_none()),
+            "the reader doesn't highlight"
+        );
+
+        valuables::apply(&mut s.drops, &config::Valuables::default());
+        let tiers: Vec<_> = s
+            .drops
+            .iter()
+            .map(|d| d.highlight.as_ref().map(|h| (h.tier, h.uncertain)))
+            .collect();
+        assert_eq!(
+            tiers,
+            vec![
+                Some((valuables::Tier::A, false)),
+                Some((valuables::Tier::S, false))
+            ],
+            "4os sword A, identified Shako S (certain); the 3os sword is gone"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn keep_list_reads_the_inventory_page_only() -> Result<()> {
+        let mut m = world()?;
+        let id = item_data::FLAG_IDENTIFIED;
+        let stored = item_mode::STORED;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        // Identified Shako (Harlequin Crest) in the inventory: kept, certain, by name.
+        stored_item(&mut m, I1, (40, 7, id, 248), (stored, 0), &[], I2)?;
+        // The same in the stash (page 4), and equipped (mode 1, page 255): not listed.
+        stored_item(&mut m, I2, (40, 7, id, 248), (stored, 4), &[], I3)?;
+        stored_item(&mut m, I3, (40, 7, id, 248), (1, 255), &[], I4)?;
+        // A white 4os Crystal Sword in the inventory: A twink.
+        stored_item(&mut m, I4, (30, 2, id, 0), (stored, 0), &[(194, 4)], I5)?;
+        // A 3os one (B only): not kept.
+        stored_item(&mut m, I5, (30, 2, id, 0), (stored, 0), &[(194, 3)], 0)?;
+        base_items_table(&mut m)?;
+
+        let s = snapshot(&m, TABLE, Some(ITEMS), None)?;
+        assert_eq!((s.ground_items, s.drops.len()), (0, 0));
+        assert_eq!(s.inventory_items, 3, "page-0 stored items only");
+        let keep: Vec<_> = s
+            .inventory_keep
+            .iter()
+            .map(|k| (k.name.as_str(), k.tier, k.count))
+            .collect();
+        assert_eq!(
+            keep,
+            vec![
+                ("Harlequin Crest", valuables::Tier::S, 1),
+                ("Crystal Sword 4os", valuables::Tier::A, 1),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sockets_absent_or_unreadable_count_as_zero() -> Result<()> {
+        let mut m = FakeMem::default();
+        let r = Reader {
+            mem: &m,
+            warnings: Vec::new(),
+            suppressed: 0,
+        };
+        assert!(r.sockets(UNMAPPED).is_err(), "unreadable unit");
+        drop(r);
+        put(&mut m, I1, UNIT_SIZE, &[])?;
+        let r = Reader {
+            mem: &m,
+            warnings: Vec::new(),
+            suppressed: 0,
+        };
+        assert_eq!(r.sockets(I1)?, 0, "null stat list");
+        Ok(())
     }
 
     #[test]
@@ -1449,10 +1805,34 @@ mod tests {
         assert_eq!(
             v.pointer("/drops/0"),
             Some(
-                &serde_json::json!({"id": 0x801, "code": "gcg", "kind": {"gem": "emerald"}, "quality": 2, "x": 5323, "y": 5622})
+                &serde_json::json!({"id": 0x801, "code": "gcg", "kind": {"gem": "emerald"}, "quality": 2,
+                    "flags": 0, "ethereal": false, "sockets": 0, "unique_index": null,
+                    "x": 5323, "y": 5622})
             )
         );
         assert_eq!(v.pointer("/drops/1/kind"), Some(&serde_json::json!("unique")));
+        // The ItemData hex is journal-only; a highlight shows once set, and parses back.
+        let mut s = s;
+        assert!(v.pointer("/drops/0/item_data_head").is_none());
+        let Some(d) = s.drops.first_mut() else {
+            bail!("no drop")
+        };
+        d.highlight = Some(valuables::Highlight {
+            tier: valuables::Tier::A,
+            category: valuables::Category::Twink,
+            rule: "r".into(),
+            uncertain: true,
+        });
+        let v = serde_json::to_value(&s)?;
+        assert_eq!(
+            v.pointer("/drops/0/highlight"),
+            Some(&serde_json::json!({"tier": "A", "category": "twink", "rule": "r", "uncertain": true}))
+        );
+        let back: Snapshot = serde_json::from_value(v.clone())?;
+        assert_eq!(
+            back.drops.first().and_then(|d| d.highlight.clone()),
+            s.drops.first().and_then(|d| d.highlight.clone())
+        );
         assert_eq!(v.pointer("/drops/2/kind"), Some(&serde_json::json!({"rune": 1})));
         Ok(())
     }

@@ -5,10 +5,11 @@
 
 use ab_glyph::FontVec;
 use anyhow::{Context, Result};
-use tiny_skia::{FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, Transform};
+use tiny_skia::{FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, StrokeDash, Transform};
 
 use crate::game::{Bounds, Monster, Preset, PresetKind, Room, Snapshot};
 use crate::items::{CharmSize, DropKind, GemColour};
+use crate::valuables::Tier;
 use crate::{info, session};
 
 /// Object txt ids of waypoints: every waypoint row of classic objects.txt. Live-verified: 119
@@ -119,6 +120,13 @@ const SUSPECT_GLYPH_PX: f32 = 22.0;
 const UNIQUE_GOLD: Rgba = [235, 190, 60, 255];
 /// Charms: a light blue, apart from the rune orange and the entry teal.
 const CHARM_BLUE: Rgba = [120, 170, 255, 255];
+/// A base shown only for a valuables rule (white 4os Crystal Sword, ...).
+const BASE_WHITE: Rgba = [240, 240, 240, 255];
+/// Valuables ring: radius = drop marker size + this, stroke width, and the dash pattern
+/// (on, off px) of an uncertain match.
+const RING_GAP: f32 = 4.0;
+const RING_WIDTH: f32 = 2.0;
+const RING_DASH: [f32; 2] = [3.0, 2.5];
 
 /// Outline shape of a marker. Monsters and presets are circles (the level entry a square); drops
 /// are diamonds and squares.
@@ -157,6 +165,13 @@ pub enum Marker {
     Elite,
     /// An item on the ground worth picking up.
     Drop(DropKind),
+    /// A valuables highlight around the drop marker of `kind`: a ring coloured by tier, dashed
+    /// when the match is uncertain. Drawn after all drop markers, so no drop hides a ring.
+    Ring {
+        kind: DropKind,
+        tier: Tier,
+        uncertain: bool,
+    },
     Player,
 }
 
@@ -186,8 +201,22 @@ impl Marker {
                 (colour, half, Shape::Square)
             }
             Self::Drop(DropKind::Gem(colour)) => (gem_colour(colour), 3.5, Shape::Diamond),
+            Self::Drop(DropKind::Base) => (BASE_WHITE, 3.5, Shape::Diamond),
+            Self::Ring { kind, tier, .. } => {
+                let radius = Self::Drop(kind).style().1 + RING_GAP;
+                (tier_colour(tier), radius, Shape::Circle)
+            }
             Self::Player => ([40, 255, 60, 255], 4.5, Shape::Circle),
         }
+    }
+}
+
+/// Ring colour of a valuables tier.
+const fn tier_colour(t: Tier) -> Rgba {
+    match t {
+        Tier::S => [230, 40, 40, 255],
+        Tier::A => [255, 140, 0, 255],
+        Tier::B => [255, 220, 0, 255],
     }
 }
 
@@ -341,6 +370,15 @@ pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
                 .iter()
                 .map(|d| (Marker::Drop(d.kind), f64::from(d.x), f64::from(d.y))),
         )
+        .chain(snap.drops.iter().filter_map(|d| {
+            let h = d.highlight.as_ref()?;
+            let ring = Marker::Ring {
+                kind: d.kind,
+                tier: h.tier,
+                uncertain: h.uncertain,
+            };
+            Some((ring, f64::from(d.x), f64::from(d.y)))
+        }))
         .chain(landmarks(snap, LANDMARKS))
         .collect();
     out.push((Marker::Player, f64::from(snap.player.x), f64::from(snap.player.y)));
@@ -359,10 +397,45 @@ pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
     render_with(snap, width, height, info::font())
 }
 
-/// The canvas height the map is fitted into: all of it, less the info line's band if there is a
-/// font to draw it with.
-pub fn map_height(height: u32, font: Option<&FontVec>) -> u32 {
-    font.map_or(height, |f| height.saturating_sub(info::band_height(f)).max(1))
+/// The canvas height the map is fitted into: all of it, less the info line's band and the
+/// band of `keep_lines` keep lines if there is a font to draw them with.
+pub fn map_height(height: u32, font: Option<&FontVec>, keep_lines: usize) -> u32 {
+    font.map_or(height, |f| {
+        let bands = info::band_height(f) + info::keep_band_height(f, keep_lines);
+        height.saturating_sub(bands).max(1)
+    })
+}
+
+/// The inventory keep list as text lines for a `width` px canvas; none without a font.
+fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<String> {
+    match font {
+        Some(f) if !snap.inventory_keep.is_empty() => {
+            let max_width = f32::from(u16::try_from(width).unwrap_or(u16::MAX)) - 8.0;
+            info::keep_lines(f, &snap.inventory_keep, max_width)
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// A frame with only the inventory keep lines (for towns, where the map is hidden); `None` if
+/// there is nothing to show (empty list, or no font to draw it with).
+///
+/// # Errors
+/// Fails if the canvas size is zero or too large for tiny-skia.
+pub fn render_keep_only(
+    snap: &Snapshot,
+    width: u32,
+    height: u32,
+    font: Option<&FontVec>,
+) -> Result<Option<Pixmap>> {
+    let lines = keep_lines(snap, width, font);
+    let Some(font) = font.filter(|_| !lines.is_empty()) else {
+        return Ok(None);
+    };
+    let mut pm =
+        Pixmap::new(width, height).with_context(|| format!("invalid canvas size {width}x{height}"))?;
+    info::draw_keep(&mut pm, font, &lines);
+    Ok(Some(pm))
 }
 
 /// [`render`] with an explicit font; `None` draws no info line and gives the map the full canvas.
@@ -372,28 +445,9 @@ pub fn map_height(height: u32, font: Option<&FontVec>) -> u32 {
 pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontVec>) -> Result<Pixmap> {
     let mut pm =
         Pixmap::new(width, height).with_context(|| format!("invalid canvas size {width}x{height}"))?;
-    let view = View::fit(level_bounds(snap), width, map_height(height, font));
-    // The level is one continuous shape: all rooms in one path, then the loaded ones in a second
-    // path on top. Separate fills per room would leave anti-aliasing seams along shared edges;
-    // within one path the edges' coverage adds up, and the loaded layer blends onto the base fill
-    // rather than onto the transparent canvas.
-    for (rooms, fill) in [
-        (rooms_path(view, snap.level.rooms.iter()), ROOM),
-        (
-            rooms_path(view, snap.level.rooms.iter().filter(|r| r.loaded)),
-            ROOM_LOADED,
-        ),
-    ] {
-        if let Some(path) = rooms {
-            pm.fill_path(
-                &path,
-                &paint(fill),
-                FillRule::Winding,
-                Transform::identity(),
-                None,
-            );
-        }
-    }
+    let keep = keep_lines(snap, width, font);
+    let view = View::fit(level_bounds(snap), width, map_height(height, font, keep.len()));
+    fill_rooms(&mut pm, view, snap);
 
     let ring = Stroke {
         width: 1.5,
@@ -438,6 +492,8 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         };
         if let Marker::Suspected(_) = marker {
             draw_suspected(&mut pm, font, &dot, cx, cy);
+        } else if let Marker::Ring { uncertain, .. } = marker {
+            draw_ring(&mut pm, &dot, colour, uncertain);
         } else if let Marker::QuestObject(_) = marker {
             pm.stroke_path(
                 &dot,
@@ -473,9 +529,55 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         }
     }
     if let Some(font) = font {
-        info::draw(&mut pm, font, &info::info_line(snap.level.id, snap.difficulty));
+        let inset = info::keep_band_height(font, keep.len());
+        info::draw(
+            &mut pm,
+            font,
+            &info::info_line(snap.level.id, snap.difficulty),
+            inset,
+        );
+        info::draw_keep(&mut pm, font, &keep);
     }
     Ok(pm)
+}
+
+/// Fills the level's rooms, then the loaded ones on top.
+fn fill_rooms(pm: &mut Pixmap, view: View, snap: &Snapshot) {
+    // The level is one continuous shape: all rooms in one path, then the loaded ones in a second
+    // path on top. Separate fills per room would leave anti-aliasing seams along shared edges;
+    // within one path the edges' coverage adds up, and the loaded layer blends onto the base fill
+    // rather than onto the transparent canvas.
+    for (rooms, fill) in [
+        (rooms_path(view, snap.level.rooms.iter()), ROOM),
+        (
+            rooms_path(view, snap.level.rooms.iter().filter(|r| r.loaded)),
+            ROOM_LOADED,
+        ),
+    ] {
+        if let Some(path) = rooms {
+            pm.fill_path(
+                &path,
+                &paint(fill),
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+    }
+}
+
+/// A valuables ring along `circle`: solid, or dashed for an `uncertain` match.
+fn draw_ring(pm: &mut Pixmap, circle: &Path, colour: Rgba, uncertain: bool) {
+    let stroke = Stroke {
+        width: RING_WIDTH,
+        dash: if uncertain {
+            StrokeDash::new(RING_DASH.to_vec(), 0.0)
+        } else {
+            None
+        },
+        ..Stroke::default()
+    };
+    pm.stroke_path(circle, &paint(colour), &stroke, Transform::identity(), None);
 }
 
 /// A "?" for an unconfirmed landmark at (`cx`, `cy`): the glyph on a dark translucent disc, or
@@ -626,6 +728,8 @@ mod tests {
             monsters: vec![],
             ground_items: 0,
             drops: vec![],
+            inventory_items: 0,
+            inventory_keep: vec![],
             difficulty: None,
             warnings: vec![],
         }
@@ -923,6 +1027,12 @@ mod tests {
             code: None,
             kind,
             quality: 0,
+            flags: 0,
+            ethereal: false,
+            sockets: 0,
+            unique_index: None,
+            item_data_head: String::new(),
+            highlight: None,
             x,
             y,
         }
@@ -977,6 +1087,106 @@ mod tests {
             }
         }
         Ok((hits, dx, dy))
+    }
+
+    fn highlighted(kind: DropKind, x: u32, tier: Tier, uncertain: bool) -> ItemDrop {
+        let mut d = drop_at(kind, x, 30);
+        d.highlight = Some(crate::valuables::Highlight {
+            tier,
+            category: crate::valuables::Category::Trade,
+            rule: "test".into(),
+            uncertain,
+        });
+        d
+    }
+
+    /// Of `n` points evenly around the circle of `radius` px around `at`, how many are in the
+    /// ring colour `want` (anti-aliasing allowed for).
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "test points are inside the canvas"
+    )]
+    fn ring_hits(pm: &Pixmap, at: (f32, f32), radius: f32, want: Rgba, n: u16) -> Result<u16> {
+        let mut hits = 0;
+        for i in 0..n {
+            let angle = f32::from(i) * std::f32::consts::TAU / f32::from(n);
+            let x = radius.mul_add(angle.cos(), at.0).floor() as u32;
+            let y = radius.mul_add(angle.sin(), at.1).floor() as u32;
+            let p = rgba(pm, x, y)?;
+            let close = p.iter().zip(want).take(3).all(|(&a, b)| a.abs_diff(b) <= 60);
+            if close && p[3] >= 150 {
+                hits += 1;
+            }
+        }
+        Ok(hits)
+    }
+
+    #[test]
+    fn rings_come_after_drops_and_before_the_player() {
+        let mut snap = empty_snapshot(5, 5);
+        snap.drops = vec![
+            highlighted(DropKind::Base, 1, Tier::A, false),
+            drop_at(DropKind::Rune(1), 2, 2),
+        ];
+        let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                Marker::Drop(DropKind::Base),
+                Marker::Drop(DropKind::Rune(1)),
+                Marker::Ring {
+                    kind: DropKind::Base,
+                    tier: Tier::A,
+                    uncertain: false
+                },
+                Marker::Player,
+            ]
+        );
+        let (white, size, shape) = Marker::Drop(DropKind::Base).style();
+        assert_eq!(
+            (white, shape),
+            (BASE_WHITE, Shape::Diamond),
+            "bases: a white diamond"
+        );
+        assert!(
+            size < Marker::Drop(DropKind::Unique).style().1,
+            "smaller than a unique"
+        );
+    }
+
+    #[test]
+    fn rings_are_coloured_by_tier_and_dashed_when_uncertain() -> Result<()> {
+        let mut snap = empty_snapshot(5, 115);
+        snap.level.rooms = vec![room(0, 0, false), room(60, 0, true)];
+        snap.drops = vec![
+            highlighted(DropKind::Unique, 20, Tier::S, false),
+            highlighted(DropKind::Base, 60, Tier::A, false),
+            highlighted(DropKind::Base, 100, Tier::B, false),
+            highlighted(DropKind::Set, 140, Tier::S, true),
+        ];
+        let (w, h) = (400, 400);
+        let pm = render(&snap, w, h)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+        let expect = [
+            (20.0, DropKind::Unique, [230, 40, 40, 255]),
+            (60.0, DropKind::Base, [255, 140, 0, 255]),
+            (100.0, DropKind::Base, [255, 220, 0, 255]),
+        ];
+        for (x, kind, colour) in expect {
+            let at = v.to_screen(x, 30.0);
+            let radius = Marker::Drop(kind).style().1 + RING_GAP;
+            let hits = ring_hits(&pm, at, radius, colour, 72)?;
+            assert!(hits >= 68, "solid {colour:?} ring at x {x}: {hits}/72");
+            // Inside the gap between marker and ring: not ring-coloured.
+            let inside = ring_hits(&pm, at, radius - 2.5, colour, 72)?;
+            assert!(inside <= 4, "ring colour inside the ring at x {x}: {inside}");
+        }
+        let at = v.to_screen(140.0, 30.0);
+        let radius = Marker::Drop(DropKind::Set).style().1 + RING_GAP;
+        let hits = ring_hits(&pm, at, radius, [230, 40, 40, 255], 72)?;
+        assert!((20..=60).contains(&hits), "dashed ring: {hits}/72 on the ring");
+        Ok(())
     }
 
     #[test]
@@ -1109,7 +1319,7 @@ mod tests {
         snap.difficulty = Some(0);
         let (w, h) = (400, 400);
         let pm = render_with(&snap, w, h, Some(font))?;
-        let top = map_height(h, Some(font));
+        let top = map_height(h, Some(font), 0);
         assert!(top < h && h - top < 40, "band {top}..{h}");
         let (mut band, mut above) = (0, 0);
         for y in 0..h {
@@ -1134,7 +1344,7 @@ mod tests {
         assert!(dark >= 50, "only {dark} outline pixels");
         // Without a font: no text, and the map gets the whole canvas.
         let plain = render_with(&snap, w, h, None)?;
-        assert_eq!(map_height(h, None), h);
+        assert_eq!(map_height(h, None, 0), h);
         for y in top..h {
             for x in 0..w {
                 assert!(!is_text_white(rgba(&plain, x, y)?), "{x},{y}");
@@ -1151,7 +1361,7 @@ mod tests {
         };
         let snap = fixture()?;
         let (w, h) = (400, 400);
-        let top = map_height(h, Some(font));
+        let top = map_height(h, Some(font), 0);
         let v = View::fit(level_bounds(&snap), w, top);
         for r in &snap.level.rooms {
             for (x, y) in [
@@ -1504,7 +1714,7 @@ mod tests {
             return Ok(());
         };
         let pm = render_with(&snap, w, h, Some(font))?;
-        let v = View::fit(level_bounds(&snap), w, map_height(h, Some(font)));
+        let v = View::fit(level_bounds(&snap), w, map_height(h, Some(font), 0));
         let at = v.to_screen(90.0, 30.0);
         let near = count_near(&pm, at, SUSPECT_DISC_RADIUS, is_suspect_text)?;
         assert!(near >= 15, "only {near} light glyph pixels near the ?");

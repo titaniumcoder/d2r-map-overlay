@@ -130,6 +130,17 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   heuristic, which mislearned generic spawn ids (328/840 next to Witch Doctor Endugu).
 - Kurast Sewers 1 (92): lever (object 367) and stairs down (366) in room preset 739 → landmark (one game).
 
+## Item fields and valuables (2026-11-15)
+- ItemData `+0x00` quality (2 normal, 4 magic, 5 set, 7 unique verified live), `+0x18` flags (0x10 identified
+  verified; 0x400000 ethereal, 0x4000000 runeword = classic bits, unverified), `+0x34` unique/set row index
+  (verified: Khalim's Flail = uniqueitems row 127; sets + unidentified items unverified), `+0x54` body slot,
+  `+0x55` page (0 inventory, 4 stash, 255 elsewhere; verified over 74 items). Inventory = mode 0 + page 0.
+- Item stat list: unit `+0x88` → `+0x30` entries / `+0x38` count, entry {u16 layer, u16 id, u32 value}; sockets = 194.
+- Valuables: research/valuables.json (67 rules, S/A/B, trade/twink) embedded; tiers per category in
+  `~/.config/d2r-map-overlay/config.toml` (default S+A both; example: config.example.toml). Ground: ring by tier
+  (S red, A orange, dashed = uncertain). Inventory keep list in green below the info line, also in towns: certain
+  S/A, uncertain only S. Unique/set names from src/item_names_data.rs (research/gen_item_names.py).
+
 ## Research journal
 Live mode appends deduped events to `~/.local/share/d2r-map-overlay/journal/YYYY-MM-DD.jsonl` (UTC date):
 level (room pieces), arrival, marker (+ piece), link, elite monster, killed, drop. Files are never rotated;

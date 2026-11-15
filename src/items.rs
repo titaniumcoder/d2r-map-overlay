@@ -1,4 +1,5 @@
-//! Ground drops worth showing (unique, set, gems, runes, charms) and the game's item-code table.
+//! Ground drops worth showing (unique, set, gems, runes, charms, valuable bases) and the game's
+//! item-code table.
 //!
 //! An item unit only carries its items.txt row (`unit::TXT`); the 4-character item code
 //! (`gcg `, `r01 `) lives in the game's items table, an array on the heap whose address differs
@@ -38,6 +39,9 @@ pub enum CharmSize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DropKind {
+    /// Any other item, shown only because a valuables rule matches it (e.g. a white 4os
+    /// Crystal Sword; see [`crate::valuables`]).
+    Base,
     Gem(GemColour),
     /// Rune number 1 (El) ..= 33 (Zod).
     Rune(u8),

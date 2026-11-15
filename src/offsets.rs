@@ -29,6 +29,8 @@ pub mod unit {
     pub const ACT: u64 = 0x20;
     /// ptr to `Path`.
     pub const PATH: u64 = 0x38;
+    /// ptr to the unit's `StatList` (verified live on items, 2026-11-15).
+    pub const STATS: u64 = 0x88;
     /// ptr to the next unit in the hash chain (verified for monsters only).
     pub const NEXT: u64 = 0x150;
 }
@@ -153,6 +155,8 @@ pub mod static_path {
 pub mod item_mode {
     /// Lying on the ground (live-verified 2026-11-14).
     pub const ON_GROUND: u32 = 3;
+    /// In a storage page: inventory, stash, cube (`item_data::PAGE` tells which). Live 2026-11-15.
+    pub const STORED: u32 = 0;
 }
 
 /// `ItemData` (unit data of an item).
@@ -160,9 +164,46 @@ pub mod item_data {
     /// u32 quality (classic D2: 1 low, 2 normal, 3 superior, 4 magic, 5 set, 6 rare, 7 unique,
     /// 8 crafted). Live-verified: a normal gem reads 2.
     pub const QUALITY: u64 = 0x00;
-    /// Classic values; to verify live with a set and a unique drop.
+    /// Classic values; unique (7) live-verified 2026-11-15, set (5) still to see.
     pub const QUALITY_SET: u32 = 5;
     pub const QUALITY_UNIQUE: u32 = 7;
+    /// Other classic quality values (2 and 4 seen live).
+    pub const QUALITY_NORMAL: u32 = 2;
+    pub const QUALITY_SUPERIOR: u32 = 3;
+    pub const QUALITY_MAGIC: u32 = 4;
+    pub const QUALITY_RARE: u32 = 6;
+    /// u32 item flags. Live: `0x0080_0000` on unidentified magic items. The bit values below are
+    /// classic D2 and still to verify in D2R.
+    pub const FLAGS: u64 = 0x18;
+    /// `FLAGS` bit of an ethereal item (classic; to verify live).
+    pub const FLAG_ETHEREAL: u32 = 0x0040_0000;
+    /// `FLAGS` bit of a finished runeword (classic; UNVERIFIED in D2R, the journal logs `FLAGS`).
+    pub const FLAG_RUNEWORD: u32 = 0x0400_0000;
+    /// `FLAGS` bit of an identified item (classic; live: set on an identified quest unique).
+    pub const FLAG_IDENTIFIED: u32 = 0x10;
+    /// u32 uniqueitems / setitems row (`*ID`) of a unique / set item. Live-verified 2026-11-15 for
+    /// an identified unique (Khalim's Flail: 127 = uniqueitems `KhalimFlail`). NOT verified: sets,
+    /// and whether it is filled in before the item is identified (so only trusted with
+    /// [`FLAG_IDENTIFIED`]).
+    pub const FILE_INDEX: u64 = 0x34;
+    /// u8 storage page of a stored item: `PAGE_INVENTORY` 0, stash 4; 255 when equipped (body
+    /// slot in the byte at `+0x54`), on the ground or on the cursor. Live-verified 2026-11-15
+    /// over 74 items.
+    pub const PAGE: u64 = 0x55;
+    pub const PAGE_INVENTORY: u8 = 0;
+    /// Bytes of `ItemData` copied into the journal's drop event for checking the offsets above.
+    pub const HEAD_LEN: usize = 0x50;
+}
+
+/// `StatList` (unit `+0x88`). Verified live on items (damage 21/22, durability 72/73, defense 31).
+pub mod stat_list {
+    /// ptr to the array of [`STAT_SIZE`]-byte entries `{u16 layer, u16 stat id, u32 value}`.
+    pub const ENTRIES: u64 = 0x30;
+    /// u64 entry count.
+    pub const COUNT: u64 = 0x38;
+    pub const STAT_SIZE: u64 = 8;
+    /// Stat id `item_numsockets` (itemstatcost.txt).
+    pub const NUM_SOCKETS: u16 = 194;
 }
 
 /// The game's items table (one record per items.txt row, weapons then armor then misc; D2R row =

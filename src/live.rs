@@ -19,7 +19,9 @@ use crate::journal::Journal;
 use crate::overlay::Msg;
 use crate::process::ProcMem;
 use crate::session::Session;
-use crate::{image, items, offset_cache, process, render};
+use ab_glyph::FontVec;
+
+use crate::{config, image, info, items, offset_cache, process, render, valuables};
 
 /// Snapshot interval (~5 Hz).
 const TICK: Duration = Duration::from_millis(200);
@@ -44,8 +46,14 @@ fn send(tx: &Sender<Msg>, msg: Msg) -> Result<(), UiGone> {
 }
 
 /// Runs until the UI is gone. `player` picks among several player units; `size` is the frame size;
-/// `journal` records what is seen (see [`crate::journal`]).
-pub fn run(tx: &Sender<Msg>, player: Option<&str>, size: (u32, u32), mut journal: Journal) {
+/// `journal` records what is seen (see [`crate::journal`]); `valuables` picks the highlighted drop tiers.
+pub fn run(
+    tx: &Sender<Msg>,
+    player: Option<&str>,
+    size: (u32, u32),
+    mut journal: Journal,
+    valuables: &config::Valuables,
+) {
     let cache = offset_cache::default_path();
     // The last open error printed: a repeat isn't printed again, a different one is.
     let mut open_err = String::new();
@@ -78,7 +86,7 @@ pub fn run(tx: &Sender<Msg>, player: Option<&str>, size: (u32, u32), mut journal
         eprintln!("attached to D2R (pid {pid})");
         waiting_logged = false;
         let follow = find_table(pid, &mem, cache.as_deref()).map_or(Ok(()), |table| {
-            follow_game(tx, pid, &mem, table, player, size, &mut journal)
+            follow_game(tx, pid, &mem, table, player, size, &mut journal, valuables)
         });
         // The process is gone (or never got a table): hide until the next one is in a game.
         if follow.and_then(|()| send(tx, Msg::Hide)).is_err() {
@@ -122,6 +130,10 @@ fn find_table(pid: u32, mem: &ProcMem, cache: Option<&Path>) -> Option<u64> {
 }
 
 /// Snapshots at [`TICK`] until the process exits; `Ok(())` then, `Err` if the UI is gone.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "plain pass-through of run's settings; a struct for one caller adds nothing"
+)]
 fn follow_game(
     tx: &Sender<Msg>,
     pid: u32,
@@ -130,6 +142,7 @@ fn follow_game(
     player: Option<&str>,
     (w, h): (u32, u32),
     journal: &mut Journal,
+    valuables: &config::Valuables,
 ) -> Result<(), UiGone> {
     let mut session = Session::default();
     let mut dedup = Dedup::default();
@@ -138,9 +151,12 @@ fn follow_game(
         let start = Instant::now();
         match game::snapshot(mem, table, items_table.base(), player) {
             Ok(mut snap) => {
-                if snap.ground_items > 0 {
+                // Codes are needed for ground drops and for the inventory keep list.
+                if snap.ground_items > 0 || snap.inventory_items > 0 {
                     items_table.search(pid);
                 }
+                // Highlights first: the journal records them with the drop.
+                valuables::apply(&mut snap.drops, valuables);
                 // Before `apply`: it drops the monster presets the journal wants to see.
                 journal.observe(&snap);
                 let update = session.apply(&mut snap);
@@ -150,15 +166,8 @@ fn follow_game(
                 if update.new_game {
                     eprintln!("new game (player id or act changed): superunique kills cleared");
                 }
-                if game::is_town(snap.level.id) {
-                    if dedup.hide(Hidden::Town) {
-                        send(tx, Msg::Hide)?;
-                    }
-                } else if let Some(snap) = dedup.changed(snap) {
-                    match render::render(snap, w, h) {
-                        Ok(frame) => send(tx, Msg::Frame(frame))?,
-                        Err(e) => eprintln!("rendering failed: {e:#}"),
-                    }
+                if let Some(msg) = tick_msg(&mut dedup, snap, (w, h), info::font()) {
+                    send(tx, msg)?;
                 }
             }
             Err(e) => {
@@ -234,6 +243,31 @@ impl ItemsTable {
     }
 }
 
+/// What one snapshot's tick sends, if anything. In a town only the inventory keep lines are
+/// shown (no map, info line or markers), and the overlay hides when there are none; elsewhere
+/// the map. `None`: the screen is up to date (or rendering failed, logged).
+fn tick_msg(dedup: &mut Dedup, snap: Snapshot, (w, h): (u32, u32), font: Option<&FontVec>) -> Option<Msg> {
+    let town = game::is_town(snap.level.id);
+    if town && snap.inventory_keep.is_empty() {
+        return dedup.hide(Hidden::Town).then_some(Msg::Hide);
+    }
+    let snap = dedup.changed(snap)?;
+    let frame = if town {
+        render::render_keep_only(snap, w, h, font)
+    } else {
+        render::render_with(snap, w, h, font).map(Some)
+    };
+    match frame {
+        Ok(Some(frame)) => Some(Msg::Frame(frame)),
+        // No font for the keep lines: nothing to show in town.
+        Ok(None) => dedup.hide(Hidden::Town).then_some(Msg::Hide),
+        Err(e) => {
+            eprintln!("rendering failed: {e:#}");
+            None
+        }
+    }
+}
+
 /// Why the overlay is hidden.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Hidden {
@@ -299,6 +333,93 @@ mod tests {
     fn fixture() -> Result<Snapshot> {
         let json = include_str!("../tests/fixtures/jail1-snapshot.json");
         serde_json::from_str(json).context("parsing fixture")
+    }
+
+    fn keep() -> crate::valuables::Keep {
+        crate::valuables::Keep {
+            name: "Harlequin Crest".into(),
+            tier: crate::valuables::Tier::S,
+            category: crate::valuables::Category::Trade,
+            count: 1,
+        }
+    }
+
+    #[test]
+    fn town_without_keep_list_hides() -> Result<()> {
+        let mut d = Dedup::default();
+        let mut town = fixture()?;
+        town.level.id = 1;
+        let font = info::font();
+        assert!(matches!(
+            tick_msg(&mut d, fixture()?, (200, 200), font),
+            Some(Msg::Frame(_))
+        ));
+        assert!(matches!(
+            tick_msg(&mut d, town, (200, 200), font),
+            Some(Msg::Hide)
+        ));
+        let mut town = fixture()?;
+        town.level.id = 1;
+        assert!(tick_msg(&mut d, town, (200, 200), font).is_none(), "hidden once");
+        Ok(())
+    }
+
+    #[test]
+    fn town_with_keep_list_shows_only_the_green_lines() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let mut dedup = Dedup::default();
+        let mut town = fixture()?;
+        town.level.id = 1;
+        town.inventory_keep = vec![keep()];
+        let Some(Msg::Frame(pm)) = tick_msg(&mut dedup, town, (200, 200), Some(font)) else {
+            anyhow::bail!("no frame in town with a keep list");
+        };
+        let lh = info::line_height(font);
+        let mut green = 0;
+        for (index, px) in pm.pixels().iter().enumerate() {
+            let colour = px.demultiply();
+            if colour.alpha() == 0 {
+                continue;
+            }
+            let row = u32::try_from(index)? / pm.width();
+            assert!(row + lh + 8 >= pm.height(), "ink above the keep line at y {row}");
+            // Ink is the green text or its dark outline; no map, markers or white info line.
+            let (red, grn, blue) = (colour.red(), colour.green(), colour.blue());
+            assert!(
+                grn >= red && grn >= blue && red < 160,
+                "non-green pixel {red},{grn},{blue} at y {row}"
+            );
+            if grn > 180 && colour.alpha() == 255 {
+                green += 1;
+            }
+        }
+        assert!(green > 20, "only {green} green pixels");
+        Ok(())
+    }
+
+    #[test]
+    fn keep_lines_shrink_the_map_outside_towns() -> Result<()> {
+        let Some(font) = info::font() else {
+            return Ok(());
+        };
+        let h = 300;
+        let plain = render::map_height(h, Some(font), 0);
+        assert_eq!(
+            render::map_height(h, Some(font), 1),
+            plain - info::line_height(font)
+        );
+        assert_eq!(render::map_height(h, None, 2), h, "no font: no bands");
+        let mut snap = fixture()?;
+        snap.inventory_keep = vec![keep()];
+        let mut d = Dedup::default();
+        assert!(matches!(
+            tick_msg(&mut d, snap, (200, h), Some(font)),
+            Some(Msg::Frame(_))
+        ));
+        Ok(())
     }
 
     #[test]

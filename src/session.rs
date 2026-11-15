@@ -228,6 +228,8 @@ mod tests {
             monsters: vec![],
             ground_items: 0,
             drops: vec![],
+            inventory_items: 0,
+            inventory_keep: vec![],
             difficulty: None,
             warnings: vec![],
         }

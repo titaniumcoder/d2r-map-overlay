@@ -1,0 +1,20 @@
+# d2r-map-overlay configuration (optional).
+# Copy to $XDG_CONFIG_HOME/d2r-map-overlay/config.toml (usually ~/.config/d2r-map-overlay/config.toml).
+# Read once at start. Missing file or key: the defaults below. An invalid file is reported on
+# stderr and the defaults are used. This example spells out the defaults.
+
+[valuables]
+# Ground drops matched by research/valuables.json get a ring around their marker, coloured by
+# tier: S red, A orange, B yellow; dashed when the match is uncertain (unique/set name unknown,
+# or the item's stats decide). List the tiers to highlight per category ("S", "A", "B").
+# trade = items worth selling; twink = white runeword bases (e.g. a 4os Crystal Sword).
+# A plain base with no enabled match isn't shown at all.
+trade = ["S", "A"]
+twink = ["S", "A"]
+
+[shrines]
+# Shrine types to show (not drawn yet). Names, lowercase: none, refilling, health, mana,
+# health exchange, mana exchange, armor, combat, resist fire, resist cold, resist lightning,
+# resist poison, skill, mana recharge, stamina, experience, enirhs, portal, gem, fire, monster,
+# exploding, poison. Unknown names are reported and ignored. show = [] shows none.
+show = ["refilling", "skill", "stamina", "gem", "monster"]
