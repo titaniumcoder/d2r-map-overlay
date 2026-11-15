@@ -50,11 +50,20 @@ pub struct LandmarkRule {
 ///   pieces "Cave Next W/E/S/N" (87–90, exit to the next outdoor area) and "Cave Down W/E/S/N"
 ///   (91–94, stairs to level 2); Underground Passage 1 had one 90 and one 91 piece (2026-11-15).
 ///   Confirmed: the 90 piece holds the exit to Dark Wood (room link to level 5, user stood on it).
+/// - Stony Field (4): lvlprest 160 "Act 1 - Cairn Stones", the stone circle; the five stones and the
+///   portal stone (objects 17–22) lay inside it (live 2026-11-15).
 /// - Dark Wood (5): lvlprest 161 "Act 1 - Inifus" (funktree.ds1), the Tree of Inifuss (confirmed in
 ///   game 2026-11-15).
 /// - Black Marsh (6): lvlprest 163 "Act 1 - Tower 1" (Tower1.ds1), the Forgotten Tower entrance
 ///   (confirmed in game 2026-11-15).
 pub const LANDMARKS: &[LandmarkRule] = &[
+    LandmarkRule {
+        level_ids: 4..=4,
+        preset_ids: 160..=160,
+        label: "cairn stones",
+        confirmed: true,
+        exit: false,
+    },
     LandmarkRule {
         level_ids: 9..=12,
         preset_ids: 90..=90,
