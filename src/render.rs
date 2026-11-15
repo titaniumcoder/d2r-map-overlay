@@ -41,6 +41,9 @@ pub enum LandmarkStyle {
     Star,
     /// Stairs down to a deeper level ([`Marker::StairsDown`]).
     StairsDown,
+    /// A gold worm ([`Marker::Worm`]): Coldworm's chamber, the most hated spot in act 2 (user's
+    /// choice, 2026-11-15).
+    Worm,
 }
 
 /// Landmark rules.
@@ -93,7 +96,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         preset_ids: 509..=509,
         label: "coldworm",
         confirmed: true,
-        style: LandmarkStyle::Star,
+        style: LandmarkStyle::Worm,
     },
     LandmarkRule {
         level_ids: 49..=49,
@@ -410,6 +413,9 @@ pub enum Shape {
     Skull,
     /// [`Shape::Skull`] with two horns, the demon skull of a boss.
     HornedSkull,
+    /// A wavy worm body (an open centre line, stroked; see [`worm_path`]) with a round head on the
+    /// right; the size is half its length.
+    Worm,
     /// Three steps descending to the right ([`stairs_path`]); the size is half the side.
     Stairs,
 }
@@ -441,6 +447,8 @@ pub enum Marker {
     /// A landmark room (see [`LANDMARKS`]), with the rule's label. Drawn below live elites so the
     /// boss standing on it stays visible.
     Landmark(&'static str),
+    /// A confirmed [`LandmarkStyle::Worm`] landmark: a wavy gold worm with a head, landmark size.
+    Worm,
     /// A quest object preset (see [`QUEST_OBJECTS`]) or quest monster preset (see
     /// [`QUEST_MONSTERS`]), with its label: a small gold star without
     /// halo, drawn above the landmark star so both show when they overlap.
@@ -489,6 +497,7 @@ impl Marker {
             // The ring is the no-font fallback; with a font the "?" glyph is drawn instead.
             Self::Suspected(_) => (SUSPECT_TEXT, 7.0, Shape::Circle),
             Self::Landmark(_) => (LANDMARK_GOLD, 9.0, Shape::Star),
+            Self::Worm => (LANDMARK_GOLD, 9.0, Shape::Worm),
             Self::QuestObject(_) => (LANDMARK_GOLD, 6.0, Shape::Star),
             Self::Well => (WELL_CYAN, 4.5, Shape::Circle),
             Self::Shrine(code) => (shrine_colour(code), 4.0, Shape::Circle),
@@ -707,6 +716,7 @@ pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f
                 (false, _) => Marker::Suspected(rule.label),
                 (true, LandmarkStyle::Star) => Marker::Landmark(rule.label),
                 (true, LandmarkStyle::StairsDown) => Marker::StairsDown,
+                (true, LandmarkStyle::Worm) => Marker::Worm,
             };
             Some((marker, x, y))
         })
@@ -945,15 +955,6 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         line_join: LineJoin::Round,
         ..Stroke::default()
     };
-    let solid = |pm: &mut Pixmap, path: &Path, colour: Rgba| {
-        pm.fill_path(
-            path,
-            &paint(colour),
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
-    };
     for (marker, x, y) in markers(snap) {
         let (colour, size, shape) = marker.style();
         let (cx, cy) = view.to_screen(x, y);
@@ -962,6 +963,8 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         };
         if let Marker::Suspected(_) = marker {
             draw_suspected(&mut pm, font, &dot, cx, cy);
+        } else if shape == Shape::Worm {
+            draw_worm(&mut pm, &dot, colour, (cx, cy, size));
         } else if let Marker::Ring { uncertain, .. } = marker {
             draw_ring(&mut pm, &dot, colour, uncertain);
         } else if marker == Marker::Well {
@@ -1177,6 +1180,82 @@ fn triangle_path(cx: f32, cy: f32, size: f32, (ux, uy): (f32, f32)) -> Option<Pa
     pb.finish()
 }
 
+/// Fills `path` in `colour`.
+fn solid(pm: &mut Pixmap, path: &Path, colour: Rgba) {
+    pm.fill_path(
+        path,
+        &paint(colour),
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+}
+
+/// The centre line of a worm: one and a half sine waves from `cx - size` to `cx + size`,
+/// amplitude a third of `size`.
+fn worm_path(cx: f32, cy: f32, size: f32) -> Option<Path> {
+    const SEGMENTS: u8 = 16;
+    let mut pb = PathBuilder::new();
+    for i in 0..=SEGMENTS {
+        let t = f32::from(i) / f32::from(SEGMENTS);
+        let x = 2.0f32.mul_add(t, -1.0).mul_add(size, cx);
+        let y = (t * 3.0 * std::f32::consts::PI).sin().mul_add(size / 3.0, cy);
+        if i == 0 {
+            pb.move_to(x, y);
+        } else {
+            pb.line_to(x, y);
+        }
+    }
+    pb.finish()
+}
+
+/// Draws the worm `body` (from [`worm_path`]) in `colour` with a dark outline, and a round head
+/// at its right end, for a worm centred on (`cx`, `cy`) of half-length `size`.
+fn draw_worm(pm: &mut Pixmap, body: &Path, colour: Rgba, (cx, cy, size): (f32, f32, f32)) {
+    let round = |width| Stroke {
+        width,
+        line_cap: tiny_skia::LineCap::Round,
+        line_join: LineJoin::Round,
+        ..Stroke::default()
+    };
+    let head_x = cx + size;
+    // sin(3π) = 0: the body ends on the centre line.
+    let head = PathBuilder::from_circle(head_x, cy, size * 0.3);
+    pm.stroke_path(
+        body,
+        &paint(MARKER_OUTLINE),
+        &round(5.0),
+        Transform::identity(),
+        None,
+    );
+    if let Some(head) = &head {
+        pm.fill_path(
+            head,
+            &paint(MARKER_OUTLINE),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+        pm.stroke_path(
+            head,
+            &paint(MARKER_OUTLINE),
+            &round(2.0),
+            Transform::identity(),
+            None,
+        );
+    }
+    pm.stroke_path(body, &paint(colour), &round(3.0), Transform::identity(), None);
+    if let Some(head) = &head {
+        pm.fill_path(
+            head,
+            &paint(colour),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+}
+
 /// A staircase of three steps descending to the right, in a square of half-side `size` centred
 /// on (`cx`, `cy`).
 fn stairs_path(cx: f32, cy: f32, size: f32) -> Option<Path> {
@@ -1201,6 +1280,7 @@ fn marker_path(shape: Shape, cx: f32, cy: f32, size: f32) -> Option<Path> {
     match shape {
         Shape::Triangle => triangle_path(cx, cy, size, (0.0, -1.0)),
         Shape::Stairs => stairs_path(cx, cy, size),
+        Shape::Worm => worm_path(cx, cy, size),
         Shape::Skull => skull_path(cx, cy, size, false, true),
         Shape::HornedSkull => skull_path(cx, cy, size, true, true),
         Shape::Circle => PathBuilder::from_circle(cx, cy, size),
@@ -1871,6 +1951,32 @@ mod tests {
         );
         assert_eq!(rgba(&pm, 18, 24)?, Marker::Exit.style().0, "bottom step filled");
         assert_eq!(rgba(&pm, 24, 16)?[3], 0, "top-right corner empty");
+        Ok(())
+    }
+
+    #[test]
+    fn coldworm_chamber_draws_a_gold_worm() -> Result<()> {
+        let mut snap = empty_snapshot(5, 5);
+        snap.level.id = 64;
+        snap.level.rooms = vec![Room {
+            preset: Some(509),
+            ..room(0, 0, false)
+        }];
+        let kinds: Vec<Marker> = landmarks(&snap, LANDMARKS)
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .collect();
+        assert_eq!(kinds, vec![Marker::Worm]);
+        let mut pm = Pixmap::new(40, 40).context("pixmap")?;
+        let (cx, cy, size) = (20.0, 20.0, 9.0);
+        let body = worm_path(cx, cy, size).context("worm path")?;
+        draw_worm(&mut pm, &body, LANDMARK_GOLD, (cx, cy, size));
+        let gold = (0..40u32)
+            .flat_map(|y| (0..40u32).map(move |x| (x, y)))
+            .filter(|&(x, y)| rgba(&pm, x, y).is_ok_and(|p| p == LANDMARK_GOLD))
+            .count();
+        assert!(gold >= 30, "gold pixels {gold}");
+        assert_eq!(rgba(&pm, 20, 5)?[3], 0, "nothing far above the body");
         Ok(())
     }
 
