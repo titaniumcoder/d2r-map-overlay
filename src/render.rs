@@ -87,6 +87,13 @@ pub const QUEST_OBJECTS: &[(u32, &str)] = &[
     // River of Flame (107), live 2026-11-15: at the forge, 25 tiles from Hephasto's superunique
     // preset 792 (superuniques.txt calls him "The Feature Creep").
     (376, "hellforge"),
+    // Chaos Sanctuary (108): the five Diablo seals (objects.txt "Seal", OperateFn 52-56); the seal
+    // bosses are superunique presets 787-789 (Infector of Souls, Lord De Seis, Grand Vizier).
+    (392, "diablo seal"),
+    (393, "diablo seal"),
+    (394, "diablo seal"),
+    (395, "diablo seal"),
+    (396, "diablo seal"),
 ];
 
 /// The quest-object label of object txt id `txt`, if it is one.
@@ -1704,6 +1711,8 @@ mod tests {
             (366, "sewer stairs"),
             (367, "sewer lever"),
             (376, "hellforge"),
+            (392, "diablo seal"),
+            (396, "diablo seal"),
         ] {
             assert_eq!(
                 preset_marker(&object(txt, 0, 0)),
@@ -1712,7 +1721,7 @@ mod tests {
             );
         }
         // Other objects: nothing; waypoints stay waypoints.
-        for txt in [0, 151, 153, 365, 368, 375, 377, 473] {
+        for txt in [0, 151, 153, 365, 368, 375, 377, 391, 397, 473] {
             assert_eq!(preset_marker(&object(txt, 0, 0)), None, "{txt}");
         }
         assert_eq!(preset_marker(&object(237, 0, 0)), Some(Marker::Waypoint));
