@@ -162,6 +162,8 @@ pub const LANDMARKS: &[LandmarkRule] = &[
 /// Quest objects (object txt ids from objects.txt, which matched live) drawn where their preset
 /// is, once the room holding it is loaded. The id alone identifies them, so they are confirmed.
 pub const QUEST_OBJECTS: &[(u32, &str)] = &[
+    // Barracks (28), live 2026-11-15: the Horadric Malus stand, inside the Smith's forge piece 204.
+    (108, "horadric malus"),
     (152, "orifice"),
     (252, "gidbinn altar"),
     (366, "sewer stairs"),
