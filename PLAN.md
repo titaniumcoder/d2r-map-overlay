@@ -109,8 +109,10 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   other ids (510, 511, 513, 517 seen). Drawn as a gold haloed star from the moment the level is entered.
 - Games created in quick succession often share the layout (seed looks time-based); waiting a minute varies it.
 - **Tal Rasha's real tomb** (levels 66–72): the orifice chamber is its own preset. Confirmed: 462 in tomb 72 (orifice
-  object 152 inside it); a fake tomb's chest chamber was 473 in tomb 71. Assumed pattern: orifice chamber = level+390
-  (456–462), chest chamber = level+402 (468–474). Drawn with the same gold star; only 462 is confirmed so far.
+  object 152 inside it); a fake tomb's chest chamber was 473 in tomb 71. The level+390 guess was wrong: lvlprest
+  names them "Tomb Talrasha W/E/S/N" (460–463, only in the real tomb) and "Tomb Chest W/E/S/N" (472–475);
+  456–459 are "Tomb Cube W/E/S/N", the Halls of the Dead 3 cube chamber (459 confirmed with chest object 354).
+  Use lvlprest names (blizzhackers/d2data lvlprest.json, `Def` = the Room2 preset id) before guessing patterns.
 
 ## Flayer Jungle (78), 2026-11-15
 - 192 rooms in 9 large piece types (16 or 32 Room2 each): 534, 535, 538, 539, 565, 570, 574, 601, 602.

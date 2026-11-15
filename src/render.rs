@@ -47,10 +47,13 @@ pub enum LandmarkStyle {
 /// - Arcane Sanctuary (74): the arm end holding the Summoner's platform has its own preset per
 ///   direction: 525 (+x), 526 (−x), 527 (−y), 528 (+y), all four confirmed in game (2026-11-15).
 ///   Ordinary arm ends use other ids (510, 511, 513, 517 seen).
-/// - Tal Rasha's tombs (66–72): the real tomb's orifice chamber. Confirmed: 462 in tomb 72 (orifice
-///   object 152 inside it). A fake tomb's chest chamber was 473 in tomb 71. Pattern assumed: orifice
-///   chamber = level + 390 (456–462), chest chamber = level + 402 (468–474); only 462 is confirmed,
-///   so 456–461 are an unconfirmed rule. The 462 chamber spans 4 Room2 cells.
+/// - Tal Rasha's tombs (66–72): the real tomb's orifice chamber is lvlprest "Tomb Talrasha W/E/S/N"
+///   (460–463), only ever placed in the real tomb. Confirmed: 462 in tomb 72 (orifice object 152
+///   inside it); 460, 461, 463 are unconfirmed. A fake tomb's chest chamber is "Tomb Chest" (472–475;
+///   473 seen in tomb 71). The 462 chamber spans 4 Room2 cells. (An earlier level+390 guess was
+///   wrong: 456–459 are the Halls of the Dead cube pieces.)
+/// - Halls of the Dead Level 3 (60): lvlprest "Tomb Cube W/E/S/N" (456–459) holds the Horadric Cube
+///   chest (object 354) and Bloodwitch's spawn. Confirmed: 459 (chest inside it, 2026-11-15).
 /// - Flayer Jungle (78): the Gidbinn altar (object 252) lies in piece 602, live-verified 2026-11-15
 ///   (player in a 602 room 5 tiles from the altar). 602 spans 16 Room2 cells; 601 is the waypoint
 ///   area (waypoint object 237).
@@ -194,16 +197,37 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         style: LandmarkStyle::Star,
     },
     LandmarkRule {
-        level_ids: 72..=72,
+        level_ids: 66..=72,
         preset_ids: 462..=462,
         label: "orifice",
         confirmed: true,
         style: LandmarkStyle::Star,
     },
     LandmarkRule {
+        level_ids: 60..=60,
+        preset_ids: 459..=459,
+        label: "horadric cube",
+        confirmed: true,
+        style: LandmarkStyle::Star,
+    },
+    LandmarkRule {
+        level_ids: 60..=60,
+        preset_ids: 456..=458,
+        label: "horadric cube (W/E/S)",
+        confirmed: false,
+        style: LandmarkStyle::Star,
+    },
+    LandmarkRule {
         level_ids: 66..=72,
-        preset_ids: 456..=461,
-        label: "orifice (assumed level+390 pattern)",
+        preset_ids: 460..=461,
+        label: "orifice (W/E)",
+        confirmed: false,
+        style: LandmarkStyle::Star,
+    },
+    LandmarkRule {
+        level_ids: 66..=72,
+        preset_ids: 463..=463,
+        label: "orifice (N)",
         confirmed: false,
         style: LandmarkStyle::Star,
     },
@@ -228,6 +252,9 @@ pub const LANDMARKS: &[LandmarkRule] = &[
 pub const QUEST_OBJECTS: &[(u32, &str)] = &[
     // Barracks (28), live 2026-11-15: the Horadric Malus stand, inside the Smith's forge piece 204.
     (108, "horadric malus"),
+    // Halls of the Dead Level 3 (60), live 2026-11-15: the Horadric Cube chest, next to
+    // Bloodwitch's spawn preset 762.
+    (354, "horadric cube chest"),
     (152, "orifice"),
     (252, "gidbinn altar"),
     (366, "sewer stairs"),
@@ -2482,19 +2509,19 @@ mod tests {
         let mut snap = sanctuary([Some(473), Some(424), None, None]);
         snap.level.id = 71;
         assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
-        // Tomb 66 with 456: only the assumed level+390 pattern says so, a "?".
-        let mut snap = sanctuary([None, Some(456), None, None]);
+        // Tomb 66 with 460 (Talrasha W): unconfirmed direction, a "?".
+        let mut snap = sanctuary([None, Some(460), None, None]);
         snap.level.id = 66;
         assert_eq!(
             landmarks(&snap, LANDMARKS),
-            vec![(
-                Marker::Suspected("orifice (assumed level+390 pattern)"),
-                90.0,
-                30.0
-            )]
+            vec![(Marker::Suspected("orifice (W/E)"), 90.0, 30.0)]
         );
-        // 462 outside tomb 72 is not confirmed and not in the assumed range either.
+        // 462 is the orifice in whichever tomb is the real one.
         let mut snap = sanctuary([None, Some(462), None, None]);
+        snap.level.id = 66;
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![(orifice, 90.0, 30.0)]);
+        // 456 (a cube piece) in a tomb is nothing.
+        let mut snap = sanctuary([None, Some(456), None, None]);
         snap.level.id = 66;
         assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
         // The orifice id outside the tombs is nothing either.
@@ -2639,7 +2666,9 @@ mod tests {
                 "smith (forge N)",
                 "cave exit to the next area",
                 "cave stairs down",
-                "orifice (assumed level+390 pattern)"
+                "horadric cube (W/E/S)",
+                "orifice (W/E)",
+                "orifice (N)"
             ]
         );
     }
@@ -2707,7 +2736,7 @@ mod tests {
 
     /// Tomb 66 with an assumed-orifice room (456) at world 90,30 and the orifice object at 150,30.
     fn tomb_66() -> Snapshot {
-        let mut snap = sanctuary([None, Some(456), None, None]);
+        let mut snap = sanctuary([None, Some(460), None, None]);
         snap.level.id = 66;
         snap.presets = vec![object(152, 150, 30)];
         snap
