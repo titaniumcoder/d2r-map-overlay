@@ -30,8 +30,17 @@ pub struct LandmarkRule {
     pub label: &'static str,
     /// Seen in game; `false` for a rule extrapolated from a pattern.
     pub confirmed: bool,
-    /// Once confirmed, draw it as a level exit ([`Marker::Exit`]) instead of a landmark star.
-    pub exit: bool,
+    /// How a confirmed rule is drawn.
+    pub style: LandmarkStyle,
+}
+
+/// How a confirmed [`LandmarkRule`] is drawn (an unconfirmed one is always a "?").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LandmarkStyle {
+    /// A gold landmark star ([`Marker::Landmark`]).
+    Star,
+    /// Stairs down to a deeper level ([`Marker::StairsDown`]).
+    StairsDown,
 }
 
 /// Landmark rules.
@@ -52,7 +61,7 @@ pub struct LandmarkRule {
 ///   (91–94, stairs to level 2); Underground Passage 1 had one 90 and one 91 piece (2026-11-15).
 ///   Confirmed: the 90 piece holds the exit to Dark Wood (room link to level 5, user stood on it),
 ///   drawn as a gold star because it is where the user wants to go (2026-11-15); the 91 piece holds
-///   the stairs to Underground Passage 2 (room link to level 14), drawn as a plain exit.
+///   the stairs to Underground Passage 2 (room link to level 14), drawn as a staircase.
 /// - Stony Field (4): lvlprest 160 "Act 1 - Cairn Stones", the stone circle; the five stones and the
 ///   portal stone (objects 17–22) lay inside it (live 2026-11-15).
 /// - Barracks (28): lvlprest "Barracks Forge W/E/S/N" (202–205) holds the Smith and the Horadric
@@ -69,126 +78,126 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         preset_ids: 341..=341,
         label: "radament's lair",
         confirmed: true,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 49..=49,
         preset_ids: 342..=344,
         label: "radament's lair (E/S/N)",
         confirmed: false,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 47..=48,
         preset_ids: 337..=340,
         label: "sewer stairs down",
         confirmed: false,
-        exit: true,
+        style: LandmarkStyle::StairsDown,
     },
     LandmarkRule {
         level_ids: 28..=28,
         preset_ids: 204..=204,
         label: "smith (forge)",
         confirmed: true,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 28..=28,
         preset_ids: 202..=203,
         label: "smith (forge W/E)",
         confirmed: false,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 28..=28,
         preset_ids: 205..=205,
         label: "smith (forge N)",
         confirmed: false,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 4..=4,
         preset_ids: 160..=160,
         label: "cairn stones",
         confirmed: true,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 9..=12,
         preset_ids: 90..=90,
         label: "cave exit to the next area (north)",
         confirmed: true,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 9..=12,
         preset_ids: 87..=89,
         label: "cave exit to the next area",
         confirmed: false,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 9..=12,
         preset_ids: 91..=91,
         label: "cave stairs down (west)",
         confirmed: true,
-        exit: true,
+        style: LandmarkStyle::StairsDown,
     },
     LandmarkRule {
         level_ids: 9..=12,
         preset_ids: 92..=94,
         label: "cave stairs down",
         confirmed: false,
-        exit: true,
+        style: LandmarkStyle::StairsDown,
     },
     LandmarkRule {
         level_ids: 5..=5,
         preset_ids: 161..=161,
         label: "tree of inifuss",
         confirmed: true,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 6..=6,
         preset_ids: 163..=163,
         label: "forgotten tower",
         confirmed: true,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 74..=74,
         preset_ids: 525..=528,
         label: "summoner",
         confirmed: true,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 72..=72,
         preset_ids: 462..=462,
         label: "orifice",
         confirmed: true,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 66..=72,
         preset_ids: 456..=461,
         label: "orifice (assumed level+390 pattern)",
         confirmed: false,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 78..=78,
         preset_ids: 602..=602,
         label: "gidbinn",
         confirmed: true,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 92..=92,
         preset_ids: 739..=739,
         label: "sewer stairs",
         confirmed: true,
-        exit: false,
+        style: LandmarkStyle::Star,
     },
 ];
 
@@ -331,6 +340,8 @@ pub enum Shape {
     Skull,
     /// [`Shape::Skull`] with two horns, the demon skull of a boss.
     HornedSkull,
+    /// Three steps descending to the right ([`stairs_path`]); the size is half the side.
+    Stairs,
 }
 
 /// Something drawn on the map. Variant order is draw order (player last, on top).
@@ -338,6 +349,8 @@ pub enum Shape {
 pub enum Marker {
     /// Tile preset: a level exit.
     Exit,
+    /// A confirmed stairs-down landmark ([`LandmarkStyle::StairsDown`]): a purple staircase.
+    StairsDown,
     /// The tile preset the player entered the level by (see `Session::apply`).
     Entry,
     /// A walk-through border to an adjacent level (see [`border_exits`]): a small triangle on
@@ -398,6 +411,7 @@ impl Marker {
             Self::Exit => ([170, 90, 255, 255], 5.0, Shape::Circle),
             Self::Entry => ([40, 200, 200, 255], 4.5, Shape::Square),
             // Size 7: about 11 px long with the outline; at 4 it was barely visible (user, 2026-11-15).
+            Self::StairsDown => (Self::Exit.style().0, 6.0, Shape::Stairs),
             Self::BorderExit { entry: false, .. } => (Self::Exit.style().0, 7.0, Shape::Triangle),
             Self::BorderExit { entry: true, .. } => (Self::Entry.style().0, 7.0, Shape::Triangle),
             Self::Waypoint => ([60, 140, 255, 255], 5.0, Shape::Circle),
@@ -616,12 +630,10 @@ pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f
                 .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))?;
             let x = f64::midpoint(f64::from(x0), f64::from(x1));
             let y = f64::midpoint(f64::from(y0), f64::from(y1));
-            let marker = if rule.confirmed && rule.exit {
-                Marker::Exit
-            } else if rule.confirmed {
-                Marker::Landmark(rule.label)
-            } else {
-                Marker::Suspected(rule.label)
+            let marker = match (rule.confirmed, rule.style) {
+                (false, _) => Marker::Suspected(rule.label),
+                (true, LandmarkStyle::Star) => Marker::Landmark(rule.label),
+                (true, LandmarkStyle::StairsDown) => Marker::StairsDown,
             };
             Some((marker, x, y))
         })
@@ -895,7 +907,7 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
             solid(&mut pm, &dot, colour);
         } else if matches!(shape, Shape::Skull | Shape::HornedSkull) {
             draw_skull(&mut pm, &dot, colour, (cx, cy, size), shape == Shape::HornedSkull);
-        } else if shape == Shape::Triangle {
+        } else if matches!(shape, Shape::Triangle | Shape::Stairs) {
             // Outline under the fill: the small triangle keeps all its colour, with half the
             // outline showing around it.
             pm.stroke_path(&dot, &paint(MARKER_OUTLINE), &ring, Transform::identity(), None);
@@ -1092,10 +1104,30 @@ fn triangle_path(cx: f32, cy: f32, size: f32, (ux, uy): (f32, f32)) -> Option<Pa
     pb.finish()
 }
 
+/// A staircase of three steps descending to the right, in a square of half-side `size` centred
+/// on (`cx`, `cy`).
+fn stairs_path(cx: f32, cy: f32, size: f32) -> Option<Path> {
+    let third = size / 3.0;
+    let (l, m1, m2, r) = (cx - size, cx - third, cx + third, cx + size);
+    let (t, n1, n2, b) = (cy - size, cy - third, cy + third, cy + size);
+    let mut pb = PathBuilder::new();
+    pb.move_to(l, t);
+    pb.line_to(m1, t);
+    pb.line_to(m1, n1);
+    pb.line_to(m2, n1);
+    pb.line_to(m2, n2);
+    pb.line_to(r, n2);
+    pb.line_to(r, b);
+    pb.line_to(l, b);
+    pb.close();
+    pb.finish()
+}
+
 /// The outline of a marker centred on (`cx`, `cy`); `None` for a degenerate size.
 fn marker_path(shape: Shape, cx: f32, cy: f32, size: f32) -> Option<Path> {
     match shape {
         Shape::Triangle => triangle_path(cx, cy, size, (0.0, -1.0)),
+        Shape::Stairs => stairs_path(cx, cy, size),
         Shape::Skull => skull_path(cx, cy, size, false, true),
         Shape::HornedSkull => skull_path(cx, cy, size, true, true),
         Shape::Circle => PathBuilder::from_circle(cx, cy, size),
@@ -1726,6 +1758,43 @@ mod tests {
             loaded,
             preset: None,
         }
+    }
+
+    #[test]
+    fn underground_passage_exit_is_a_star_and_stairs_down_a_staircase() -> Result<()> {
+        let mut snap = empty_snapshot(5, 5);
+        snap.level.id = 10;
+        let piece = |x, preset| Room {
+            preset: Some(preset),
+            ..room(x, 0, false)
+        };
+        snap.level.rooms = vec![piece(0, 90), piece(120, 91), piece(240, 92)];
+        let kinds: Vec<Marker> = landmarks(&snap, LANDMARKS)
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                Marker::Landmark("cave exit to the next area (north)"),
+                Marker::StairsDown,
+                Marker::Suspected("cave stairs down"),
+            ]
+        );
+        // The staircase draws in the exit purple.
+        let (cx, cy) = (20.0, 20.0);
+        let path = marker_path(Shape::Stairs, cx, cy, 6.0).context("stairs path")?;
+        let mut pm = Pixmap::new(40, 40).context("pixmap")?;
+        pm.fill_path(
+            &path,
+            &paint(Marker::Exit.style().0),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+        assert_eq!(rgba(&pm, 18, 24)?, Marker::Exit.style().0, "bottom step filled");
+        assert_eq!(rgba(&pm, 24, 16)?[3], 0, "top-right corner empty");
+        Ok(())
     }
 
     #[test]
