@@ -96,6 +96,16 @@ pub const QUEST_OBJECTS: &[(u32, &str)] = &[
     (396, "diablo seal"),
 ];
 
+/// Quest objects of [`QUEST_OBJECTS`] that are used up once operated: their marker goes away for
+/// the game when the live object (loaded near the player) is seen in a non-neutral mode (see
+/// [`crate::session`]).
+pub const CONSUMABLE_QUEST_OBJECTS: &[u32] = &[392, 393, 394, 395, 396];
+
+/// True if object txt id `txt` is in [`CONSUMABLE_QUEST_OBJECTS`].
+pub fn is_consumable_quest_object(txt: u32) -> bool {
+    CONSUMABLE_QUEST_OBJECTS.contains(&txt)
+}
+
 /// The quest-object label of object txt id `txt`, if it is one.
 pub fn quest_object(txt: u32) -> Option<&'static str> {
     QUEST_OBJECTS
@@ -791,6 +801,7 @@ mod tests {
             drops: vec![],
             shrines: vec![],
             wells: vec![],
+            operated_objects: vec![],
             inventory_items: 0,
             inventory_keep: vec![],
             difficulty: None,

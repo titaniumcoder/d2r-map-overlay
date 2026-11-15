@@ -18,6 +18,7 @@ use crate::offsets::{
     unit_table,
 };
 use crate::process::ReadMem;
+use crate::render::is_consumable_quest_object;
 use crate::valuables;
 
 /// Most units walked per unit type (over all hash slots).
@@ -87,6 +88,10 @@ pub struct Snapshot {
     /// Wells near the player.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wells: Vec<Well>,
+    /// Operated consumable quest objects near the player (Diablo seals; see
+    /// [`crate::render::CONSUMABLE_QUEST_OBJECTS`]). The session hides their presets for the game.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operated_objects: Vec<OperatedObject>,
     /// Items in the player's inventory (shown or not); live-mode only, not in the JSON.
     #[serde(skip)]
     pub inventory_items: u32,
@@ -254,6 +259,16 @@ pub struct Well {
     pub y: u32,
 }
 
+/// A consumable quest object (txt id in [`crate::render::CONSUMABLE_QUEST_OBJECTS`]) that has
+/// been operated (unit mode other than [`object_mode::NEUTRAL`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OperatedObject {
+    /// objects.txt row.
+    pub txt: u32,
+    pub x: u32,
+    pub y: u32,
+}
+
 /// True if objects.txt row `txt` is a shrine (see `research/gen_objects.py`).
 pub fn is_shrine_object(txt: u32) -> bool {
     SHRINE_OBJECTS.binary_search(&txt).is_ok()
@@ -383,7 +398,7 @@ pub fn snapshot(
         }
     }
     let (ground_items, drops, inventory) = r.items(unit_table, items_table);
-    let (shrines, wells) = r.objects(unit_table);
+    let (shrines, wells, operated_objects) = r.objects(unit_table);
     let inventory_items = u32::try_from(inventory.len()).unwrap_or(u32::MAX);
     let inventory_keep = valuables::keep_list(&inventory);
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
@@ -402,6 +417,7 @@ pub fn snapshot(
         drops,
         shrines,
         wells,
+        operated_objects,
         inventory_items,
         inventory_keep,
         difficulty,
@@ -744,25 +760,40 @@ impl<M: ReadMem> Reader<'_, M> {
         })
     }
 
-    /// The shrines and wells among the loaded object units; other objects are skipped unread.
-    fn objects(&mut self, unit_table: u64) -> (Vec<Shrine>, Vec<Well>) {
+    /// The shrines, wells and operated consumable quest objects among the loaded object units;
+    /// other objects are skipped unread.
+    fn objects(&mut self, unit_table: u64) -> (Vec<Shrine>, Vec<Well>, Vec<OperatedObject>) {
         let mut shrines = Vec::new();
         let mut wells = Vec::new();
+        let mut operated = Vec::new();
         for addr in self.units(unit_table, unit_table::OBJECT) {
             match self.object(addr) {
                 Ok(Some(Object::Shrine(s))) => shrines.push(s),
                 Ok(Some(Object::Well(w))) => wells.push(w),
+                Ok(Some(Object::Operated(o))) => operated.push(o),
                 Ok(None) => {}
                 Err(e) => self.warn(format!("object {addr:#x}: {e:#}")),
             }
         }
-        (shrines, wells)
+        (shrines, wells, operated)
     }
 
-    /// The object unit at `addr` as a shrine or well; `None` for any other object, and for a
-    /// shrine object without a shrine type in [`SHRINE_TYPES`].
+    /// The object unit at `addr` as a shrine, well or operated consumable quest object; `None`
+    /// for any other object, a shrine object without a shrine type in [`SHRINE_TYPES`], and an
+    /// untouched consumable quest object.
     fn object(&self, addr: u64) -> Result<Option<Object>> {
         let head = self.unit_head(addr, unit_table::OBJECT)?;
+        if is_consumable_quest_object(head.txt) {
+            if head.mode == object_mode::NEUTRAL {
+                return Ok(None);
+            }
+            let path = head.path.context("object has no path")?;
+            return Ok(Some(Object::Operated(OperatedObject {
+                txt: head.txt,
+                x: self.u32(path, static_path::X)?,
+                y: self.u32(path, static_path::Y)?,
+            })));
+        }
         let shrine = is_shrine_object(head.txt);
         if !shrine && !is_well_object(head.txt) {
             return Ok(None);
@@ -922,6 +953,7 @@ impl<M: ReadMem> Reader<'_, M> {
 enum Object {
     Shrine(Shrine),
     Well(Well),
+    Operated(OperatedObject),
 }
 
 /// Lowercase hex of `bytes`, no separators.
@@ -1922,6 +1954,42 @@ mod tests {
         assert_eq!(
             v.pointer("/shrines/1"),
             Some(&serde_json::json!({"txt": 2, "code": 12, "used": false, "x": 5110, "y": 5210}))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn operated_seals() -> Result<()> {
+        let mut m = world()?;
+        let mut slots = BASE_SLOTS.to_vec();
+        slots.push((unit_table::OBJECT, 5, O0));
+        table(&mut m, &slots)?;
+        // O0 operated seal 392 → O1 untouched seal 393 → O2 operating seal 396 (mode 1) →
+        // O3 used shrine: a shrine, not an operated quest object.
+        object(&mut m, O0, (392, 2, 0), (7800, 5300), O1)?;
+        object(&mut m, O1, (393, 0, 0), (7820, 5310), O2)?;
+        object(&mut m, O2, (396, 1, 0), (7700, 5290), O3)?;
+        object(&mut m, O3, (236, 2, 2), (7710, 5280), 0)?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        let op = |txt, x, y| OperatedObject { txt, x, y };
+        assert_eq!(
+            s.operated_objects,
+            vec![op(392, 7800, 5300), op(396, 7700, 5290)],
+            "mode 0 is untouched"
+        );
+        assert_eq!(s.shrines.len(), 1);
+        assert!(
+            s.warnings.iter().all(|w| !w.starts_with("object")),
+            "{:?}",
+            s.warnings
+        );
+        // Empty stays out of the JSON; a listed one round-trips.
+        let v = serde_json::to_value(snapshot(&world()?, TABLE, None, None)?)?;
+        assert!(v.get("operated_objects").is_none());
+        let v = serde_json::to_value(&s)?;
+        assert_eq!(
+            v.pointer("/operated_objects/0"),
+            Some(&serde_json::json!({"txt": 392, "x": 7800, "y": 5300}))
         );
         Ok(())
     }

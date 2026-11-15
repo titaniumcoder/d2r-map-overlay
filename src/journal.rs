@@ -565,6 +565,7 @@ mod tests {
             drops: vec![],
             shrines: vec![],
             wells: vec![],
+            operated_objects: vec![],
             inventory_items: 0,
             inventory_keep: vec![],
             difficulty: None,

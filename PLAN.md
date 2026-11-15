@@ -133,7 +133,9 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 ## Item fields and valuables (2026-11-15)
 - ItemData `+0x00` quality (2 normal, 4 magic, 5 set, 7 unique verified live), `+0x18` flags (0x10 identified
   verified; 0x400000 ethereal, 0x4000000 runeword = classic bits, unverified), `+0x34` unique/set row index
-  (verified: Khalim's Flail = uniqueitems row 127; sets + unidentified items unverified), `+0x54` body slot,
+  (verified: Khalim's Flail = row 127, Hellforge Hammer = row 126, both identified quest items; an UNIDENTIFIED set item
+  (Cleglaw's Claw, row 32) read 0 → the index is only filled once identified, so name rules on unidentified items
+  stay uncertain), `+0x54` body slot,
   `+0x55` page (0 inventory, 4 stash, 255 elsewhere; verified over 74 items). Inventory = mode 0 + page 0.
 - Item stat list: unit `+0x88` → `+0x30` entries / `+0x38` count, entry {u16 layer, u16 id, u32 value}; sockets = 194.
 - Valuables: research/valuables.json (67 rules, S/A/B, trade/twink) embedded; tiers per category in
@@ -146,7 +148,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   (shrines.txt code; live: Health 2, Experience 15) — only meaningful for shrine objects (a bone pile had a stray
   value there). Mode 0 = untouched, anything else = used.
 - Classification from objects.txt `OperateFn` (2 = shrine, 22 = well) → src/objects_data.rs via
-  research/gen_objects.py. Drawn: unused shrines whose type is in config `[shrines] show` (user list: refilling,
+  research/gen_objects.py. Chaos Sanctuary seals (392-396) are quest objects; once a seal's live object leaves
+  mode 0 its star is hidden for the rest of the game. Drawn: unused shrines whose type is in config `[shrines] show` (user list: refilling,
   skill, stamina, experience, gem, monster), all wells. Hellforge (376) is a quest object.
 
 ## Research journal

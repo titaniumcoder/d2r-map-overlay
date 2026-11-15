@@ -31,11 +31,15 @@ use std::collections::{HashMap, HashSet};
 use crate::game::{Addr, PresetKind, Snapshot};
 use crate::levels_data::SUPERUNIQUES;
 use crate::offsets::monster_data;
+use crate::render::is_consumable_quest_object;
 
 /// Most distance in tiles between a dead superunique and the superunique preset it is credited
 /// to. Generous: it only picks which marker to remove (the nearest), and superunique presets of
 /// one level lie far apart.
 const KILL_RADIUS: f64 = 30.0;
+/// Most distance in tiles between an operated consumable quest object (live position) and the
+/// object preset it hides: preset and live positions may differ by a tile or two.
+const OPERATED_RADIUS: f64 = 5.0;
 /// Most distance in tiles between the arrival point and the entry tile preset.
 const ENTRY_RADIUS: f64 = 25.0;
 /// Tile presets this close to the entry tile are part of the same entry (multi-tile stairs).
@@ -64,6 +68,9 @@ pub struct Session {
     game: Option<GameKey>,
     /// Superunique presets whose monster was seen dead in this game, by (level id, preset x, y).
     killed: HashSet<LevelPos>,
+    /// Consumable quest objects (Diablo seals) seen operated in this game, by (level id, live
+    /// x, y). Their presets are hidden for the game, also once the live object unloads.
+    operated: HashSet<LevelPos>,
     /// Level id of the previous snapshot (kept across games: only its change matters).
     last_level: Option<u32>,
     /// Player position on arriving in each level of this game, by level id.
@@ -89,7 +96,8 @@ pub fn superunique(txt: u32) -> Option<&'static str> {
 
 impl Session {
     /// Folds `snap` into the session and rewrites it for drawing: monster presets are kept only
-    /// if they are a superunique's (see [`superunique`]) not killed in this game.
+    /// if they are a superunique's (see [`superunique`]) not killed in this game, and consumable
+    /// quest object presets only if not seen operated in this game.
     pub fn apply(&mut self, snap: &mut Snapshot) -> Update {
         let mut update = Update::default();
         let key = GameKey {
@@ -98,6 +106,7 @@ impl Session {
         };
         if self.game.replace(key).is_some_and(|old| old != key) {
             self.killed.clear();
+            self.operated.clear();
             self.arrivals.clear();
             update.new_game = true;
         }
@@ -147,9 +156,20 @@ impl Session {
             }
         }
 
-        snap.presets.retain(|p| {
-            p.kind != PresetKind::Monster
-                || (superunique(p.txt).is_some() && !self.killed.contains(&(level, p.x, p.y)))
+        for o in &snap.operated_objects {
+            self.operated.insert((level, o.x, o.y));
+        }
+        let operated_near = |x: u32, y: u32| {
+            self.operated.iter().any(|&(l, ox, oy)| {
+                l == level
+                    && (f64::from(x) - f64::from(ox)).hypot(f64::from(y) - f64::from(oy)) <= OPERATED_RADIUS
+            })
+        };
+
+        snap.presets.retain(|p| match p.kind {
+            PresetKind::Monster => superunique(p.txt).is_some() && !self.killed.contains(&(level, p.x, p.y)),
+            PresetKind::Object => !(is_consumable_quest_object(p.txt) && operated_near(p.x, p.y)),
+            _ => true,
         });
         update
     }
@@ -180,7 +200,7 @@ fn mark_entry(snap: &mut Snapshot, (ax, ay): (u16, u16)) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::{Level, Monster, Player, Preset};
+    use crate::game::{Level, Monster, OperatedObject, Player, Preset};
 
     fn monster(flags: u8, mode: u32, x: u16, y: u16) -> Monster {
         Monster {
@@ -230,6 +250,7 @@ mod tests {
             drops: vec![],
             shrines: vec![],
             wells: vec![],
+            operated_objects: vec![],
             inventory_items: 0,
             inventory_keep: vec![],
             difficulty: None,
@@ -354,6 +375,49 @@ mod tests {
         far.monsters = vec![monster(0x02, 0, 300, 300)];
         s.apply(&mut far);
         assert_eq!(far.presets.len(), 3);
+    }
+
+    #[test]
+    fn operated_seal_marker_is_removed_for_the_game() {
+        let seals = || {
+            vec![
+                preset(PresetKind::Object, 392, 7800, 5300),
+                preset(PresetKind::Object, 393, 7810, 5300), // another seal, 10 tiles away
+                preset(PresetKind::Object, 119, 7801, 5300), // a waypoint: not consumable
+            ]
+        };
+        let txts = |s: &Snapshot| s.presets.iter().map(|p| p.txt).collect::<Vec<_>>();
+        let mut s = Session::default();
+        let mut a = snap(1, 0xa000, 108);
+        a.presets = seals();
+        s.apply(&mut a);
+        assert_eq!(txts(&a), vec![392, 393, 119], "nothing operated yet");
+
+        // Seal 392 operated, live position two tiles off its preset.
+        let mut b = snap(1, 0xa000, 108);
+        b.presets = seals();
+        b.operated_objects = vec![OperatedObject {
+            txt: 392,
+            x: 7802,
+            y: 5301,
+        }];
+        s.apply(&mut b);
+        assert_eq!(txts(&b), vec![393, 119]);
+        // The live object unloads: still hidden.
+        let mut c = snap(1, 0xa000, 108);
+        c.presets = seals();
+        s.apply(&mut c);
+        assert_eq!(txts(&c), vec![393, 119]);
+        // Same spot in another level is another object.
+        let mut other = snap(1, 0xa000, 107);
+        other.presets = seals();
+        s.apply(&mut other);
+        assert_eq!(txts(&other), vec![392, 393, 119]);
+        // A new game brings it back.
+        let mut next = snap(2, 0xb000, 108);
+        next.presets = seals();
+        assert!(s.apply(&mut next).new_game);
+        assert_eq!(txts(&next), vec![392, 393, 119]);
     }
 
     fn at(mut s: Snapshot, x: u16, y: u16, presets: &[Preset]) -> Snapshot {
