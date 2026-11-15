@@ -29,6 +29,8 @@ pub struct LandmarkRule {
     pub label: &'static str,
     /// Seen in game; `false` for a rule extrapolated from a pattern.
     pub confirmed: bool,
+    /// Once confirmed, draw it as a level exit ([`Marker::Exit`]) instead of a landmark star.
+    pub exit: bool,
 }
 
 /// Landmark rules.
@@ -47,62 +49,79 @@ pub struct LandmarkRule {
 /// - Act 1 caves, level 1 (Cave 9, Underground Passage 10, Hole 11, Pit 12): lvlprest names the
 ///   pieces "Cave Next W/E/S/N" (87–90, exit to the next outdoor area) and "Cave Down W/E/S/N"
 ///   (91–94, stairs to level 2); Underground Passage 1 had one 90 and one 91 piece (2026-11-15).
+///   Confirmed: the 90 piece holds the exit to Dark Wood (room link to level 5, user stood on it).
 /// - Dark Wood (5): lvlprest 161 "Act 1 - Inifus" (funktree.ds1), the Tree of Inifuss.
 /// - Black Marsh (6): lvlprest 163 "Act 1 - Tower 1" (Tower1.ds1), the Forgotten Tower entrance.
 pub const LANDMARKS: &[LandmarkRule] = &[
     LandmarkRule {
         level_ids: 9..=12,
-        preset_ids: 87..=90,
+        preset_ids: 90..=90,
+        label: "cave exit to the next area (north)",
+        confirmed: true,
+        exit: true,
+    },
+    LandmarkRule {
+        level_ids: 9..=12,
+        preset_ids: 87..=89,
         label: "cave exit to the next area",
         confirmed: false,
+        exit: true,
     },
     LandmarkRule {
         level_ids: 9..=12,
         preset_ids: 91..=94,
         label: "cave stairs down",
         confirmed: false,
+        exit: false,
     },
     LandmarkRule {
         level_ids: 5..=5,
         preset_ids: 161..=161,
         label: "tree of inifuss",
         confirmed: false,
+        exit: false,
     },
     LandmarkRule {
         level_ids: 6..=6,
         preset_ids: 163..=163,
         label: "forgotten tower",
         confirmed: false,
+        exit: false,
     },
     LandmarkRule {
         level_ids: 74..=74,
         preset_ids: 525..=528,
         label: "summoner",
         confirmed: true,
+        exit: false,
     },
     LandmarkRule {
         level_ids: 72..=72,
         preset_ids: 462..=462,
         label: "orifice",
         confirmed: true,
+        exit: false,
     },
     LandmarkRule {
         level_ids: 66..=72,
         preset_ids: 456..=461,
         label: "orifice (assumed level+390 pattern)",
         confirmed: false,
+        exit: false,
     },
     LandmarkRule {
         level_ids: 78..=78,
         preset_ids: 602..=602,
         label: "gidbinn",
         confirmed: true,
+        exit: false,
     },
     LandmarkRule {
         level_ids: 92..=92,
         preset_ids: 739..=739,
         label: "sewer stairs",
         confirmed: true,
+        exit: false,
     },
 ];
 
@@ -464,7 +483,9 @@ pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f
                 .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))?;
             let x = f64::midpoint(f64::from(x0), f64::from(x1));
             let y = f64::midpoint(f64::from(y0), f64::from(y1));
-            let marker = if rule.confirmed {
+            let marker = if rule.confirmed && rule.exit {
+                Marker::Exit
+            } else if rule.confirmed {
                 Marker::Landmark(rule.label)
             } else {
                 Marker::Suspected(rule.label)
