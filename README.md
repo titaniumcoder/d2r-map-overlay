@@ -1,0 +1,67 @@
+# d2r-map-overlay
+
+A map tool for **Diablo II: Resurrected** (D2R) on **Linux**.
+
+It reads the running game's memory (read-only) and draws a small, click-through minimap in the corner of
+the screen. The minimap shows:
+
+- **Layout:** the level layout, waypoints, entrances and exits (including the arrows on open level borders),
+  and your trail.
+- **Monsters:** superuniques, bosses, champion and unique packs.
+- **Landmarks:** quest spots such as the Summoner, the real Tal Rasha tomb's orifice, the Horadric Cube,
+  Radament and the Cairn Stones.
+- **Shrines and wells, and valuable drops.**
+- **Text lines** under the map: a "keep / sell / give away" summary of your inventory and stashes, and the
+  areas that suit your character level and build.
+
+## ⚠️ Use at your own risk: it could get your account banned
+
+Reading the game's memory is against Blizzard's terms of service. **Using this tool could get your
+Battle.net account banned.** You use it entirely at your own risk; **I am not responsible** for any
+ban, suspension or other consequence.
+
+## Linux only. It does not work on Windows
+
+This tool is built for one specific setup:
+
+- D2R running under **Proton/Wine** on Linux. The game process is found through `/proc`.
+- The **Hyprland** Wayland compositor. The overlay is a `wlr-layer-shell` surface, and it is shown only
+  while D2R has focus, which it learns from Hyprland's IPC socket.
+- Reading `/proc/<pid>/mem`, which needs the `CAP_SYS_PTRACE` capability on the binary.
+
+**It will not work on Windows,** and it is untested on other compositors. If you want it on Windows or
+anywhere else, you are free to try: fork it and send a pull request.
+
+It is **free to use as is**, with no warranty and no support promise. Memory offsets change with game
+patches; the ones here were found on D2R build 3.x in November 2026.
+
+## Building and running
+
+Requirements: Rust (see `mise.toml`), a Wayland session on Hyprland, and D2R running under Proton.
+
+```sh
+cargo build --release
+# Reading another process's memory needs ptrace rights (ptrace_scope=1):
+sudo setcap cap_sys_ptrace=ep target/release/d2r-map-overlay
+target/release/d2r-map-overlay            # live overlay
+target/release/d2r-map-overlay --dump     # print one JSON snapshot of the game state
+```
+
+Optional configuration lives in `~/.config/d2r-map-overlay/config.toml`. See
+[`config.example.toml`](config.example.toml) for:
+
+- which valuables are highlighted
+- which shrines are shown
+- per-character builds for the area colouring
+
+## How it works (short)
+
+- Finds the D2R process and a fully readable alias of its (partly encrypted) image.
+- Locates the unit hash table by signature, then walks it: player → path → room → level → rooms and
+  presets, monsters, objects and items.
+- All verified offsets and research notes are in [`PLAN.md`](PLAN.md). The Python probes in `research/`
+  are how they were found.
+
+## License
+
+[MIT](LICENSE).
