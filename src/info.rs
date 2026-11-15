@@ -12,7 +12,7 @@ use ab_glyph::{Font, FontVec, GlyphId, PxScale, ScaleFont, point};
 use tiny_skia::{Mask, Paint, Pixmap, Rect, Transform};
 
 use crate::levels_data::{BOSSES, LEVELS};
-use crate::valuables::{Keep, Tier};
+use crate::valuables::{Keep, Spare, Tier};
 
 /// Champions are this many levels above the area's monster level (D2 rule).
 const CHAMPION_BONUS: u8 = 2;
@@ -39,6 +39,14 @@ const KEEP_TEXT: [u8; 4] = [90, 230, 90, 255];
 /// Most keep lines; the last one ends in "+N more" when the list is longer.
 pub const MAX_KEEP_LINES: usize = 3;
 const KEEP_PREFIX: &str = "Keep: ";
+/// The sell lines below the keep lines: grey.
+pub const SELL_TEXT: [u8; 4] = [175, 175, 175, 255];
+pub const SELL_PREFIX: &str = "Sell: ";
+/// The give-away lines below the sell lines: yellow.
+pub const GIVE_TEXT: [u8; 4] = [255, 225, 60, 255];
+pub const GIVE_PREFIX: &str = "Give away: ";
+/// Separator of the sell and give-away entries.
+const COMMA: &str = ", ";
 /// The last part of a terrorized level's line, drawn in [`TERROR_TEXT`].
 const TERRORIZED: &str = "terrorized";
 const TERROR_TEXT: [u8; 4] = [190, 120, 255, 255];
@@ -139,9 +147,44 @@ pub fn line_height(font: &FontVec) -> u32 {
     ceil_px(scaled.height()) + 2
 }
 
-/// Extra canvas px at the bottom for `lines` keep lines (0 for none).
+/// Extra canvas px at the bottom for `lines` text rows below the info line, gap rows included
+/// (0 for none; see [`stack`]).
 pub fn keep_band_height(font: &FontVec, lines: usize) -> u32 {
-    u32::try_from(lines.min(MAX_KEEP_LINES)).map_or(0, |n| n * line_height(font))
+    u32::try_from(lines).map_or(0, |n| n.saturating_mul(line_height(font)))
+}
+
+/// One sell or give-away entry as text: `Gravenspine (inv)`, `Magefist ×2 (stash)`.
+pub fn spare_entry(s: &Spare) -> String {
+    let place = s.place.label();
+    if s.count > 1 {
+        format!("{} ×{} ({place})", s.name, s.count)
+    } else {
+        format!("{} ({place})", s.name)
+    }
+}
+
+/// A sell or give-away list as lines after `prefix`, comma-separated, of at most `max_width` px
+/// in `font`, capped like the keep lines.
+pub fn spare_lines(font: &FontVec, prefix: &str, spares: &[Spare], max_width: f32) -> Vec<String> {
+    let entries: Vec<String> = spares.iter().map(spare_entry).collect();
+    wrap(prefix, COMMA, &entries, |t| text_width(font, t) <= max_width)
+}
+
+/// The text rows below the info line, top to bottom, each with its colour: the keep lines
+/// (green), the sell lines (grey), the give-away lines (yellow), with an empty gap row between
+/// two non-empty blocks.
+pub fn stack(keep: Vec<String>, sell: Vec<String>, give: Vec<String>) -> Vec<(String, [u8; 4])> {
+    let mut rows = Vec::new();
+    for (lines, colour) in [(keep, KEEP_TEXT), (sell, SELL_TEXT), (give, GIVE_TEXT)] {
+        if lines.is_empty() {
+            continue;
+        }
+        if !rows.is_empty() {
+            rows.push((String::new(), colour));
+        }
+        rows.extend(lines.into_iter().map(|l| (l, colour)));
+    }
+    rows
 }
 
 /// One keep-list entry as text: `Harlequin Crest (S)`, `Lem Rune ×2 (A)`.
@@ -168,13 +211,14 @@ pub fn keep_lines(font: &FontVec, keep: &[Keep], max_width: f32) -> Vec<String> 
 /// wide for a line of its own gets one anyway), at most [`MAX_KEEP_LINES`]. If they don't all
 /// fit, the last line ends in "+N more" for the rest. Empty for no entries.
 pub fn wrap_keep(entries: &[String], fits: impl Fn(&str) -> bool) -> Vec<String> {
+    wrap(KEEP_PREFIX, SEPARATOR, entries, fits)
+}
+
+/// [`wrap_keep`] with any `prefix` before the first line and `sep` between entries.
+fn wrap(prefix: &str, sep: &str, entries: &[String], fits: impl Fn(&str) -> bool) -> Vec<String> {
     let render = |i: usize, line: &[String]| {
-        let body = line.join(SEPARATOR);
-        if i == 0 {
-            format!("{KEEP_PREFIX}{body}")
-        } else {
-            body
-        }
+        let body = line.join(sep);
+        if i == 0 { format!("{prefix}{body}") } else { body }
     };
     let mut lines: Vec<Vec<String>> = Vec::new();
     for e in entries {
@@ -210,9 +254,9 @@ pub fn wrap_keep(entries: &[String], fits: impl Fn(&str) -> bool) -> Vec<String>
     lines.iter().enumerate().map(|(i, l)| render(i, l)).collect()
 }
 
-/// Draws the keep `lines` bottom-left into `pm` in green, the last one at the bottom. Draws
-/// nothing if the canvas is shorter than the lines.
-pub fn draw_keep(pm: &mut Pixmap, font: &FontVec, lines: &[String]) {
+/// Draws the text `lines` ([`stack`]) bottom-left into `pm` in their colours, the last one at
+/// the bottom. Draws nothing if the canvas is shorter than the lines.
+pub fn draw_keep(pm: &mut Pixmap, font: &FontVec, lines: &[(String, [u8; 4])]) {
     let h = pm.height();
     if h < keep_band_height(font, lines.len()) + 2 * PAD {
         return;
@@ -220,9 +264,12 @@ pub fn draw_keep(pm: &mut Pixmap, font: &FontVec, lines: &[String]) {
     let scaled = font.as_scaled(PxScale::from(TEXT_PX));
     let lh = line_height(font);
     let x0 = f32_px(PAD + 1);
-    for (from_bottom, line) in (0u32..).zip(lines.iter().rev()) {
+    for (from_bottom, (line, colour)) in (0u32..).zip(lines.iter().rev()) {
+        if line.is_empty() {
+            continue; // a gap row
+        }
         let baseline = f32_px(h - PAD - 1 - from_bottom * lh) + scaled.descent();
-        draw_outlined(pm, font, TEXT_PX, KEEP_TEXT, line, (x0, baseline), false);
+        draw_outlined(pm, font, TEXT_PX, *colour, line, (x0, baseline), false);
     }
 }
 
@@ -602,6 +649,58 @@ mod tests {
     }
 
     #[test]
+    fn spare_entries_and_lines() {
+        use crate::valuables::Place;
+        let spare = |name: &str, place, count| Spare {
+            name: name.into(),
+            place,
+            count,
+        };
+        assert_eq!(
+            spare_entry(&spare("Gravenspine", Place::Inventory, 1)),
+            "Gravenspine (inv)"
+        );
+        assert_eq!(
+            spare_entry(&spare("Magefist", Place::Stash, 2)),
+            "Magefist ×2 (stash)"
+        );
+        assert_eq!(spare_entry(&spare("a", Place::Cube, 1)), "a (cube)");
+        assert_eq!(spare_entry(&spare("a", Place::Shared, 1)), "a (shared)");
+        let entries: Vec<String> = (0..12).map(|i| format!("i{i:02}")).collect();
+        let fits = |t: &str| t.chars().count() <= 20;
+        let lines = wrap(SELL_PREFIX, COMMA, &entries, fits);
+        assert_eq!(
+            lines,
+            vec!["Sell: i00, i01, i02", "i03, i04, i05, i06", "i07, i08, +3 more"]
+        );
+    }
+
+    #[test]
+    fn stack_orders_colours_and_gaps() {
+        let l = |s: &str| vec![s.to_owned()];
+        let rows = stack(
+            l("Keep: k"),
+            l("Sell: s"),
+            vec!["Give away: g".into(), "h".into()],
+        );
+        let want: Vec<(String, [u8; 4])> = vec![
+            ("Keep: k".into(), KEEP_TEXT),
+            (String::new(), SELL_TEXT),
+            ("Sell: s".into(), SELL_TEXT),
+            (String::new(), GIVE_TEXT),
+            ("Give away: g".into(), GIVE_TEXT),
+            ("h".into(), GIVE_TEXT),
+        ];
+        assert_eq!(rows, want);
+        assert_eq!(
+            stack(vec![], vec![], l("Give away: g")),
+            vec![("Give away: g".to_owned(), GIVE_TEXT)],
+            "no gap without a block above"
+        );
+        assert_eq!(stack(vec![], vec![], vec![]), vec![]);
+    }
+
+    #[test]
     fn keep_band_heights() {
         let Some(font) = font() else {
             eprintln!("skipped: no info-line font on this machine");
@@ -612,7 +711,11 @@ mod tests {
         assert_eq!(keep_band_height(font, 0), 0, "no lines, no band");
         assert_eq!(keep_band_height(font, 1), lh);
         assert_eq!(keep_band_height(font, 3), 3 * lh);
-        assert_eq!(keep_band_height(font, 7), 3 * lh, "capped at three lines");
+        assert_eq!(
+            keep_band_height(font, 7),
+            7 * lh,
+            "keep, sell, give away and gaps"
+        );
     }
 
     #[test]

@@ -117,6 +117,14 @@ pub struct Snapshot {
     /// Left out of the JSON when empty, so older dumps and fixtures stay unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inventory_keep: Vec<valuables::Keep>,
+    /// The player's stored items to sell (inventory, cube, personal and shared stash; see
+    /// [`valuables::spare_lists`]). Grey lines below the keep lines. Left out of the JSON when
+    /// empty, like `give_away`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sell: Vec<valuables::Spare>,
+    /// The player's stored items to give away (best rule is tier B). Yellow lines below `sell`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub give_away: Vec<valuables::Spare>,
     /// 0 Normal, 1 Nightmare, 2 Hell; `None` if unreadable (and in old fixtures).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<u8>,
@@ -261,8 +269,57 @@ struct ItemScan {
     drops: Vec<ItemDrop>,
     /// All items on the inventory page.
     inventory: Vec<ItemDrop>,
+    /// Stored items on the inventory, cube and stash pages that may be spare
+    /// ([`valuables::may_spare`]), any owner: the owner filter needs the chosen player.
+    stored: Vec<Stored>,
     stash_owners: OwnerVotes,
     inventory_owners: OwnerVotes,
+}
+
+/// A stored item with its `item_data::PAGE` and `item_data::OWNER`.
+#[derive(Debug)]
+struct Stored {
+    item: ItemDrop,
+    page: u8,
+    owner: u32,
+}
+
+/// Where a stored item on `page` with `owner` is, for the player with unit id `player`; `None`
+/// if it isn't the player's. Pages 0 (inventory), 3 (cube) and 4 (stash) count when the player
+/// owns the item; page-4 items of any other owner are the shared stash tabs (each tab is a
+/// pseudo-owner), except unowned ones ([`item_data::NO_OWNER`], 0) and `other_players`' ids.
+fn place(page: u8, owner: u32, player: u32, other_players: &[u32]) -> Option<valuables::Place> {
+    use valuables::Place;
+    match page {
+        item_data::PAGE_INVENTORY if owner == player => Some(Place::Inventory),
+        item_data::PAGE_CUBE if owner == player => Some(Place::Cube),
+        item_data::PAGE_STASH if owner == player => Some(Place::Stash),
+        item_data::PAGE_STASH
+            if owner != item_data::NO_OWNER && owner != 0 && !other_players.contains(&owner) =>
+        {
+            Some(Place::Shared)
+        }
+        _ => None,
+    }
+}
+
+/// The sell and give-away lists of the `stored` items that are the player's ([`place`]); the
+/// other `candidates` are other players.
+fn spare_lists(
+    stored: Vec<Stored>,
+    player: u32,
+    candidates: &[Candidate],
+) -> (Vec<valuables::Spare>, Vec<valuables::Spare>) {
+    let others: Vec<u32> = candidates
+        .iter()
+        .map(|c| c.id)
+        .filter(|&id| id != player)
+        .collect();
+    let mine: Vec<_> = stored
+        .into_iter()
+        .filter_map(|s| place(s.page, s.owner, player, &others).map(|p| (s.item, p)))
+        .collect();
+    valuables::spare_lists(&mine)
 }
 
 /// The candidate to use as the player and the rule that picked it; `None` if no candidate fits
@@ -460,7 +517,7 @@ pub fn is_well_object(txt: u32) -> bool {
 
 /// A ground item worth showing (see [`items::classify`]), or a base a valuables rule matches.
 /// The fields after `quality` default so older dumps stay loadable.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ItemDrop {
     pub id: u32,
     /// Item code (`"gcg"`); `None` if the items table is unknown.
@@ -577,15 +634,10 @@ pub fn snapshot(
             Err(e) => r.warn(format!("monster {addr:#x}: {e:#}")),
         }
     }
-    let ItemScan {
-        ground: ground_items,
-        drops,
-        inventory,
-        ..
-    } = scan;
     let (shrines, wells, operated_objects) = r.objects(unit_table);
-    let inventory_items = u32::try_from(inventory.len()).unwrap_or(u32::MAX);
-    let inventory_keep = valuables::keep_list(&inventory);
+    let inventory_items = u32::try_from(scan.inventory.len()).unwrap_or(u32::MAX);
+    let inventory_keep = valuables::keep_list(&scan.inventory);
+    let (sell, give_away) = spare_lists(scan.stored, chosen.id, &candidates);
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
     let terrorized = is_terrorized(&monsters);
 
@@ -598,13 +650,15 @@ pub fn snapshot(
         room_links,
         border_links,
         monsters,
-        ground_items,
-        drops,
+        ground_items: scan.ground,
+        drops: scan.drops,
         shrines,
         wells,
         operated_objects,
         inventory_items,
         inventory_keep,
+        sell,
+        give_away,
         difficulty,
         terrorized,
         warnings: r.into_warnings(),
@@ -1112,22 +1166,36 @@ impl<M: ReadMem> Reader<'_, M> {
                     continue;
                 }
             };
-            // Stash, cube, equipped, cursor and belt items are units too: only the ground and
-            // the inventory count, and the stash and inventory vote on the owner.
+            // Stash, cube, equipped, cursor and belt items are units too: the ground and the
+            // inventory count, the stash and inventory vote on the owner, and the inventory,
+            // cube and stash give the spare lists.
             let page = if head.mode == item_mode::STORED {
                 self.page(&head)
             } else {
                 None
+            };
+            // An unreadable owner just doesn't vote, and its item can't be listed as spare.
+            let owner = match page {
+                Some(item_data::PAGE_INVENTORY | item_data::PAGE_CUBE | item_data::PAGE_STASH) => {
+                    head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok())
+                }
+                _ => None,
             };
             let votes = match page {
                 Some(item_data::PAGE_STASH) => Some(&mut scan.stash_owners),
                 Some(item_data::PAGE_INVENTORY) => Some(&mut scan.inventory_owners),
                 _ => None,
             };
-            if let Some(votes) = votes.filter(|v| !v.done()) {
-                // An unreadable owner just doesn't vote.
-                if let Some(owner) = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok()) {
-                    votes.add(owner);
+            if let (Some(votes), Some(owner)) = (votes.filter(|v| !v.done()), owner) {
+                votes.add(owner);
+            }
+            // Cube and stash: only the may-be-spare items are read in full.
+            if let (Some(p @ (item_data::PAGE_CUBE | item_data::PAGE_STASH)), Some(owner)) = (page, owner)
+                && self.may_spare(&head)
+            {
+                match self.item_fields(addr, &head, items_table) {
+                    Ok(item) => scan.stored.push(Stored { item, page: p, owner }),
+                    Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
                 }
             }
             let found = match head.mode {
@@ -1143,12 +1211,34 @@ impl<M: ReadMem> Reader<'_, M> {
             };
             match found {
                 Ok(Some((d, true))) => scan.drops.push(d),
-                Ok(Some((d, false))) => scan.inventory.push(d),
+                Ok(Some((d, false))) => {
+                    if let Some(owner) = owner
+                        && valuables::may_spare(d.quality, d.flags)
+                    {
+                        scan.stored.push(Stored {
+                            item: d.clone(),
+                            page: item_data::PAGE_INVENTORY,
+                            owner,
+                        });
+                    }
+                    scan.inventory.push(d);
+                }
                 Ok(None) => {}
                 Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
             }
         }
         scan
+    }
+
+    /// True if the stored item `head` may be spare ([`valuables::may_spare`]); false if its
+    /// quality or flags are unreadable.
+    fn may_spare(&self, head: &UnitHead) -> bool {
+        head.unit_data.is_some_and(|d| {
+            matches!(
+                (self.u32(d, item_data::QUALITY), self.u32(d, item_data::FLAGS)),
+                (Ok(q), Ok(f)) if valuables::may_spare(q, f)
+            )
+        })
     }
 
     /// Storage page of a stored item (`item_data::PAGE`); `None` if unreadable.
@@ -2411,6 +2501,71 @@ mod tests {
                 ("Crystal Sword 4os", valuables::Tier::A, 1),
             ]
         );
+        Ok(())
+    }
+
+    /// An identified unique of items.txt row `txt` and uniqueitems row `index`, stored on `page`
+    /// with `owner` ([`stored_item`] plus `item_data::OWNER`).
+    fn owned_unique(
+        mem: &mut FakeMem,
+        addr: u64,
+        (txt, index): (u32, u32),
+        (page, owner): (u8, u32),
+        next: u64,
+    ) -> Result<()> {
+        let fields = (txt, 7, item_data::FLAG_IDENTIFIED, index);
+        stored_item(mem, addr, fields, (item_mode::STORED, page), &[], next)?;
+        let data = addr + 0x200;
+        let mut b = mem.read_bytes(data, 0x60)?;
+        let at = usize::try_from(item_data::OWNER)?;
+        b.get_mut(at..at + 4)
+            .context("owner in ItemData")?
+            .copy_from_slice(&owner.to_le_bytes());
+        mem.add(data, b);
+        Ok(())
+    }
+
+    #[test]
+    fn spare_lists_cover_the_players_inventory_cube_and_stashes() -> Result<()> {
+        const I7: u64 = 0x80_7000;
+        const I8: u64 = 0x80_8000;
+        const SHARED_TAB: u32 = 0x7777;
+        // items.txt rows 30 crs, 41 tgl, 42 hdm; uniqueitems 12 Gravenspine, 105 Magefist.
+        let (grave, magefist) = ((30, 12), (41, 105));
+        let mut m = world()?;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        owned_unique(&mut m, I1, grave, (0, BOB_ID), I2)?; // Bob's inventory: sell
+        owned_unique(&mut m, I2, grave, (0, ALICE_ID), I3)?; // another player's inventory
+        owned_unique(&mut m, I3, magefist, (4, SHARED_TAB), I4)?; // shared stash: give away
+        owned_unique(&mut m, I4, grave, (4, item_data::NO_OWNER), I5)?; // unknown page-4 items
+        owned_unique(&mut m, I5, grave, (3, BOB_ID), I6)?; // Bob's cube: sell
+        owned_unique(&mut m, I6, grave, (4, ALICE_ID), I7)?; // another player's stash id
+        owned_unique(&mut m, I7, magefist, (4, BOB_ID), I8)?; // Bob's stash: give away
+        owned_unique(&mut m, I8, (42, 12), (4, BOB_ID), 0)?; // quest code hdm: never listed
+        let stride = usize::try_from(crate::offsets::items_txt::STRIDE)?;
+        let mut b = vec![0u8; 50 * stride];
+        for (row, code) in [(30, b"crs "), (41, b"tgl "), (42, b"hdm ")] {
+            b.get_mut(row * stride..row * stride + 4)
+                .context("row in table")?
+                .copy_from_slice(code);
+        }
+        m.add(ITEMS, b);
+
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let names =
+            |l: &[valuables::Spare]| -> Vec<String> { l.iter().map(crate::info::spare_entry).collect() };
+        assert_eq!(names(&s.sell), vec!["Gravenspine (inv)", "Gravenspine (cube)"]);
+        assert_eq!(names(&s.give_away), vec!["Magefist (stash)", "Magefist (shared)"]);
+        assert_eq!(
+            s.inventory_items, 2,
+            "the keep scan still sees every inventory item"
+        );
+        // Empty lists stay out of the JSON.
+        let mut quiet = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        quiet.sell.clear();
+        quiet.give_away.clear();
+        let json = serde_json::to_string(&quiet)?;
+        assert!(!json.contains("sell") && !json.contains("give_away"), "{json}");
         Ok(())
     }
 

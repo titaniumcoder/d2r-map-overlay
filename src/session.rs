@@ -546,6 +546,8 @@ mod tests {
             operated_objects: vec![],
             inventory_items: 0,
             inventory_keep: vec![],
+            sell: vec![],
+            give_away: vec![],
             difficulty: None,
             terrorized: false,
             warnings: vec![],

@@ -229,6 +229,11 @@ pub mod item_data {
     /// over 74 items.
     pub const PAGE: u64 = 0x55;
     pub const PAGE_INVENTORY: u8 = 0;
+    /// The Horadric Cube (live 2026-11-15, owner = the player's unit id).
+    pub const PAGE_CUBE: u8 = 3;
+    /// Personal stash (owner = the player's unit id) and the shared stash tabs (live
+    /// 2026-11-15: each tab is its own pseudo-owner id, no player's). Also 38 items of owner
+    /// [`NO_OWNER`], all at (0,0) with quality 2, purpose unknown.
     pub const PAGE_STASH: u8 = 4;
     /// Bytes of `ItemData` copied into the journal's drop event for checking the offsets above.
     pub const HEAD_LEN: usize = 0x50;

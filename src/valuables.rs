@@ -288,6 +288,120 @@ fn display_name(item: &ItemDrop) -> String {
     name
 }
 
+/// Where a stored item of the player is (see `game::snapshot` for how page and owner map to it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Place {
+    Inventory,
+    Cube,
+    Stash,
+    Shared,
+}
+
+impl Place {
+    /// The short label shown after the item name: `inv`, `cube`, `stash`, `shared`.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Inventory => "inv",
+            Self::Cube => "cube",
+            Self::Stash => "stash",
+            Self::Shared => "shared",
+        }
+    }
+}
+
+/// A stored item that can go: sold to a vendor or given away (see [`spare_lists`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Spare {
+    /// The unique or set name.
+    pub name: String,
+    pub place: Place,
+    /// Identical entries (same name and place) are listed once with their count.
+    pub count: u32,
+}
+
+/// What to do with a stored item no S or A rule wants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// No rule of any tier matches.
+    Sell,
+    /// The best match is a B rule.
+    GiveAway,
+}
+
+/// Codes of quest and quest-like items (classic misc.txt/weapons.txt plus the D2R uber keys,
+/// organs and tokens): never listed as spare, whatever their quality.
+const QUEST_CODES: [&str; 36] = [
+    "leg", "hdm", "bks", "bkd", "ass", "box", "tr1", "tr2", "msf", "vip", "hst", "j34", "g34", "g33", "bbb",
+    "qf1", "qf2", "qey", "qhr", "qbr", "mss", "hfh", "ice", "xyz", "pk1", "pk2", "pk3", "dhn", "bey", "mbr",
+    "std", "toa", "tes", "ceh", "bet", "fed",
+];
+
+/// uniqueitems rows of the act quest uniques: Amulet of the Viper, Staff of Kings, Horadric
+/// Staff, Hell Forge Hammer, Khalim's Flail and Will.
+const QUEST_UNIQUE_ROWS: std::ops::RangeInclusive<u32> = 123..=128;
+
+/// Cheap pre-check on the raw `ItemData` fields: an identified unique or set item, not a
+/// runeword. Only these can be spare, so the reader skips the rest of the stash.
+pub const fn may_spare(quality: u32, flags: u32) -> bool {
+    (quality == item_data::QUALITY_UNIQUE || quality == item_data::QUALITY_SET)
+        && flags & item_data::FLAG_IDENTIFIED != 0
+        && flags & item_data::FLAG_RUNEWORD == 0
+}
+
+/// Whether a stored item can go, conservatively: only an identified unique or set item with a
+/// known name and code, not a charm, jewel, gem, rune or quest item. `None`: keep it (an S or A
+/// rule matches, or it is none of these).
+pub fn verdict(item: &ItemDrop) -> Option<Verdict> {
+    use crate::items::DropKind;
+    if !may_spare(item.quality, item.flags) || !matches!(item.kind, DropKind::Unique | DropKind::Set) {
+        return None;
+    }
+    // Without the code a quest item or jewel can't be ruled out.
+    let code = item.code.as_deref()?;
+    if code == "jew" || QUEST_CODES.contains(&code) {
+        return None;
+    }
+    if item.quality == item_data::QUALITY_UNIQUE
+        && item.unique_index.is_some_and(|i| QUEST_UNIQUE_ROWS.contains(&i))
+    {
+        return None;
+    }
+    identity(item)?;
+    match best(item, &EVERYTHING) {
+        None => Some(Verdict::Sell),
+        Some(h) if h.tier == Tier::B => Some(Verdict::GiveAway),
+        Some(_) => None,
+    }
+}
+
+/// The sell and the give-away lists of the stored `items` (see [`verdict`]), identical ones
+/// merged, each sorted by name, then place.
+pub fn spare_lists(items: &[(ItemDrop, Place)]) -> (Vec<Spare>, Vec<Spare>) {
+    let (mut sell, mut give): (Vec<Spare>, Vec<Spare>) = (Vec::new(), Vec::new());
+    for (item, place) in items {
+        let (Some(v), Some(name)) = (verdict(item), identity(item)) else {
+            continue;
+        };
+        let list = match v {
+            Verdict::Sell => &mut sell,
+            Verdict::GiveAway => &mut give,
+        };
+        match list.iter_mut().find(|s| s.name == name && s.place == *place) {
+            Some(s) => s.count = s.count.saturating_add(1),
+            None => list.push(Spare {
+                name: name.to_owned(),
+                place: *place,
+                count: 1,
+            }),
+        }
+    }
+    for list in [&mut sell, &mut give] {
+        list.sort_by(|a, b| a.name.cmp(&b.name).then(a.place.cmp(&b.place)));
+    }
+    (sell, give)
+}
+
 /// Sets each drop's highlight from the tiers `enabled` turns on, and removes the drops that are
 /// only shown for a rule ([`crate::items::DropKind::Base`]) when no enabled rule matches.
 pub fn apply(drops: &mut Vec<ItemDrop>, enabled: &config::Valuables) {
@@ -540,6 +654,95 @@ mod tests {
             ]
         );
         assert_eq!(keep_list(&[]), vec![]);
+    }
+
+    /// An identified unique (`quality` 7) or set (5) item of `code` and row `index`.
+    fn named(code: &str, quality: u32, index: u32) -> ItemDrop {
+        let mut d = drop(code, quality, 0, false);
+        d.kind = if quality == item_data::QUALITY_SET {
+            DropKind::Set
+        } else {
+            DropKind::Unique
+        };
+        d.flags = item_data::FLAG_IDENTIFIED;
+        d.unique_index = Some(index);
+        d
+    }
+
+    #[test]
+    fn verdict_sell_give_away_or_keep() {
+        assert_eq!(
+            verdict(&named("hax", 7, 12)),
+            Some(Verdict::Sell),
+            "Gravenspine: no rule"
+        );
+        assert_eq!(
+            verdict(&named("tgl", 7, 105)),
+            Some(Verdict::GiveAway),
+            "Magefist: a B rule"
+        );
+        assert_eq!(verdict(&named("uap", 7, 248)), None, "Harlequin Crest: S");
+        assert_eq!(
+            verdict(&named("bsw", 5, 13)),
+            Some(Verdict::Sell),
+            "Isenhart's Lightbrand: no rule"
+        );
+    }
+
+    #[test]
+    fn verdict_excludes_unsafe_items() {
+        let mut unid = named("hax", 7, 12);
+        unid.flags = 0;
+        assert_eq!(verdict(&unid), None, "unidentified");
+        let mut rw = named("hax", 7, 12);
+        rw.flags |= item_data::FLAG_RUNEWORD;
+        assert_eq!(verdict(&rw), None, "runeword flag");
+        assert_eq!(verdict(&named("uap", 7, 127)), None, "Khalim's Flail by row");
+        for code in ["hdm", "msf", "vip", "g33", "qf1", "qf2", "qey", "hfh", "hst"] {
+            assert_eq!(verdict(&named(code, 7, 12)), None, "quest code {code}");
+        }
+        let mut charm = named("cm1", 7, 381);
+        charm.kind = DropKind::Charm {
+            size: crate::items::CharmSize::Small,
+            unique: true,
+        };
+        assert_eq!(verdict(&charm), None, "unique charm");
+        assert_eq!(verdict(&named("jew", 7, 392)), None, "Rainbow Facet jewel");
+        let mut magic = named("hax", 4, 12);
+        magic.kind = DropKind::Base;
+        assert_eq!(verdict(&magic), None, "magic");
+        assert_eq!(verdict(&named("hax", 2, 12)), None, "normal");
+        let mut no_code = named("hax", 7, 12);
+        no_code.code = None;
+        assert_eq!(verdict(&no_code), None, "no code: quest item not ruled out");
+        assert_eq!(verdict(&named("hax", 7, 99_999)), None, "unknown name");
+    }
+
+    #[test]
+    fn spare_lists_merge_and_sort() {
+        let items = vec![
+            (named("tgl", 7, 105), Place::Stash),
+            (named("hax", 7, 12), Place::Shared),
+            (named("hax", 7, 12), Place::Inventory),
+            (named("hax", 7, 12), Place::Inventory),
+            (named("uap", 7, 248), Place::Inventory),
+            (named("bsw", 5, 13), Place::Cube),
+        ];
+        let (sell, give) = spare_lists(&items);
+        let spare = |n: &str, place, count| Spare {
+            name: n.into(),
+            place,
+            count,
+        };
+        assert_eq!(
+            sell,
+            vec![
+                spare("Gravenspine", Place::Inventory, 2),
+                spare("Gravenspine", Place::Shared, 1),
+                spare("Isenhart's Lightbrand", Place::Cube, 1),
+            ]
+        );
+        assert_eq!(give, vec![spare("Magefist", Place::Stash, 1)]);
     }
 
     #[test]

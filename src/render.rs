@@ -878,7 +878,8 @@ pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
 }
 
 /// The canvas height the map is fitted into: all of it, less the info line's band and the
-/// band of `keep_lines` keep lines if there is a font to draw them with.
+/// band of `keep_lines` text rows below it (keep, sell, give away and the gaps between them;
+/// see [`info::stack`]) if there is a font to draw them with.
 pub fn map_height(height: u32, font: Option<&FontVec>, keep_lines: usize) -> u32 {
     font.map_or(height, |f| {
         let bands = info::band_height(f) + info::keep_band_height(f, keep_lines);
@@ -886,19 +887,22 @@ pub fn map_height(height: u32, font: Option<&FontVec>, keep_lines: usize) -> u32
     })
 }
 
-/// The inventory keep list as text lines for a `width` px canvas; none without a font.
-fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<String> {
-    match font {
-        Some(f) if !snap.inventory_keep.is_empty() => {
-            let max_width = f32::from(u16::try_from(width).unwrap_or(u16::MAX)) - 8.0;
-            info::keep_lines(f, &snap.inventory_keep, max_width)
-        }
-        _ => Vec::new(),
-    }
+/// The text rows below the info line for a `width` px canvas: the inventory keep list, then the
+/// sell and give-away lists, with gap rows ([`info::stack`]); none without a font.
+fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<(String, Rgba)> {
+    let Some(f) = font else {
+        return Vec::new();
+    };
+    let max_width = f32::from(u16::try_from(width).unwrap_or(u16::MAX)) - 8.0;
+    info::stack(
+        info::keep_lines(f, &snap.inventory_keep, max_width),
+        info::spare_lines(f, info::SELL_PREFIX, &snap.sell, max_width),
+        info::spare_lines(f, info::GIVE_PREFIX, &snap.give_away, max_width),
+    )
 }
 
-/// A frame with only the inventory keep lines (for towns, where the map is hidden); `None` if
-/// there is nothing to show (empty list, or no font to draw it with).
+/// A frame with only the keep, sell and give-away lines (for towns, where the map is hidden);
+/// `None` if there is nothing to show (empty lists, or no font to draw them with).
 ///
 /// # Errors
 /// Fails if the canvas size is zero or too large for tiny-skia.
@@ -1484,6 +1488,8 @@ mod tests {
             operated_objects: vec![],
             inventory_items: 0,
             inventory_keep: vec![],
+            sell: vec![],
+            give_away: vec![],
             difficulty: None,
             terrorized: false,
             warnings: vec![],
@@ -2390,6 +2396,72 @@ mod tests {
         snap.terrorized = true;
         let pm = render_with(&snap, w, h, Some(font))?;
         assert!(count(&pm)? >= 20, "only {} violet pixels", count(&pm)?);
+        Ok(())
+    }
+
+    #[test]
+    fn keep_sell_and_give_away_blocks_with_gaps_and_colours() -> Result<()> {
+        use crate::valuables::{Category, Keep, Place, Spare, Tier};
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let mut snap = fixture()?;
+        snap.difficulty = Some(0);
+        snap.inventory_keep = vec![Keep {
+            name: "Harlequin Crest".into(),
+            tier: Tier::S,
+            category: Category::Trade,
+            count: 1,
+        }];
+        let spare = |name: &str, place| Spare {
+            name: name.into(),
+            place,
+            count: 1,
+        };
+        snap.sell = vec![spare("Gravenspine", Place::Inventory)];
+        snap.give_away = vec![spare("Magefist", Place::Shared)];
+        let (w, h) = (400, 400);
+        assert_eq!(keep_lines(&snap, w, Some(font)).len(), 5, "3 lines, 2 gaps");
+        let lh = info::line_height(font);
+        assert_eq!(
+            map_height(h, Some(font), 5),
+            map_height(h, Some(font), 0) - 5 * lh,
+            "the map shrinks by every row"
+        );
+        let pm = render_with(&snap, w, h, Some(font))?;
+        // Row `k` from the bottom spans `(h - 4 - (k + 1) lh, h - 4 - k lh]` (PAD 3 + 1).
+        let count = |k: u32, pred: &dyn Fn(Rgba) -> bool| -> Result<u32> {
+            let (bottom, top) = (h - 4 - k * lh, h - 4 - (k + 1) * lh);
+            let mut n = 0;
+            for y in top + 1..=bottom {
+                for x in 0..w {
+                    n += u32::from(pred(rgba(&pm, x, y)?));
+                }
+            }
+            Ok(n)
+        };
+        let solid = |p: Rgba| p[3] == 255;
+        let yellow = |p: Rgba| solid(p) && p[0] > 200 && p[1] > 170 && p[2] < 120;
+        let grey = |p: Rgba| solid(p) && p[0] > 130 && p[0].abs_diff(p[1]) < 12 && p[0].abs_diff(p[2]) < 12;
+        let green = |p: Rgba| solid(p) && p[1] > 180 && p[0] < 140 && p[2] < 140;
+        let ink = |p: Rgba| p[3] > 0;
+        assert!(count(0, &yellow)? > 20, "give away at the bottom, yellow");
+        assert_eq!(count(0, &grey)?, 0, "no grey in the give-away row");
+        assert!(count(2, &grey)? > 20, "sell above it, grey");
+        assert_eq!(count(2, &yellow)?, 0, "no yellow in the sell row");
+        assert!(count(4, &green)? > 20, "keep on top, green");
+        // The gap rows hold no text; the outline of a neighbour row may reach in by a pixel.
+        for k in [1, 3] {
+            let (bottom, top) = (h - 4 - k * lh, h - 4 - (k + 1) * lh);
+            let mut n = 0;
+            for y in top + 3..=bottom - 3 {
+                for x in 0..w {
+                    n += u32::from(ink(rgba(&pm, x, y)?));
+                }
+            }
+            assert_eq!(n, 0, "gap row {k}");
+        }
         Ok(())
     }
 
