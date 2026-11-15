@@ -158,7 +158,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   `+0xB30` (8 × u32; bit n in dword n/32). Live in the terrorized Moo Moo Farm: all 24 cows had bit 189, the player
   and the druid's wolves didn't. A level counts as terrorized when ≥ 2 living monsters carry it; the flag holds for
   the current visit (zones rotate hourly). Info line: "terrorized" in violet, table monster levels hidden.
-  Still to check: monsters in a non-terrorized area have the bit clear.
+  Confirmed by the user: during the Legacy of Terror event (13–19 Nov 2026) every Normal zone is terrorized after
+  Baal (switchable per game); towns read clean. A non-terrorized combat area is still to check after the event.
 
 ## Research journal
 Live mode appends deduped events to `~/.local/share/d2r-map-overlay/journal/YYYY-MM-DD.jsonl` (UTC date):
