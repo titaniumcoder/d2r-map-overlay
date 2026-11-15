@@ -9,6 +9,7 @@ use tiny_skia::{FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stro
 
 use crate::game::{Bounds, Monster, Preset, PresetKind, Room, RoomRect, Snapshot};
 use crate::items::{CharmSize, DropKind, GemColour};
+use crate::offsets::monster_data;
 use crate::valuables::Tier;
 use crate::{info, session};
 
@@ -262,6 +263,16 @@ const BASE_WHITE: Rgba = [240, 240, 240, 255];
 const RING_GAP: f32 = 4.0;
 const RING_WIDTH: f32 = 2.0;
 const RING_DASH: [f32; 2] = [3.0, 2.5];
+/// Live elites: the dot and the superunique and boss skulls.
+const ELITE_RED: Rgba = [230, 30, 30, 255];
+/// Skull icons: the dark outline is stroked under the fill, so about 1 px of it shows around the
+/// skull and it darkens the small eye holes.
+const SKULL_OUTLINE_WIDTH: f32 = 2.0;
+/// Most distance in tiles between a live superunique or boss and a superunique or quest monster
+/// preset whose marker it replaces for the frame: the live icon is drawn, the preset dot not.
+/// A bit above `session`'s bind radius (15), as the monster moves around its spawn while alive;
+/// once it is dead the session hides the preset for the game.
+const LIVE_REPLACES_PRESET_RADIUS: f64 = 20.0;
 /// Shrine dots have a white outline, apart from every other marker's dark one.
 const SHRINE_OUTLINE: Rgba = [255, 255, 255, 230];
 /// Well: a hollow cyan ring (the entry is a teal square) on a dark backing ring.
@@ -283,6 +294,11 @@ pub enum Shape {
     /// Isosceles triangle, tip up unless drawn with a direction ([`triangle_path`]); the size is
     /// the centre-to-tip distance.
     Triangle,
+    /// Death skull: cranium, jaw, two eye holes ([`skull_path`]); the size is a quarter of its
+    /// height and width, so 3.5 gives the 8 px footprint of an elite dot.
+    Skull,
+    /// [`Shape::Skull`] with two horns, the demon skull of a boss.
+    HornedSkull,
 }
 
 /// Something drawn on the map. Variant order is draw order (player last, on top).
@@ -321,8 +337,13 @@ pub enum Marker {
     /// Any other living monster, only on levels in [`ALL_MONSTER_LEVELS`]: a small dim red dot
     /// below the elites.
     Monster,
-    /// Live superunique, champion or unique monster.
+    /// Live champion or unique monster.
     Elite,
+    /// Live superunique (`MonsterData` flag 0x02): a red death skull.
+    Superunique,
+    /// Live quest boss ([`BOSS_MONSTERS`](crate::levels_data::BOSS_MONSTERS) by txt id): a red
+    /// horned skull.
+    Boss,
     /// The player. Drawn below drops and rings: on big levels a fresh drop lies within a pixel or
     /// two of the player and would otherwise be hidden (live, Bloody Foothills, a large charm 3.6
     /// tiles away).
@@ -344,8 +365,9 @@ impl Marker {
         match self {
             Self::Exit => ([170, 90, 255, 255], 5.0, Shape::Circle),
             Self::Entry => ([40, 200, 200, 255], 4.5, Shape::Square),
-            Self::BorderExit { entry: false, .. } => (Self::Exit.style().0, 4.0, Shape::Triangle),
-            Self::BorderExit { entry: true, .. } => (Self::Entry.style().0, 4.0, Shape::Triangle),
+            // Size 7: about 11 px long with the outline; at 4 it was barely visible (user, 2026-11-15).
+            Self::BorderExit { entry: false, .. } => (Self::Exit.style().0, 7.0, Shape::Triangle),
+            Self::BorderExit { entry: true, .. } => (Self::Entry.style().0, 7.0, Shape::Triangle),
             Self::Waypoint => ([60, 140, 255, 255], 5.0, Shape::Circle),
             Self::Special(_) => ([255, 110, 40, 255], 4.5, Shape::Circle),
             // The ring is the no-font fallback; with a font the "?" glyph is drawn instead.
@@ -355,7 +377,9 @@ impl Marker {
             Self::Well => (WELL_CYAN, 4.5, Shape::Circle),
             Self::Shrine(code) => (shrine_colour(code), 4.0, Shape::Circle),
             Self::Monster => ([255, 120, 120, 200], 2.0, Shape::Circle),
-            Self::Elite => ([230, 30, 30, 255], 3.5, Shape::Circle),
+            Self::Elite => (ELITE_RED, 3.5, Shape::Circle),
+            Self::Superunique => (ELITE_RED, 3.5, Shape::Skull),
+            Self::Boss => (ELITE_RED, 3.5, Shape::HornedSkull),
             Self::Drop(DropKind::Unique) => (UNIQUE_GOLD, 5.0, Shape::Diamond),
             Self::Drop(DropKind::Set) => ([30, 220, 30, 255], 5.0, Shape::Diamond),
             Self::Drop(DropKind::Rune(_)) => ([255, 150, 20, 255], 3.5, Shape::Square),
@@ -501,6 +525,34 @@ pub fn is_elite(m: &Monster) -> bool {
     m.flags & ELITE_FLAGS != 0 && !m.is_dead()
 }
 
+/// The icon marker of a live monster: [`Marker::Boss`] for a quest boss by txt id (whatever its
+/// flags: the boss check comes first), else [`Marker::Superunique`] or [`Marker::Elite`] for an
+/// elite (see [`is_elite`]). `None` for a dead or ordinary monster.
+pub fn elite_marker(m: &Monster) -> Option<Marker> {
+    if m.is_dead() {
+        None
+    } else if crate::levels_data::BOSS_MONSTERS.contains(&m.txt) {
+        Some(Marker::Boss)
+    } else if !is_elite(m) {
+        None
+    } else if m.flags & monster_data::SUPERUNIQUE != 0 {
+        Some(Marker::Superunique)
+    } else {
+        Some(Marker::Elite)
+    }
+}
+
+/// True if a preset drawn as `marker` at (`x`, `y`) is a superunique or quest monster spawn that
+/// one of the live superunique or boss positions `live` stands within
+/// [`LIVE_REPLACES_PRESET_RADIUS`] of: the live icon shows instead.
+fn replaced_by_live(p: &Preset, marker: Marker, live: &[(f64, f64)]) -> bool {
+    p.kind == PresetKind::Monster
+        && matches!(marker, Marker::Special(_) | Marker::QuestObject(_))
+        && live
+            .iter()
+            .any(|&(mx, my)| (f64::from(p.x) - mx).hypot(f64::from(p.y) - my) <= LIVE_REPLACES_PRESET_RADIUS)
+}
+
 /// The marker a preset is drawn as, if any.
 pub fn preset_marker(p: &Preset) -> Option<Marker> {
     match p.kind {
@@ -630,10 +682,19 @@ pub fn border_exits(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
 
 /// Every marker of the snapshot with its world position, in draw order.
 pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
+    let live_bosses: Vec<(f64, f64)> = snap
+        .monsters
+        .iter()
+        .filter(|m| matches!(elite_marker(m), Some(Marker::Superunique | Marker::Boss)))
+        .map(|m| (f64::from(m.x), f64::from(m.y)))
+        .collect();
     let mut out: Vec<(Marker, f64, f64)> = snap
         .presets
         .iter()
-        .filter_map(|p| preset_marker(p).map(|m| (m, f64::from(p.x), f64::from(p.y))))
+        .filter_map(|p| {
+            let marker = preset_marker(p).filter(|&m| !replaced_by_live(p, m, &live_bosses))?;
+            Some((marker, f64::from(p.x), f64::from(p.y)))
+        })
         .chain(
             snap.wells
                 .iter()
@@ -645,8 +706,8 @@ pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
                 .map(|s| (Marker::Shrine(s.code), f64::from(s.x), f64::from(s.y))),
         )
         .chain(snap.monsters.iter().filter(|m| !m.is_dead()).filter_map(|m| {
-            let marker = if is_elite(m) {
-                Marker::Elite
+            let marker = if let Some(elite) = elite_marker(m) {
+                elite
             } else if ALL_MONSTER_LEVELS.contains(&snap.level.id)
                 && !crate::levels_data::NON_HOSTILE_MONSTERS.contains(&m.txt)
             {
@@ -800,8 +861,10 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
                 None,
             );
             solid(&mut pm, &dot, colour);
+        } else if matches!(shape, Shape::Skull | Shape::HornedSkull) {
+            draw_skull(&mut pm, &dot, colour, (cx, cy, size), shape == Shape::HornedSkull);
         } else if shape == Shape::Triangle {
-            // Outline under the fill: the 6 px triangle keeps all its colour, with half the
+            // Outline under the fill: the small triangle keeps all its colour, with half the
             // outline showing around it.
             pm.stroke_path(&dot, &paint(MARKER_OUTLINE), &ring, Transform::identity(), None);
             solid(&mut pm, &dot, colour);
@@ -893,6 +956,44 @@ fn draw_well(pm: &mut Pixmap, circle: &Path, colour: Rgba) {
     }
 }
 
+/// A superunique or boss skull: `dot` is its [`skull_path`] with the eye holes, centred on
+/// (`cx`, `cy`) with `size`.
+fn draw_skull(pm: &mut Pixmap, dot: &Path, colour: Rgba, (cx, cy, size): (f32, f32, f32), horns: bool) {
+    // Outline of the outer contour under the fill, as for the stars. Stroking the eye holes too
+    // would ring them and merge both eyes into one dark band at 8 px, so even-odd cuts them out
+    // of the fill and they are filled dark on their own.
+    let outline = Stroke {
+        width: SKULL_OUTLINE_WIDTH,
+        line_join: LineJoin::Round,
+        ..Stroke::default()
+    };
+    if let Some(outer) = skull_path(cx, cy, size, horns, false) {
+        pm.stroke_path(
+            &outer,
+            &paint(MARKER_OUTLINE),
+            &outline,
+            Transform::identity(),
+            None,
+        );
+    }
+    pm.fill_path(
+        dot,
+        &paint(colour),
+        FillRule::EvenOdd,
+        Transform::identity(),
+        None,
+    );
+    if let Some(eyes) = skull_eyes(cx, cy, size) {
+        pm.fill_path(
+            &eyes,
+            &paint(MARKER_OUTLINE),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+}
+
 /// A "?" for an unconfirmed landmark at (`cx`, `cy`): the glyph on a dark translucent disc, or
 /// without a font the hollow light-gold `ring` on a dark backing.
 fn draw_suspected(pm: &mut Pixmap, font: Option<&FontVec>, ring: &Path, cx: f32, cy: f32) {
@@ -932,7 +1033,8 @@ fn marker_outline(marker: Marker, shape: Shape, cx: f32, cy: f32, size: f32) -> 
 }
 
 /// A triangle centred on (`cx`, `cy`) with its tip `size` px from the centre toward screen
-/// direction `(ux, uy)` (any length; zero points up). Size 4 gives a triangle about 6 px long and wide.
+/// direction `(ux, uy)` (any length; zero points up). It is 1.5 × `size` long and 1.3 × `size`
+/// wide: size 7 gives about 10.5 × 9 px.
 fn triangle_path(cx: f32, cy: f32, size: f32, (ux, uy): (f32, f32)) -> Option<Path> {
     let len = ux.hypot(uy);
     let (ux, uy) = if len > f32::EPSILON {
@@ -962,6 +1064,8 @@ fn triangle_path(cx: f32, cy: f32, size: f32, (ux, uy): (f32, f32)) -> Option<Pa
 fn marker_path(shape: Shape, cx: f32, cy: f32, size: f32) -> Option<Path> {
     match shape {
         Shape::Triangle => triangle_path(cx, cy, size, (0.0, -1.0)),
+        Shape::Skull => skull_path(cx, cy, size, false, true),
+        Shape::HornedSkull => skull_path(cx, cy, size, true, true),
         Shape::Circle => PathBuilder::from_circle(cx, cy, size),
         Shape::Square => {
             Rect::from_xywh(cx - size, cy - size, 2.0 * size, 2.0 * size).map(PathBuilder::from_rect)
@@ -992,6 +1096,79 @@ fn marker_path(shape: Shape, cx: f32, cy: f32, size: f32) -> Option<Path> {
             pb.close();
             pb.finish()
         }
+    }
+}
+
+/// A skull centred on (`cx`, `cy`), in units of `size` / 4 (so the outline spans about ±4 units):
+/// one outer contour (cranium arc, with a horn on each upper side if `horns`, down into a narrower
+/// jaw) and, if `eyes`, the two eye circles of [`skull_eyes`] inside it. Filled even-odd, the eyes
+/// are holes. The outer contour is one polygon on purpose: separate overlapping cranium and jaw
+/// shapes would cancel out under even-odd.
+fn skull_path(cx: f32, cy: f32, size: f32, horns: bool, eyes: bool) -> Option<Path> {
+    // Cranium circle (centre y, radius), jaw half-width and bottom.
+    const CRANIUM_Y: f32 = -0.9;
+    const CRANIUM_R: f32 = 3.0;
+    const JAW_HALF: f32 = 1.5;
+    const JAW_BOTTOM: f32 = 3.8;
+    // Right horn: its base spans these cranium angles (degrees, screen y down), its tip is here;
+    // the left horn mirrors it.
+    const HORN_BASE: (f32, f32) = (-30.0, -62.0);
+    const HORN_TIP: (f32, f32) = (3.7, -5.0);
+    let k = size / 4.0;
+    let at = |x: f32, y: f32| (x.mul_add(k, cx), y.mul_add(k, cy));
+    let on_cranium = |deg: f32| {
+        let (sin, cos) = deg.to_radians().sin_cos();
+        at(CRANIUM_R * cos, CRANIUM_R.mul_add(sin, CRANIUM_Y))
+    };
+    let mut pb = PathBuilder::new();
+    let line = |pb: &mut PathBuilder, (x, y): (f32, f32)| pb.line_to(x, y);
+    // An arc of the cranium from angle `from` down to `to`: 20 segments, at most ~15 degrees
+    // each for the longest (the whole skull top), plenty at 8 px.
+    let arc = |pb: &mut PathBuilder, from: f32, to: f32| {
+        const STEPS: u8 = 20;
+        for i in 0..=STEPS {
+            let t = f32::from(i) / f32::from(STEPS);
+            line(pb, on_cranium((to - from).mul_add(t, from)));
+        }
+    };
+    // Angle of the right jaw corner on the cranium; the left one is 180 - this.
+    let join = (JAW_HALF / CRANIUM_R).acos().to_degrees();
+    let (x, y) = at(JAW_HALF, JAW_BOTTOM);
+    pb.move_to(x, y);
+    if horns {
+        let (tx, ty) = HORN_TIP;
+        arc(&mut pb, join, HORN_BASE.0);
+        line(&mut pb, at(tx, ty));
+        arc(&mut pb, HORN_BASE.1, -180.0 - HORN_BASE.1);
+        line(&mut pb, at(-tx, ty));
+        arc(&mut pb, -180.0 - HORN_BASE.0, -180.0 - join);
+    } else {
+        arc(&mut pb, join, -180.0 - join);
+    }
+    line(&mut pb, at(-JAW_HALF, JAW_BOTTOM));
+    pb.close();
+    if eyes {
+        push_eyes(&mut pb, cx, cy, size);
+    }
+    pb.finish()
+}
+
+/// The two eye circles of the skull of [`skull_path`], alone: filled dark so they read on any
+/// background (a hole alone would show the room grey).
+fn skull_eyes(cx: f32, cy: f32, size: f32) -> Option<Path> {
+    let mut pb = PathBuilder::new();
+    push_eyes(&mut pb, cx, cy, size);
+    pb.finish()
+}
+
+fn push_eyes(pb: &mut PathBuilder, cx: f32, cy: f32, size: f32) {
+    // Offset from the centre and radius, in units of `size` / 4 as in `skull_path`.
+    const EYE_X: f32 = 1.5;
+    const EYE_Y: f32 = -0.4;
+    const EYE_R: f32 = 0.95;
+    let k = size / 4.0;
+    for side in [-1.0, 1.0] {
+        pb.push_circle((side * EYE_X).mul_add(k, cx), EYE_Y.mul_add(k, cy), EYE_R * k);
     }
 }
 
@@ -1215,6 +1392,164 @@ mod tests {
         assert!(!is_elite(&monster(0x00, 1)), "normal");
         assert!(!is_elite(&monster(0x08, 0)), "dead (mode 0)");
         assert!(!is_elite(&monster(0x0C, 12)), "dead (mode 12)");
+    }
+
+    fn monster_txt(txt: u32, flags: u8, mode: u32) -> Monster {
+        Monster {
+            txt,
+            ..monster(flags, mode)
+        }
+    }
+
+    #[test]
+    fn live_monster_icon_classification() {
+        // Andariel (156), Baal (544), Baal's clone (570), Nihlathak (526): the boss check wins
+        // over the superunique flag, and needs no elite flag at all.
+        for txt in [156, 544, 570, 526] {
+            assert_eq!(
+                elite_marker(&monster_txt(txt, 0x02, 1)),
+                Some(Marker::Boss),
+                "{txt}"
+            );
+            assert_eq!(
+                elite_marker(&monster_txt(txt, 0x08, 1)),
+                Some(Marker::Boss),
+                "{txt}"
+            );
+            assert_eq!(
+                elite_marker(&monster_txt(txt, 0x00, 1)),
+                Some(Marker::Boss),
+                "{txt}"
+            );
+        }
+        // Superunique beats the plain elite, also with the unique and champion bits set.
+        assert_eq!(elite_marker(&monster(0x02, 1)), Some(Marker::Superunique));
+        assert_eq!(elite_marker(&monster(0x0A, 1)), Some(Marker::Superunique));
+        assert_eq!(elite_marker(&monster(0x08, 1)), Some(Marker::Elite));
+        assert_eq!(elite_marker(&monster(0x04, 1)), Some(Marker::Elite));
+        // Not drawn as an elite: minion only, normal, dead (boss or not).
+        assert_eq!(elite_marker(&monster(0x10, 1)), None);
+        assert_eq!(elite_marker(&monster(0x00, 1)), None);
+        assert_eq!(elite_marker(&monster(0x02, 0)), None);
+        assert_eq!(elite_marker(&monster_txt(156, 0x00, 12)), None);
+        // Same draw rank as the elite dot: above shrines, below the player.
+        assert!(Marker::Shrine(1) < Marker::Elite);
+        assert!(Marker::Elite < Marker::Superunique && Marker::Superunique < Marker::Boss);
+        assert!(Marker::Boss < Marker::Player);
+    }
+
+    #[test]
+    fn a_live_superunique_replaces_its_preset_marker() {
+        let mut snap = empty_snapshot(5, 5);
+        let at = |kind, txt, x, y| Preset {
+            x,
+            y,
+            ..preset(kind, txt)
+        };
+        snap.presets = vec![
+            at(PresetKind::Monster, 757, 100, 100), // Countess preset, 19 tiles off: hidden
+            at(PresetKind::Monster, 771, 200, 100), // another superunique preset: kept
+            at(PresetKind::Monster, 434, 110, 110), // quest monster preset near him: hidden
+            at(PresetKind::Object, 460, 101, 100),  // quest object, not a monster: kept
+            at(PresetKind::Tile, 1, 100, 100),      // exit: kept
+        ];
+        let kinds = |s: &Snapshot| -> Vec<Marker> { markers(s).into_iter().map(|(m, _, _)| m).collect() };
+        let countess = |mode| Monster {
+            x: 115,
+            y: 112,
+            ..monster(0x02, mode)
+        };
+
+        snap.monsters = vec![countess(1)];
+        assert_eq!(
+            kinds(&snap),
+            vec![
+                Marker::Exit,
+                Marker::Special(Some("The Smith")),
+                Marker::QuestObject("anya"),
+                Marker::Superunique,
+                Marker::Player
+            ]
+        );
+        // A plain unique standing there hides nothing.
+        snap.monsters = vec![Monster {
+            x: 100,
+            y: 100,
+            ..monster(0x08, 1)
+        }];
+        assert_eq!(
+            kinds(&snap)
+                .iter()
+                .filter(|m| matches!(m, Marker::Special(_)))
+                .count(),
+            2
+        );
+        // Dead: the preset is back for this frame (the session hides a killed one for the game).
+        snap.monsters = vec![countess(12)];
+        assert_eq!(
+            kinds(&snap),
+            vec![
+                Marker::Exit,
+                Marker::Special(Some("The Countess")),
+                Marker::Special(Some("The Smith")),
+                Marker::QuestObject("anya"),
+                Marker::QuestObject("prison door"),
+                Marker::Player
+            ]
+        );
+        // A live boss hides a nearby preset the same way.
+        snap.monsters = vec![Monster {
+            x: 105,
+            y: 100,
+            ..monster_txt(526, 0x00, 1)
+        }];
+        assert!(!kinds(&snap).contains(&Marker::Special(Some("The Countess"))));
+        assert!(kinds(&snap).contains(&Marker::Boss));
+    }
+
+    #[test]
+    fn skull_icons_draw_red_within_the_elite_dot_footprint() -> Result<()> {
+        for (flags, txt, want) in [(0x02, 1, Marker::Superunique), (0x00, 544, Marker::Boss)] {
+            let mut snap = empty_snapshot(5, 5);
+            snap.monsters = vec![Monster {
+                x: 60,
+                y: 60,
+                ..monster_txt(txt, flags, 1)
+            }];
+            assert!(markers(&snap).iter().any(|&(m, _, _)| m == want), "{want:?}");
+            let pm = render(&snap, 200, 200)?;
+            let at = View::fit(level_bounds(&snap), 200, 200).to_screen(60.0, 60.0);
+            let red = |p: Rgba| p[0] > 180 && p[1] < 80 && p[2] < 80 && p[3] > 200;
+            let mut hits = 0;
+            for y in 0..pm.height() {
+                for x in 0..pm.width() {
+                    if red(rgba(&pm, x, y)?) {
+                        let (dx, dy) = (
+                            f64::from(x) + 0.5 - f64::from(at.0),
+                            f64::from(y) + 0.5 - f64::from(at.1),
+                        );
+                        assert!(dx.abs() <= 4.5 && dy.abs() <= 4.5, "{want:?}: red at {dx},{dy}");
+                        hits += 1;
+                    }
+                }
+            }
+            // About 8x8 px less the outline, eyes and edge anti-aliasing: a dozen solid pixels.
+            assert!(hits >= 10, "{want:?}: only {hits} red pixels");
+            // A dark outline just outside the cranium top, and dark eye holes.
+            #[allow(
+                clippy::cast_sign_loss,
+                clippy::cast_possible_truncation,
+                reason = "test points are inside the canvas"
+            )]
+            let pixel =
+                |dx: f32, dy: f32| ((at.0 + dx - 0.5).round() as u32, (at.1 + dy - 0.5).round() as u32);
+            let (ox, oy) = pixel(0.0, -4.0);
+            let top = rgba(&pm, ox, oy)?;
+            assert!(top[0] < 120 && top[3] > 100, "{want:?}: outline above: {top:?}");
+            let (ex, ey) = pixel(1.2, -0.4);
+            assert!(!red(rgba(&pm, ex, ey)?), "{want:?}: eye hole is not red");
+        }
+        Ok(())
     }
 
     #[test]
@@ -1967,7 +2302,8 @@ mod tests {
             let (colour, size, _) = Marker::BorderExit { dir: (0, 1), entry }.style();
             assert_eq!(colour, if entry { Marker::Entry } else { Marker::Exit }.style().0);
             let (hits, dx, dy) = colour_spread(&pm, colour, v.to_screen(x, y))?;
-            assert!(hits >= 4, "only {hits} pixels (entry {entry})");
+            // Size 7: about 45 px of area; most of it is fully covered.
+            assert!(hits >= 20, "only {hits} pixels (entry {entry})");
             assert!(
                 dx.hypot(dy) <= f64::from(size) * 1.5,
                 "spread {dx},{dy} (entry {entry})"
@@ -2059,7 +2395,7 @@ mod tests {
         snap.level.id = 74;
         snap.monsters = vec![monster(0x02, 1)];
         let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
-        assert_eq!(kinds, vec![summoner, Marker::Elite, Marker::Player]);
+        assert_eq!(kinds, vec![summoner, Marker::Superunique, Marker::Player]);
     }
 
     #[test]

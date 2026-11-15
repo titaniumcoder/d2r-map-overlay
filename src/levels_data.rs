@@ -236,3 +236,9 @@ pub const NON_HOSTILE_MONSTERS: &[u32] = &[
     419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 511, 512, 513, 514, 515, 520, 521, 522,
     523, 527, 534, 535, 536, 537, 538, 539, 560, 561, 734, 737, 738, 742, 743, 744,
 ];
+
+/// Monster txt ids (hcIdx) of the quest bosses in BOSSES plus Baal's other forms (throne,
+/// stairs, clone), sorted: drawn as a boss icon while alive.
+pub const BOSS_MONSTERS: &[u32] = &[
+    156, 211, 229, 242, 243, 250, 256, 267, 365, 526, 543, 544, 559, 570,
+];

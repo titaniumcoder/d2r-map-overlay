@@ -37,6 +37,10 @@ BOSSES = [
     ("Baal", "baalcrab", 132),
 ]
 
+# Baal's other monstats forms, also drawn as a boss (not his minions, tentacles or the council).
+# "baaltaunt" is left out: it is the voice in the Worldstone Keep, not a form that fights.
+BAAL_FORMS = ["baalthrone", "baalcrabstairs", "baalclone"]
+
 
 def rs_str(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -71,5 +75,12 @@ print("/// Monster txt ids (hcIdx) with a monstats `Align` (1 ally, 2 neutral): 
 print("/// town NPCs and critters. Never enemies.")
 print("pub const NON_HOSTILE_MONSTERS: &[u32] = &[")
 for i in sorted(int(r["*hcIdx"]) for r in monstats if r.get("Align") not in (None, "", 0)):
+    print(f"    {i},")
+print("];")
+print()
+print("/// Monster txt ids (hcIdx) of the quest bosses in BOSSES plus Baal's other forms (throne,")
+print("/// stairs, clone), sorted: drawn as a boss icon while alive.")
+print("pub const BOSS_MONSTERS: &[u32] = &[")
+for i in sorted({int(mon[key]["*hcIdx"]) for key in [k for _, k, _ in BOSSES] + BAAL_FORMS}):
     print(f"    {i},")
 print("];")
