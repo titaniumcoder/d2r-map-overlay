@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::game::Shrine;
 use crate::valuables::{Category, Tier};
 
 /// Shrine names by shrines.txt code (row): `SHRINE_NAMES[code]`.
@@ -84,7 +85,7 @@ impl Valuables {
     }
 }
 
-/// `[shrines]`: the shrine types to show, as shrines.txt codes (not drawn yet).
+/// `[shrines]`: the shrine types to show, as shrines.txt codes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shrines {
     pub show: Vec<u8>,
@@ -94,6 +95,13 @@ impl Default for Shrines {
     fn default() -> Self {
         let (show, _) = shrine_codes(&DEFAULT_SHRINES.map(str::to_owned));
         Self { show }
+    }
+}
+
+impl Shrines {
+    /// Keeps the shrines to draw: unused ones whose type is in `show`. Wells are always drawn.
+    pub fn retain_shown(&self, shrines: &mut Vec<Shrine>) {
+        shrines.retain(|s| !s.used && self.show.contains(&s.code));
     }
 }
 
@@ -255,6 +263,32 @@ mod tests {
             (at(1), at(12), at(18), at(22)),
             (Some("refilling"), Some("skill"), Some("gem"), Some("poison"))
         );
+    }
+
+    #[test]
+    fn shrine_filter() {
+        let shrine = |code, used| Shrine {
+            txt: 236,
+            code,
+            used,
+            x: u32::from(code),
+            y: 0,
+        };
+        let mut shrines = vec![
+            shrine(2, false),
+            shrine(12, false),
+            shrine(12, true),
+            shrine(20, false),
+        ];
+        Shrines::default().retain_shown(&mut shrines);
+        assert_eq!(
+            shrines,
+            vec![shrine(12, false), shrine(20, false)],
+            "health not shown by default, used skill shrine dropped"
+        );
+        let mut shrines = vec![shrine(2, false)];
+        Shrines { show: vec![2] }.retain_shown(&mut shrines);
+        assert_eq!(shrines.len(), 1, "health shown once configured");
     }
 
     #[test]

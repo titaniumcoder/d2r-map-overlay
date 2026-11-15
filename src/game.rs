@@ -1,4 +1,5 @@
-//! Reads one snapshot of the game state (player, level layout, presets, monsters, ground drops).
+//! Reads one snapshot of the game state (player, level layout, presets, monsters, ground drops,
+//! nearby shrines and wells).
 //!
 //! Lists in game memory change under us while we read, so a single bad pointer deep in a
 //! list only skips that entry and is recorded in `Snapshot::warnings`; only a missing
@@ -10,9 +11,11 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::items::{self, DropKind};
+use crate::objects_data::{SHRINE_OBJECTS, WELL_OBJECTS};
 use crate::offsets::{
-    ROOM_TILE_SCALE, act, act_misc, item_data, item_mode, level, level_preset, monster_data, path,
-    player_data, preset, room_tile, room1, room2, stat_list, static_path, unit, unit_table,
+    ROOM_TILE_SCALE, act, act_misc, item_data, item_mode, level, level_preset, monster_data, object_data,
+    object_mode, path, player_data, preset, room_tile, room1, room2, stat_list, static_path, unit,
+    unit_table,
 };
 use crate::process::ReadMem;
 use crate::valuables;
@@ -29,6 +32,9 @@ const MAX_ITEM_STATS: u64 = 512;
 const MAX_LINKS_PER_ROOM: usize = 100;
 /// Warnings kept in the snapshot; the rest are only counted.
 const MAX_WARNINGS: usize = 50;
+
+/// Shrine types (shrines.txt codes, see `config::SHRINE_NAMES`) of a real shrine; 0 is "none".
+const SHRINE_TYPES: std::ops::RangeInclusive<u8> = 1..=22;
 
 /// Level ids of the five towns (levels.txt): Rogue Encampment, Lut Gholein, Kurast Docks,
 /// Pandemonium Fortress, Harrogath.
@@ -73,6 +79,14 @@ pub struct Snapshot {
     /// The ground items worth showing.
     #[serde(default)]
     pub drops: Vec<ItemDrop>,
+    /// Shrines near the player (objects are loaded only in range). Live mode keeps only the
+    /// unused ones of the configured types for drawing ([`crate::config::Shrines::retain_shown`]).
+    /// Left out of the JSON when empty, like the fields below.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shrines: Vec<Shrine>,
+    /// Wells near the player.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wells: Vec<Well>,
     /// Items in the player's inventory (shown or not); live-mode only, not in the JSON.
     #[serde(skip)]
     pub inventory_items: u32,
@@ -218,6 +232,38 @@ impl Monster {
     }
 }
 
+/// A shrine object (txt id in [`SHRINE_OBJECTS`]) with a shrine type in [`SHRINE_TYPES`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Shrine {
+    /// objects.txt row.
+    pub txt: u32,
+    /// Shrine type: the shrines.txt code (`ObjectData` +0x08), 2 health, 12 skill, ...
+    pub code: u8,
+    /// Already clicked (any unit mode other than [`object_mode::NEUTRAL`]).
+    pub used: bool,
+    pub x: u32,
+    pub y: u32,
+}
+
+/// A well object (txt id in [`WELL_OBJECTS`]). Wells refill, so used or not doesn't matter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Well {
+    /// objects.txt row.
+    pub txt: u32,
+    pub x: u32,
+    pub y: u32,
+}
+
+/// True if objects.txt row `txt` is a shrine (see `research/gen_objects.py`).
+pub fn is_shrine_object(txt: u32) -> bool {
+    SHRINE_OBJECTS.binary_search(&txt).is_ok()
+}
+
+/// True if objects.txt row `txt` is a well (see `research/gen_objects.py`).
+pub fn is_well_object(txt: u32) -> bool {
+    WELL_OBJECTS.binary_search(&txt).is_ok()
+}
+
 /// A ground item worth showing (see [`items::classify`]), or a base a valuables rule matches.
 /// The fields after `quality` default so older dumps stay loadable.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -337,6 +383,7 @@ pub fn snapshot(
         }
     }
     let (ground_items, drops, inventory) = r.items(unit_table, items_table);
+    let (shrines, wells) = r.objects(unit_table);
     let inventory_items = u32::try_from(inventory.len()).unwrap_or(u32::MAX);
     let inventory_keep = valuables::keep_list(&inventory);
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
@@ -353,6 +400,8 @@ pub fn snapshot(
         monsters,
         ground_items,
         drops,
+        shrines,
+        wells,
         inventory_items,
         inventory_keep,
         difficulty,
@@ -695,6 +744,57 @@ impl<M: ReadMem> Reader<'_, M> {
         })
     }
 
+    /// The shrines and wells among the loaded object units; other objects are skipped unread.
+    fn objects(&mut self, unit_table: u64) -> (Vec<Shrine>, Vec<Well>) {
+        let mut shrines = Vec::new();
+        let mut wells = Vec::new();
+        for addr in self.units(unit_table, unit_table::OBJECT) {
+            match self.object(addr) {
+                Ok(Some(Object::Shrine(s))) => shrines.push(s),
+                Ok(Some(Object::Well(w))) => wells.push(w),
+                Ok(None) => {}
+                Err(e) => self.warn(format!("object {addr:#x}: {e:#}")),
+            }
+        }
+        (shrines, wells)
+    }
+
+    /// The object unit at `addr` as a shrine or well; `None` for any other object, and for a
+    /// shrine object without a shrine type in [`SHRINE_TYPES`].
+    fn object(&self, addr: u64) -> Result<Option<Object>> {
+        let head = self.unit_head(addr, unit_table::OBJECT)?;
+        let shrine = is_shrine_object(head.txt);
+        if !shrine && !is_well_object(head.txt) {
+            return Ok(None);
+        }
+        let shrine_type = if shrine {
+            let data = head.unit_data.context("shrine has no object data")?;
+            let t = self.u8(data, object_data::SHRINE_TYPE)?;
+            if !SHRINE_TYPES.contains(&t) {
+                return Ok(None);
+            }
+            Some(t)
+        } else {
+            None
+        };
+        // Objects have a static path, like items.
+        let path = head.path.context("object has no path")?;
+        let (x, y) = (self.u32(path, static_path::X)?, self.u32(path, static_path::Y)?);
+        let txt = head.txt;
+        Ok(Some(shrine_type.map_or(
+            Object::Well(Well { txt, x, y }),
+            |code| {
+                Object::Shrine(Shrine {
+                    txt,
+                    code,
+                    used: head.mode != object_mode::NEUTRAL,
+                    x,
+                    y,
+                })
+            },
+        )))
+    }
+
     /// The number of items on the ground, those worth showing, and the items in the player's
     /// inventory (all of them, position 0,0; the keep list picks from them).
     fn items(&mut self, unit_table: u64, items_table: Option<u64>) -> (u32, Vec<ItemDrop>, Vec<ItemDrop>) {
@@ -816,6 +916,12 @@ impl<M: ReadMem> Reader<'_, M> {
             .unwrap_or(0);
         Ok(u8::try_from(value).unwrap_or(u8::MAX))
     }
+}
+
+/// What [`Reader::object`] found.
+enum Object {
+    Shrine(Shrine),
+    Well(Well),
 }
 
 /// Lowercase hex of `bytes`, no separators.
@@ -1708,6 +1814,139 @@ mod tests {
             s.warnings
         );
         Ok(())
+    }
+
+    const O0: u64 = 0xA0_0000;
+    const O1: u64 = 0xA0_1000;
+    const O2: u64 = 0xA0_2000;
+    const O3: u64 = 0xA0_3000;
+    const O4: u64 = 0xA0_4000;
+    const O5: u64 = 0xA0_5000;
+
+    /// An object unit with its `ObjectData` (shrine type) at `addr + 0x200` and static path
+    /// (position) at `addr + 0x400`.
+    fn object(
+        mem: &mut FakeMem,
+        addr: u64,
+        (txt, mode, shrine_type): (u32, u32, u8),
+        (x, y): (u32, u32),
+        next: u64,
+    ) -> Result<()> {
+        let (data, path) = (addr + 0x200, addr + 0x400);
+        put(
+            mem,
+            addr,
+            UNIT_SIZE,
+            &[
+                (unit::TYPE, &unit_table::OBJECT.to_le_bytes()),
+                (unit::TXT, &txt.to_le_bytes()),
+                (unit::ID, &(u32::try_from(addr >> 12)?).to_le_bytes()),
+                (unit::MODE, &mode.to_le_bytes()),
+                (unit::UNIT_DATA, &data.to_le_bytes()),
+                (unit::PATH, &path.to_le_bytes()),
+                (unit::NEXT, &next.to_le_bytes()),
+            ],
+        )?;
+        put(mem, data, 0x10, &[(object_data::SHRINE_TYPE, &[shrine_type])])?;
+        put(
+            mem,
+            path,
+            0x20,
+            &[
+                (path::X, &22407u16.to_le_bytes()),
+                (static_path::X, &x.to_le_bytes()),
+                (static_path::Y, &y.to_le_bytes()),
+            ],
+        )
+    }
+
+    #[test]
+    fn shrines_and_wells() -> Result<()> {
+        let mut m = world()?;
+        let mut slots = BASE_SLOTS.to_vec();
+        slots.push((unit_table::OBJECT, 5, O0));
+        table(&mut m, &slots)?;
+        // O0 used health shrine (236, live) → O1 skill shrine → O2 used well → O3 chest →
+        // O4 shrine object without a shrine type → O5 well with an unreadable path.
+        object(&mut m, O0, (236, 2, 2), (5100, 5200), O1)?;
+        object(&mut m, O1, (2, 0, 12), (5110, 5210), O2)?;
+        object(&mut m, O2, (130, 2, 0), (5120, 5220), O3)?;
+        object(&mut m, O3, (5, 0, 0), (5130, 5230), O4)?;
+        object(&mut m, O4, (77, 0, 0), (5140, 5240), O5)?;
+        put(
+            &mut m,
+            O5,
+            UNIT_SIZE,
+            &[
+                (unit::TYPE, &unit_table::OBJECT.to_le_bytes()),
+                (unit::TXT, &132u32.to_le_bytes()),
+                (unit::PATH, &UNMAPPED.to_le_bytes()),
+            ],
+        )?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        let shrine = |txt, code, used, x, y| Shrine {
+            txt,
+            code,
+            used,
+            x,
+            y,
+        };
+        assert_eq!(
+            s.shrines,
+            vec![shrine(236, 2, true, 5100, 5200), shrine(2, 12, false, 5110, 5210)],
+            "mode 2 is used; type 0 skipped"
+        );
+        assert_eq!(
+            s.wells,
+            vec![Well {
+                txt: 130,
+                x: 5120,
+                y: 5220
+            }]
+        );
+        let object_warnings: Vec<_> = s.warnings.iter().filter(|w| w.starts_with("object")).collect();
+        assert_eq!(
+            object_warnings.len(),
+            1,
+            "only the unreadable well: {object_warnings:?}"
+        );
+        assert!(
+            object_warnings
+                .iter()
+                .all(|w| w.starts_with(&format!("object {O5:#x}")))
+        );
+        // Older dumps without the fields still load; empty lists stay out of the JSON.
+        let v = serde_json::to_value(snapshot(&world()?, TABLE, None, None)?)?;
+        assert!(v.get("shrines").is_none() && v.get("wells").is_none());
+        let v = serde_json::to_value(&s)?;
+        assert_eq!(
+            v.pointer("/shrines/1"),
+            Some(&serde_json::json!({"txt": 2, "code": 12, "used": false, "x": 5110, "y": 5210}))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn object_classification_tables() {
+        assert!(SHRINE_OBJECTS.len() > 50 && WELL_OBJECTS.len() > 5);
+        assert!(SHRINE_OBJECTS.is_sorted_by(|a, b| a < b), "sorted, unique");
+        assert!(WELL_OBJECTS.is_sorted_by(|a, b| a < b), "sorted, unique");
+        // 236 "health wellforhell" was a Health shrine live (2026-11-15).
+        for txt in [2, 236, 249, 81, 83] {
+            assert!(is_shrine_object(txt) && !is_well_object(txt), "{txt}");
+        }
+        for txt in [130, 132, 137, 138, 111] {
+            assert!(is_well_object(txt) && !is_shrine_object(txt), "{txt}");
+        }
+        // Waypoint, chest, an unusable fountain: neither.
+        for txt in [119, 5, 31] {
+            assert!(!is_well_object(txt) && !is_shrine_object(txt), "{txt}");
+        }
+        assert_eq!(
+            usize::from(*SHRINE_TYPES.end()) + 1,
+            crate::config::SHRINE_NAMES.len(),
+            "every named shrine type"
+        );
     }
 
     #[test]

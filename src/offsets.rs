@@ -10,6 +10,8 @@ pub mod unit_table {
     /// Unit type ids (also the value of `unit::TYPE`).
     pub const PLAYER: u32 = 0;
     pub const MONSTER: u32 = 1;
+    /// Objects (shrines, wells, chests, ...); only those near the player are loaded. Live 2026-11-15.
+    pub const OBJECT: u32 = 2;
     pub const ITEM: u32 = 4;
 }
 
@@ -143,7 +145,8 @@ pub mod monster_data {
     pub const SUPERUNIQUE: u8 = 0x02;
 }
 
-/// `StaticPath`: the path of a unit that doesn't move (items; `path` is for moving units).
+/// `StaticPath`: the path of a unit that doesn't move (items and objects; `path` is for moving
+/// units). Objects live-verified 2026-11-15.
 pub mod static_path {
     /// u32 world x (tiles). Live-verified 2026-11-14 with a dropped gem next to the player.
     pub const X: u64 = 0x10;
@@ -157,6 +160,23 @@ pub mod item_mode {
     pub const ON_GROUND: u32 = 3;
     /// In a storage page: inventory, stash, cube (`item_data::PAGE` tells which). Live 2026-11-15.
     pub const STORED: u32 = 0;
+}
+
+/// Object unit modes (`unit::MODE` of an object). An untouched shrine is in mode 0 (live
+/// 2026-11-15).
+pub mod object_mode {
+    /// Neutral: an untouched shrine. Any other mode (1 = operating, the click animation; 2 =
+    /// operated, seen live on a clicked Health shrine) means it is used. Wells refill, so a well
+    /// is drawn in any mode.
+    pub const NEUTRAL: u32 = 0;
+}
+
+/// `ObjectData` (unit data of an object). `+0x00` points to the object's objects.txt record (not
+/// read: the unit's txt id says the same).
+pub mod object_data {
+    /// u8 shrine type = shrines.txt code (1..=22) of a shrine object. Live 2026-11-15: a Health
+    /// shrine read 2.
+    pub const SHRINE_TYPE: u64 = 0x08;
 }
 
 /// `ItemData` (unit data of an item).

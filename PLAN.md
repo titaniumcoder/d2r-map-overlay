@@ -141,6 +141,14 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   (S red, A orange, dashed = uncertain). Inventory keep list in green below the info line, also in towns: certain
   S/A, uncertain only S. Unique/set names from src/item_names_data.rs (research/gen_item_names.py).
 
+## Shrines and wells (2026-11-15)
+- Object units: unit block 2, static path position (+0x10/+0x14). ObjectData (unit +0x10) `+0x08` u8 = shrine type
+  (shrines.txt code; live: Health 2, Experience 15) — only meaningful for shrine objects (a bone pile had a stray
+  value there). Mode 0 = untouched, anything else = used.
+- Classification from objects.txt `OperateFn` (2 = shrine, 22 = well) → src/objects_data.rs via
+  research/gen_objects.py. Drawn: unused shrines whose type is in config `[shrines] show` (user list: refilling,
+  skill, stamina, experience, gem, monster), all wells. Hellforge (376) is a quest object.
+
 ## Research journal
 Live mode appends deduped events to `~/.local/share/d2r-map-overlay/journal/YYYY-MM-DD.jsonl` (UTC date):
 level (room pieces), arrival, marker (+ piece), link, elite monster, killed, drop. Files are never rotated;

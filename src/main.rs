@@ -16,6 +16,7 @@ mod journal;
 )]
 mod levels_data;
 mod live;
+mod objects_data;
 mod offset_cache;
 mod offsets;
 mod overlay;
@@ -107,7 +108,7 @@ fn live(player: Option<String>, size: (u32, u32), journal: bool, config: config:
         .name("reader".into())
         .spawn(move || {
             let _exit = ExitOnDrop;
-            live::run(&reader_tx, player.as_deref(), size, journal, &config.valuables);
+            live::run(&reader_tx, player.as_deref(), size, journal, &config);
         })
         .context("starting the reader thread")?;
     thread::Builder::new()
@@ -191,11 +192,12 @@ fn load_snapshot(path: &str) -> Result<game::Snapshot> {
 }
 
 /// Loads a `--dump` snapshot and filters it like live mode does (superunique presets only, drop
-/// highlights from `config`).
+/// highlights and shown shrines from `config`).
 fn load_for_drawing(path: &str, config: &config::Config) -> Result<game::Snapshot> {
     let mut snap = load_snapshot(path)?;
     valuables::apply(&mut snap.drops, &config.valuables);
     session::Session::default().apply(&mut snap);
+    config.shrines.retain_shown(&mut snap.shrines);
     Ok(snap)
 }
 

@@ -84,6 +84,9 @@ pub const QUEST_OBJECTS: &[(u32, &str)] = &[
     (252, "gidbinn altar"),
     (366, "sewer stairs"),
     (367, "sewer lever"),
+    // River of Flame (107), live 2026-11-15: at the forge, 25 tiles from Hephasto's superunique
+    // preset 792 (superuniques.txt calls him "The Feature Creep").
+    (376, "hellforge"),
 ];
 
 /// The quest-object label of object txt id `txt`, if it is one.
@@ -127,6 +130,12 @@ const BASE_WHITE: Rgba = [240, 240, 240, 255];
 const RING_GAP: f32 = 4.0;
 const RING_WIDTH: f32 = 2.0;
 const RING_DASH: [f32; 2] = [3.0, 2.5];
+/// Shrine dots have a white outline, apart from every other marker's dark one.
+const SHRINE_OUTLINE: Rgba = [255, 255, 255, 230];
+/// Well: a hollow cyan ring (the entry is a teal square) on a dark backing ring.
+const WELL_CYAN: Rgba = [0, 230, 255, 255];
+const WELL_RING_WIDTH: f32 = 2.0;
+const WELL_BACKING_WIDTH: f32 = 3.5;
 
 /// Outline shape of a marker. Monsters and presets are circles (the level entry a square); drops
 /// are diamonds and squares.
@@ -161,6 +170,10 @@ pub enum Marker {
     /// A quest object preset (see [`QUEST_OBJECTS`]), with its label: a small gold star without
     /// halo, drawn above the landmark star so both show when they overlap.
     QuestObject(&'static str),
+    /// A well near the player (live object): a hollow cyan ring. Wells refill: drawn used or not.
+    Well,
+    /// An unused shrine of a type the config shows (live object), with its shrines.txt code.
+    Shrine(u8),
     /// Live superunique, champion or unique monster.
     Elite,
     /// An item on the ground worth picking up.
@@ -187,6 +200,8 @@ impl Marker {
             Self::Suspected(_) => (SUSPECT_TEXT, 7.0, Shape::Circle),
             Self::Landmark(_) => (LANDMARK_GOLD, 9.0, Shape::Star),
             Self::QuestObject(_) => (LANDMARK_GOLD, 6.0, Shape::Star),
+            Self::Well => (WELL_CYAN, 4.5, Shape::Circle),
+            Self::Shrine(code) => (shrine_colour(code), 4.0, Shape::Circle),
             Self::Elite => ([230, 30, 30, 255], 3.5, Shape::Circle),
             Self::Drop(DropKind::Unique) => (UNIQUE_GOLD, 5.0, Shape::Diamond),
             Self::Drop(DropKind::Set) => ([30, 220, 30, 255], 5.0, Shape::Diamond),
@@ -217,6 +232,19 @@ const fn tier_colour(t: Tier) -> Rgba {
         Tier::S => [230, 40, 40, 255],
         Tier::A => [255, 140, 0, 255],
         Tier::B => [255, 220, 0, 255],
+    }
+}
+
+/// Fill colour of a shrine by shrines.txt code: the five default ones apart from each other and from
+/// the waypoint blue, exit purple and elite red; other types a neutral grey.
+const fn shrine_colour(code: u8) -> Rgba {
+    match code {
+        1 => [120, 210, 255, 255],  // refilling: light blue
+        12 => [255, 80, 200, 255],  // skill: magenta
+        14 => [180, 235, 30, 255],  // stamina: yellow-green
+        18 => [250, 250, 250, 255], // gem: white
+        20 => [140, 0, 20, 255],    // monster: dark red
+        _ => [150, 150, 150, 255],
     }
 }
 
@@ -360,6 +388,16 @@ pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
         .iter()
         .filter_map(|p| preset_marker(p).map(|m| (m, f64::from(p.x), f64::from(p.y))))
         .chain(
+            snap.wells
+                .iter()
+                .map(|w| (Marker::Well, f64::from(w.x), f64::from(w.y))),
+        )
+        .chain(
+            snap.shrines
+                .iter()
+                .map(|s| (Marker::Shrine(s.code), f64::from(s.x), f64::from(s.y))),
+        )
+        .chain(
             snap.monsters
                 .iter()
                 .filter(|m| is_elite(m))
@@ -494,6 +532,11 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
             draw_suspected(&mut pm, font, &dot, cx, cy);
         } else if let Marker::Ring { uncertain, .. } = marker {
             draw_ring(&mut pm, &dot, colour, uncertain);
+        } else if marker == Marker::Well {
+            draw_well(&mut pm, &dot, colour);
+        } else if let Marker::Shrine(_) = marker {
+            solid(&mut pm, &dot, colour);
+            pm.stroke_path(&dot, &paint(SHRINE_OUTLINE), &ring, Transform::identity(), None);
         } else if let Marker::QuestObject(_) = marker {
             pm.stroke_path(
                 &dot,
@@ -578,6 +621,17 @@ fn draw_ring(pm: &mut Pixmap, circle: &Path, colour: Rgba, uncertain: bool) {
         ..Stroke::default()
     };
     pm.stroke_path(circle, &paint(colour), &stroke, Transform::identity(), None);
+}
+
+/// A well: the hollow `circle` in `colour` on a wider dark ring, so it reads on any background.
+fn draw_well(pm: &mut Pixmap, circle: &Path, colour: Rgba) {
+    for (colour, width) in [(MARKER_OUTLINE, WELL_BACKING_WIDTH), (colour, WELL_RING_WIDTH)] {
+        let stroke = Stroke {
+            width,
+            ..Stroke::default()
+        };
+        pm.stroke_path(circle, &paint(colour), &stroke, Transform::identity(), None);
+    }
 }
 
 /// A "?" for an unconfirmed landmark at (`cx`, `cy`): the glyph on a dark translucent disc, or
@@ -728,6 +782,8 @@ mod tests {
             monsters: vec![],
             ground_items: 0,
             drops: vec![],
+            shrines: vec![],
+            wells: vec![],
             inventory_items: 0,
             inventory_keep: vec![],
             difficulty: None,
@@ -1647,6 +1703,7 @@ mod tests {
             (252, "gidbinn altar"),
             (366, "sewer stairs"),
             (367, "sewer lever"),
+            (376, "hellforge"),
         ] {
             assert_eq!(
                 preset_marker(&object(txt, 0, 0)),
@@ -1655,7 +1712,7 @@ mod tests {
             );
         }
         // Other objects: nothing; waypoints stay waypoints.
-        for txt in [0, 151, 153, 365, 368, 473] {
+        for txt in [0, 151, 153, 365, 368, 375, 377, 473] {
             assert_eq!(preset_marker(&object(txt, 0, 0)), None, "{txt}");
         }
         assert_eq!(preset_marker(&object(237, 0, 0)), Some(Marker::Waypoint));
@@ -1760,6 +1817,114 @@ mod tests {
                 Marker::Player
             ]
         );
+        Ok(())
+    }
+
+    fn shrine_at(code: u8, x: u32, y: u32) -> crate::game::Shrine {
+        crate::game::Shrine {
+            txt: 236,
+            code,
+            used: false,
+            x,
+            y,
+        }
+    }
+
+    fn well_at(x: u32, y: u32) -> crate::game::Well {
+        crate::game::Well { txt: 130, x, y }
+    }
+
+    #[test]
+    fn shrines_and_wells_sit_above_landmarks_and_below_elites() {
+        let mut snap = sanctuary([None, Some(525), None, None]);
+        snap.presets = vec![object(152, 90, 30)];
+        snap.monsters = vec![monster(0x08, 1)];
+        snap.drops = vec![drop_at(DropKind::Unique, 1, 1)];
+        snap.shrines = vec![shrine_at(12, 40, 30)];
+        snap.wells = vec![well_at(50, 30)];
+        let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                Marker::Landmark("summoner"),
+                Marker::QuestObject("orifice"),
+                Marker::Well,
+                Marker::Shrine(12),
+                Marker::Elite,
+                Marker::Drop(DropKind::Unique),
+                Marker::Player,
+            ]
+        );
+    }
+
+    #[test]
+    fn default_shrine_colours_are_distinct() {
+        let others = [
+            Marker::Exit,
+            Marker::Waypoint,
+            Marker::Elite,
+            Marker::Player,
+            Marker::Well,
+            Marker::Shrine(2),
+        ]
+        .map(|m| m.style().0);
+        let defaults = [1, 12, 14, 18, 20].map(|c| Marker::Shrine(c).style().0);
+        for (i, c) in defaults.iter().enumerate() {
+            assert!(!others.contains(c), "{c:?} reused");
+            assert!(!defaults.iter().skip(i + 1).any(|d| d == c), "{c:?} twice");
+        }
+        assert_eq!(
+            Marker::Shrine(2).style().0,
+            Marker::Shrine(99).style().0,
+            "neutral"
+        );
+    }
+
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "test points are inside the canvas"
+    )]
+    fn centre((x, y): (f32, f32)) -> (u32, u32) {
+        (x.floor() as u32, y.floor() as u32)
+    }
+
+    #[test]
+    fn shrine_renders_as_a_white_outlined_dot() -> Result<()> {
+        let mut snap = empty_snapshot(5, 115);
+        snap.level.rooms = vec![room(0, 0, true)];
+        snap.shrines = vec![shrine_at(12, 30, 30)];
+        let (w, h) = (400, 400);
+        let pm = render(&snap, w, h)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+        let at = v.to_screen(30.0, 30.0);
+        let (fill, radius, shape) = Marker::Shrine(12).style();
+        assert_eq!(shape, Shape::Circle);
+        let (cx, cy) = centre(at);
+        assert_eq!(rgba(&pm, cx, cy)?, fill, "skill shrine centre");
+        let (hits, dx, dy) = colour_spread(&pm, fill, at)?;
+        assert!(hits >= 12, "only {hits} shrine pixels");
+        assert!(dx.hypot(dy) <= f64::from(radius), "spread {dx},{dy}");
+        let white = ring_hits(&pm, at, radius, SHRINE_OUTLINE, 16)?;
+        assert!(white >= 12, "white outline: {white}/16");
+        Ok(())
+    }
+
+    #[test]
+    fn well_renders_as_a_hollow_cyan_ring() -> Result<()> {
+        let mut snap = empty_snapshot(5, 115);
+        snap.level.rooms = vec![room(0, 0, true)];
+        snap.wells = vec![well_at(30, 30)];
+        let (w, h) = (400, 400);
+        let pm = render(&snap, w, h)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+        let at = v.to_screen(30.0, 30.0);
+        let (_, radius, _) = Marker::Well.style();
+        let cyan = ring_hits(&pm, at, radius, WELL_CYAN, 16)?;
+        assert!(cyan >= 12, "cyan ring: {cyan}/16");
+        let (cx, cy) = centre(at);
+        let inside = rgba(&pm, cx, cy)?;
+        assert!(inside[1] < 200, "hollow: the room shows through, {inside:?}");
         Ok(())
     }
 }

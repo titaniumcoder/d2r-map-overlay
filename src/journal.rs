@@ -16,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+use crate::config::SHRINE_NAMES;
 use crate::game::{Bounds, PresetKind, Room, Snapshot};
 use crate::items::DropKind;
 use crate::session;
@@ -117,6 +118,19 @@ pub enum Event {
         /// Hex of the first `item_data::HEAD_LEN` bytes of `ItemData`.
         item_data_head: String,
     },
+    /// A shrine (any type, used or not) on first sight at its spot.
+    Shrine {
+        level: u32,
+        txt: u32,
+        x: u32,
+        y: u32,
+        shrine_type: u8,
+        /// `config::SHRINE_NAMES` of `shrine_type`.
+        name: &'static str,
+        used: bool,
+    },
+    /// A well on first sight at its spot.
+    Well { level: u32, txt: u32, x: u32, y: u32 },
 }
 
 /// Rooms sharing a preset id: how many and their bounding box (world tiles, max exclusive).
@@ -178,6 +192,9 @@ pub struct Recorder {
     /// Elite unit id → seen dead.
     monsters: HashMap<u32, bool>,
     drops: HashSet<u32>,
+    /// (level id, x, y) of shrines and of wells.
+    shrines: HashSet<(u32, u32, u32)>,
+    wells: HashSet<(u32, u32, u32)>,
 }
 
 impl Recorder {
@@ -288,7 +305,36 @@ impl Recorder {
                 });
             }
         }
+        self.objects(snap, &mut out);
         out
+    }
+
+    /// The shrine and well events of `snap`, once per spot.
+    fn objects(&mut self, snap: &Snapshot, out: &mut Vec<Event>) {
+        let level = snap.level.id;
+        for sh in &snap.shrines {
+            if self.shrines.insert((level, sh.x, sh.y)) {
+                out.push(Event::Shrine {
+                    level,
+                    txt: sh.txt,
+                    x: sh.x,
+                    y: sh.y,
+                    shrine_type: sh.code,
+                    name: SHRINE_NAMES.get(usize::from(sh.code)).copied().unwrap_or("?"),
+                    used: sh.used,
+                });
+            }
+        }
+        for w in &snap.wells {
+            if self.wells.insert((level, w.x, w.y)) {
+                out.push(Event::Well {
+                    level,
+                    txt: w.txt,
+                    x: w.x,
+                    y: w.y,
+                });
+            }
+        }
     }
 }
 
@@ -517,6 +563,8 @@ mod tests {
             monsters: vec![],
             ground_items: 0,
             drops: vec![],
+            shrines: vec![],
+            wells: vec![],
             inventory_items: 0,
             inventory_keep: vec![],
             difficulty: None,
@@ -558,6 +606,8 @@ mod tests {
                 Event::Monster { .. } => "monster",
                 Event::Killed { .. } => "killed",
                 Event::Drop { .. } => "drop",
+                Event::Shrine { .. } => "shrine",
+                Event::Well { .. } => "well",
             })
             .collect()
     }
@@ -740,6 +790,46 @@ mod tests {
             v,
             json!({"ev": "killed", "level": 74, "id": 77, "txt": 250, "x": 45, "y": 5, "piece": 510})
         );
+        Ok(())
+    }
+
+    #[test]
+    fn shrine_and_well_events_once_per_spot() -> Result<()> {
+        let mut r = Recorder::default();
+        let mut s = snap(1, 108);
+        let shrine = |used| crate::game::Shrine {
+            txt: 236,
+            code: 2,
+            used,
+            x: 7,
+            y: 8,
+        };
+        s.shrines = vec![shrine(false)];
+        s.wells = vec![crate::game::Well {
+            txt: 130,
+            x: 9,
+            y: 10,
+        }];
+        let values = r
+            .observe(&s)
+            .iter()
+            .filter(|e| matches!(e, Event::Shrine { .. } | Event::Well { .. }))
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(
+            values,
+            vec![
+                json!({"ev": "shrine", "level": 108, "txt": 236, "x": 7, "y": 8, "shrine_type": 2,
+                    "name": "health", "used": false}),
+                json!({"ev": "well", "level": 108, "txt": 130, "x": 9, "y": 10}),
+            ]
+        );
+        // Used later, or seen again: no new events; a new game sees them again.
+        s.shrines = vec![shrine(true)];
+        assert_eq!(r.observe(&s), vec![]);
+        let mut next = snap(2, 108);
+        next.shrines = vec![shrine(true)];
+        assert_eq!(kinds(&r.observe(&next)), vec!["level", "shrine"]);
         Ok(())
     }
 

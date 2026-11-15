@@ -13,7 +13,7 @@ trade = ["S", "A"]
 twink = ["S", "A"]
 
 [shrines]
-# Shrine types to show (not drawn yet). Names, lowercase: none, refilling, health, mana,
+# Shrine types to show (unused ones near the player). Names, lowercase: none, refilling, health, mana,
 # health exchange, mana exchange, armor, combat, resist fire, resist cold, resist lightning,
 # resist poison, skill, mana recharge, stamina, experience, enirhs, portal, gem, fire, monster,
 # exploding, poison. Unknown names are reported and ignored. show = [] shows none.

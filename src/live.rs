@@ -46,13 +46,14 @@ fn send(tx: &Sender<Msg>, msg: Msg) -> Result<(), UiGone> {
 }
 
 /// Runs until the UI is gone. `player` picks among several player units; `size` is the frame size;
-/// `journal` records what is seen (see [`crate::journal`]); `valuables` picks the highlighted drop tiers.
+/// `journal` records what is seen (see [`crate::journal`]); `config` picks the highlighted drop tiers
+/// and the shrines drawn.
 pub fn run(
     tx: &Sender<Msg>,
     player: Option<&str>,
     size: (u32, u32),
     mut journal: Journal,
-    valuables: &config::Valuables,
+    config: &config::Config,
 ) {
     let cache = offset_cache::default_path();
     // The last open error printed: a repeat isn't printed again, a different one is.
@@ -86,7 +87,7 @@ pub fn run(
         eprintln!("attached to D2R (pid {pid})");
         waiting_logged = false;
         let follow = find_table(pid, &mem, cache.as_deref()).map_or(Ok(()), |table| {
-            follow_game(tx, pid, &mem, table, player, size, &mut journal, valuables)
+            follow_game(tx, pid, &mem, table, player, size, &mut journal, config)
         });
         // The process is gone (or never got a table): hide until the next one is in a game.
         if follow.and_then(|()| send(tx, Msg::Hide)).is_err() {
@@ -142,7 +143,7 @@ fn follow_game(
     player: Option<&str>,
     (w, h): (u32, u32),
     journal: &mut Journal,
-    valuables: &config::Valuables,
+    config: &config::Config,
 ) -> Result<(), UiGone> {
     let mut session = Session::default();
     let mut dedup = Dedup::default();
@@ -156,10 +157,12 @@ fn follow_game(
                     items_table.search(pid);
                 }
                 // Highlights first: the journal records them with the drop.
-                valuables::apply(&mut snap.drops, valuables);
-                // Before `apply`: it drops the monster presets the journal wants to see.
+                valuables::apply(&mut snap.drops, &config.valuables);
+                // Before `apply` and the shrine filter: they drop monster presets and shrines
+                // the journal wants to see.
                 journal.observe(&snap);
                 let update = session.apply(&mut snap);
+                config.shrines.retain_shown(&mut snap.shrines);
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }
