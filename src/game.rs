@@ -267,8 +267,8 @@ struct ItemScan {
     ground: u32,
     /// Ground items worth showing.
     drops: Vec<ItemDrop>,
-    /// All items on the inventory page.
-    inventory: Vec<ItemDrop>,
+    /// All items on the inventory page, with their owner id (`None` if unreadable).
+    inventory: Vec<(ItemDrop, Option<u32>)>,
     /// Stored items on the inventory, cube and stash pages that may be spare
     /// ([`valuables::may_spare`]), any owner: the owner filter needs the chosen player.
     stored: Vec<Stored>,
@@ -301,6 +301,16 @@ fn place(page: u8, owner: u32, player: u32, other_players: &[u32]) -> Option<val
         }
         _ => None,
     }
+}
+
+/// The keep list of the `inventory` items owned by unit id `player`: in a group game the other
+/// players' inventory items are units too.
+fn keep_list(inventory: Vec<(ItemDrop, Option<u32>)>, player: u32) -> Vec<valuables::Keep> {
+    let mine: Vec<ItemDrop> = inventory
+        .into_iter()
+        .filter_map(|(d, owner)| (owner == Some(player)).then_some(d))
+        .collect();
+    valuables::keep_list(&mine)
 }
 
 /// The sell and give-away lists of the `stored` items that are the player's ([`place`]); the
@@ -577,7 +587,8 @@ pub fn snapshot(
         }
     }
     // Items first: their owner ids tell which candidate is the local player.
-    let scan = r.items(unit_table, items_table);
+    let candidate_ids: Vec<u32> = candidates.iter().map(|c| c.id).collect();
+    let scan = r.items(unit_table, items_table, &candidate_ids);
     let Some((chosen, chosen_by)) = choose_player(&candidates, player_name, previous, &scan) else {
         let names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
         match player_name {
@@ -636,7 +647,7 @@ pub fn snapshot(
     }
     let (shrines, wells, operated_objects) = r.objects(unit_table);
     let inventory_items = u32::try_from(scan.inventory.len()).unwrap_or(u32::MAX);
-    let inventory_keep = valuables::keep_list(&scan.inventory);
+    let inventory_keep = keep_list(scan.inventory, chosen.id);
     let (sell, give_away) = spare_lists(scan.stored, chosen.id, &candidates);
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
     let terrorized = is_terrorized(&monsters);
@@ -1155,8 +1166,9 @@ impl<M: ReadMem> Reader<'_, M> {
 
     /// The items on the ground, those worth showing, the items in the inventory (all of them,
     /// position 0,0; the keep list picks from them), and the owner votes of the stash and
-    /// inventory items.
-    fn items(&mut self, unit_table: u64, items_table: Option<u64>) -> ItemScan {
+    /// inventory items. Only owners among the player `candidates` (unit ids) vote: the shared
+    /// stash tabs' pseudo-owners must never win the stash vote.
+    fn items(&mut self, unit_table: u64, items_table: Option<u64>, candidates: &[u32]) -> ItemScan {
         let mut scan = ItemScan::default();
         for addr in self.units(unit_table, unit_table::ITEM) {
             let head = match self.unit_head(addr, unit_table::ITEM) {
@@ -1186,7 +1198,9 @@ impl<M: ReadMem> Reader<'_, M> {
                 Some(item_data::PAGE_INVENTORY) => Some(&mut scan.inventory_owners),
                 _ => None,
             };
-            if let (Some(votes), Some(owner)) = (votes.filter(|v| !v.done()), owner) {
+            if let (Some(votes), Some(owner)) = (votes.filter(|v| !v.done()), owner)
+                && candidates.contains(&owner)
+            {
                 votes.add(owner);
             }
             // Cube and stash: only the may-be-spare items are read in full.
@@ -1221,7 +1235,7 @@ impl<M: ReadMem> Reader<'_, M> {
                             owner,
                         });
                     }
-                    scan.inventory.push(d);
+                    scan.inventory.push((d, owner));
                 }
                 Ok(None) => {}
                 Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
@@ -1740,6 +1754,26 @@ mod tests {
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_BOB), ChosenBy::InventoryOwner)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn shared_stash_pseudo_owners_do_not_vote() -> Result<()> {
+        // Four items of a shared stash tab (pseudo-owner, no player) and one of Bob's: before,
+        // the tab id won the stash vote and the choice fell through; now only Bob votes.
+        let tab = 0x7777;
+        let m = world_with_owned(&[
+            (STASH, tab),
+            (STASH, tab),
+            (STASH, tab),
+            (STASH, tab),
+            (STASH, BOB_ID),
+        ])?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
+        assert_eq!(
+            (s.player.addr, s.player_chosen_by),
+            (Addr(P_BOB), ChosenBy::StashOwner)
         );
         Ok(())
     }
@@ -2483,12 +2517,18 @@ mod tests {
         // A white 4os Crystal Sword in the inventory: A twink.
         stored_item(&mut m, I4, (30, 2, id, 0), (stored, 0), &[(194, 4)], I5)?;
         // A 3os one (B only): not kept.
-        stored_item(&mut m, I5, (30, 2, id, 0), (stored, 0), &[(194, 3)], 0)?;
+        stored_item(&mut m, I5, (30, 2, id, 0), (stored, 0), &[(194, 3)], I6)?;
+        // Another player's Shako in an inventory (group game): not kept.
+        stored_item(&mut m, I6, (40, 7, id, 248), (stored, 0), &[], 0)?;
+        for addr in [I1, I2, I4, I5] {
+            set_owner(&mut m, addr, BOB_ID)?;
+        }
+        set_owner(&mut m, I6, ALICE_ID)?;
         base_items_table(&mut m)?;
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), None, None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
         assert_eq!((s.ground_items, s.drops.len()), (0, 0));
-        assert_eq!(s.inventory_items, 3, "page-0 stored items only");
+        assert_eq!(s.inventory_items, 4, "page-0 stored items, any owner");
         let keep: Vec<_> = s
             .inventory_keep
             .iter()
@@ -2515,6 +2555,11 @@ mod tests {
     ) -> Result<()> {
         let fields = (txt, 7, item_data::FLAG_IDENTIFIED, index);
         stored_item(mem, addr, fields, (item_mode::STORED, page), &[], next)?;
+        set_owner(mem, addr, owner)
+    }
+
+    /// Sets `item_data::OWNER` of the item at `addr` (laid out by [`stored_item`]).
+    fn set_owner(mem: &mut FakeMem, addr: u64, owner: u32) -> Result<()> {
         let data = addr + 0x200;
         let mut b = mem.read_bytes(data, 0x60)?;
         let at = usize::try_from(item_data::OWNER)?;
