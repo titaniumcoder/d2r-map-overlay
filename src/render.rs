@@ -46,6 +46,9 @@ pub enum LandmarkStyle {
     /// A gold worm ([`Marker::Worm`]): Coldworm's chamber, the most hated spot in act 2 (user's
     /// choice, 2026-11-15).
     Worm,
+    /// A mini orifice ([`Marker::Orifice`]): the real Tal Rasha tomb's staff hole, apart from the
+    /// fake tombs' treasure stars (user's choice, 2026-11-16).
+    Orifice,
 }
 
 /// Landmark rules.
@@ -233,7 +236,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         preset_ids: 462..=462,
         label: "orifice",
         confirmed: true,
-        style: LandmarkStyle::Star,
+        style: LandmarkStyle::Orifice,
     },
     LandmarkRule {
         level_ids: 66..=72,
@@ -261,7 +264,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         preset_ids: 460..=460,
         label: "orifice (W)",
         confirmed: true,
-        style: LandmarkStyle::Star,
+        style: LandmarkStyle::Orifice,
     },
     LandmarkRule {
         level_ids: 66..=72,
@@ -480,6 +483,9 @@ pub enum Marker {
     Landmark(&'static str),
     /// A confirmed [`LandmarkStyle::Worm`] landmark: a wavy gold worm with a head, landmark size.
     Worm,
+    /// A confirmed [`LandmarkStyle::Orifice`] landmark: a dark hole in a gold ring with the staff
+    /// standing in it.
+    Orifice,
     /// A quest object preset (see [`QUEST_OBJECTS`]) or quest monster preset (see
     /// [`QUEST_MONSTERS`]), with its label: a small gold star without
     /// halo, drawn above the landmark star so both show when they overlap.
@@ -529,6 +535,7 @@ impl Marker {
             Self::Suspected(_) => (SUSPECT_TEXT, 7.0, Shape::Circle),
             Self::Landmark(_) => (LANDMARK_GOLD, 9.0, Shape::Star),
             Self::Worm => (LANDMARK_GOLD, 9.0, Shape::Worm),
+            Self::Orifice => (LANDMARK_GOLD, 7.0, Shape::Circle),
             Self::QuestObject(_) => (LANDMARK_GOLD, 6.0, Shape::Star),
             Self::Well => (WELL_CYAN, 4.5, Shape::Circle),
             Self::Shrine(code) => (shrine_colour(code), 4.0, Shape::Circle),
@@ -748,6 +755,7 @@ pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f
                 (true, LandmarkStyle::Star) => Marker::Landmark(rule.label),
                 (true, LandmarkStyle::StairsDown) => Marker::StairsDown,
                 (true, LandmarkStyle::Worm) => Marker::Worm,
+                (true, LandmarkStyle::Orifice) => Marker::Orifice,
             };
             Some((marker, x, y))
         })
@@ -1001,8 +1009,8 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         };
         if let Marker::Suspected(_) = marker {
             draw_suspected(&mut pm, font, &dot, cx, cy);
-        } else if shape == Shape::Worm {
-            draw_worm(&mut pm, &dot, colour, (cx, cy, size));
+        } else if shape == Shape::Worm || marker == Marker::Orifice {
+            draw_figure(&mut pm, marker, &dot, colour, (cx, cy, size));
         } else if let Marker::Ring { uncertain, .. } = marker {
             draw_ring(&mut pm, &dot, colour, uncertain);
         } else if marker == Marker::Well {
@@ -1248,6 +1256,51 @@ fn triangle_path(cx: f32, cy: f32, size: f32, (ux, uy): (f32, f32)) -> Option<Pa
     );
     pb.close();
     pb.finish()
+}
+
+/// Draws a figure landmark: the worm (`body` is its path) or the mini orifice.
+fn draw_figure(pm: &mut Pixmap, marker: Marker, body: &Path, colour: Rgba, geom: (f32, f32, f32)) {
+    if marker == Marker::Orifice {
+        draw_orifice(pm, colour, geom);
+    } else {
+        draw_worm(pm, body, colour, geom);
+    }
+}
+
+/// Draws the mini orifice centred on (`cx`, `cy`) with outer radius `size`: a dark hole inside a
+/// thick gold ring, and the Horadric Staff as a gold bar standing up out of it.
+fn draw_orifice(pm: &mut Pixmap, colour: Rgba, (cx, cy, size): (f32, f32, f32)) {
+    let stroke = |width| Stroke {
+        width,
+        line_cap: tiny_skia::LineCap::Round,
+        ..Stroke::default()
+    };
+    let ring_r = size * 0.7;
+    if let Some(hole) = PathBuilder::from_circle(cx, cy, size) {
+        solid(pm, &hole, MARKER_OUTLINE);
+    }
+    if let Some(ring) = PathBuilder::from_circle(cx, cy, ring_r) {
+        pm.stroke_path(
+            &ring,
+            &paint(colour),
+            &stroke(size * 0.4),
+            Transform::identity(),
+            None,
+        );
+    }
+    let mut pb = PathBuilder::new();
+    pb.move_to(cx, ring_r.mul_add(0.3, cy));
+    pb.line_to(cx, size.mul_add(-1.5, cy));
+    if let Some(staff) = pb.finish() {
+        pm.stroke_path(
+            &staff,
+            &paint(MARKER_OUTLINE),
+            &stroke(4.0),
+            Transform::identity(),
+            None,
+        );
+        pm.stroke_path(&staff, &paint(colour), &stroke(2.0), Transform::identity(), None);
+    }
 }
 
 /// Fills `path` in `colour`.
@@ -2818,7 +2871,7 @@ mod tests {
 
     #[test]
     fn orifice_rule_marks_the_real_tomb_chamber_only() {
-        let orifice = Marker::Landmark("orifice");
+        let orifice = Marker::Orifice;
         // Real tomb 72, orifice chamber 462 (confirmed in game).
         let mut snap = sanctuary([Some(462), Some(424), None, None]);
         snap.level.id = 72;
@@ -2847,10 +2900,7 @@ mod tests {
         // Tomb 66 with 460 (Talrasha W): confirmed in tomb 69, so a star in any tomb.
         let mut snap = sanctuary([None, Some(460), None, None]);
         snap.level.id = 66;
-        assert_eq!(
-            landmarks(&snap, LANDMARKS),
-            vec![(Marker::Landmark("orifice (W)"), 90.0, 30.0)]
-        );
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![(Marker::Orifice, 90.0, 30.0)]);
         // 462 is the orifice in whichever tomb is the real one.
         let mut snap = sanctuary([None, Some(462), None, None]);
         snap.level.id = 66;
@@ -3155,11 +3205,7 @@ mod tests {
         let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
         assert_eq!(
             kinds,
-            vec![
-                Marker::Landmark("orifice"),
-                Marker::QuestObject("orifice"),
-                Marker::Player
-            ]
+            vec![Marker::Orifice, Marker::QuestObject("orifice"), Marker::Player]
         );
         Ok(())
     }
