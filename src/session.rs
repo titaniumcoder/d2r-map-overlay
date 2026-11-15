@@ -33,13 +33,14 @@
 //! The tile preset nearest to it, within [`ENTRY_RADIUS`], is the way in and gets
 //! [`Preset::entry`](crate::game::Preset::entry); the other tiles stay exits. Arriving by waypoint or portal has no tile nearby, so no entry. The
 //! very first snapshot of a session has no previous level (the overlay may start mid-level),
-//! so it records no arrival.
+//! so it records no arrival. A walk-through border ([`Snapshot::border_links`]) to the level the
+//! player came from is the entry if the arrival point lies within [`ENTRY_RADIUS`] of its rooms.
 
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::game::{Monster, Preset, PresetKind, Shrine, Snapshot, Well};
+use crate::game::{Monster, Preset, PresetKind, RoomRect, Shrine, Snapshot, Well};
 use crate::levels_data::SUPERUNIQUES;
 use crate::offsets::monster_data;
 use crate::render::{is_consumable_quest_object, quest_monster};
@@ -93,6 +94,10 @@ pub struct GameState {
     /// Player position on arriving in each level of this game, by level id.
     #[serde(default)]
     arrivals: HashMap<u32, (u16, u16)>,
+    /// The level the player was in just before arriving in each level of this game, by level
+    /// id (recorded with the arrival, first visit wins).
+    #[serde(default)]
+    came_from: HashMap<u32, u32>,
     /// Every preset seen per level id, raw (before filtering, `entry` false), first seen first.
     #[serde(default)]
     presets: HashMap<u32, Vec<Preset>>,
@@ -270,19 +275,29 @@ impl Session {
         } else {
             snap.terrorized = self.state.terrorized.contains(&level);
         }
-        let level_changed = self.last_level.replace(level).is_some_and(|old| old != level);
+        let previous = self.last_level.replace(level);
+        let level_changed = previous.is_some_and(|old| old != level);
         let here = (snap.player.x, snap.player.y);
         if (level_changed || update.new_game) && !self.state.arrivals.contains_key(&level) {
             self.changed |= self.state.arrivals.insert(level, here) != Some(here);
+            if let Some(old) = previous.filter(|_| level_changed) {
+                self.changed |= self.state.came_from.insert(level, old) != Some(old);
+            }
             self.settling = Some((level, ARRIVAL_SETTLE));
         }
+        // A tile preset or a border to the level come from near the arrival point is the entry.
+        // `|`, not `||`: both kinds get marked.
+        let from = self.state.came_from.get(&level).copied();
+        let mark = |snap: &mut Snapshot, at| {
+            mark_entry(snap, at) | from.is_some_and(|from| mark_border_entry(snap, from, at))
+        };
         if let Some(&arrival) = self.state.arrivals.get(&level) {
-            let found = mark_entry(snap, arrival);
+            let found = mark(snap, arrival);
             let was_settling = self.settling.is_some_and(|(l, _)| l == level);
             self.settling = match self.settling {
                 Some((l, left)) if l == level && !found && left > 0 => {
                     self.changed |= self.state.arrivals.insert(level, here) != Some(here);
-                    if mark_entry(snap, here) {
+                    if mark(snap, here) {
                         None
                     } else {
                         Some((l, left - 1))
@@ -403,10 +418,34 @@ fn mark_entry(snap: &mut Snapshot, (ax, ay): (u16, u16)) -> bool {
     true
 }
 
+/// Marks the border links to `from` (the level the player came from) as the entry, if the
+/// arrival point lies within [`ENTRY_RADIUS`] of one of their rooms in this level: walking over
+/// the border puts the player there, while a waypoint or portal from that level does not.
+/// Returns whether it was.
+fn mark_border_entry(snap: &mut Snapshot, from: u32, (ax, ay): (u16, u16)) -> bool {
+    let near = |r: &RoomRect| {
+        let gap = |a: u16, lo: u32, len: u32| {
+            let (a, lo, hi) = (f64::from(a), f64::from(lo), f64::from(lo.saturating_add(len)));
+            (lo - a).max(a - hi).max(0.0)
+        };
+        gap(ax, r.x, r.w).hypot(gap(ay, r.y, r.h)) <= ENTRY_RADIUS
+    };
+    let walked_in = snap
+        .border_links
+        .iter()
+        .any(|l| l.to_level_id == from && near(&l.from_room));
+    if walked_in {
+        for l in snap.border_links.iter_mut().filter(|l| l.to_level_id == from) {
+            l.entry = true;
+        }
+    }
+    walked_in
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::{Addr, Level, OperatedObject, Player};
+    use crate::game::{Addr, BorderLink, Level, OperatedObject, Player};
 
     fn monster(flags: u8, mode: u32, x: u16, y: u16) -> Monster {
         Monster {
@@ -453,6 +492,7 @@ mod tests {
             },
             presets: vec![],
             room_links: vec![],
+            border_links: vec![],
             monsters: vec![],
             ground_items: 0,
             drops: vec![],
@@ -861,6 +901,55 @@ mod tests {
         );
         s.apply(&mut far);
         assert_eq!(tiles(&far), vec![(1, false)]);
+    }
+
+    /// Level 27 with a border room to 26 at the bottom (y 140..180) and to 28 at the top (y 60..100).
+    fn cloister(x: u16, y: u16) -> Snapshot {
+        let rect = |x, y| RoomRect { x, y, w: 40, h: 40 };
+        let link = |from_y, to_level, to_y| BorderLink {
+            from_room: rect(100, from_y),
+            to_level_id: to_level,
+            to_room: rect(100, to_y),
+            entry: false,
+        };
+        let mut s = at(snap(1, 0xa000, 27), x, y, &[]);
+        s.border_links = vec![link(140, 26, 180), link(60, 28, 20)];
+        s
+    }
+
+    fn entry_levels(s: &Snapshot) -> Vec<u32> {
+        s.border_links
+            .iter()
+            .filter(|l| l.entry)
+            .map(|l| l.to_level_id)
+            .collect()
+    }
+
+    #[test]
+    fn walking_over_a_border_marks_the_level_come_from() {
+        let mut s = Session::default();
+        s.apply(&mut at(snap(1, 0xa000, 26), 120, 185, &[]));
+        // Arrival inside the room bordering 26: the 26 border is the entry, 28 stays an exit.
+        let mut arrive = cloister(120, 178);
+        s.apply(&mut arrive);
+        assert_eq!(entry_levels(&arrive), vec![26]);
+        // It stays the entry while walking on toward 28.
+        let mut later = cloister(120, 70);
+        s.apply(&mut later);
+        assert_eq!(entry_levels(&later), vec![26]);
+    }
+
+    #[test]
+    fn waypoint_from_an_adjacent_level_is_no_border_entry() {
+        let mut s = Session::default();
+        s.apply(&mut at(snap(1, 0xa000, 26), 120, 185, &[]));
+        // Arrived far from the 26 border rooms (a waypoint at the top): nothing is the entry,
+        // also not after the settle window has passed.
+        for _ in 0..=ARRIVAL_SETTLE {
+            let mut wp = cloister(120, 20);
+            s.apply(&mut wp);
+            assert_eq!(entry_levels(&wp), Vec::<u32>::new());
+        }
     }
 
     #[test]

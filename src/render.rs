@@ -7,7 +7,7 @@ use ab_glyph::FontVec;
 use anyhow::{Context, Result};
 use tiny_skia::{FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, StrokeDash, Transform};
 
-use crate::game::{Bounds, Monster, Preset, PresetKind, Room, Snapshot};
+use crate::game::{Bounds, Monster, Preset, PresetKind, Room, RoomRect, Snapshot};
 use crate::items::{CharmSize, DropKind, GemColour};
 use crate::valuables::Tier;
 use crate::{info, session};
@@ -255,6 +255,9 @@ pub enum Shape {
     Square,
     /// Five-pointed star, one tip up; the size is the centre-to-tip distance.
     Star,
+    /// Isosceles triangle, tip up unless drawn with a direction ([`triangle_path`]); the size is
+    /// the centre-to-tip distance.
+    Triangle,
 }
 
 /// Something drawn on the map. Variant order is draw order (player last, on top).
@@ -264,6 +267,14 @@ pub enum Marker {
     Exit,
     /// The tile preset the player entered the level by (see `Session::apply`).
     Entry,
+    /// A walk-through border to an adjacent level (see [`border_exits`]): a small triangle on
+    /// the shared border pointing from this level's rooms toward the other level's. `dir` is that
+    /// direction in world tiles (unnormalised); `entry` if the player came from that level (teal
+    /// instead of the exit purple).
+    BorderExit {
+        dir: (i32, i32),
+        entry: bool,
+    },
     Waypoint,
     /// Monster preset: superunique or other special spawn, with the superunique's name when its
     /// txt id is in the table (see `session::superunique`). Not drawn as text; kept for later use.
@@ -308,6 +319,8 @@ impl Marker {
         match self {
             Self::Exit => ([170, 90, 255, 255], 5.0, Shape::Circle),
             Self::Entry => ([40, 200, 200, 255], 4.5, Shape::Square),
+            Self::BorderExit { entry: false, .. } => (Self::Exit.style().0, 4.0, Shape::Triangle),
+            Self::BorderExit { entry: true, .. } => (Self::Entry.style().0, 4.0, Shape::Triangle),
             Self::Waypoint => ([60, 140, 255, 255], 5.0, Shape::Circle),
             Self::Special(_) => ([255, 110, 40, 255], 4.5, Shape::Circle),
             // The ring is the no-font fallback; with a font the "?" glyph is drawn instead.
@@ -506,6 +519,90 @@ pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f
         .collect()
 }
 
+/// A world-tile box, `max` exclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Span {
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+}
+
+impl Span {
+    const fn of(r: RoomRect) -> Self {
+        Self {
+            x0: r.x,
+            y0: r.y,
+            x1: r.x.saturating_add(r.w),
+            y1: r.y.saturating_add(r.h),
+        }
+    }
+
+    fn union(self, o: Self) -> Self {
+        Self {
+            x0: self.x0.min(o.x0),
+            y0: self.y0.min(o.y0),
+            x1: self.x1.max(o.x1),
+            y1: self.y1.max(o.y1),
+        }
+    }
+
+    /// Where `self`, grown by one tile on every side, overlaps `o`: the strip of `o` along the
+    /// edge the two share. `None` if they don't touch.
+    fn touch(self, o: Self) -> Option<Self> {
+        let s = Self {
+            x0: self.x0.saturating_sub(1).max(o.x0),
+            y0: self.y0.saturating_sub(1).max(o.y0),
+            x1: self.x1.saturating_add(1).min(o.x1),
+            y1: self.y1.saturating_add(1).min(o.y1),
+        };
+        (s.x0 < s.x1 && s.y0 < s.y1).then_some(s)
+    }
+
+    /// Twice the centre (integer, no rounding).
+    fn centre2(self) -> (i64, i64) {
+        (
+            i64::from(self.x0) + i64::from(self.x1),
+            i64::from(self.y0) + i64::from(self.y1),
+        )
+    }
+}
+
+/// One [`Marker::BorderExit`] per adjacent level the player can walk into over the level's
+/// edge (from [`Snapshot::border_links`]). Only near rooms that actually touch a room of this
+/// level count: a level reached by stairs or a cave mouth lies elsewhere in world space, so it
+/// never touches, and levels with a room-tile link keep their tile exit markers instead. The
+/// marker sits at the centre of the shared border strips; it points from the centre of this
+/// level's touching rooms to the centre of the other level's.
+pub fn border_exits(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
+    let mut levels: Vec<u32> = snap.border_links.iter().map(|l| l.to_level_id).collect();
+    levels.sort_unstable();
+    levels.dedup();
+    levels
+        .into_iter()
+        .filter(|id| !snap.room_links.iter().any(|l| l.to_level_id == *id))
+        .filter_map(|id| {
+            let mut found: Option<(Span, Span, Span)> = None;
+            let mut entry = false;
+            for l in snap.border_links.iter().filter(|l| l.to_level_id == id) {
+                let (from, to) = (Span::of(l.from_room), Span::of(l.to_room));
+                let Some(strip) = from.touch(to) else { continue };
+                entry |= l.entry;
+                found = Some(found.map_or((strip, from, to), |(s, f, t)| {
+                    (s.union(strip), f.union(from), t.union(to))
+                }));
+            }
+            let (strip, from, to) = found?;
+            let ((fx, fy), (tx, ty)) = (from.centre2(), to.centre2());
+            let dir = (i32::try_from(tx - fx).ok()?, i32::try_from(ty - fy).ok()?);
+            let (sx, sy) = strip.centre2();
+            #[allow(clippy::cast_precision_loss, reason = "world tiles are far below 2^52")]
+            let (x, y) = (sx as f64 / 2.0, sy as f64 / 2.0);
+            Some((Marker::BorderExit { dir, entry }, x, y))
+        })
+        .collect()
+}
+
 /// Every marker of the snapshot with its world position, in draw order.
 pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
     let mut out: Vec<(Marker, f64, f64)> = snap
@@ -549,6 +646,7 @@ pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
             Some((ring, f64::from(d.x), f64::from(d.y)))
         }))
         .chain(landmarks(snap, LANDMARKS))
+        .chain(border_exits(snap))
         .collect();
     out.push((Marker::Player, f64::from(snap.player.x), f64::from(snap.player.y)));
     // Stable sort: keeps snapshot order within one kind.
@@ -656,7 +754,7 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
     for (marker, x, y) in markers(snap) {
         let (colour, size, shape) = marker.style();
         let (cx, cy) = view.to_screen(x, y);
-        let Some(dot) = marker_path(shape, cx, cy, size) else {
+        let Some(dot) = marker_outline(marker, shape, cx, cy, size) else {
             continue;
         };
         if let Marker::Suspected(_) = marker {
@@ -676,6 +774,11 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
                 Transform::identity(),
                 None,
             );
+            solid(&mut pm, &dot, colour);
+        } else if shape == Shape::Triangle {
+            // Outline under the fill: the 6 px triangle keeps all its colour, with half the
+            // outline showing around it.
+            pm.stroke_path(&dot, &paint(MARKER_OUTLINE), &ring, Transform::identity(), None);
             solid(&mut pm, &dot, colour);
         } else if shape == Shape::Star {
             // Halo: a gold ring on a wider dark ring, so it reads on any background.
@@ -790,9 +893,50 @@ fn draw_suspected(pm: &mut Pixmap, font: Option<&FontVec>, ring: &Path, cx: f32,
     }
 }
 
+/// The outline of `marker` (drawn with `shape` and `size`) centred on (`cx`, `cy`): a border
+/// exit's triangle points its way, everything else is [`marker_path`].
+fn marker_outline(marker: Marker, shape: Shape, cx: f32, cy: f32, size: f32) -> Option<Path> {
+    match marker {
+        Marker::BorderExit { dir: (dx, dy), .. } => {
+            // `iso` is linear, so the screen direction is the projected world direction.
+            let (ux, uy) = iso(f64::from(dx), f64::from(dy));
+            triangle_path(cx, cy, size, (px(ux), px(uy)))
+        }
+        _ => marker_path(shape, cx, cy, size),
+    }
+}
+
+/// A triangle centred on (`cx`, `cy`) with its tip `size` px from the centre toward screen
+/// direction `(ux, uy)` (any length; zero points up). Size 4 gives a triangle about 6 px long and wide.
+fn triangle_path(cx: f32, cy: f32, size: f32, (ux, uy): (f32, f32)) -> Option<Path> {
+    let len = ux.hypot(uy);
+    let (ux, uy) = if len > f32::EPSILON {
+        (ux / len, uy / len)
+    } else {
+        (0.0, -1.0)
+    };
+    // Perpendicular to the direction, for the base corners.
+    let (vx, vy) = (-uy, ux);
+    let back = size * 0.5;
+    let half_base = size * 0.65;
+    let mut pb = PathBuilder::new();
+    pb.move_to(ux.mul_add(size, cx), uy.mul_add(size, cy));
+    pb.line_to(
+        vx.mul_add(half_base, ux.mul_add(-back, cx)),
+        vy.mul_add(half_base, uy.mul_add(-back, cy)),
+    );
+    pb.line_to(
+        vx.mul_add(-half_base, ux.mul_add(-back, cx)),
+        vy.mul_add(-half_base, uy.mul_add(-back, cy)),
+    );
+    pb.close();
+    pb.finish()
+}
+
 /// The outline of a marker centred on (`cx`, `cy`); `None` for a degenerate size.
 fn marker_path(shape: Shape, cx: f32, cy: f32, size: f32) -> Option<Path> {
     match shape {
+        Shape::Triangle => triangle_path(cx, cy, size, (0.0, -1.0)),
         Shape::Circle => PathBuilder::from_circle(cx, cy, size),
         Shape::Square => {
             Rect::from_xywh(cx - size, cy - size, 2.0 * size, 2.0 * size).map(PathBuilder::from_rect)
@@ -853,7 +997,7 @@ fn paint([r, g, b, a]: Rgba) -> Paint<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::{Addr, ItemDrop, Level, Player};
+    use crate::game::{Addr, BorderLink, ItemDrop, Level, Player, RoomLink, RoomPos};
 
     const FIXTURE: &str = include_str!("../tests/fixtures/jail1-snapshot.json");
 
@@ -912,6 +1056,7 @@ mod tests {
             },
             presets: vec![],
             room_links: vec![],
+            border_links: vec![],
             monsters: vec![],
             ground_items: 0,
             drops: vec![],
@@ -1688,6 +1833,121 @@ mod tests {
         let (hits, dx, dy) = colour_spread(&pm, exit, at)?;
         assert!(hits >= 9, "only {hits} exit pixels");
         assert!(dx.hypot(dy) <= f64::from(radius) * 1.5, "exit spread {dx},{dy}");
+        Ok(())
+    }
+
+    /// Two 40x40 rooms of this level side by side, each bordering a room of `to` above it (smaller
+    /// y), plus links to a far level 30, a tile-linked level 29 and an entry level 26 below.
+    fn bordered(to: u32) -> Snapshot {
+        let rect = |x, y| RoomRect { x, y, w: 40, h: 40 };
+        let link = |from: RoomRect, to_level_id, to_room, entry| BorderLink {
+            from_room: from,
+            to_level_id,
+            to_room,
+            entry,
+        };
+        let (a, b) = (rect(100, 100), rect(140, 100));
+        let mut snap = empty_snapshot(120, 120);
+        snap.level.rooms = [a, b]
+            .iter()
+            .map(|r| Room {
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+                loaded: true,
+                preset: None,
+            })
+            .collect();
+        snap.border_links = vec![
+            link(a, to, rect(100, 60), false),
+            link(a, to, rect(140, 60), false),
+            link(b, to, rect(140, 60), false),
+            link(a, 30, rect(1000, 1000), false),
+            link(b, 29, rect(180, 100), false),
+            link(b, 26, rect(140, 140), true),
+        ];
+        snap.room_links = vec![RoomLink {
+            from_room: RoomPos { x: 140, y: 100 },
+            to_level_id: 29,
+            to_room: RoomPos { x: 180, y: 100 },
+        }];
+        snap
+    }
+
+    #[test]
+    fn one_border_exit_per_touching_level() {
+        let got = border_exits(&bordered(28));
+        assert_eq!(
+            got,
+            vec![
+                // Level 26 below room b: entry, pointing +y.
+                (
+                    Marker::BorderExit {
+                        dir: (0, 80),
+                        entry: true
+                    },
+                    160.0,
+                    140.5
+                ),
+                // Level 28 above both rooms: one marker at the middle of the shared edge, pointing -y.
+                (
+                    Marker::BorderExit {
+                        dir: (0, -80),
+                        entry: false
+                    },
+                    140.0,
+                    99.5
+                ),
+            ],
+            "far level 30 and tile-linked level 29 get none"
+        );
+    }
+
+    #[test]
+    fn border_exit_triangle_points_outward_on_screen() -> Result<()> {
+        // World -y projects to screen up-right: iso(0, -1) = (1, -0.5).
+        let dir = Marker::BorderExit {
+            dir: (0, -80),
+            entry: false,
+        };
+        let (_, size, shape) = dir.style();
+        assert_eq!(shape, Shape::Triangle);
+        let path = marker_outline(dir, shape, 50.0, 50.0, size).context("triangle")?;
+        let points = path.points();
+        let tip = points.first().context("tip")?;
+        let (tx, ty) = (tip.x - 50.0, tip.y - 50.0);
+        assert!((tx.hypot(ty) - size).abs() < 1e-4, "tip {tx},{ty}");
+        assert!(
+            (ty / tx + 0.5).abs() < 1e-4 && tx > 0.0,
+            "tip {tx},{ty} not up-right"
+        );
+        assert!(
+            points
+                .iter()
+                .skip(1)
+                .all(|p| (p.x - 50.0).hypot(p.y - 50.0) < size),
+            "the tip is the farthest point"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn border_exits_render_purple_and_entry_teal() -> Result<()> {
+        let snap = bordered(28);
+        let (w, h) = (400, 400);
+        let pm = render(&snap, w, h)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+        for (entry, x, y) in [(false, 140.0, 99.5), (true, 160.0, 140.5)] {
+            let (colour, size, _) = Marker::BorderExit { dir: (0, 1), entry }.style();
+            assert_eq!(colour, if entry { Marker::Entry } else { Marker::Exit }.style().0);
+            let (hits, dx, dy) = colour_spread(&pm, colour, v.to_screen(x, y))?;
+            assert!(hits >= 4, "only {hits} pixels (entry {entry})");
+            assert!(
+                dx.hypot(dy) <= f64::from(size) * 1.5,
+                "spread {dx},{dy} (entry {entry})"
+            );
+        }
         Ok(())
     }
 

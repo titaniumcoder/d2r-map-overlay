@@ -88,8 +88,11 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - **Room1** (loaded rooms only): `+0x38` → CollMap: u32 `+0x00/+0x04` world x/y, `+0x08/+0x0C` width/height
   (= Room2 rect), `+0x20` → width×height u16 flags, row-major. Bit `0x0001` = blocked (walls seen as 5/7, floor 0).
   Verified Sewers Level 1, 2026-11-14.
-- **Room2 neighbour list** (`+0x10` list, `+0x50` u16 count) is only filled for loaded rooms and includes other
-  levels' rooms — **no** walkable-connection info for unexplored rooms. Openings for the whole level need the seed.
+- **Room2 near rooms**: `+0x10` → array of Room2 pointers, **`+0x18` u32 count** (live 2026-11-15, Outer Cloister;
+  `+0x20` sometimes reads 9 with trailing nulls and is a different field; the older `+0x50` u16 note is superseded).
+  Includes other levels' rooms: top-row rooms of 27 had near rooms in 28, bottom-row ones in 26. Used for
+  walk-through border exits (`Snapshot::border_links`, drawn as a triangle on the shared edge). Earlier note: only
+  filled for loaded rooms, and no walkable-connection info for unexplored rooms (openings need the seed).
 
 ## Markers
 - **Waypoint**: object ids table (119, 157 seen; full list from objects.txt waypoint rows).

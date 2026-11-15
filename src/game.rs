@@ -31,6 +31,8 @@ const MAX_PRESETS_PER_ROOM: usize = 500;
 const MAX_ITEM_STATS: u64 = 512;
 /// Most room-tile links walked per room.
 const MAX_LINKS_PER_ROOM: usize = 100;
+/// Most near-room entries read per room (`room2::NEAR_COUNT`); live counts are around 9.
+const MAX_NEAR_ROOMS: u32 = 64;
 /// Warnings kept in the snapshot; the rest are only counted.
 const MAX_WARNINGS: usize = 50;
 /// Living desecrated monsters needed to call a level terrorized. Two rather than one, so a
@@ -83,6 +85,11 @@ pub struct Snapshot {
     pub level: Level,
     pub presets: Vec<Preset>,
     pub room_links: Vec<RoomLink>,
+    /// Rooms of other levels in this level's near-room lists (`room2::NEAR`): walk-through
+    /// borders to adjacent levels, which have no tile preset or room tile. Deduplicated; left
+    /// out of the JSON when empty, so older dumps and fixtures stay unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub border_links: Vec<BorderLink>,
     pub monsters: Vec<Monster>,
     /// Item units lying on the ground (shown or not). Defaults keep older dumps loadable.
     #[serde(default)]
@@ -355,6 +362,27 @@ pub struct RoomLink {
     pub to_room: RoomPos,
 }
 
+/// A room rectangle in world tiles.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash)]
+pub struct RoomRect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// A room of this level next to a room of another level (see [`Snapshot::border_links`]).
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
+pub struct BorderLink {
+    pub from_room: RoomRect,
+    pub to_level_id: u32,
+    pub to_room: RoomRect,
+    /// `to_level_id` is the level the player came from; set by `Session::apply`, never read from
+    /// memory. Omitted from JSON when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub entry: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Monster {
     pub addr: Addr,
@@ -502,8 +530,7 @@ pub fn snapshot(
         bounds: None,
         rooms: Vec::new(),
     };
-    let mut presets = Vec::new();
-    let mut room_links = Vec::new();
+    let (mut presets, mut room_links, mut border_links) = (Vec::new(), Vec::new(), Vec::new());
     for (i, room_addr) in rooms.into_iter().enumerate() {
         // The Room2 chain must stay inside this level (as in research/rooms.py); stop where it leaves.
         let owner = r.ptr(room_addr, room2::LEVEL);
@@ -526,6 +553,7 @@ pub fn snapshot(
         let pos = RoomPos { x: room.x, y: room.y };
         r.presets(room_addr, pos, &mut presets);
         r.room_links(room_addr, pos, &mut room_links);
+        r.border_links(room_addr, level_addr, &room, &mut border_links);
         level.rooms.push(room);
     }
     level.bounds = bounds(&level.rooms);
@@ -550,9 +578,6 @@ pub fn snapshot(
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
     let terrorized = is_terrorized(&monsters);
 
-    if r.suppressed > 0 {
-        r.warnings.push(format!("... and {} more warnings", r.suppressed));
-    }
     Ok(Snapshot {
         player,
         player_candidates: candidates,
@@ -560,6 +585,7 @@ pub fn snapshot(
         level,
         presets,
         room_links,
+        border_links,
         monsters,
         ground_items,
         drops,
@@ -570,7 +596,7 @@ pub fn snapshot(
         inventory_keep,
         difficulty,
         terrorized,
-        warnings: r.warnings,
+        warnings: r.into_warnings(),
     })
 }
 
@@ -629,6 +655,15 @@ impl<M: ReadMem> Reader<'_, M> {
         } else {
             self.suppressed = self.suppressed.saturating_add(1);
         }
+    }
+
+    /// The warnings kept, plus a line counting the suppressed ones.
+    fn into_warnings(mut self) -> Vec<String> {
+        if self.suppressed > 0 {
+            self.warnings
+                .push(format!("... and {} more warnings", self.suppressed));
+        }
+        self.warnings
     }
 
     fn ptr(&self, base: u64, off: u64) -> Result<Option<u64>> {
@@ -892,6 +927,71 @@ impl<M: ReadMem> Reader<'_, M> {
             to_level_id: self.u32(to_level, level::ID)?,
             to_room: self.room_pos(to)?,
         })
+    }
+
+    /// Records every near room (`room2::NEAR`) of `room` that belongs to another level than
+    /// `level_addr`, skipping links already in `out`. Unreadable arrays and entries become
+    /// warnings; a null array is no near rooms.
+    fn border_links(&mut self, room: u64, level_addr: u64, from: &Room, out: &mut Vec<BorderLink>) {
+        let from_room = RoomRect {
+            x: from.x,
+            y: from.y,
+            w: from.w,
+            h: from.h,
+        };
+        let array = match self.ptr(room, room2::NEAR) {
+            Ok(Some(a)) => a,
+            Ok(None) => return,
+            Err(e) => return self.warn(format!("room {room:#x} near rooms: {e:#}")),
+        };
+        let count = match self.u32(room, room2::NEAR_COUNT) {
+            Ok(n) => n,
+            Err(e) => return self.warn(format!("room {room:#x} near count: {e:#}")),
+        };
+        if count > MAX_NEAR_ROOMS {
+            self.warn(format!(
+                "room {room:#x}: {count} near rooms, reading the first {MAX_NEAR_ROOMS}"
+            ));
+        }
+        let len = usize::try_from(count.min(MAX_NEAR_ROOMS)).unwrap_or(0) * 8;
+        let bytes = match self.bytes(array, 0, len) {
+            Ok(b) => b,
+            Err(e) => return self.warn(format!("room {room:#x} near rooms: {e:#}")),
+        };
+        for &raw in bytes.as_chunks::<8>().0 {
+            let near = u64::from_le_bytes(raw);
+            // Nulls (and garbage) after the real entries are skipped, like `ReadMem::read_ptr`.
+            if !crate::process::is_user_ptr(near) {
+                continue;
+            }
+            match self.border_link(near, level_addr, from_room) {
+                // Many rooms share a neighbour pair's list entries; a level has a few hundred
+                // links at most, so a linear check is cheap.
+                Ok(Some(link)) if !out.contains(&link) => out.push(link),
+                Ok(_) => {}
+                Err(e) => self.warn(format!("near room {near:#x}: {e:#}")),
+            }
+        }
+    }
+
+    /// The link to near room `near`, or `None` if it is in this level.
+    fn border_link(&self, near: u64, level_addr: u64, from_room: RoomRect) -> Result<Option<BorderLink>> {
+        let to_level = self.ptr_req(near, room2::LEVEL, "near room level")?;
+        if to_level == level_addr {
+            return Ok(None);
+        }
+        let pos = self.room_pos(near)?;
+        Ok(Some(BorderLink {
+            from_room,
+            to_level_id: self.u32(to_level, level::ID)?,
+            to_room: RoomRect {
+                x: pos.x,
+                y: pos.y,
+                w: world(self.u32(near, room2::W)?)?,
+                h: world(self.u32(near, room2::H)?)?,
+            },
+            entry: false,
+        }))
     }
 
     fn monster(&self, addr: u64) -> Result<Monster> {
@@ -1643,6 +1743,125 @@ mod tests {
                 max_x: 130,
                 max_y: 150
             })
+        );
+        Ok(())
+    }
+
+    /// Points `room`'s near-room array at `array` with `count` entries (the Room2 must exist).
+    fn set_near(mem: &mut FakeMem, room: u64, array: u64, count: u32) -> Result<()> {
+        let mut b = mem.read_bytes(room, 0xA0)?;
+        for (off, val) in [
+            (room2::NEAR, array.to_le_bytes().to_vec()),
+            (room2::NEAR_COUNT, count.to_le_bytes().to_vec()),
+        ] {
+            let off = usize::try_from(off)?;
+            b.get_mut(off..off + val.len())
+                .context("field outside struct")?
+                .copy_from_slice(&val);
+        }
+        mem.add(room, b);
+        Ok(())
+    }
+
+    /// A near-room array of `rooms` (8-byte pointers), exactly that long.
+    fn near_array(mem: &mut FakeMem, addr: u64, rooms: &[u64]) {
+        mem.add(addr, rooms.iter().flat_map(|r| r.to_le_bytes()).collect());
+    }
+
+    const NEAR0: u64 = 0x55_0000;
+    const NEAR1: u64 = 0x55_1000;
+    const R_OTHER2: u64 = 0x60_1000;
+
+    const fn rect(x: u32, y: u32, w: u32, h: u32) -> RoomRect {
+        RoomRect { x, y, w, h }
+    }
+
+    #[test]
+    fn near_rooms_in_other_levels_become_border_links() -> Result<()> {
+        let mut m = world()?;
+        // R0 sees two rooms of level 22, its own neighbour R1 (same level: skipped) and nulls.
+        room(&mut m, R_OTHER2, (48, 60, 8, 8), 0, 0, L_OTHER, 0, 0)?;
+        near_array(&mut m, NEAR0, &[R_OTHER, R1, 0, R_OTHER2, 0]);
+        set_near(&mut m, R0, NEAR0, 5)?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        let from = rect(50, 100, 40, 30);
+        let link = |to_room| BorderLink {
+            from_room: from,
+            to_level_id: 22,
+            to_room,
+            entry: false,
+        };
+        assert_eq!(
+            s.border_links,
+            vec![link(rect(200, 300, 40, 40)), link(rect(240, 300, 40, 40))]
+        );
+        // Only the bad room-tile link warns.
+        assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
+        Ok(())
+    }
+
+    #[test]
+    fn border_links_are_deduplicated() -> Result<()> {
+        let mut m = world()?;
+        // R0 lists R_OTHER twice; R1 lists it too (a different from-room: kept).
+        near_array(&mut m, NEAR0, &[R_OTHER, R_OTHER]);
+        near_array(&mut m, NEAR1, &[R_OTHER]);
+        set_near(&mut m, R0, NEAR0, 2)?;
+        set_near(&mut m, R1, NEAR1, 1)?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        let from: Vec<RoomRect> = s.border_links.iter().map(|l| l.from_room).collect();
+        assert_eq!(from, vec![rect(50, 100, 40, 30), rect(90, 100, 40, 40)]);
+        // Empty border links stay out of the JSON (fixtures unchanged); filled ones round-trip.
+        assert!(
+            serde_json::to_value(snapshot(&world()?, TABLE, None, None)?)?
+                .get("border_links")
+                .is_none()
+        );
+        let back: Snapshot = serde_json::from_str(&serde_json::to_string(&s)?)?;
+        assert_eq!(back.border_links, s.border_links);
+        Ok(())
+    }
+
+    #[test]
+    fn near_room_count_is_capped() -> Result<()> {
+        let mut m = world()?;
+        // A garbage count: only MAX_NEAR_ROOMS entries are mapped, so reading more would fail.
+        let cap = usize::try_from(MAX_NEAR_ROOMS)?;
+        let mut rooms = vec![0; cap];
+        if let Some(last) = rooms.last_mut() {
+            *last = R_OTHER;
+        }
+        near_array(&mut m, NEAR0, &rooms);
+        set_near(&mut m, R0, NEAR0, 100_000)?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        assert_eq!(s.border_links.len(), 1, "the 64th entry is still read");
+        assert!(
+            s.warnings.iter().any(|w| w.contains("100000 near rooms")),
+            "{:?}",
+            s.warnings
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unreadable_near_rooms_only_warn() -> Result<()> {
+        let mut m = world()?;
+        // R0's array is unmapped; R1's array holds an unmapped room pointer.
+        set_near(&mut m, R0, UNMAPPED, 3)?;
+        near_array(&mut m, NEAR1, &[UNMAPPED]);
+        set_near(&mut m, R1, NEAR1, 1)?;
+        let s = snapshot(&m, TABLE, None, None)?;
+        assert_eq!(s.border_links, vec![]);
+        assert_eq!(s.level.rooms.len(), 3, "the rooms are still read");
+        assert!(
+            s.warnings.iter().any(|w| w.contains("near rooms")),
+            "{:?}",
+            s.warnings
+        );
+        assert!(
+            s.warnings.iter().any(|w| w.contains("near room 0x")),
+            "{:?}",
+            s.warnings
         );
         Ok(())
     }

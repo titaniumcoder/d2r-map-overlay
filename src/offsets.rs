@@ -58,6 +58,14 @@ pub mod room1 {
 
 /// `Room2` (level layout; present for the whole level).
 pub mod room2 {
+    /// ptr to an array of [`NEAR_COUNT`] `Room2` pointers: the "near rooms", which include rooms
+    /// of adjacent levels. Live 2026-11-15 (python probe, Outer Cloister 27): the top-row rooms
+    /// had near rooms in Barracks (28), the bottom-row ones in Monastery Gate (26), so a
+    /// walk-through border to another level shows up here without any tile preset or room tile.
+    pub const NEAR: u64 = 0x10;
+    /// u32 number of entries in [`NEAR`]. Live 2026-11-15: +0x20 sometimes read 9 with null
+    /// entries after the real ones; that is a different field, this one is the count.
+    pub const NEAR_COUNT: u64 = 0x18;
     /// ptr to the room's level-preset record (`level_preset`). Live-verified 2026-11-15 over 8 games.
     pub const LEVEL_PRESET: u64 = 0x40;
     /// ptr to the next `Room2` of the level.
