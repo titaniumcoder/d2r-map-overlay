@@ -567,8 +567,11 @@ pub fn level_bounds(snap: &Snapshot) -> Bounds {
 pub const ALL_MONSTER_LEVELS: &[u32] = &[8];
 
 /// Live superunique/champion/unique, not dead. Minion-only (0x10) and normal (0) monsters are skipped.
+///
+/// Allies never count: assassin traps (e.g. Wake of Fire, txt 410) carry the unique flag 0x08
+/// (live 2026-11-15), so every `NON_HOSTILE_MONSTERS` id is skipped.
 pub fn is_elite(m: &Monster) -> bool {
-    m.flags & ELITE_FLAGS != 0 && !m.is_dead()
+    m.flags & ELITE_FLAGS != 0 && !m.is_dead() && !crate::levels_data::NON_HOSTILE_MONSTERS.contains(&m.txt)
 }
 
 /// The icon marker of a live monster: [`Marker::Boss`] for a quest boss by txt id (whatever its
@@ -1456,6 +1459,10 @@ mod tests {
         assert!(!is_elite(&monster(0x00, 1)), "normal");
         assert!(!is_elite(&monster(0x08, 0)), "dead (mode 0)");
         assert!(!is_elite(&monster(0x0C, 12)), "dead (mode 12)");
+        let mut trap = monster(0x08, 1);
+        trap.txt = 410;
+        assert!(!is_elite(&trap), "assassin trap with the unique flag");
+        assert_eq!(elite_marker(&trap), None);
     }
 
     fn monster_txt(txt: u32, flags: u8, mode: u32) -> Monster {
