@@ -94,9 +94,11 @@ pub const QUEST_OBJECTS: &[(u32, &str)] = &[
     (394, "diablo seal"),
     (395, "diablo seal"),
     (396, "diablo seal"),
-    // Frozen River (114): Anya frozen in ice, objects.txt 558 "fana" / "frozen anya" (from d2data;
-    // object ids have matched live so far, Anya not yet seen live).
-    (558, "frozen anya"),
+    // Frozen River (114): Anya's spot is object 460, a dummy "Drehya Start Outside Town" (Drehya =
+    // Anya's internal name), live 2026-11-15 next to Frozenstein's preset 810. Object 558 "frozen
+    // anya" (the ice figure) is not in the level layout. The dummy can't be operated, so the star
+    // stays after she is freed.
+    (460, "anya"),
 ];
 
 /// Quest monster presets (monster preset txt id, label) drawn like a quest object until the
@@ -124,7 +126,7 @@ pub fn quest_monster(txt: u32) -> Option<&'static str> {
 /// Quest objects of [`QUEST_OBJECTS`] that are used up once operated: their marker goes away for
 /// the game when the live object (loaded near the player) is seen in a non-neutral mode (see
 /// [`crate::session`]).
-pub const CONSUMABLE_QUEST_OBJECTS: &[u32] = &[392, 393, 394, 395, 396, 558];
+pub const CONSUMABLE_QUEST_OBJECTS: &[u32] = &[392, 393, 394, 395, 396];
 
 /// True if object txt id `txt` is in [`CONSUMABLE_QUEST_OBJECTS`].
 pub fn is_consumable_quest_object(txt: u32) -> bool {
@@ -1756,7 +1758,7 @@ mod tests {
             (376, "hellforge"),
             (392, "diablo seal"),
             (396, "diablo seal"),
-            (558, "frozen anya"),
+            (460, "anya"),
         ] {
             assert_eq!(
                 preset_marker(&object(txt, 0, 0)),
