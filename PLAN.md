@@ -198,6 +198,21 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   (5/7) still to observe live.
 - Drawn as distinct icons (unique gold, set green, rune orange, gem by colour), dropped from the map once picked up.
 
+## Findings, second live session (Vex, Acts 1–5 Normal, 2026-11-15)
+- **Landmarks come from lvlprest names** (blizzhackers/d2data `lvlprest.json`, `Def` = Room2 preset id). Confirmed in
+  game: cave Next N 90 (exit, star) and Down W 91 (stairs), Inifus 161, Tower 1 163, Cairn Stones 160, Barracks Forge
+  S/E 204/203, Sewer Next E 338, Radament's Lair W/N 341/344, Tomb Cube N 459 (+ chest object 354), Lair Tight Spot
+  S 509 (Coldworm, drawn as a worm; Staff chest object 356). Unconfirmed directions stay "?".
+  Maggot Lair Next 501–504 drawn as stairs without confirmation (pattern held in caves and sewers).
+- **Room2 near rooms** (+0x10 array, +0x18 count) give walk-through borders to adjacent levels → border arrows.
+- **Allies carry elite flags**: assassin traps have MonsterData 0x08; monstats `Align` set → never elite, never drawn.
+- **Player choice is sticky per game** (group games flip-flopped and wiped the per-game memory).
+- **Stash**: page 3 = cube, 4 = stash. Personal stash items are owned by the player id. Shared stash pages are
+  player-type units without an act, one per page; the shared ones of the current character have
+  `Inventory(+0x90) +0x48` = the player's id. Other tab units in memory are stale (earlier characters, offline
+  shared stash) and must be ignored (verified by moving Cathan's Seal through pages 1–5).
+- Open: Hell difficulty value 2; ethereal bit 0x400000; tomb orifice W/E/N, forge W/N, cube W/E/S, lair E/S.
+
 ## Overlay
 - Layer-shell surface, layer `overlay`, anchored top-right, default 400×400 (config), **empty input region** (click-through), no keyboard.
 - Draw current level only: room footprints (loaded rooms brighter), player dot, waypoint (blue), exits (purple + target name),
