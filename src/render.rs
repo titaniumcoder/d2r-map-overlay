@@ -74,7 +74,8 @@ pub enum LandmarkStyle {
 ///   341 and 344 confirmed in game 2026-11-15, Radament (txt 229) standing in 344); stairs piece 338 confirmed in level 1 (room link to level 48) and "Sewer Next W/E/S/N" (337–340, stairs down) in levels 1–2.
 /// - Maggot Lair (62–64): lvlprest "Lair Next W/E/S/N" (501–504) is the stairs down in levels 1–2
 ///   (drawn as stairs at once: the "Next" = stairs-down naming is confirmed for act 1 caves and the
-///   sewers); "Lair Tight Spot S" (509, MagQueen.ds1) in level 3 should be Coldworm's chamber.
+///   sewers); "Lair Tight Spot S" (509, MagQueen.ds1) in level 3 is Coldworm's chamber with the staff
+///   chest (confirmed in game 2026-11-15).
 /// - Dark Wood (5): lvlprest 161 "Act 1 - Inifus" (funktree.ds1), the Tree of Inifuss (confirmed in
 ///   game 2026-11-15).
 /// - Black Marsh (6): lvlprest 163 "Act 1 - Tower 1" (Tower1.ds1), the Forgotten Tower entrance
@@ -91,7 +92,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 64..=64,
         preset_ids: 509..=509,
         label: "coldworm",
-        confirmed: false,
+        confirmed: true,
         style: LandmarkStyle::Star,
     },
     LandmarkRule {
@@ -272,6 +273,9 @@ pub const QUEST_OBJECTS: &[(u32, &str)] = &[
     // Halls of the Dead Level 3 (60), live 2026-11-15: the Horadric Cube chest, next to
     // Bloodwitch's spawn preset 762.
     (354, "horadric cube chest"),
+    // Maggot Lair Level 3 (64), live 2026-11-15: the Staff of Kings chest (OperateFn 41) in
+    // Coldworm's chamber 509, next to his spawn preset 766.
+    (356, "staff of kings chest"),
     (152, "orifice"),
     (252, "gidbinn altar"),
     (366, "sewer stairs"),
@@ -2676,7 +2680,6 @@ mod tests {
         assert_eq!(
             unconfirmed,
             vec![
-                "coldworm",
                 "radament's lair (E/S)",
                 "sewer stairs down",
                 "sewer stairs down (S/N)",
