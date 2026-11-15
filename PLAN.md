@@ -116,7 +116,7 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 
 ## ActMisc, difficulty and seed lead (2026-11-15)
 - Player unit `+0x20` → act; **act `+0x70` → ActMisc** (older builds: +0x78, which now points into code).
-- ActMisc `+0x830` u16 = **difficulty** (0 Normal read on a Normal character; NM/Hell still to confirm).
+- ActMisc `+0x830` u16 = **difficulty**: 0 Normal and 1 Nightmare confirmed live (2026-11-15); Hell (2) still to see.
 - Phase 2 lead: ActMisc `+0x840` and `+0x860` hold random-looking u32s (e.g. 3943813804 / 3154569827), where the
   seed-selector plugin says the generator stores {seed, 0x29A} and the derived value. Used directly as d2mapapi
   seeds they do **not** reproduce the Flayer Jungle (waypoint/altar positions differ) — likely encoded/derived.
