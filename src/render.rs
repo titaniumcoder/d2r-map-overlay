@@ -96,6 +96,28 @@ pub const QUEST_OBJECTS: &[(u32, &str)] = &[
     (396, "diablo seal"),
 ];
 
+/// Quest monster presets (monster preset txt id, label) drawn like a quest object until the
+/// monster is seen dead near its preset (see [`crate::session`]).
+pub const QUEST_MONSTERS: &[(u32, &str)] = &[
+    // Frigid Highlands (111, data name "Rigid Highlands"), quest "Rescue on Mount Arreat": the
+    // breakable door of each barbarian prisoner's cage is the monster `prisondoor` (monstats
+    // hcIdx 434). Verified live: every cage has monster preset 434, so a normal monster's preset
+    // txt id is its hcIdx. The cage itself is object preset 473 ("cagedwussie1"), ~10 tiles
+    // from the door; deliberately not in QUEST_OBJECTS so a cage gets one marker, not two.
+    // Monster presets 432/433 (Barricade Door) and 435 (Barricade Tower) are siege barricades,
+    // not prisoners: dropped. Still unverified: the live door's txt (hcIdx 434) and its dead
+    // mode once broken, which hide the marker.
+    (434, "prison door"),
+];
+
+/// The quest-monster label of monster preset txt id `txt`, if it is one.
+pub fn quest_monster(txt: u32) -> Option<&'static str> {
+    QUEST_MONSTERS
+        .iter()
+        .find(|&&(id, _)| id == txt)
+        .map(|&(_, label)| label)
+}
+
 /// Quest objects of [`QUEST_OBJECTS`] that are used up once operated: their marker goes away for
 /// the game when the live object (loaded near the player) is seen in a non-neutral mode (see
 /// [`crate::session`]).
@@ -184,7 +206,8 @@ pub enum Marker {
     /// A landmark room (see [`LANDMARKS`]), with the rule's label. Drawn below live elites so the
     /// boss standing on it stays visible.
     Landmark(&'static str),
-    /// A quest object preset (see [`QUEST_OBJECTS`]), with its label: a small gold star without
+    /// A quest object preset (see [`QUEST_OBJECTS`]) or quest monster preset (see
+    /// [`QUEST_MONSTERS`]), with its label: a small gold star without
     /// halo, drawn above the landmark star so both show when they overlap.
     QuestObject(&'static str),
     /// A well near the player (live object): a hollow cyan ring. Wells refill: drawn used or not.
@@ -370,7 +393,10 @@ pub fn preset_marker(p: &Preset) -> Option<Marker> {
         PresetKind::Object => quest_object(p.txt).map(Marker::QuestObject),
         PresetKind::Tile if p.entry => Some(Marker::Entry),
         PresetKind::Tile => Some(Marker::Exit),
-        PresetKind::Monster => Some(Marker::Special(session::superunique(p.txt))),
+        PresetKind::Monster => Some(quest_monster(p.txt).map_or_else(
+            || Marker::Special(session::superunique(p.txt)),
+            Marker::QuestObject,
+        )),
         PresetKind::Other(_) => None,
     }
 }
@@ -1745,6 +1771,21 @@ mod tests {
             ..object(152, 0, 0)
         };
         assert_eq!(preset_marker(&monster), Some(Marker::Special(None)));
+        // A quest monster preset (prison door) is drawn as a quest object; as an object it's not.
+        // Siege barricades (432, 433, 435) stay generic monster presets.
+        let door = Preset {
+            kind: PresetKind::Monster,
+            ..object(434, 0, 0)
+        };
+        assert_eq!(preset_marker(&door), Some(Marker::QuestObject("prison door")));
+        assert_eq!(preset_marker(&object(434, 0, 0)), None);
+        for barricade in [432, 433, 435] {
+            let p = Preset {
+                kind: PresetKind::Monster,
+                ..object(barricade, 0, 0)
+            };
+            assert_eq!(preset_marker(&p), Some(Marker::Special(None)), "{barricade}");
+        }
     }
 
     /// Tomb 66 with an assumed-orifice room (456) at world 90,30 and the orifice object at 150,30.

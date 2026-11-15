@@ -6,6 +6,9 @@
 //! `research/gen_levels.py`) and it wasn't killed in this game. Other monster presets are
 //! ordinary fixed spawns. Older versions learned the ids in play and kept them in a
 //! `superuniques.txt` next to the offset cache; that file is no longer read and can be deleted.
+//! Quest monster presets ([`QUEST_MONSTERS`](crate::render::QUEST_MONSTERS), the prison doors
+//! of Frigid Highlands) are kept too, until a dead monster with the same txt id is seen
+//! within [`QUEST_KILL_RADIUS`] of one; that preset then counts as killed for the game.
 //!
 //! Pure: no I/O. [`Session::apply`] folds each snapshot in and rewrites it for drawing, so the
 //! renderer stays a function of the snapshot alone.
@@ -31,12 +34,15 @@ use std::collections::{HashMap, HashSet};
 use crate::game::{Addr, Monster, PresetKind, Snapshot};
 use crate::levels_data::SUPERUNIQUES;
 use crate::offsets::monster_data;
-use crate::render::is_consumable_quest_object;
+use crate::render::{is_consumable_quest_object, quest_monster};
 
 /// Most distance in tiles between a dead superunique and the superunique preset it is credited
 /// to. Generous: it only picks which marker to remove (the nearest), and superunique presets of
 /// one level lie far apart.
 const KILL_RADIUS: f64 = 30.0;
+/// Most distance in tiles between a dead quest monster (live position) and the quest monster
+/// preset of the same txt id it is credited to.
+const QUEST_KILL_RADIUS: f64 = 10.0;
 /// Most distance in tiles between a living superunique and the superunique preset its unit id is
 /// bound to: it spawns on its preset, so a small radius suffices and keeps a passing
 /// superunique from binding to another's preset.
@@ -70,7 +76,8 @@ pub struct Update {
 #[derive(Debug, Default)]
 pub struct Session {
     game: Option<GameKey>,
-    /// Superunique presets whose monster was seen dead in this game, by (level id, preset x, y).
+    /// Superunique and quest monster presets whose monster was seen dead in this game, by
+    /// (level id, preset x, y).
     killed: HashSet<LevelPos>,
     /// Superunique preset each superunique monster (by unit id) was first seen alive near in
     /// this game. Its death kills that preset however far it was chased.
@@ -103,7 +110,8 @@ pub fn superunique(txt: u32) -> Option<&'static str> {
 
 impl Session {
     /// Folds `snap` into the session and rewrites it for drawing: monster presets are kept only
-    /// if they are a superunique's (see [`superunique`]) not killed in this game, and consumable
+    /// if they are a superunique's (see [`superunique`]) or a quest monster's (see
+    /// [`quest_monster`]) not killed in this game, and consumable
     /// quest object presets only if not seen operated in this game.
     pub fn apply(&mut self, snap: &mut Snapshot) -> Update {
         let mut update = Update::default();
@@ -180,6 +188,8 @@ impl Session {
             }
         }
 
+        self.kill_quest_monsters(snap);
+
         for o in &snap.operated_objects {
             self.operated.insert((level, o.x, o.y));
         }
@@ -191,11 +201,40 @@ impl Session {
         };
 
         snap.presets.retain(|p| match p.kind {
-            PresetKind::Monster => superunique(p.txt).is_some() && !self.killed.contains(&(level, p.x, p.y)),
+            PresetKind::Monster => {
+                (superunique(p.txt).is_some() || quest_monster(p.txt).is_some())
+                    && !self.killed.contains(&(level, p.x, p.y))
+            }
             PresetKind::Object => !(is_consumable_quest_object(p.txt) && operated_near(p.x, p.y)),
             _ => true,
         });
         update
+    }
+}
+
+impl Session {
+    /// A dead quest monster (prison door broken) kills the nearest quest monster preset of its
+    /// txt id within [`QUEST_KILL_RADIUS`]. Normal monsters get no unit-id binding: a door
+    /// doesn't move.
+    fn kill_quest_monsters(&mut self, snap: &Snapshot) {
+        let level = snap.level.id;
+        for m in snap
+            .monsters
+            .iter()
+            .filter(|m| m.is_dead() && quest_monster(m.txt).is_some())
+        {
+            let (mx, my) = (f64::from(m.x), f64::from(m.y));
+            if let Some((_, p)) = snap
+                .presets
+                .iter()
+                .filter(|p| p.kind == PresetKind::Monster && p.txt == m.txt)
+                .map(|p| ((f64::from(p.x) - mx).hypot(f64::from(p.y) - my), p))
+                .filter(|&(d, _)| d <= QUEST_KILL_RADIUS)
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+            {
+                self.killed.insert((level, p.x, p.y));
+            }
+        }
     }
 }
 
@@ -329,6 +368,56 @@ mod tests {
         s.apply(&mut a);
         let kept: Vec<u32> = a.presets.iter().map(|p| p.txt).collect();
         assert_eq!(kept, vec![757, 7], "generic monster presets dropped, tiles kept");
+    }
+
+    fn with_txt(txt: u32, mode: u32, x: u16, y: u16) -> Monster {
+        Monster {
+            txt,
+            ..monster(0, mode, x, y)
+        }
+    }
+
+    #[test]
+    fn prison_door_preset_is_kept_until_a_dead_door_is_seen_near_it() {
+        let presets = || {
+            vec![
+                preset(PresetKind::Monster, 434, 100, 100), // prison door
+                preset(PresetKind::Monster, 434, 140, 100), // another cage's door
+                preset(PresetKind::Monster, 433, 102, 100), // barricade door: dropped
+                preset(PresetKind::Monster, 435, 110, 100), // barricade tower: dropped
+            ]
+        };
+        let kept = |s: &Snapshot| s.presets.iter().map(|p| (p.txt, p.x)).collect::<Vec<_>>();
+        let mut s = Session::default();
+        let mut alive = snap(1, 0xa000, 111);
+        alive.presets = presets();
+        alive.monsters = vec![
+            with_txt(434, 1, 100, 101),  // standing door
+            with_txt(433, 0, 101, 100),  // dead other monster near the door
+            with_txt(434, 12, 120, 100), // dead door 20 tiles from either preset
+        ];
+        s.apply(&mut alive);
+        assert_eq!(kept(&alive), vec![(434, 100), (434, 140)]);
+
+        let mut broken = snap(1, 0xa000, 111);
+        broken.presets = presets();
+        broken.monsters = vec![with_txt(434, 0, 103, 104)];
+        s.apply(&mut broken);
+        assert_eq!(kept(&broken), vec![(434, 140)], "broken door's preset hidden");
+        // Stays hidden after the corpse unloads; another level's preset at that spot is kept.
+        let mut later = snap(1, 0xa000, 111);
+        later.presets = presets();
+        s.apply(&mut later);
+        assert_eq!(kept(&later), vec![(434, 140)]);
+        let mut other_level = snap(1, 0xa000, 112);
+        other_level.presets = presets();
+        s.apply(&mut other_level);
+        assert_eq!(other_level.presets.len(), 2);
+        // A new game brings it back.
+        let mut next_game = snap(2, 0xc000, 111);
+        next_game.presets = presets();
+        s.apply(&mut next_game);
+        assert_eq!(kept(&next_game), vec![(434, 100), (434, 140)]);
     }
 
     #[test]

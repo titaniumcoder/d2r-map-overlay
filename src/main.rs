@@ -191,8 +191,8 @@ fn load_snapshot(path: &str) -> Result<game::Snapshot> {
     serde_json::from_str(&json).with_context(|| format!("parsing snapshot {path}"))
 }
 
-/// Loads a `--dump` snapshot and filters it like live mode does (superunique presets only, drop
-/// highlights and shown shrines from `config`).
+/// Loads a `--dump` snapshot and filters it like live mode does (superunique and quest monster
+/// presets only, drop highlights and shown shrines from `config`).
 fn load_for_drawing(path: &str, config: &config::Config) -> Result<game::Snapshot> {
     let mut snap = load_snapshot(path)?;
     valuables::apply(&mut snap.drops, &config.valuables);
