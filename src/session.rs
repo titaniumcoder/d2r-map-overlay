@@ -140,11 +140,12 @@ pub struct GameState {
     /// The player was in the Moo Moo Farm in this game (the cow run is counted).
     #[serde(default)]
     cow_run: bool,
-    /// The player's path through the Moo Moo Farm in this game (world tiles, oldest first):
-    /// a point at least [`TRAIL_STEP`] from the previous one, at most [`TRAIL_CAP`] (the oldest
-    /// go first).
+    /// The player's path through each level of this game, by level id (world tiles, oldest
+    /// first): a point at least [`TRAIL_STEP`] from the previous one, at most [`TRAIL_CAP`] per
+    /// level (the oldest go first). Every level since the user asked for it everywhere
+    /// (2026-11-15); it started in the Moo Moo Farm.
     #[serde(default)]
-    trail: Vec<(u16, u16)>,
+    trails: HashMap<u32, Vec<(u16, u16)>>,
 }
 
 impl GameState {
@@ -422,8 +423,8 @@ impl Session {
         self.kill_quest_monsters(snap);
         if level == cows::COW_LEVEL {
             self.count_cows(snap, &mut update);
-            self.follow_trail(snap);
         }
+        self.follow_trail(snap);
 
         for o in &snap.operated_objects {
             self.changed |= self.state.operated.insert((level, o.x, o.y));
@@ -475,18 +476,19 @@ impl Session {
     /// hands the trail to the snapshot.
     fn follow_trail(&mut self, snap: &mut Snapshot) {
         let here = (snap.player.x, snap.player.y);
-        let far_enough = self.state.trail.last().is_none_or(|&(x, y)| {
+        let trail = self.state.trails.entry(snap.level.id).or_default();
+        let far_enough = trail.last().is_none_or(|&(x, y)| {
             (f64::from(here.0) - f64::from(x)).hypot(f64::from(here.1) - f64::from(y)) >= TRAIL_STEP
         });
         if here != (0, 0) && far_enough {
-            if self.state.trail.len() >= TRAIL_CAP {
+            if trail.len() >= TRAIL_CAP {
                 // O(n) shift, but at most once per new point of a 5000-point Vec.
-                self.state.trail.remove(0);
+                trail.remove(0);
             }
-            self.state.trail.push(here);
+            trail.push(here);
             self.changed = true;
         }
-        snap.trail.clone_from(&self.state.trail);
+        snap.trail.clone_from(trail);
     }
 
     /// A dead quest monster (prison door broken) kills the nearest quest monster preset of its
@@ -1510,16 +1512,27 @@ mod tests {
     }
 
     #[test]
-    fn the_trail_is_kept_in_level_39_only_and_per_game() {
+    fn the_trail_is_kept_per_level_and_per_game() {
         let mut s = Session::default();
         let mut elsewhere = farm_at(1, 4, 100, 100);
         s.apply(&mut elsewhere);
-        assert!(elsewhere.trail.is_empty(), "no trail outside the farm");
+        assert_eq!(elsewhere.trail, vec![(100, 100)], "every level has a trail");
         s.apply(&mut farm_at(1, crate::cows::COW_LEVEL, 100, 100));
         s.apply(&mut farm_at(1, 1, 200, 200));
         let mut back = farm_at(1, crate::cows::COW_LEVEL, 100, 100);
         s.apply(&mut back);
-        assert_eq!(back.trail, vec![(100, 100)], "town visits leave no points");
+        assert_eq!(
+            back.trail,
+            vec![(100, 100)],
+            "a town visit adds nothing to the farm's trail"
+        );
+        let mut stony = farm_at(1, 4, 140, 100);
+        s.apply(&mut stony);
+        assert_eq!(
+            stony.trail,
+            vec![(100, 100), (140, 100)],
+            "level 4 kept its own trail"
+        );
         let mut next = farm_at(2, crate::cows::COW_LEVEL, 300, 300);
         s.apply(&mut next);
         assert_eq!(next.trail, vec![(300, 300)], "a new game starts a new trail");
