@@ -113,6 +113,10 @@ pub const QUEST_MONSTERS: &[(u32, &str)] = &[
     // not prisoners: dropped. Still unverified: the live door's txt (hcIdx 434) and its dead
     // mode once broken, which hide the marker.
     (434, "prison door"),
+    // Halls of Vaught (124): Nihlathak, monstats `nihlathakboss` hcIdx 526 (preset txt = hcIdx, as
+    // verified for the prison door). Not yet seen live. The level is one piece type (864), so no
+    // landmark rule can find his platform; this marker appears once his preset is loaded.
+    (526, "nihlathak"),
 ];
 
 /// The quest-monster label of monster preset txt id `txt`, if it is one.
@@ -1785,6 +1789,11 @@ mod tests {
         };
         assert_eq!(preset_marker(&door), Some(Marker::QuestObject("prison door")));
         assert_eq!(preset_marker(&object(434, 0, 0)), None);
+        let nihlathak = Preset {
+            kind: PresetKind::Monster,
+            ..object(526, 0, 0)
+        };
+        assert_eq!(preset_marker(&nihlathak), Some(Marker::QuestObject("nihlathak")));
         for barricade in [432, 433, 435] {
             let p = Preset {
                 kind: PresetKind::Monster,
