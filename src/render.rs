@@ -193,6 +193,10 @@ pub enum Marker {
     Shrine(u8),
     /// Live superunique, champion or unique monster.
     Elite,
+    /// The player. Drawn below drops and rings: on big levels a fresh drop lies within a pixel or
+    /// two of the player and would otherwise be hidden (live, Bloody Foothills, a large charm 3.6
+    /// tiles away).
+    Player,
     /// An item on the ground worth picking up.
     Drop(DropKind),
     /// A valuables highlight around the drop marker of `kind`: a ring coloured by tier, dashed
@@ -202,7 +206,6 @@ pub enum Marker {
         tier: Tier,
         uncertain: bool,
     },
-    Player,
 }
 
 impl Marker {
@@ -1126,12 +1129,12 @@ mod tests {
             kinds,
             vec![
                 Marker::Elite,
+                Marker::Player,
                 Marker::Drop(DropKind::Gem(GemColour::Ruby)),
                 Marker::Drop(DropKind::Rune(8)),
                 Marker::Drop(DropKind::Unique),
-                Marker::Player,
             ],
-            "unique on top of the other drops, the player on top of all"
+            "unique on top of the other drops; drops above the player so a fresh drop isn't hidden"
         );
         // Drops never look like a dot: every drop style has a non-circle shape.
         for kind in [
@@ -1197,7 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn rings_come_after_drops_and_before_the_player() {
+    fn rings_come_after_drops_and_the_player() {
         let mut snap = empty_snapshot(5, 5);
         snap.drops = vec![
             highlighted(DropKind::Base, 1, Tier::A, false),
@@ -1207,6 +1210,7 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
+                Marker::Player,
                 Marker::Drop(DropKind::Base),
                 Marker::Drop(DropKind::Rune(1)),
                 Marker::Ring {
@@ -1214,7 +1218,6 @@ mod tests {
                     tier: Tier::A,
                     uncertain: false
                 },
-                Marker::Player,
             ]
         );
         let (white, size, shape) = Marker::Drop(DropKind::Base).style();
@@ -1871,8 +1874,8 @@ mod tests {
                 Marker::Well,
                 Marker::Shrine(12),
                 Marker::Elite,
-                Marker::Drop(DropKind::Unique),
                 Marker::Player,
+                Marker::Drop(DropKind::Unique),
             ]
         );
     }
