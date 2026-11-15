@@ -641,9 +641,9 @@ pub fn level_bounds(snap: &Snapshot) -> Bounds {
 }
 
 /// Levels where every living enemy is drawn (not hirelings, summons or critters, see
-/// `NON_HOSTILE_MONSTERS`), not just elites: Den of Evil (8), whose quest
-/// needs every monster killed (user request, 2026-11-15).
-pub const ALL_MONSTER_LEVELS: &[u32] = &[8];
+/// `NON_HOSTILE_MONSTERS`), not just elites (user requests, 2026-11-15): Den of Evil (8), whose
+/// quest needs every monster killed, and the Moo Moo Farm (39), to see where the cow packs are.
+pub const ALL_MONSTER_LEVELS: &[u32] = &[8, 39];
 
 /// Live superunique/champion/unique, not dead. Minion-only (0x10) and normal (0) monsters are skipped.
 ///
