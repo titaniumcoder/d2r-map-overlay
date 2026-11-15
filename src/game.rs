@@ -136,6 +136,11 @@ pub struct Snapshot {
     /// replaces the monster levels in the info line. Left out of the JSON when `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cows: Option<crate::cows::Tally>,
+    /// Where the player has been in this game's Moo Moo Farm (world tiles, oldest first), set
+    /// by the session there only and drawn as a faint path under the markers. Left out of the
+    /// JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trail: Vec<(u16, u16)>,
     pub warnings: Vec<String>,
 }
 
@@ -671,6 +676,7 @@ pub fn snapshot(
         difficulty,
         terrorized,
         cows: None,
+        trail: Vec::new(),
         warnings: r.into_warnings(),
     })
 }

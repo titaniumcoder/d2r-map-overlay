@@ -179,6 +179,9 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   live unit, seen with superunique+unique flags at his preset). Lifetime total/best/runs in
   `~/.local/share/d2r-map-overlay/cows.json` (not shown yet), seeded once from the journal: runs = distinct games
   with a level-39 event (3), total/best = elite cows logged killed (2 / 1); normal cows were never logged.
+- **Cow Level trail** (same request): in level 39 the session records the player's position into `GameState`
+  (a point ≥ 4 tiles from the last, at most 5000, oldest dropped; skips 0,0 loading frames), drawn just above the
+  room fill as a 3 px translucent pink polyline, broken at jumps > 30 tiles (teleport, waypoint, portal).
 
 ## User feedback, first live session (Act 1, 2026-11-14)
 - Minimap "already helps drastically"; ~1% CPU, 7 MB RSS.

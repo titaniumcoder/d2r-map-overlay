@@ -136,6 +136,7 @@ mod tests {
             difficulty: None,
             terrorized: false,
             cows: None,
+            trail: vec![],
             warnings: vec![],
         }
     }

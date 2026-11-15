@@ -5,7 +5,9 @@
 
 use ab_glyph::FontVec;
 use anyhow::{Context, Result};
-use tiny_skia::{FillRule, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, StrokeDash, Transform};
+use tiny_skia::{
+    FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, StrokeDash, Transform,
+};
 
 use crate::game::{Bounds, Monster, Preset, PresetKind, Room, RoomRect, Snapshot};
 use crate::items::{CharmSize, DropKind, GemColour};
@@ -355,6 +357,12 @@ const FALLBACK_SPAN: u32 = 50;
 type Rgba = [u8; 4];
 const ROOM: Rgba = [70, 74, 84, 120];
 const ROOM_LOADED: Rgba = [125, 130, 142, 160];
+/// The Moo Moo Farm trail ([`Snapshot::trail`]): a faint pink, apart from the grey room fill.
+const TRAIL: Rgba = [255, 200, 225, 90];
+const TRAIL_WIDTH: f32 = 3.0;
+/// Consecutive trail points farther apart than this (tiles) were a teleport, waypoint or
+/// portal: the line breaks there instead of drawing a long jump.
+const TRAIL_BREAK: f64 = 30.0;
 const MARKER_OUTLINE: Rgba = [0, 0, 0, 220];
 /// Landmark star: gold fill, a thick dark outline and a gold halo ring around it.
 const LANDMARK_GOLD: Rgba = [255, 200, 30, 255];
@@ -932,6 +940,7 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
     let keep = keep_lines(snap, width, font);
     let view = View::fit(level_bounds(snap), width, map_height(height, font, keep.len()));
     fill_rooms(&mut pm, view, snap);
+    draw_trail(&mut pm, view, &snap.trail);
 
     let ring = Stroke {
         width: 1.5,
@@ -1028,6 +1037,32 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         info::draw_keep(&mut pm, font, &keep);
     }
     Ok(pm)
+}
+
+/// Strokes `trail` (world tiles) as one translucent polyline with round joins, broken where two
+/// points lie more than [`TRAIL_BREAK`] apart. One path, so overlapping segments don't stack
+/// their alpha.
+fn draw_trail(pm: &mut Pixmap, view: View, trail: &[(u16, u16)]) {
+    let mut pb = PathBuilder::new();
+    let mut prev: Option<(f64, f64)> = None;
+    for &(x, y) in trail {
+        let (x, y) = (f64::from(x), f64::from(y));
+        let (sx, sy) = view.to_screen(x, y);
+        match prev {
+            Some((px, py)) if (x - px).hypot(y - py) <= TRAIL_BREAK => pb.line_to(sx, sy),
+            _ => pb.move_to(sx, sy),
+        }
+        prev = Some((x, y));
+    }
+    // `None` for an empty trail or a lone point: nothing to draw.
+    let Some(path) = pb.finish() else { return };
+    let stroke = Stroke {
+        width: TRAIL_WIDTH,
+        line_join: LineJoin::Round,
+        line_cap: LineCap::Round,
+        ..Stroke::default()
+    };
+    pm.stroke_path(&path, &paint(TRAIL), &stroke, Transform::identity(), None);
 }
 
 /// Fills the level's rooms, then the loaded ones on top.
@@ -1493,6 +1528,7 @@ mod tests {
             difficulty: None,
             terrorized: false,
             cows: None,
+            trail: vec![],
             warnings: vec![],
         }
     }
@@ -3135,6 +3171,46 @@ mod tests {
         let (cx, cy) = centre(at);
         let inside = rgba(&pm, cx, cy)?;
         assert!(inside[1] < 200, "hollow: the room shows through, {inside:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn the_trail_draws_under_the_markers_and_breaks_on_jumps() -> Result<()> {
+        let mut snap = empty_snapshot(10, 10);
+        snap.level.id = crate::cows::COW_LEVEL;
+        snap.level.rooms = vec![room(0, 0, true), room(60, 0, true)];
+        let (w, h) = (300, 200);
+        let view = View::fit(level_bounds(&snap), w, map_height(h, None, 0));
+        let at = |pm: &Pixmap, (x, y): (f64, f64)| -> Result<tiny_skia::ColorU8> {
+            let (sx, sy) = view.to_screen(x, y);
+            #[allow(
+                clippy::cast_sign_loss,
+                clippy::cast_possible_truncation,
+                reason = "test points are inside the canvas"
+            )]
+            let px = |v: f32| v.round() as u32;
+            Ok(pm.pixel(px(sx), px(sy)).context("pixel")?.demultiply())
+        };
+        let plain = render_with(&snap, w, h, None)?;
+        // A walked line, then a 50-tile jump (a teleport) and on.
+        snap.trail = vec![(20, 40), (30, 40), (40, 40), (90, 40), (100, 40)];
+        let trailed = render_with(&snap, w, h, None)?;
+        let (before, after) = (at(&plain, (25.0, 40.0))?, at(&trailed, (25.0, 40.0))?);
+        assert_ne!(before, after, "the trail is drawn over the room fill");
+        assert!(
+            after.red() > before.red(),
+            "pinker than the fill: {after:?} vs {before:?}"
+        );
+        assert_eq!(
+            at(&plain, (65.0, 40.0))?,
+            at(&trailed, (65.0, 40.0))?,
+            "no line across the jump"
+        );
+        assert_ne!(
+            at(&plain, (95.0, 40.0))?,
+            at(&trailed, (95.0, 40.0))?,
+            "drawn after it"
+        );
         Ok(())
     }
 }
