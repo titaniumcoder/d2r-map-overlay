@@ -2422,11 +2422,11 @@ mod tests {
         snap.sell = vec![spare("Gravenspine", Place::Inventory)];
         snap.give_away = vec![spare("Magefist", Place::Shared)];
         let (w, h) = (400, 400);
-        assert_eq!(keep_lines(&snap, w, Some(font)).len(), 5, "3 lines, 2 gaps");
+        assert_eq!(keep_lines(&snap, w, Some(font)).len(), 6, "3 lines, 3 gaps");
         let lh = info::line_height(font);
         assert_eq!(
-            map_height(h, Some(font), 5),
-            map_height(h, Some(font), 0) - 5 * lh,
+            map_height(h, Some(font), 6),
+            map_height(h, Some(font), 0) - 6 * lh,
             "the map shrinks by every row"
         );
         let pm = render_with(&snap, w, h, Some(font))?;

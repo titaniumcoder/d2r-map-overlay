@@ -171,17 +171,17 @@ pub fn spare_lines(font: &FontVec, prefix: &str, spares: &[Spare], max_width: f3
 }
 
 /// The text rows below the info line, top to bottom, each with its colour: the keep lines
-/// (green), the sell lines (grey), the give-away lines (yellow), with an empty gap row between
-/// two non-empty blocks.
+/// (green), the sell lines (grey), the give-away lines (yellow), with an empty gap row before
+/// each non-empty block (so also between the info line and the first block).
 pub fn stack(keep: Vec<String>, sell: Vec<String>, give: Vec<String>) -> Vec<(String, [u8; 4])> {
     let mut rows = Vec::new();
     for (lines, colour) in [(keep, KEEP_TEXT), (sell, SELL_TEXT), (give, GIVE_TEXT)] {
         if lines.is_empty() {
             continue;
         }
-        if !rows.is_empty() {
-            rows.push((String::new(), colour));
-        }
+        // A gap row before every block, also the first: it keeps the lists apart from the info
+        // line above them (user request, 2026-11-15).
+        rows.push((String::new(), colour));
         rows.extend(lines.into_iter().map(|l| (l, colour)));
     }
     rows
@@ -684,6 +684,7 @@ mod tests {
             vec!["Give away: g".into(), "h".into()],
         );
         let want: Vec<(String, [u8; 4])> = vec![
+            (String::new(), KEEP_TEXT),
             ("Keep: k".into(), KEEP_TEXT),
             (String::new(), SELL_TEXT),
             ("Sell: s".into(), SELL_TEXT),
@@ -694,8 +695,8 @@ mod tests {
         assert_eq!(rows, want);
         assert_eq!(
             stack(vec![], vec![], l("Give away: g")),
-            vec![("Give away: g".to_owned(), GIVE_TEXT)],
-            "no gap without a block above"
+            vec![(String::new(), GIVE_TEXT), ("Give away: g".to_owned(), GIVE_TEXT)],
+            "a gap below the info line even for the only block"
         );
         assert_eq!(stack(vec![], vec![], vec![]), vec![]);
     }
