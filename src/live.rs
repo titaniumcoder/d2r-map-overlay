@@ -155,7 +155,8 @@ fn follow_game(
     let mut items_table = ItemsTable::NotSearched;
     loop {
         let start = Instant::now();
-        match game::snapshot(mem, table, items_table.base(), player) {
+        // The previous player id (or game.json's on a restart) keeps the choice sticky.
+        match game::snapshot(mem, table, items_table.base(), player, session.player_id()) {
             Ok(mut snap) => {
                 // Codes are needed for ground drops and for the inventory keep list.
                 if snap.ground_items > 0 || snap.inventory_items > 0 {
@@ -173,7 +174,7 @@ fn follow_game(
                 }
                 if update.new_game {
                     eprintln!(
-                        "new game (player id changed): remembered markers and kills cleared; \
+                        "new game (previous player no longer present): remembered markers and kills cleared; \
                          player {:?} chosen by {} among {} candidates",
                         snap.player.name,
                         snap.player_chosen_by.label(),

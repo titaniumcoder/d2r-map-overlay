@@ -1,10 +1,11 @@
 //! State accumulated over snapshots of one game: what was seen in each level, superuniques
 //! killed, seals operated and where the player arrived in each level.
 //!
-//! **Memory**: every preset (raw, before filtering), shrine and well seen is remembered per
-//! level for the game and merged back into later snapshots of that level, so the map keeps what
+//! **Memory**: every preset (raw, before filtering), shrine, well, room link and border link
+//! seen is remembered per level for the game and merged back into later snapshots of that level, so the map keeps what
 //! was explored even after D2R unloads it. The filters below then run over live and remembered
-//! presets alike. A shrine keeps its latest `used`. Monsters, items and the player are live only;
+//! presets alike. A shrine keeps its latest `used`; a border link's `entry` is recomputed per
+//! snapshot. Monsters, items and the player are live only;
 //! a level seen terrorized (Terror Zone) stays so for the current visit (zones rotate hourly).
 //! [`GameState`] is that per-game part; `game_file` keeps it on disk across overlay restarts.
 //!
@@ -20,7 +21,10 @@
 //! Pure: no I/O. [`Session::apply`] folds each snapshot in and rewrites it for drawing, so the
 //! renderer stays a function of the snapshot alone.
 //!
-//! **Game change**: the per-game part is cleared when the player's unit id changes. Online the
+//! **Game change**: the per-game part is cleared when the player's unit id changes. The choice
+//! is sticky ([`Session::player_id`] feeds [`ChosenBy::Previous`](crate::game::ChosenBy::Previous)),
+//! so in a group game the id only changes once the chosen player is no longer a candidate (or
+//! `--player` names someone else), not when the item owner vote flips. Online the
 //! server hands out a random-looking 32-bit player unit id per game, so a repeat is practically
 //! impossible; offline games may reuse small ids, which then carries the old game's state over
 //! (accepted: it only keeps markers hidden or remembered that a fresh look would redraw). The
@@ -40,7 +44,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::game::{Monster, Preset, PresetKind, RoomRect, Shrine, Snapshot, Well};
+use crate::game::{BorderLink, Monster, Preset, PresetKind, RoomLink, RoomRect, Shrine, Snapshot, Well};
 use crate::levels_data::SUPERUNIQUES;
 use crate::offsets::monster_data;
 use crate::render::{is_consumable_quest_object, quest_monster};
@@ -107,6 +111,13 @@ pub struct GameState {
     /// Every well seen per level id.
     #[serde(default)]
     wells: HashMap<u32, Vec<Well>>,
+    /// Every room-tile link seen per level id. Kept with the border links: a level with a
+    /// room link draws tile exits, not a border arrow ([`crate::render::border_exits`]).
+    #[serde(default)]
+    room_links: HashMap<u32, Vec<RoomLink>>,
+    /// Every walk-through border link seen per level id (`entry` false; it is set per snapshot).
+    #[serde(default)]
+    border_links: HashMap<u32, Vec<BorderLink>>,
     /// Levels seen terrorized in this game ([`Snapshot::terrorized`]). Kept so the info line
     /// doesn't drop back to the table monster levels once the desecrated monsters near the
     /// player are dead or unloaded.
@@ -122,9 +133,10 @@ impl GameState {
         }
     }
 
-    /// Remembers the live presets, shrines and wells of `snap`'s level and adds the remembered
-    /// ones it lacks (same kind, txt and position for presets; same position for shrines and
-    /// wells). Returns whether anything was newly remembered or a shrine changed.
+    /// Remembers the live presets, shrines, wells and links of `snap`'s level and adds the
+    /// remembered ones it lacks (same kind, txt and position for presets; same position for
+    /// shrines and wells; equal links). Returns whether anything was newly remembered or a
+    /// shrine changed.
     fn remember(&mut self, snap: &mut Snapshot) -> bool {
         let level = snap.level.id;
         let mut changed = false;
@@ -181,8 +193,30 @@ impl GameState {
             .cloned()
             .collect();
         snap.wells.extend(missing);
+
+        changed |= merge(self.room_links.entry(level).or_default(), &mut snap.room_links);
+        // Live links carry `entry` false here (it is set after `remember`), so equality is
+        // the room pair.
+        changed |= merge(
+            self.border_links.entry(level).or_default(),
+            &mut snap.border_links,
+        );
         changed
     }
+}
+
+/// Adds the `live` items `seen` lacks to `seen` and the `seen` items `live` lacks to `live`.
+/// Returns whether `seen` grew. Linear: a level has a few hundred links at most.
+fn merge<T: Clone + PartialEq>(seen: &mut Vec<T>, live: &mut Vec<T>) -> bool {
+    let before = seen.len();
+    for l in live.iter() {
+        if !seen.contains(l) {
+            seen.push(l.clone());
+        }
+    }
+    let missing: Vec<T> = seen.iter().filter(|s| !live.contains(s)).cloned().collect();
+    live.extend(missing);
+    seen.len() > before
 }
 
 #[derive(Debug, Default)]
@@ -225,6 +259,17 @@ impl Session {
     /// Offers a saved game state; the first snapshot adopts it if its player id matches.
     pub fn restore(&mut self, state: GameState) {
         self.restored = Some(state);
+    }
+
+    /// Unit id of the player of the current game (or of the restored state before the first
+    /// snapshot): pass it to [`crate::game::snapshot`] so the choice stays on that player.
+    #[must_use]
+    pub fn player_id(&self) -> Option<u32> {
+        if self.started {
+            Some(self.state.player_id)
+        } else {
+            self.restored.as_ref().map(|s| s.player_id)
+        }
     }
 
     /// The game state if it changed since the last call (which then clears the change).
@@ -937,6 +982,62 @@ mod tests {
         let mut later = cloister(120, 70);
         s.apply(&mut later);
         assert_eq!(entry_levels(&later), vec![26]);
+    }
+
+    #[test]
+    fn border_and_room_links_are_remembered_for_the_game() {
+        let mut s = Session::default();
+        s.apply(&mut at(snap(1, 0xa000, 26), 120, 185, &[]));
+        let mut arrive = cloister(120, 178);
+        arrive.room_links = vec![RoomLink {
+            from_room: crate::game::RoomPos { x: 100, y: 60 },
+            to_level_id: 30,
+            to_room: crate::game::RoomPos { x: 0, y: 0 },
+        }];
+        let seen = arrive.border_links.clone();
+        s.apply(&mut arrive);
+        // Walked on: the game unloaded the border rooms, the live read has no links.
+        for _ in 0..3 {
+            let mut away = at(snap(1, 0xa000, 27), 120, 70, &[]);
+            s.apply(&mut away);
+            let pairs: Vec<(u32, RoomRect)> = away
+                .border_links
+                .iter()
+                .map(|l| (l.to_level_id, l.from_room))
+                .collect();
+            let want: Vec<(u32, RoomRect)> = seen.iter().map(|l| (l.to_level_id, l.from_room)).collect();
+            assert_eq!(pairs, want, "remembered once, not duplicated");
+            assert_eq!(
+                entry_levels(&away),
+                vec![26],
+                "entry still from the current logic"
+            );
+            assert_eq!(away.room_links.len(), 1);
+        }
+        // Seen live again alongside the remembered ones: still no duplicates.
+        let mut again = cloister(120, 70);
+        s.apply(&mut again);
+        assert_eq!(again.border_links.len(), 2);
+
+        let mut next_game = at(snap(2, 0xa000, 27), 120, 70, &[]);
+        assert!(s.apply(&mut next_game).new_game);
+        assert_eq!(next_game.border_links, vec![], "a new game forgets the links");
+        assert_eq!(next_game.room_links, vec![]);
+    }
+
+    #[test]
+    fn the_chosen_player_id_is_kept_and_a_vanished_one_is_a_new_game() {
+        let mut s = Session::default();
+        assert_eq!(s.player_id(), None);
+        s.apply(&mut snap(1, 0xa000, 2));
+        assert_eq!(s.player_id(), Some(1), "fed back into the next choice");
+        // The previous player is gone, so the choice moved on: that's a new game.
+        assert!(s.apply(&mut snap(2, 0xa000, 2)).new_game);
+        assert_eq!(s.player_id(), Some(2));
+        // An overlay restart: the saved player id seeds the choice before the first snapshot.
+        let mut s = Session::default();
+        s.restore(saved_state());
+        assert_eq!(s.player_id(), Some(1));
     }
 
     #[test]

@@ -168,7 +168,7 @@ fn dump(player: Option<&str>, config: &config::Config) -> Result<()> {
     let img = image::find_image(&maps, &mem).context("locating D2R.exe image")?;
     let table = img.unit_table(&mem, offset_cache::default_path().as_deref(), true)?;
     let items_table = items::locate(pid, &mem);
-    let mut snap = game::snapshot(&mem, table.addr, items_table, player)?;
+    let mut snap = game::snapshot(&mem, table.addr, items_table, player, None)?;
     valuables::apply(&mut snap.drops, &config.valuables);
     println!("{}", serde_json::to_string_pretty(&snap)?);
     Ok(())

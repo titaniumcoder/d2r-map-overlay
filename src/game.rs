@@ -184,6 +184,9 @@ pub struct Candidate {
 pub enum ChosenBy {
     /// `--player NAME`.
     Name,
+    /// The player chosen on the previous tick (or saved in `game.json`) is still a candidate:
+    /// kept, so a group game's owner vote can't flip the choice and reset the session.
+    Previous,
     /// The majority owner id of the stash items.
     StashOwner,
     /// No stash items (or none of a candidate): the majority owner id of the inventory items.
@@ -208,6 +211,7 @@ impl ChosenBy {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Name => "name",
+            Self::Previous => "previous",
             Self::StashOwner => "stash owner",
             Self::InventoryOwner => "inventory owner",
             Self::FirstCandidate => "first candidate",
@@ -262,10 +266,12 @@ struct ItemScan {
 }
 
 /// The candidate to use as the player and the rule that picked it; `None` if no candidate fits
-/// (none named `player_name`, or no candidates at all).
+/// (none named `player_name`, or no candidates at all). Precedence: `player_name`, then the
+/// `previous` unit id while it is still a candidate, then the owner votes, then the first.
 fn choose_player<'a>(
     candidates: &'a [Candidate],
     player_name: Option<&str>,
+    previous: Option<u32>,
     scan: &ItemScan,
 ) -> Option<(&'a Candidate, ChosenBy)> {
     if let Some(name) = player_name {
@@ -273,6 +279,9 @@ fn choose_player<'a>(
             .iter()
             .find(|c| c.name == name)
             .map(|c| (c, ChosenBy::Name));
+    }
+    if let Some(c) = previous.and_then(|id| candidates.iter().find(|c| c.id == id)) {
+        return Some((c, ChosenBy::Previous));
     }
     let by_owner = |votes: &OwnerVotes, by: ChosenBy| {
         let owner = votes.winner()?;
@@ -355,7 +364,7 @@ pub struct RoomPos {
     pub y: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RoomLink {
     pub from_room: RoomPos,
     pub to_level_id: u32,
@@ -484,6 +493,7 @@ pub struct ItemDrop {
 
 /// Reads one snapshot. `unit_table` is the hash table address from [`crate::image::Image::unit_table`];
 /// `items_table` is the item-code table from [`items::find_table`] (`None`: unique and set drops only).
+/// `previous` is the unit id of the player chosen before (see [`ChosenBy::Previous`]).
 ///
 /// # Errors
 /// Fails if no live player unit is found (or none named `player_name`), or the player's level
@@ -493,6 +503,7 @@ pub fn snapshot(
     unit_table: u64,
     items_table: Option<u64>,
     player_name: Option<&str>,
+    previous: Option<u32>,
 ) -> Result<Snapshot> {
     let mut r = Reader {
         mem,
@@ -510,7 +521,7 @@ pub fn snapshot(
     }
     // Items first: their owner ids tell which candidate is the local player.
     let scan = r.items(unit_table, items_table);
-    let Some((chosen, chosen_by)) = choose_player(&candidates, player_name, &scan) else {
+    let Some((chosen, chosen_by)) = choose_player(&candidates, player_name, previous, &scan) else {
         let names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
         match player_name {
             Some(name) => bail!("no live player named {name:?} (candidates: {names:?})"),
@@ -1526,7 +1537,7 @@ mod tests {
 
     #[test]
     fn player_selection() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None, None)?;
+        let s = snapshot(&world()?, TABLE, None, None, None)?;
         assert_eq!(
             s.player.addr,
             Addr(P_ALICE),
@@ -1612,7 +1623,7 @@ mod tests {
             (STASH, ALICE_ID),
             (STASH, BOB_ID),
         ])?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_BOB), ChosenBy::StashOwner)
@@ -1628,14 +1639,14 @@ mod tests {
     #[test]
     fn inventory_owner_without_stash_items() -> Result<()> {
         let m = world_with_owned(&[(INVENTORY, BOB_ID), (INVENTORY, BOB_ID)])?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_BOB), ChosenBy::InventoryOwner)
         );
         // A stash owner that is no candidate falls through to the inventory vote.
         let m = world_with_owned(&[(STASH, 0x999), (INVENTORY, BOB_ID)])?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_BOB), ChosenBy::InventoryOwner)
@@ -1646,11 +1657,46 @@ mod tests {
     #[test]
     fn player_name_beats_the_owner_vote() -> Result<()> {
         let m = world_with_owned(&[(STASH, BOB_ID), (INVENTORY, BOB_ID)])?;
-        let s = snapshot(&m, TABLE, None, Some("Alice"))?;
+        let s = snapshot(&m, TABLE, None, Some("Alice"), None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_ALICE), ChosenBy::Name)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn previous_player_is_kept_while_a_candidate() -> Result<()> {
+        // Alice was chosen first; the owner votes now alternate (here: all Bob's). Alice stays.
+        let m = world_with_owned(&[(STASH, BOB_ID), (INVENTORY, BOB_ID)])?;
+        let s = snapshot(&m, TABLE, None, None, Some(ALICE_ID))?;
+        assert_eq!(
+            (s.player.addr, s.player_chosen_by),
+            (Addr(P_ALICE), ChosenBy::Previous)
+        );
+        // `--player` still wins over the previous choice.
+        let s = snapshot(&m, TABLE, None, Some("Bob"), Some(ALICE_ID))?;
+        assert_eq!((s.player.addr, s.player_chosen_by), (Addr(P_BOB), ChosenBy::Name));
+        // The previous player left (no such candidate): the vote decides again.
+        let s = snapshot(&m, TABLE, None, None, Some(0x999))?;
+        assert_eq!(
+            (s.player.addr, s.player_chosen_by),
+            (Addr(P_BOB), ChosenBy::StashOwner)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn alternating_owner_votes_keep_the_first_choice_and_the_game() -> Result<()> {
+        // Group game: the owner vote flips between Bob and Alice from tick to tick.
+        let bob = world_with_owned(&[(STASH, BOB_ID)])?;
+        let alice = world_with_owned(&[(STASH, ALICE_ID)])?;
+        let mut session = crate::session::Session::default();
+        for (i, m) in [&bob, &alice, &bob, &alice].into_iter().enumerate() {
+            let mut s = snapshot(m, TABLE, None, None, session.player_id())?;
+            assert_eq!(s.player.addr, Addr(P_BOB), "tick {i}");
+            assert!(!session.apply(&mut s).new_game, "tick {i}");
+        }
         Ok(())
     }
 
@@ -1664,7 +1710,7 @@ mod tests {
             (STASH, item_data::NO_OWNER),
             (STASH, 0),
         ])?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_ALICE), ChosenBy::FirstCandidate)
@@ -1693,18 +1739,18 @@ mod tests {
         let mut m = world()?;
         // R2 now claims to belong to another level: the walk keeps R0, R1 and stops with a warning.
         room(&mut m, R2, (10, 26, 4, 4), 0, 0, L_OTHER, 0, 0)?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         assert_eq!(s.level.rooms.len(), 2);
         assert!(s.warnings.iter().any(|w| w.contains("room walk stopped")));
         // A foreign first room means the level offsets are wrong: that's an error, not an empty map.
         level_struct(&mut m, LEVEL, 21, R_OTHER)?;
-        assert!(snapshot(&m, TABLE, None, None).is_err());
+        assert!(snapshot(&m, TABLE, None, None, None).is_err());
         Ok(())
     }
 
     #[test]
     fn level_rooms_in_world_tiles() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None, None)?;
+        let s = snapshot(&world()?, TABLE, None, None, None)?;
         assert_eq!(s.level.id, 21);
         assert_eq!(
             s.level.rooms,
@@ -1783,7 +1829,7 @@ mod tests {
         room(&mut m, R_OTHER2, (48, 60, 8, 8), 0, 0, L_OTHER, 0, 0)?;
         near_array(&mut m, NEAR0, &[R_OTHER, R1, 0, R_OTHER2, 0]);
         set_near(&mut m, R0, NEAR0, 5)?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         let from = rect(50, 100, 40, 30);
         let link = |to_room| BorderLink {
             from_room: from,
@@ -1808,12 +1854,12 @@ mod tests {
         near_array(&mut m, NEAR1, &[R_OTHER]);
         set_near(&mut m, R0, NEAR0, 2)?;
         set_near(&mut m, R1, NEAR1, 1)?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         let from: Vec<RoomRect> = s.border_links.iter().map(|l| l.from_room).collect();
         assert_eq!(from, vec![rect(50, 100, 40, 30), rect(90, 100, 40, 40)]);
         // Empty border links stay out of the JSON (fixtures unchanged); filled ones round-trip.
         assert!(
-            serde_json::to_value(snapshot(&world()?, TABLE, None, None)?)?
+            serde_json::to_value(snapshot(&world()?, TABLE, None, None, None)?)?
                 .get("border_links")
                 .is_none()
         );
@@ -1833,7 +1879,7 @@ mod tests {
         }
         near_array(&mut m, NEAR0, &rooms);
         set_near(&mut m, R0, NEAR0, 100_000)?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         assert_eq!(s.border_links.len(), 1, "the 64th entry is still read");
         assert!(
             s.warnings.iter().any(|w| w.contains("100000 near rooms")),
@@ -1850,7 +1896,7 @@ mod tests {
         set_near(&mut m, R0, UNMAPPED, 3)?;
         near_array(&mut m, NEAR1, &[UNMAPPED]);
         set_near(&mut m, R1, NEAR1, 1)?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         assert_eq!(s.border_links, vec![]);
         assert_eq!(s.level.rooms.len(), 3, "the rooms are still read");
         assert!(
@@ -1874,7 +1920,7 @@ mod tests {
         room_with_preset(&mut m, R0, (10, 20, 8, 6), R1, ROOM1_0, LEVEL, PR_OBJ, RT0, LP0)?;
         room_with_preset(&mut m, R1, (18, 20, 8, 8), R2, 0, LEVEL, PR_MON, 0, UNMAPPED)?;
         put(&mut m, LP0, 0x10, &[(level_preset::ID, &525u32.to_le_bytes())])?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         let ids: Vec<Option<u32>> = s.level.rooms.iter().map(|r| r.preset).collect();
         assert_eq!(ids, vec![Some(525), None, None]);
         // Optional data: the unmapped record adds no warning (only the bad room-tile link does).
@@ -1888,7 +1934,7 @@ mod tests {
 
     #[test]
     fn presets_and_links() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None, None)?;
+        let s = snapshot(&world()?, TABLE, None, None, None)?;
         assert_eq!(
             s.presets,
             vec![
@@ -1939,7 +1985,7 @@ mod tests {
 
     #[test]
     fn monsters_and_items() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None, None)?;
+        let s = snapshot(&world()?, TABLE, None, None, None)?;
         let monster = |addr, txt, x, y, flags, name_seed| Monster {
             addr: Addr(addr),
             id: u32::try_from(addr >> 12).unwrap_or_default(),
@@ -2035,7 +2081,7 @@ mod tests {
     #[test]
     fn monster_desecrated_state() -> Result<()> {
         let m = world_with_states([Some(&[189]), Some(&[56, 188, 190]), None])?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         let flags: Vec<_> = s.monsters.iter().map(|m| (m.addr.0, m.desecrated)).collect();
         assert_eq!(flags, vec![(M0, true), (M1, false), (M2, false)]);
         assert!(
@@ -2046,7 +2092,7 @@ mod tests {
         assert!(!s.terrorized, "one desecrated monster is not enough");
 
         let m = world_with_states([Some(&[189]), Some(&[3, 189]), None])?;
-        assert!(snapshot(&m, TABLE, None, None)?.terrorized);
+        assert!(snapshot(&m, TABLE, None, None, None)?.terrorized);
         Ok(())
     }
 
@@ -2266,7 +2312,7 @@ mod tests {
         rich_item(&mut m, I4, (30, 3, 0, 0), &[(194, 3)], 0)?;
         base_items_table(&mut m)?;
 
-        let mut s = snapshot(&m, TABLE, Some(ITEMS), None)?;
+        let mut s = snapshot(&m, TABLE, Some(ITEMS), None, None)?;
         assert!(
             s.warnings.iter().all(|w| !w.starts_with("item")),
             "{:?}",
@@ -2350,7 +2396,7 @@ mod tests {
         stored_item(&mut m, I5, (30, 2, id, 0), (stored, 0), &[(194, 3)], 0)?;
         base_items_table(&mut m)?;
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), None, None)?;
         assert_eq!((s.ground_items, s.drops.len()), (0, 0));
         assert_eq!(s.inventory_items, 3, "page-0 stored items only");
         let keep: Vec<_> = s
@@ -2391,7 +2437,7 @@ mod tests {
     #[test]
     fn ground_drops() -> Result<()> {
         let m = world_with_items()?;
-        let s = snapshot(&m, TABLE, Some(ITEMS), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), None, None)?;
         assert_eq!(
             s.ground_items, 5,
             "I0 (mode 1) and I5 (mode 0) are not on the ground"
@@ -2418,7 +2464,7 @@ mod tests {
         );
 
         // Without the items table only quality tells: unique and set, no codes.
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         assert_eq!(s.ground_items, 5);
         assert_eq!(
             s.drops,
@@ -2433,9 +2479,9 @@ mod tests {
     #[test]
     fn player_by_name() -> Result<()> {
         let mem = world()?;
-        let s = snapshot(&mem, TABLE, None, Some("Bob"))?;
+        let s = snapshot(&mem, TABLE, None, Some("Bob"), None)?;
         assert_eq!((s.player.addr, s.player.class, s.player.x), (Addr(P_BOB), 5, 95));
-        let err = snapshot(&mem, TABLE, None, Some("Ghost"))
+        let err = snapshot(&mem, TABLE, None, Some("Ghost"), None)
             .err()
             .context("stale player must not match")?;
         assert!(err.to_string().contains("\"Alice\", \"Bob\""), "{err}");
@@ -2447,7 +2493,7 @@ mod tests {
         let mut mem = world()?;
         table(&mut mem, &[(unit_table::PLAYER, 3, P_STALE)])?;
         unit(&mut mem, P_STALE, 0, 1, PD_STALE, 0, 0, 0)?;
-        let err = snapshot(&mem, TABLE, None, None)
+        let err = snapshot(&mem, TABLE, None, None, None)
             .err()
             .context("expected error")?;
         assert!(err.to_string().contains("not in a game?"), "{err}");
@@ -2462,7 +2508,7 @@ mod tests {
         table(&mut mem, &slots)?;
         unit(&mut mem, M2, 1, 42, MD0, ACT, PATH_M2, M2)?;
         unit_path(&mut mem, PATH_M2, 70, 120, ROOM1_0)?;
-        let s = snapshot(&mem, TABLE, None, None)?;
+        let s = snapshot(&mem, TABLE, None, None, None)?;
         assert_eq!(
             s.monsters.iter().map(|m| m.txt).collect::<Vec<_>>(),
             vec![40, 41, 42]
@@ -2475,7 +2521,7 @@ mod tests {
     fn unreadable_unit_is_a_warning() -> Result<()> {
         let mut mem = world()?;
         unit(&mut mem, M1, 1, 41, MD1, ACT, PATH_M1, UNMAPPED)?;
-        let s = snapshot(&mem, TABLE, None, None)?;
+        let s = snapshot(&mem, TABLE, None, None, None)?;
         assert_eq!(s.monsters.len(), 2);
         assert!(
             s.warnings
@@ -2554,7 +2600,7 @@ mod tests {
                 (unit::PATH, &UNMAPPED.to_le_bytes()),
             ],
         )?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         let shrine = |txt, code, used, x, y| Shrine {
             txt,
             code,
@@ -2587,7 +2633,7 @@ mod tests {
                 .all(|w| w.starts_with(&format!("object {O5:#x}")))
         );
         // Older dumps without the fields still load; empty lists stay out of the JSON.
-        let v = serde_json::to_value(snapshot(&world()?, TABLE, None, None)?)?;
+        let v = serde_json::to_value(snapshot(&world()?, TABLE, None, None, None)?)?;
         assert!(v.get("shrines").is_none() && v.get("wells").is_none());
         let v = serde_json::to_value(&s)?;
         assert_eq!(
@@ -2609,7 +2655,7 @@ mod tests {
         object(&mut m, O1, (393, 0, 0), (7820, 5310), O2)?;
         object(&mut m, O2, (396, 1, 0), (7700, 5290), O3)?;
         object(&mut m, O3, (236, 2, 2), (7710, 5280), 0)?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         let op = |txt, x, y| OperatedObject { txt, x, y };
         assert_eq!(
             s.operated_objects,
@@ -2623,7 +2669,7 @@ mod tests {
             s.warnings
         );
         // Empty stays out of the JSON; a listed one round-trips.
-        let v = serde_json::to_value(snapshot(&world()?, TABLE, None, None)?)?;
+        let v = serde_json::to_value(snapshot(&world()?, TABLE, None, None, None)?)?;
         assert!(v.get("operated_objects").is_none());
         let v = serde_json::to_value(&s)?;
         assert_eq!(
@@ -2679,7 +2725,7 @@ mod tests {
         preset_unit(&mut m, PR_DUP0, preset::OBJECT, 119, 3, 4, PR_DUP1)?;
         preset_unit(&mut m, PR_DUP1, preset::OBJECT, 119, 3, 4, PR_DUP2)?;
         preset_unit(&mut m, PR_DUP2, preset::MONSTER, 119, 3, 4, 0)?;
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         let got: Vec<(PresetKind, u32, u32, u32)> =
             s.presets.iter().map(|p| (p.kind, p.txt, p.x, p.y)).collect();
         assert_eq!(
@@ -2711,7 +2757,7 @@ mod tests {
         const ACT_MISC: u64 = 0x23_0000;
         let mut m = world()?;
         // The act isn't mapped in the base world: no difficulty, no warning, not in the JSON.
-        let s = snapshot(&m, TABLE, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
         assert_eq!(s.difficulty, None);
         assert_eq!(serde_json::to_value(&s)?.pointer("/difficulty"), None);
         put(&mut m, ACT, 0x80, &[(act::MISC, &ACT_MISC.to_le_bytes())])?;
@@ -2722,7 +2768,7 @@ mod tests {
                 0x840,
                 &[(act_misc::DIFFICULTY, &raw.to_le_bytes())],
             )?;
-            let s = snapshot(&m, TABLE, None, None)?;
+            let s = snapshot(&m, TABLE, None, None, None)?;
             assert_eq!(s.difficulty, want, "raw {raw}");
         }
         Ok(())
@@ -2740,13 +2786,13 @@ mod tests {
 
     #[test]
     fn json_shape() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None, None)?;
+        let s = snapshot(&world()?, TABLE, None, None, None)?;
         let v = serde_json::to_value(&s)?;
         let at = |p: &str| v.pointer(p).cloned().unwrap_or_default();
         assert_eq!(at("/player/addr"), "0x201000");
         assert_eq!(at("/presets/0/kind"), "object");
         assert_eq!(at("/presets/2/kind"), 9);
-        let s = snapshot(&world_with_items()?, TABLE, Some(ITEMS), None)?;
+        let s = snapshot(&world_with_items()?, TABLE, Some(ITEMS), None, None)?;
         let v = serde_json::to_value(&s)?;
         assert_eq!(
             v.pointer("/drops/0"),
