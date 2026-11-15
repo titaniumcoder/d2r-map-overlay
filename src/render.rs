@@ -50,7 +50,8 @@ pub struct LandmarkRule {
 ///   pieces "Cave Next W/E/S/N" (87–90, exit to the next outdoor area) and "Cave Down W/E/S/N"
 ///   (91–94, stairs to level 2); Underground Passage 1 had one 90 and one 91 piece (2026-11-15).
 ///   Confirmed: the 90 piece holds the exit to Dark Wood (room link to level 5, user stood on it).
-/// - Dark Wood (5): lvlprest 161 "Act 1 - Inifus" (funktree.ds1), the Tree of Inifuss.
+/// - Dark Wood (5): lvlprest 161 "Act 1 - Inifus" (funktree.ds1), the Tree of Inifuss (confirmed in
+///   game 2026-11-15).
 /// - Black Marsh (6): lvlprest 163 "Act 1 - Tower 1" (Tower1.ds1), the Forgotten Tower entrance.
 pub const LANDMARKS: &[LandmarkRule] = &[
     LandmarkRule {
@@ -78,7 +79,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 5..=5,
         preset_ids: 161..=161,
         label: "tree of inifuss",
-        confirmed: false,
+        confirmed: true,
         exit: false,
     },
     LandmarkRule {
@@ -1872,7 +1873,6 @@ mod tests {
             vec![
                 "cave exit to the next area",
                 "cave stairs down",
-                "tree of inifuss",
                 "forgotten tower",
                 "orifice (assumed level+390 pattern)"
             ]
