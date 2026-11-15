@@ -1033,7 +1033,13 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         info::draw(
             &mut pm,
             font,
-            &info::info_line(snap.level.id, snap.difficulty, snap.terrorized, snap.cows),
+            &info::info_line(
+                snap.level.id,
+                snap.difficulty,
+                snap.terrorized,
+                snap.cows,
+                &snap.player.build,
+            ),
             inset,
         );
         info::draw_keep(&mut pm, font, &keep);
@@ -1507,6 +1513,7 @@ mod tests {
                 level_id: 1,
                 act: None,
                 char_level: None,
+                build: vec![],
             },
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,

@@ -20,3 +20,17 @@ twink = ["S", "A"]
 show = ["refilling", "skill", "stamina", "gem", "monster"]
 # Of those, types shown in Normal only (hidden in Nightmare and Hell).
 normal_only = ["stamina"]
+
+[builds]
+# Each character's damage types, primary first, by character name (any case): from Nightmare on,
+# the info line's monster levels turn red in areas bad for the build (35 % or more of the monster
+# types immune to the primary damage, or any type immune to all of them) and green where none is
+# immune to the primary damage. Damage names: physical, fire, cold, lightning, poison, magic.
+# Unknown names are reported and ignored. No entry: no colouring.
+# Vex = ["lightning", "fire", "physical"]
+
+# [builds.class]
+# Fallback by class for characters not listed above: a class name (amazon, sorceress, necromancer,
+# paladin, barbarian, druid, assassin) or its id 0..6.
+# druid = ["physical"]
+# necromancer = ["physical"]

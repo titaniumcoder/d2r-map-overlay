@@ -8,12 +8,16 @@
 //!
 //! In the Moo Moo Farm with a cow counter (`Snapshot::cows`, see [`crate::cows`]) the monster and
 //! boss levels give way to it: `Normal · Moo Moo Farm · kill count: 57 / victims alive: 23`.
+//!
+//! From Nightmare on, the monster-level part (or the cow counter) is coloured by how the
+//! character's build suits the area ([`crate::build::rate`]): red when bad, green when good.
 
 use std::sync::OnceLock;
 
 use ab_glyph::{Font, FontVec, GlyphId, PxScale, ScaleFont, point};
 use tiny_skia::{Mask, Paint, Pixmap, Rect, Transform};
 
+use crate::build::{self, Damage, Rating};
 use crate::cows::{COW_LEVEL, Tally};
 use crate::levels_data::{BOSSES, LEVELS};
 use crate::valuables::{Keep, Spare, Tier};
@@ -60,7 +64,7 @@ const SUGGEST_BONUS: u8 = 2;
 /// Most suggested areas.
 const MAX_SUGGESTIONS: usize = 2;
 /// Town level ids: never suggested.
-const TOWNS: [u32; 5] = [1, 40, 75, 103, 109];
+pub const TOWNS: [u32; 5] = [1, 40, 75, 103, 109];
 /// Level ids from here on are special or uber levels (Pandemonium, Uber Tristram, …): never
 /// suggested.
 const FIRST_SPECIAL_LEVEL: u32 = 133;
@@ -70,6 +74,10 @@ const COMMA: &str = ", ";
 const TERRORIZED: &str = "terrorized";
 const TERROR_TEXT: [u8; 4] = [190, 120, 255, 255];
 const OUTLINE: [u8; 4] = [0, 0, 0, 220];
+/// The monster-level part in an area bad for the build ([`Rating::Bad`]).
+const BAD_TEXT: [u8; 4] = [235, 70, 60, 255];
+/// The monster-level part in an area good for the build ([`Rating::Good`]).
+const GOOD_TEXT: [u8; 4] = [80, 220, 100, 255];
 
 pub const fn difficulty_name(d: u8) -> Option<&'static str> {
     match d {
@@ -92,6 +100,8 @@ pub struct InfoLine {
     pub stats: Vec<String>,
     /// The level is terrorized: the last part is drawn in violet.
     pub terrorized: bool,
+    /// How the area suits the build: colours the stats before a [`TERRORIZED`] part.
+    pub rating: Rating,
 }
 
 impl InfoLine {
@@ -113,8 +123,15 @@ impl InfoLine {
 /// pick, so only the area name is shown. An area with monster level 0 (towns, the Forgotten
 /// Tower's ground floor) has no monster levels. A `terrorized` level shows [`TERRORIZED`] in
 /// place of monster and boss levels (the table values don't apply in a Terror Zone). In the Moo
-/// Moo Farm, `cows` replaces them (a terrorized farm keeps [`TERRORIZED`] last).
-pub fn info_line(level_id: u32, difficulty: Option<u8>, terrorized: bool, cows: Option<Tally>) -> InfoLine {
+/// Moo Farm, `cows` replaces them (a terrorized farm keeps [`TERRORIZED`] last). `build` (primary
+/// damage first) rates the area ([`build::rate`]).
+pub fn info_line(
+    level_id: u32,
+    difficulty: Option<u8>,
+    terrorized: bool,
+    cows: Option<Tally>,
+    build: &[Damage],
+) -> InfoLine {
     let difficulty = difficulty.filter(|&d| difficulty_name(d).is_some());
     let level = LEVELS.iter().find(|&&(id, _, _)| id == level_id);
     let area = level.map_or_else(|| format!("Level {level_id}"), |&(_, name, _)| name.to_owned());
@@ -145,6 +162,7 @@ pub fn info_line(level_id: u32, difficulty: Option<u8>, terrorized: bool, cows: 
         area,
         stats,
         terrorized,
+        rating: build::rate(level_id, difficulty, build),
     }
 }
 
@@ -424,16 +442,44 @@ pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine, inset: u32) {
     let max_width = f32_px(w.saturating_sub(2 * (PAD + 1)));
     let baseline = f32_px(h - PAD - 1) + scaled.descent();
     let text = fit_text(font, line, max_width);
-    // Shortening only cuts the area name, so the fitted text still ends in the violet part.
-    let (head, tail) = match text.strip_suffix(TERRORIZED) {
-        Some(head) if line.terrorized => (head, TERRORIZED),
-        _ => (text.as_str(), ""),
-    };
-    draw_outlined(pm, font, TEXT_PX, TEXT, head, (x0, baseline), false);
-    if !tail.is_empty() {
-        let x = x0 + text_width(font, head);
-        draw_outlined(pm, font, TEXT_PX, TERROR_TEXT, tail, (x, baseline), false);
+    let mut x = x0;
+    for (part, colour) in spans(line, &text) {
+        draw_outlined(pm, font, TEXT_PX, colour, part, (x, baseline), false);
+        x += text_width(font, part);
     }
+}
+
+/// The fitted `text` of `line` ([`fit_text`]) as coloured parts, left to right: white, then the
+/// stats in the rating's colour (red or green; white when neutral), then a terrorized line's
+/// [`TERRORIZED`] in violet. Empty parts are left out.
+fn spans<'a>(line: &InfoLine, text: &'a str) -> Vec<(&'a str, [u8; 4])> {
+    // Shortening only cuts the area name, so the fitted text still ends in the stats.
+    let (rest, terror) = match text.strip_suffix(TERRORIZED) {
+        Some(rest) if line.terrorized => (rest, TERRORIZED),
+        _ => (text, ""),
+    };
+    let rated_parts = line.stats.len().saturating_sub(usize::from(line.terrorized));
+    let rated = line.stats.get(..rated_parts).unwrap_or_default().join(SEPARATOR);
+    // Before a terrorized part, the stats are followed by the separator, which stays white.
+    let (rated_end, sep) = match rest.strip_suffix(SEPARATOR) {
+        Some(end) if !terror.is_empty() => (end, SEPARATOR),
+        _ => (rest, ""),
+    };
+    let colour = match line.rating {
+        Rating::Bad => BAD_TEXT,
+        Rating::Good => GOOD_TEXT,
+        Rating::Neutral => TEXT,
+    };
+    let (head, rated, sep) = match rated_end.strip_suffix(rated.as_str()) {
+        Some(head) if !rated.is_empty() && line.rating != Rating::Neutral => {
+            (head, rated_end.get(head.len()..).unwrap_or_default(), sep)
+        }
+        _ => (rest, "", ""),
+    };
+    [(head, TEXT), (rated, colour), (sep, TEXT), (terror, TERROR_TEXT)]
+        .into_iter()
+        .filter(|(part, _)| !part.is_empty())
+        .collect()
 }
 
 /// Draws `c` at `size` px in `colour` with the info line's dark 1 px outline, its ink box centred
@@ -623,15 +669,15 @@ mod tests {
     #[test]
     fn line_with_elite_offsets() {
         assert_eq!(
-            info_line(88, Some(0), false, None).text(),
+            info_line(88, Some(0), false, None, &[]).text(),
             "Normal · Flayer Dungeon Level 1 · mlvl 22 · champ 24 · unique 25"
         );
         assert_eq!(
-            info_line(88, Some(1), false, None).text(),
+            info_line(88, Some(1), false, None, &[]).text(),
             "Nightmare · Flayer Dungeon Level 1 · mlvl 51 · champ 53 · unique 54"
         );
         assert_eq!(
-            info_line(88, Some(2), false, None).text(),
+            info_line(88, Some(2), false, None, &[]).text(),
             "Hell · Flayer Dungeon Level 1 · mlvl 81 · champ 83 · unique 84"
         );
     }
@@ -639,11 +685,11 @@ mod tests {
     #[test]
     fn line_with_boss() {
         assert_eq!(
-            info_line(102, Some(0), false, None).text(),
+            info_line(102, Some(0), false, None, &[]).text(),
             "Normal · Durance of Hate Level 3 · mlvl 25 · champ 27 · unique 28 · Mephisto 26"
         );
         assert_eq!(
-            info_line(102, Some(2), false, None)
+            info_line(102, Some(2), false, None, &[])
                 .stats
                 .last()
                 .map(String::as_str),
@@ -653,7 +699,7 @@ mod tests {
 
     #[test]
     fn unknown_level_has_no_monster_levels() {
-        let line = info_line(9999, Some(1), false, None);
+        let line = info_line(9999, Some(1), false, None, &[]);
         assert_eq!(line.text(), "Nightmare · Level 9999");
     }
 
@@ -661,13 +707,13 @@ mod tests {
     fn unknown_difficulty_is_left_out() {
         for d in [None, Some(3), Some(200)] {
             assert_eq!(
-                info_line(88, d, false, None).text(),
+                info_line(88, d, false, None, &[]).text(),
                 "Flayer Dungeon Level 1",
                 "{d:?}"
             );
         }
         // Mephisto's level depends on the difficulty too.
-        assert_eq!(info_line(102, None, false, None).stats, Vec::<String>::new());
+        assert_eq!(info_line(102, None, false, None, &[]).stats, Vec::<String>::new());
     }
 
     #[test]
@@ -676,7 +722,7 @@ mod tests {
             eprintln!("skipped: no info-line font on this machine");
             return;
         };
-        let line = info_line(88, Some(0), false, None);
+        let line = info_line(88, Some(0), false, None, &[]);
         let full = line.text();
         assert_eq!(fit_text(font, &line, 10_000.0), full);
         let narrow = text_width(font, &full) - 30.0;
@@ -916,20 +962,20 @@ mod tests {
     #[test]
     fn terrorized_line_drops_table_levels() {
         // Moo Moo Farm (39).
-        let line = info_line(39, Some(0), true, None);
+        let line = info_line(39, Some(0), true, None, &[]);
         assert_eq!(line.text(), "Normal · Moo Moo Farm · terrorized");
         assert!(line.terrorized);
         assert!(
-            info_line(39, Some(0), false, None).text().contains("mlvl"),
+            info_line(39, Some(0), false, None, &[]).text().contains("mlvl"),
             "not terrorized: table values"
         );
         // No boss level either (Mephisto's level is a table value too).
         assert_eq!(
-            info_line(102, Some(2), true, None).text(),
+            info_line(102, Some(2), true, None, &[]).text(),
             "Hell · Durance of Hate Level 3 · terrorized"
         );
         assert_eq!(
-            info_line(39, None, true, None).text(),
+            info_line(39, None, true, None, &[]).text(),
             "Moo Moo Farm · terrorized"
         );
     }
@@ -938,7 +984,7 @@ mod tests {
     fn zero_mlvl_area_has_no_monster_levels() {
         // Rogue Encampment: monster level 0 in the table.
         assert_eq!(
-            info_line(1, Some(0), false, None).text(),
+            info_line(1, Some(0), false, None, &[]).text(),
             "Normal · Rogue Encampment"
         );
     }
@@ -947,10 +993,10 @@ mod tests {
     fn the_cow_counter_replaces_the_monster_levels_in_level_39_only() {
         let cows = Some(Tally { kills: 57, alive: 23 });
         assert_eq!(
-            info_line(39, Some(0), false, cows).text(),
+            info_line(39, Some(0), false, cows, &[]).text(),
             "Normal · Moo Moo Farm · kill count: 57 / victims alive: 23"
         );
-        let terror = info_line(39, Some(2), true, cows);
+        let terror = info_line(39, Some(2), true, cows, &[]);
         assert_eq!(
             terror.text(),
             "Hell · Moo Moo Farm · kill count: 57 / victims alive: 23 · terrorized"
@@ -958,9 +1004,135 @@ mod tests {
         assert!(terror.terrorized, "still ends in the violet part");
         // Elsewhere, or without a counter, the usual line.
         assert_eq!(
-            info_line(88, Some(0), false, cows),
-            info_line(88, Some(0), false, None)
+            info_line(88, Some(0), false, cows, &[]),
+            info_line(88, Some(0), false, None, &[])
         );
-        assert!(info_line(39, Some(0), false, None).text().contains("mlvl"));
+        assert!(info_line(39, Some(0), false, None, &[]).text().contains("mlvl"));
+    }
+
+    const VEX: [Damage; 3] = [Damage::Lightning, Damage::Fire, Damage::Physical];
+
+    #[test]
+    fn rating_colours_only_the_stats() {
+        // Travincal, Nightmare: no immunes, good for Vex.
+        let line = info_line(83, Some(1), false, None, &VEX);
+        assert_eq!(line.rating, Rating::Good);
+        let text = line.text();
+        assert_eq!(
+            spans(&line, &text),
+            vec![
+                ("Nightmare · Travincal · ", TEXT),
+                ("mlvl 54 · champ 56 · unique 57", GOOD_TEXT)
+            ]
+        );
+        // Hell City of the Damned: 4 of 7 types lightning immune.
+        let line = info_line(106, Some(2), false, None, &VEX);
+        let text = line.text();
+        assert_eq!(
+            spans(&line, &text).last(),
+            Some(&("mlvl 84 · champ 86 · unique 87", BAD_TEXT))
+        );
+        // Normal, or no build: one white part.
+        for line in [
+            info_line(106, Some(0), false, None, &VEX),
+            info_line(106, Some(2), false, None, &[]),
+        ] {
+            let text = line.text();
+            assert_eq!(line.rating, Rating::Neutral);
+            assert_eq!(spans(&line, &text), vec![(text.as_str(), TEXT)]);
+        }
+        // Mephisto's level is part of the coloured stats.
+        let line = info_line(102, Some(1), false, None, &VEX);
+        let text = line.text();
+        assert!(
+            spans(&line, &text)
+                .last()
+                .is_some_and(|&(part, c)| part.ends_with("Mephisto 59") && c != TEXT),
+            "{:?}",
+            spans(&line, &text)
+        );
+    }
+
+    #[test]
+    fn rating_keeps_terrorized_violet_and_colours_the_cow_counter() {
+        let build = [Damage::Cold];
+        let cows = Some(Tally { kills: 5, alive: 9 });
+        let line = info_line(39, Some(1), true, cows, &build);
+        assert_ne!(line.rating, Rating::Neutral, "Moo Moo Farm in Nightmare is rated");
+        let colour = if line.rating == Rating::Bad {
+            BAD_TEXT
+        } else {
+            GOOD_TEXT
+        };
+        let text = line.text();
+        assert_eq!(
+            spans(&line, &text),
+            vec![
+                ("Nightmare · Moo Moo Farm · ", TEXT),
+                ("kill count: 5 / victims alive: 9", colour),
+                (" · ", TEXT),
+                (TERRORIZED, TERROR_TEXT)
+            ]
+        );
+        // Terrorized without the counter: nothing to rate, only the violet part.
+        let line = info_line(83, Some(1), true, None, &VEX);
+        let text = line.text();
+        assert_eq!(
+            spans(&line, &text),
+            vec![("Nightmare · Travincal · ", TEXT), (TERRORIZED, TERROR_TEXT)]
+        );
+    }
+
+    #[test]
+    fn rating_survives_a_shortened_area() {
+        let Some(font) = font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return;
+        };
+        let line = info_line(83, Some(1), false, None, &VEX);
+        let text = fit_text(font, &line, 200.0);
+        assert!(text.contains('…'), "{text}");
+        assert_eq!(
+            spans(&line, &text).last(),
+            Some(&("mlvl 54 · champ 56 · unique 57", GOOD_TEXT))
+        );
+    }
+
+    #[test]
+    fn draws_the_rated_part_in_its_colour() {
+        let Some(font) = font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return;
+        };
+        let count = |line: &InfoLine, rgb: [u8; 3]| -> usize {
+            let Some(mut pm) = Pixmap::new(600, 40) else {
+                return 0;
+            };
+            draw(&mut pm, font, line, 0);
+            pm.pixels()
+                .iter()
+                .filter(|p| {
+                    let c = p.demultiply();
+                    // Blending through the mask may be off by one per channel.
+                    c.alpha() == 255
+                        && [c.red(), c.green(), c.blue()]
+                            .iter()
+                            .zip(rgb)
+                            .all(|(&v, want)| v.abs_diff(want) <= 2)
+                })
+                .count()
+        };
+        let [r, g, b, _] = GOOD_TEXT;
+        let good = info_line(83, Some(1), false, None, &VEX);
+        // Only fully covered glyph pixels count: a few dozen at 16 px.
+        assert!(count(&good, [r, g, b]) > 10, "green glyph pixels");
+        assert!(count(&good, [255, 255, 255]) > 10, "white area name");
+        let neutral = info_line(83, Some(0), false, None, &VEX);
+        assert_eq!(count(&neutral, [r, g, b]), 0, "Normal: no green");
+        let [r, g, b, _] = BAD_TEXT;
+        assert!(
+            count(&info_line(106, Some(2), false, None, &VEX), [r, g, b]) > 10,
+            "red"
+        );
     }
 }

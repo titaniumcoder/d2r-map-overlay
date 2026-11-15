@@ -6,6 +6,7 @@ Fetch the tables with:
   gh api repos/blizzhackers/d2data/contents/json/monstats.json -H "Accept: application/vnd.github.raw" > monstats.json
   gh api repos/blizzhackers/d2data/contents/json/superuniques.json -H "Accept: application/vnd.github.raw" > superuniques.json
 Monster levels are the expansion columns (MonLvlEx, MonLvlEx(N), MonLvlEx(H)).
+Immunities (IMMUNITIES) are resist >= 100 in the monstats Res* columns of the spawned types.
 """
 import json
 import sys
@@ -83,4 +84,57 @@ print("/// stairs, clone), sorted: drawn as a boss icon while alive.")
 print("pub const BOSS_MONSTERS: &[u32] = &[")
 for i in sorted({int(mon[key]["*hcIdx"]) for key in [k for _, k, _ in BOSSES] + BAAL_FORMS}):
     print(f"    {i},")
+print("];")
+print()
+
+# Immunities: a resistance of 100 or more. Physical is monstats `ResDm` (damage resist).
+IMMUNE = 100
+RES_COLUMNS = ["ResDm", "ResFi", "ResCo", "ResLi", "ResPo", "ResMa"]  # physical, fire, cold, lightning, poison, magic
+SUFFIXES = ["", "(N)", "(H)"]
+
+
+def spawn_types(level, difficulty):
+    """Distinct monstats ids spawned in `level` in `difficulty` (0 Normal, 1 Nightmare, 2 Hell).
+
+    Normal: mon1..10 plus umon1..10 (the unique/champion candidates). Nightmare and Hell share
+    nmon1..10 (the game picks uniques from the same list there). Empty and unknown keys are
+    skipped; a key listed twice (a spawn weight) counts once."""
+    prefixes = ["mon", "umon"] if difficulty == 0 else ["nmon"]
+    keys = []
+    for p in prefixes:
+        for i in range(1, 11):
+            k = level.get(f"{p}{i}")
+            if k and k in mon and k not in keys:
+                keys.append(k)
+    return keys
+
+
+print("/// One level in one difficulty: (distinct monster types that spawn, how many are immune to")
+print("/// each damage type, the immunity bitmask of each type with any immunity); see IMMUNITIES.")
+print("pub type AreaImmunities = (u8, [u8; 6], &'static [u8]);")
+print()
+print("/// (level id, per difficulty Normal, Nightmare, Hell: (distinct monster types that spawn,")
+print("/// how many of them are immune (resist >= 100) to [physical, fire, cold, lightning, poison,")
+print("/// magic], and the immunity bitmask of each type with any immunity (bit i = damage i of that")
+print("/// order))). From levels `mon`/`umon` (Normal) and `nmon` (Nightmare, Hell) and the monstats")
+print("/// `ResDm`/`ResFi`/`ResCo`/`ResLi`/`ResPo`/`ResMa` columns of that difficulty.")
+print("#[rustfmt::skip] // one row per level as generated; rustfmt would spread each over many lines")
+print("pub const IMMUNITIES: &[(u32, [AreaImmunities; 3])] = &[")
+for r in sorted(levels, key=lambda r: r.get("Id", 0)):
+    lid = r.get("Id")
+    if lid is None or lid == 0:
+        continue
+    per_difficulty = []
+    for d, suffix in enumerate(SUFFIXES):
+        types = spawn_types(r, d)
+        masks = [
+            sum(1 << i for i, c in enumerate(RES_COLUMNS) if (mon[k].get(c + suffix) or 0) >= IMMUNE)
+            for k in types
+        ]
+        immune = [sum(1 for m in masks if m & (1 << i)) for i in range(len(RES_COLUMNS))]
+        immune_masks = [m for m in masks if m]
+        per_difficulty.append(
+            f"({len(types)}, [{', '.join(map(str, immune))}], &[{', '.join(map(str, immune_masks))}])"
+        )
+    print(f"    ({lid}, [{', '.join(per_difficulty)}]),")
 print("];")

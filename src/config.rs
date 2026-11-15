@@ -4,11 +4,13 @@
 //! Loaded once at start. A missing file means the defaults; an unreadable or invalid one is
 //! reported once on stderr and the defaults are used, so a typo never stops the overlay.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::build::Damage;
 use crate::game::Shrine;
 use crate::valuables::{Category, Tier};
 
@@ -39,6 +41,17 @@ pub const SHRINE_NAMES: [&str; 23] = [
     "poison",
 ];
 
+/// Class names by class id (charstats row), for `[builds.class]`.
+pub const CLASS_NAMES: [&str; 7] = [
+    "amazon",
+    "sorceress",
+    "necromancer",
+    "paladin",
+    "barbarian",
+    "druid",
+    "assassin",
+];
+
 /// Shrines shown when the config doesn't say.
 const DEFAULT_SHRINES: [&str; 5] = ["refilling", "skill", "stamina", "gem", "monster"];
 /// Shrine types shown in Normal only by default: stamina is useless later (user, 2026-11-15).
@@ -49,6 +62,7 @@ const DEFAULT_NORMAL_ONLY: [&str; 1] = ["stamina"];
 pub struct Config {
     pub valuables: Valuables,
     pub shrines: Shrines,
+    pub builds: Builds,
 }
 
 /// `[valuables]`: the tiers highlighted per category (see [`crate::valuables`]).
@@ -115,12 +129,45 @@ impl Shrines {
     }
 }
 
+/// `[builds]`: each character's damage types, primary first (see [`crate::build`]); by name, else
+/// by class (`[builds.class]`). Empty by default: no build, no colouring.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Builds {
+    /// Lowercased character name → damage types.
+    pub names: BTreeMap<String, Vec<Damage>>,
+    /// Class id (0..=6, see [`CLASS_NAMES`]) → damage types.
+    pub classes: BTreeMap<u32, Vec<Damage>>,
+}
+
+impl Builds {
+    /// The build of the character `name` (any case) of `class`: its own entry, else its class's,
+    /// else none.
+    pub fn for_player(&self, name: &str, class: u32) -> &[Damage] {
+        self.names
+            .get(&name.to_lowercase())
+            .or_else(|| self.classes.get(&class))
+            .map_or(&[], Vec::as_slice)
+    }
+}
+
 /// The file as written; names are turned into codes by [`parse`].
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawConfig {
     valuables: Valuables,
     shrines: RawShrines,
+    builds: RawBuilds,
+}
+
+/// `[builds]` as written: character name = damage names, plus the `class` table (class id or name
+/// = damage names).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawBuilds {
+    class: BTreeMap<String, Vec<String>>,
+    /// Every other key: a character name.
+    #[serde(flatten)]
+    names: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,7 +201,58 @@ fn shrine_codes(names: &[String]) -> (Vec<u8>, Vec<String>) {
     (codes, unknown)
 }
 
-/// Parses a config file's text; also returns warnings about ignored entries (unknown shrine names).
+/// The known damage types among `names` (in order, without repeats); warns about the others.
+fn damages(names: &[String], whose: &str, warnings: &mut Vec<String>) -> Vec<Damage> {
+    let mut out = Vec::new();
+    for name in names {
+        match Damage::from_name(name) {
+            Some(d) if !out.contains(&d) => out.push(d),
+            Some(_) => {}
+            None => {
+                let known: Vec<&str> = Damage::ALL.iter().map(|d| d.name()).collect();
+                warnings.push(format!(
+                    "build {whose}: unknown damage {name:?} ignored (known: {})",
+                    known.join(", ")
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// The class id of `key`: a number 0..=6 or a class name (any case).
+fn class_id(key: &str) -> Option<u32> {
+    let key = key.trim().to_lowercase();
+    let by_name = (0u32..)
+        .zip(CLASS_NAMES)
+        .find(|&(_, n)| n == key)
+        .map(|(id, _)| id);
+    by_name.or_else(|| key.parse().ok().filter(|&id: &u32| id < 7))
+}
+
+fn builds(raw: RawBuilds, warnings: &mut Vec<String>) -> Builds {
+    let mut builds = Builds::default();
+    for (name, list) in raw.names {
+        let list = damages(&list, &name, warnings);
+        builds.names.insert(name.to_lowercase(), list);
+    }
+    for (key, list) in raw.class {
+        let list = damages(&list, &format!("class {key}"), warnings);
+        match class_id(&key) {
+            Some(id) => {
+                builds.classes.insert(id, list);
+            }
+            None => warnings.push(format!(
+                "build: unknown class {key:?} ignored (known: 0..6 or {})",
+                CLASS_NAMES.join(", ")
+            )),
+        }
+    }
+    builds
+}
+
+/// Parses a config file's text; also returns warnings about ignored entries (unknown shrine names,
+/// damage types and classes).
 ///
 /// # Errors
 /// Fails on invalid TOML, unknown keys or wrongly typed values (e.g. a tier other than S, A, B).
@@ -163,7 +261,7 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), toml::de::Error> {
     let (show, mut unknown) = shrine_codes(&raw.shrines.show);
     let (normal_only, unknown_normal) = shrine_codes(&raw.shrines.normal_only);
     unknown.extend(unknown_normal);
-    let warnings = unknown
+    let mut warnings: Vec<String> = unknown
         .into_iter()
         .map(|n| {
             format!(
@@ -172,10 +270,12 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), toml::de::Error> {
             )
         })
         .collect();
+    let builds = builds(raw.builds, &mut warnings);
     Ok((
         Config {
             valuables: raw.valuables,
             shrines: Shrines { show, normal_only },
+            builds,
         },
         warnings,
     ))
@@ -267,6 +367,53 @@ mod tests {
         assert_eq!(c.valuables.twink, vec![Tier::B]);
         assert!(c.shrines.show.is_empty(), "empty list = no shrines");
         Ok(())
+    }
+
+    #[test]
+    fn parses_builds() -> Result<()> {
+        use Damage::{Cold, Fire, Lightning, Physical};
+        let (c, warnings) = parse(
+            "[builds]\nVex = [\"lightning\", \"Fire\", \"physical\", \"fire\"]\nOther = [\"holy\", \"cold\"]\n\n\
+             [builds.class]\ndruid = [\"physical\"]\n4 = [\"physical\"]\nbard = [\"fire\"]\n",
+        )?;
+        assert_eq!(
+            c.builds.for_player("Vex", 6),
+            [Lightning, Fire, Physical],
+            "deduped, in order"
+        );
+        assert_eq!(
+            c.builds.for_player("vex", 1),
+            [Lightning, Fire, Physical],
+            "name in any case"
+        );
+        assert_eq!(
+            c.builds.for_player("Other", 5),
+            [Cold],
+            "own entry beats the class"
+        );
+        assert_eq!(c.builds.for_player("Bear", 5), [Physical], "class by name");
+        assert_eq!(c.builds.for_player("Barb", 4), [Physical], "class by id");
+        assert_eq!(
+            c.builds.for_player("Sorc", 1),
+            [] as [Damage; 0],
+            "nothing configured"
+        );
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("\"holy\"")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("\"bard\"")), "{warnings:?}");
+        assert!(
+            parse("[builds]\nVex = \"lightning\"\n").is_err(),
+            "a list is required"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn class_ids() {
+        assert_eq!(class_id("Assassin"), Some(6));
+        assert_eq!(class_id("0"), Some(0));
+        assert_eq!(class_id("7"), None);
+        assert_eq!(class_id("monk"), None);
     }
 
     #[test]

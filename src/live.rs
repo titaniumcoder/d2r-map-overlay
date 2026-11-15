@@ -170,6 +170,10 @@ fn follow_game(
                 journal.observe(&snap);
                 let update = session.apply(&mut snap);
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
+                snap.player.build = config
+                    .builds
+                    .for_player(&snap.player.name, snap.player.class)
+                    .to_vec();
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }

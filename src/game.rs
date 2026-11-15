@@ -188,6 +188,11 @@ pub struct Player {
     /// unreadable (and in old fixtures, where it is left out of the JSON).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub char_level: Option<u8>,
+    /// The character's build from the config ([`crate::config::Builds::for_player`]), primary
+    /// damage first; colours the info line's monster levels ([`crate::build::rate`]). Not read
+    /// from the game nor kept in the JSON: set from the config after reading or loading.
+    #[serde(skip)]
+    pub build: Vec<crate::build::Damage>,
 }
 
 /// The character level from the raw stat value: 1..=99, or the same shifted left by 8 (some D2
@@ -957,6 +962,7 @@ impl<M: ReadMem> Reader<'_, M> {
                 .ok()
                 .flatten()
                 .and_then(char_level_from_raw),
+            build: Vec::new(),
         };
         Ok((player, level))
     }

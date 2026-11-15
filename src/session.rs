@@ -603,6 +603,7 @@ mod tests {
                 level_id: level,
                 act: Some(Addr(act)),
                 char_level: None,
+                build: vec![],
             },
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
