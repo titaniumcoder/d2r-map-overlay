@@ -52,11 +52,34 @@ pub struct LandmarkRule {
 ///   Confirmed: the 90 piece holds the exit to Dark Wood (room link to level 5, user stood on it).
 /// - Stony Field (4): lvlprest 160 "Act 1 - Cairn Stones", the stone circle; the five stones and the
 ///   portal stone (objects 17–22) lay inside it (live 2026-11-15).
+/// - Barracks (28): lvlprest "Barracks Forge W/E/S/N" (202–205) holds the Smith and the Horadric
+///   Malus; confirmed for 204 (Smith preset 771 and malus object 108 both inside it, 2026-11-15).
 /// - Dark Wood (5): lvlprest 161 "Act 1 - Inifus" (funktree.ds1), the Tree of Inifuss (confirmed in
 ///   game 2026-11-15).
 /// - Black Marsh (6): lvlprest 163 "Act 1 - Tower 1" (Tower1.ds1), the Forgotten Tower entrance
 ///   (confirmed in game 2026-11-15).
 pub const LANDMARKS: &[LandmarkRule] = &[
+    LandmarkRule {
+        level_ids: 28..=28,
+        preset_ids: 204..=204,
+        label: "smith (forge)",
+        confirmed: true,
+        exit: false,
+    },
+    LandmarkRule {
+        level_ids: 28..=28,
+        preset_ids: 202..=203,
+        label: "smith (forge W/E)",
+        confirmed: false,
+        exit: false,
+    },
+    LandmarkRule {
+        level_ids: 28..=28,
+        preset_ids: 205..=205,
+        label: "smith (forge N)",
+        confirmed: false,
+        exit: false,
+    },
     LandmarkRule {
         level_ids: 4..=4,
         preset_ids: 160..=160,
@@ -2141,6 +2164,8 @@ mod tests {
         assert_eq!(
             unconfirmed,
             vec![
+                "smith (forge W/E)",
+                "smith (forge N)",
                 "cave exit to the next area",
                 "cave stairs down",
                 "orifice (assumed level+390 pattern)"
