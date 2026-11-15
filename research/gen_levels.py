@@ -66,3 +66,10 @@ print("pub const SUPERUNIQUES: &[(u32, &str)] = &[")
 for r in sorted(supers, key=lambda r: r["hcIdx"]):
     print(f"    ({SUPERUNIQUE_PRESET_BASE + r['hcIdx']}, {rs_str(r['Superunique'])}),")
 print("];")
+print()
+print("/// Monster txt ids (hcIdx) with a monstats `Align` (1 ally, 2 neutral): hirelings, summons,")
+print("/// town NPCs and critters. Never enemies.")
+print("pub const NON_HOSTILE_MONSTERS: &[u32] = &[")
+for i in sorted(int(r["*hcIdx"]) for r in monstats if r.get("Align") not in (None, "", 0)):
+    print(f"    {i},")
+print("];")

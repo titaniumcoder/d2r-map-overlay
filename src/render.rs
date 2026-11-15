@@ -394,7 +394,8 @@ pub fn level_bounds(snap: &Snapshot) -> Bounds {
     }
 }
 
-/// Levels where every living monster is drawn, not just elites: Den of Evil (8), whose quest
+/// Levels where every living enemy is drawn (not hirelings, summons or critters, see
+/// `NON_HOSTILE_MONSTERS`), not just elites: Den of Evil (8), whose quest
 /// needs every monster killed (user request, 2026-11-15).
 pub const ALL_MONSTER_LEVELS: &[u32] = &[8];
 
@@ -463,7 +464,9 @@ pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
         .chain(snap.monsters.iter().filter(|m| !m.is_dead()).filter_map(|m| {
             let marker = if is_elite(m) {
                 Marker::Elite
-            } else if ALL_MONSTER_LEVELS.contains(&snap.level.id) {
+            } else if ALL_MONSTER_LEVELS.contains(&snap.level.id)
+                && !crate::levels_data::NON_HOSTILE_MONSTERS.contains(&m.txt)
+            {
                 Marker::Monster
             } else {
                 return None;
@@ -1033,11 +1036,14 @@ mod tests {
     #[test]
     fn den_of_evil_shows_every_living_monster() {
         let mut snap = empty_snapshot(5, 5);
+        let mut wolf = monster(0x00, 1);
+        wolf.txt = 420; // druid spirit wolf: a summon, never drawn
         snap.monsters = vec![
             monster(0x00, 1),
             monster(0x10, 1),
             monster(0x08, 1),
             monster(0x00, 12),
+            wolf,
         ];
         let kinds = |s: &Snapshot| -> Vec<Marker> { markers(s).into_iter().map(|(m, _, _)| m).collect() };
         assert_eq!(
