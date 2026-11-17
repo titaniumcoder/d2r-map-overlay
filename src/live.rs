@@ -121,7 +121,7 @@ pub fn run(
         // reload the same file twice.
         watched = Watched::now(config_path.as_deref());
         // The process is gone (or never got a table): hide until the next one is in a game.
-        // The dashboard stops showing stale data with the same breath.
+        // The dashboard keeps the last snapshot, marked offline.
         web::clear_live();
         if follow.and_then(|()| send(tx, Msg::Hide)).is_err() {
             return;
@@ -361,7 +361,7 @@ fn follow_game(
                     cow_stats.flush();
                     return Ok(());
                 }
-                // Menu or loading: the dashboard must not keep showing the last game.
+                // Menu or loading: the dashboard keeps the last game, marked offline.
                 web::clear_live();
                 if dedup.hide(Hidden::NoGame) {
                     eprintln!("no game state (menu or loading?): {e:#}");

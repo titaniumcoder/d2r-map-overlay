@@ -127,11 +127,29 @@ pub fn publish_live(json: String) {
     }
 }
 
-/// Drops the live snapshot JSON: the game is gone or in the menu, so the dashboard must show
-/// "waiting for game" instead of stale data.
+/// The game is gone or in the menu: the last snapshot stays on the dashboard, marked
+/// `"offline": true`, until the next game publishes a fresh one. Nothing published yet stays
+/// "waiting for game".
 pub fn clear_live() {
     // See [`publish_live`] for the poison handling.
-    *live_cell().write().unwrap_or_else(PoisonError::into_inner) = None;
+    let mut cell = live_cell().write().unwrap_or_else(PoisonError::into_inner);
+    // Already marked: the menu calls this every tick, don't re-serialise the snapshot.
+    if let Some(json) = cell.as_deref().filter(|j| !j.contains(OFFLINE_MARK)) {
+        *cell = mark_offline(json);
+    }
+}
+
+/// What [`mark_offline`] adds, as `serde_json` writes it (compact, no spaces).
+const OFFLINE_MARK: &str = "\"offline\":true";
+
+/// `json` with `"offline": true` added; `None` when it is not a JSON object (nothing worth
+/// keeping).
+fn mark_offline(json: &str) -> Option<String> {
+    let mut value: serde_json::Value = serde_json::from_str(json).ok()?;
+    value
+        .as_object_mut()?
+        .insert("offline".to_owned(), serde_json::Value::Bool(true));
+    Some(value.to_string())
 }
 
 /// Writes the `[bis.<name>]` build selection into `text` (comment-preserving): `Some(slug)`
@@ -294,7 +312,8 @@ fn page() -> String {
 }
 
 /// `200 OK` with the latest live snapshot's JSON verbatim (published by `live`), or
-/// [`NO_LIVE_JSON`] while no game is attached. The page handles both.
+/// [`NO_LIVE_JSON`] before the first game was seen (after that the last snapshot stays,
+/// marked offline). The page handles both.
 fn api_live() -> String {
     let json = live_cell()
         .read()
@@ -314,8 +333,8 @@ fn api_live() -> String {
 /// the last one written (a cheap string compare every [`SSE_POLL`]; [`publish_live`] skips
 /// byte-identical stores), a `: keepalive\n\n` comment every [`SSE_KEEPALIVE`], and exits on
 /// the first write error — the browser's `EventSource` then reconnects on its own. Plain raw
-/// writes, no chunked encoding (the message boundary is the SSE `\n\n`); a `live: false`
-/// event is sent once when the game detaches, so the page clears its stale frame.
+/// writes, no chunked encoding (the message boundary is the SSE `\n\n`); when the game detaches
+/// the last frame is sent once more, marked offline.
 /// Refused with 503 above [`MAX_SSE_CLIENTS`] concurrent handlers.
 fn api_live_stream(mut stream: TcpStream) {
     /// Decrements [`SSE_CLIENTS`] on drop — also on an early return or unwind, so a
@@ -362,7 +381,7 @@ fn api_live_stream(mut stream: TcpStream) {
             .clone();
         // Equal to what was last written (nothing published yet, same JSON, or detached
         // twice): nothing to send. A changed value — including the game detaching, which
-        // publishes the `live: false` marker — goes out as one event.
+        // marks the last snapshot offline — goes out as one event.
         let send = if current == last {
             None
         } else {
@@ -2310,9 +2329,11 @@ function render(r) {
     return;
   }
   const p = r.player;
-  $("who").innerHTML = `${esc(p.name)}<small>${esc([p.class, p.level != null ? "level " + p.level : null, p.difficulty, r.area].filter(Boolean).join(" · "))}</small>`;
-  $("updated").textContent = "updated " + new Date(r.updated_at * 1000).toLocaleTimeString();
-  document.title = `${p.name}${p.level != null ? " L" + p.level : ""} · ${r.area || "?"} — D2R Dashboard`;
+  const seen = new Date(r.updated_at * 1000).toLocaleTimeString();
+  $("who").innerHTML = `${esc(p.name)}<small>${esc([p.class, p.level != null ? "level " + p.level : null, p.difficulty, r.area].filter(Boolean).join(" · "))}</small>`
+    + (r.offline ? ' <span class="waiting">offline — last seen ' + esc(seen) + '</span>' : "");
+  $("updated").textContent = (r.offline ? "last seen " : "updated ") + seen;
+  document.title = `${r.offline ? "(offline) " : ""}${p.name}${p.level != null ? " L" + p.level : ""} · ${r.area || "?"} — D2R Dashboard`;
   guide(r.guide);
   levels(r.levels);
   stage(r.stage);
@@ -3305,12 +3326,26 @@ mod tests {
         // no duplicate frame within the poll interval + margin.
         publish_live("{\"live\": true, \"n\": 1}".to_owned());
         assert!(read_chunk(&mut client).is_err(), "no duplicate frame");
-        // A changed frame goes out; a detached game publishes the live:false marker.
+        // A changed frame goes out; a detached game marks the last one offline.
         publish_live("{\"live\": true, \"n\": 2}".to_owned());
         assert_eq!(read_chunk(&mut client)?, "data: {\"live\": true, \"n\": 2}\n\n");
         clear_live();
-        assert_eq!(read_chunk(&mut client)?, "data: {\"live\": false}\n\n");
+        assert_eq!(
+            read_chunk(&mut client)?,
+            "data: {\"live\":true,\"n\":2,\"offline\":true}\n\n"
+        );
         Ok(())
+    }
+
+    #[test]
+    fn mark_offline_adds_the_flag_to_objects_only() {
+        assert_eq!(
+            mark_offline("{\"live\": true}").as_deref(),
+            Some("{\"live\":true,\"offline\":true}")
+        );
+        assert!(mark_offline("{\"live\":true,\"offline\":true}").is_some_and(|j| j.contains(OFFLINE_MARK)));
+        assert_eq!(mark_offline("[1]"), None);
+        assert_eq!(mark_offline("not json"), None);
     }
 
     #[test]
