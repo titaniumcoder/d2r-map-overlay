@@ -124,9 +124,16 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   **Warlock**, a D2R patch class (skill trees Chaos/Eldritch/Demon: Miasma Bolt, Apocalypse, Abyss,
   Summon Goatman…), and d2runewizard.com lists its breakpoints: FCR 9/18/30/48/75/125 (as necro/pala),
   FHR 5/10/16/26/39/56/86/152/377, FBR as druid/necro. The config class tables now accept 8 classes.
-- The player's stat list (unit +0x88) reads level fine but showed FCR/IAS/FHR/resists as 0 while the
-  user was wearing resist gear — the combined item stats are NOT in that list (or the ids differ in D2R).
-  The breakpoint guide therefore shows zeros until this is re-verified with research probes.
+- **Stat lists (2026-11-17, research/stats.py + itemstats.py)**: the player's stat list at unit +0x88
+  is **base-only** (level, strength, life/mana/stamina in 1/256 units, xp — NO item stats). Item-granted
+  stats live on the ITEMS: each item has a base list (defence, durability, requirements) at unit +0x88
+  and a **magic-affix list chained at StatList +0xD0** (each list's `+0x08/+0x0C` = owner (unit type,
+  unit id); the affix list's owner is the item). Verified: the equipped items' affix sums equal the
+  character screen exactly (res 6/9/8/7, fire/light/cold/poison). `ItemData::OWNER` (+0x0C) separates the
+  player's gear from the mercenary's (merc items carry `NO_OWNER`, and two body slots were the merc's
+  duplicate armour/weapon). The overlay therefore sums gear stats over equipped items and carried charms
+  (charm codes cm1/cm2/cm3) per owner. Monsters keep full lists at +0x88 (a mob's list had its
+  res/experience/level inline).
 
 ## ActMisc, difficulty and seed lead (2026-11-15)
 - Player unit `+0x20` → act; **act `+0x70` → ActMisc** (older builds: +0x78, which now points into code).

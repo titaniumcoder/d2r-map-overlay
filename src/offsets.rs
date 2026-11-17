@@ -241,6 +241,9 @@ pub mod item_data {
     /// and whether it is filled in before the item is identified (so only trusted with
     /// [`FLAG_IDENTIFIED`]).
     pub const FILE_INDEX: u64 = 0x34;
+    /// u8 body slot of an equipped item (0 none; 1 helm, 3 armour, 4 weapon…). Live 2026-11-17:
+    /// the local player's equipped items carry their slot here, the mercenary's too.
+    pub const BODY: u64 = 0x54;
     /// u8 storage page of a stored item: `PAGE_INVENTORY` 0, stash 4; 255 when equipped (body
     /// slot in the byte at `+0x54`), on the ground or on the cursor. Live-verified 2026-11-15
     /// over 74 items.
@@ -280,6 +283,12 @@ pub mod stat_list {
     pub const FHR: u16 = 99;
     /// Stat id `item_fastercastrate` (FCR, %).
     pub const FCR: u16 = 105;
+    /// ptr to the unit's next stat list (the chain: base list → magic-affix list → …; each
+    /// list's `+0x08/+0x0C` owner (unit type, unit id) tells whose it is). Live 2026-11-17:
+    /// an equipped item's base list chained to its affix list (res/FHR on it), so item-granted
+    /// stats are readable by walking this chain per item — the player's own `+0x88` list is
+    /// BASE-ONLY (level/strength/…, no item stats).
+    pub const NEXT: u64 = 0xD0;
     /// The unit's state bitfield: [`STATE_FLAG_DWORDS`] little-endian u32, state `n` is bit
     /// `n % 32` of dword `n / 32` (states.txt rows). Live 2026-11-15 on monsters (Moo Moo Farm,
     /// terrorized): all 24 cows had [`super::state::DESECRATED`] set here, the player and the

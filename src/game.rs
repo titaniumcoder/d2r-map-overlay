@@ -5,7 +5,7 @@
 //! list only skips that entry and is recorded in `Snapshot::warnings`; only a missing
 //! player (or its level) fails the snapshot.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -203,8 +203,9 @@ pub struct Player {
 }
 
 /// The player's speed stats and elemental resistances as granted by gear (stat ids from
-/// itemstatcost.txt; difficulty penalties are NOT included — the stat list holds gear values).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// itemstatcost.txt, summed over the equipped items' affix lists and carried charms;
+/// difficulty penalties are NOT included — they are applied when the guide displays them).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SpeedStats {
     /// `item_fastercastrate` (FCR, %).
     pub fcr: u32,
@@ -357,6 +358,9 @@ struct ItemScan {
     stored: Vec<Stored>,
     stash_owners: OwnerVotes,
     inventory_owners: OwnerVotes,
+    /// Speed/resist stats summed over each owner's equipped items and carried charms (the
+    /// guide's numbers; the player's own stat list is base-only, no item stats).
+    gear: HashMap<u32, SpeedStats>,
 }
 
 /// A stored item with its `item_data::PAGE` and `item_data::OWNER`.
@@ -711,8 +715,10 @@ pub fn snapshot(
             None => bail!("no live player unit found (not in a game?)"),
         }
     };
-    let (player, level_addr) = r.player(chosen.addr.0).context("reading the player")?;
+    let (mut player, level_addr) = r.player(chosen.addr.0).context("reading the player")?;
     let party = read_party(&mut r, &candidates, chosen.addr, player.level_id);
+    // The guide's numbers: the chosen player's equipped items and carried charms.
+    player.speed = scan.gear.get(&chosen.id).copied();
 
     let rooms = r.walk(
         r.ptr(level_addr, level::FIRST_ROOM2)?,
@@ -1055,42 +1061,17 @@ impl<M: ReadMem> Reader<'_, M> {
             level_id: self.u32(level, level::ID)?,
             act: head.act.map(Addr),
             // Optional data like `room_preset`: an unreadable stat list is no level, not an error.
-            // Speed stats and resistances ride on the same list: none without the level.
             char_level: self
                 .stat(addr, stat_list::LEVEL)
                 .ok()
                 .flatten()
                 .and_then(char_level_from_raw),
-            speed: self.speed_stats(addr),
+            // Gear speed/resist stats are summed from the equipped items in `snapshot` (the
+            // player's stat list is base-only, no item stats).
+            speed: None,
             build: Vec::new(),
         };
         Ok((player, level))
-    }
-
-    /// The player's gear speed/resist stats for the breakpoint guide: `None` without a readable
-    /// stat list (no character level either). A stat that fails to read counts as 0.
-    fn speed_stats(&self, addr: u64) -> Option<SpeedStats> {
-        let read = |id: u16| self.stat(addr, id).ok().flatten().map_or(0, plain_stat_from_raw);
-        let fcr = read(stat_list::FCR);
-        let ias = read(stat_list::IAS);
-        let fhr = read(stat_list::FHR);
-        let speed = SpeedStats {
-            fcr,
-            ias,
-            fhr,
-            res_fire: read(stat_list::RESIST_FIRE),
-            res_cold: read(stat_list::RESIST_COLD),
-            res_lightning: read(stat_list::RESIST_LIGHTNING),
-            res_poison: read(stat_list::RESIST_POISON),
-        };
-        // No level on the unit means the stat list is unreadable: don't trust the zeros.
-        (self
-            .stat(addr, stat_list::LEVEL)
-            .ok()
-            .flatten()
-            .and_then(char_level_from_raw)
-            .is_some())
-        .then_some(speed)
     }
 
     /// World-tile origin of a `Room2`.
@@ -1401,8 +1382,101 @@ impl<M: ReadMem> Reader<'_, M> {
                 Ok(None) => {}
                 Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
             }
+            // The guide's speed/resist stats: equipped items and carried charms of a candidate
+            // (the player's own stat list is base-only; item stats live on the items).
+            if let Some(owner) = self.gear_owner(&head, page, items_table)
+                && candidates.contains(&owner)
+            {
+                self.accumulate_gear(addr, &head, scan.gear.entry(owner).or_default());
+            }
         }
         scan
+    }
+
+    /// The owner whose gear stats `item` contributes to: the player's equipped items (body slot)
+    /// and carried charms (inventory page, charm codes), by `item_data::OWNER`.
+    fn gear_owner(&self, head: &UnitHead, page: Option<u8>, items_table: Option<u64>) -> Option<u32> {
+        let data = head.unit_data?;
+        let owner = self.u32(data, item_data::OWNER).ok()?;
+        let body = self.u8(data, item_data::BODY).ok()?;
+        if body != 0 && body != 255 {
+            return Some(owner);
+        }
+        if page == Some(item_data::PAGE_INVENTORY) {
+            let code = items::read_code(self.mem, items_table?, head.txt)?;
+            let code = items::code_text(code);
+            if matches!(code.as_str(), "cm1" | "cm2" | "cm3") {
+                return Some(owner);
+            }
+        }
+        None
+    }
+
+    /// Adds the speed/resist stats of `item`'s stat-list chain (base list at `unit::STATS`, then
+    /// the affix lists chained by `stat_list::NEXT` while they still belong to the item) to
+    /// `acc`. The chain is verified live (2026-11-17): an equipped armour's affix list carried
+    /// its res; lists of other owners end the walk.
+    fn accumulate_gear(&self, item: u64, head: &UnitHead, acc: &mut SpeedStats) {
+        let Some(mut list) = self.ptr(item, unit::STATS).unwrap_or(None) else {
+            return;
+        };
+        for _ in 0..8 {
+            let (Some(ty), Some(owner)) = (self.u32(list, 0x08).ok(), self.u32(list, 0x0C).ok()) else {
+                return;
+            };
+            if ty != unit_table::ITEM || owner != head.id {
+                return;
+            }
+            for (_, id, value) in self.stat_entries(list).unwrap_or_default() {
+                let value = plain_stat_from_raw(value);
+                match id {
+                    stat_list::RESIST_FIRE => acc.res_fire = acc.res_fire.saturating_add(value),
+                    stat_list::RESIST_COLD => acc.res_cold = acc.res_cold.saturating_add(value),
+                    stat_list::RESIST_LIGHTNING => {
+                        acc.res_lightning = acc.res_lightning.saturating_add(value);
+                    }
+                    stat_list::RESIST_POISON => acc.res_poison = acc.res_poison.saturating_add(value),
+                    stat_list::IAS => acc.ias = acc.ias.saturating_add(value),
+                    stat_list::FHR => acc.fhr = acc.fhr.saturating_add(value),
+                    stat_list::FCR => acc.fcr = acc.fcr.saturating_add(value),
+                    _ => {}
+                }
+            }
+            let Some(next) = self.u64(list, stat_list::NEXT).ok() else {
+                return;
+            };
+            if next == 0 {
+                return;
+            }
+            list = next;
+        }
+    }
+
+    /// All `{layer, stat id, value}` entries of the stat list at `list` (a `StatList` address,
+    /// not a unit: the entries sit at `stat_list::ENTRIES`, the count at `stat_list::COUNT`).
+    fn stat_entries(&self, list: u64) -> Result<Vec<(u16, u16, u32)>> {
+        let count = self.u64(list, stat_list::COUNT)?;
+        if count > MAX_ITEM_STATS {
+            bail!("stat list {list:#x}: {count} entries");
+        }
+        let entries = self.ptr_req(list, stat_list::ENTRIES, "stat entries")?;
+        let len = usize::try_from(count * stat_list::STAT_SIZE)?;
+        let bytes = self
+            .mem
+            .read_bytes(entries, len)
+            .with_context(|| format!("reading {count} stats at {entries:#x}"))?;
+        Ok(bytes
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|&[l0, l1, i0, i1, v0, v1, v2, v3]| {
+                (
+                    u16::from_le_bytes([l0, l1]),
+                    u16::from_le_bytes([i0, i1]),
+                    u32::from_le_bytes([v0, v1, v2, v3]),
+                )
+            })
+            .collect())
     }
 
     /// True if the stored item `head` may be spare ([`valuables::may_spare`]); false if its
