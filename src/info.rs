@@ -385,8 +385,23 @@ pub fn piece_level(piece: &str) -> Option<u32> {
     let name = piece.split('@').next().unwrap_or(piece);
     RUNEWORD_LEVELS
         .iter()
-        .find(|(w, _)| name.eq_ignore_ascii_case(w))
+        .find(|(w, _)| same_name(name, w))
         .map(|&(_, l)| l)
+}
+
+/// Whether two item names are the same piece: ASCII case, surrounding spaces and
+/// apostrophes are ignored, since the game data spells "Ancient's Pledge" and the builds
+/// "Ancients' Pledge". The one name comparison for runewords, worn and owned pieces.
+#[must_use]
+pub fn same_name(a: &str, b: &str) -> bool {
+    let bare = |s: &str| {
+        s.trim()
+            .chars()
+            .filter(|&c| c != '\'')
+            .map(|c| c.to_ascii_lowercase())
+            .collect::<Vec<char>>()
+    };
+    bare(a) == bare(b)
 }
 
 /// The bare piece name of a `BiS` piece string (`"Insight@27"` → `"Insight"`); shared by the
@@ -402,9 +417,9 @@ pub fn piece_name(piece: &str) -> &str {
 #[must_use]
 pub fn piece_tick(piece: &str, owned_names: &[String], stash_names: &[String]) -> Option<Tick> {
     let name = piece_name(piece);
-    if owned_names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+    if owned_names.iter().any(|n| same_name(n, name)) {
         Some(Tick::Owned)
-    } else if stash_names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+    } else if stash_names.iter().any(|n| same_name(n, name)) {
         Some(Tick::Stash)
     } else {
         None
@@ -949,6 +964,18 @@ const fn f32_px(v: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_name_ignores_case_spaces_and_apostrophes() {
+        assert!(same_name("Ancient's Pledge", "Ancients' Pledge"));
+        assert!(same_name(" leaf", "Leaf"));
+        assert!(!same_name("Lea", "Leaf"));
+        assert_eq!(piece_level("Ancients' Pledge"), Some(21), "builds' spelling");
+        assert_eq!(
+            piece_tick("Ancients' Pledge", &["Ancient's Pledge".to_owned()], &[]),
+            Some(Tick::Owned)
+        );
+    }
 
     #[test]
     fn levels_table_has_flayer_dungeon() {

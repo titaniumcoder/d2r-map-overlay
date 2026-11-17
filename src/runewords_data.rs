@@ -519,17 +519,17 @@ pub static RUNEWORDS: [Runeword; 99] = [
     },
 ];
 
-/// Looks a runeword up by name, ignoring ASCII case (`"Steel"` and `"steel"` both
-/// match): the `BiS` piece strings in the config are user-typed. Disambiguated
+/// Looks a runeword up by name, ignoring ASCII case and apostrophes ([`crate::info::same_name`]:
+/// `"steel"`, `"Ancients' Pledge"` match): the `BiS` piece strings in the config are user-typed. Disambiguated
 /// upstream names (`"Hustle (armor)"`, `"Hustle (weapon)"`) also match their bare
 /// form, since that is what the game shows.
 #[must_use]
 pub fn lookup(name: &str) -> Option<&'static Runeword> {
     RUNEWORDS.iter().find(|w| {
-        w.name.eq_ignore_ascii_case(name)
+        crate::info::same_name(w.name, name)
             || w.name
                 .split_once(" (")
-                .is_some_and(|(bare, _)| bare.eq_ignore_ascii_case(name))
+                .is_some_and(|(bare, _)| crate::info::same_name(bare, name))
     })
 }
 
@@ -543,6 +543,10 @@ mod tests {
         assert!(lookup("STEEL").is_some(), "uppercase must match");
         assert!(lookup("Steel").is_some(), "the display name must match");
         assert!(lookup("Crafted Rare").is_none(), "non-runewords must not match");
+        assert!(
+            lookup("Ancients' Pledge").is_some(),
+            "the builds' apostrophe must match"
+        );
     }
 
     #[test]

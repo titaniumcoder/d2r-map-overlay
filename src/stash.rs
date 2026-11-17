@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::game::ItemDrop;
 use crate::items::{self, DropKind};
 use crate::offsets::item_data;
+use crate::runewords_data::{RUNEWORDS, Runeword};
 use crate::valuables;
 
 /// One item of a shared-stash tab, named for the dashboard and the `BiS` ticks.
@@ -80,6 +81,51 @@ pub const RUNE_NAMES: [&str; 33] = [
     "Hel", "Io", "Lum", "Ko", "Fal", "Lem", "Pul", "Um", "Mal", "Ist", "Gul", "Vex", "Ohm", "Lo", "Sur",
     "Ber", "Jah", "Cham", "Zod",
 ];
+
+/// Required character level of each rune by rune number (`r01` El … `r33` Zod): misc.txt
+/// `levelreq` (blizzhackers/d2data `misc.json`, D2R). Hel is 0 there, not 33.
+const RUNE_LEVELS: [u32; 33] = [
+    11, 11, 13, 13, 15, 15, 17, 19, 21, 23, 25, 27, 29, 31, 0, 35, 37, 39, 41, 43, 45, 47, 49, 51, 53, 55,
+    57, 59, 61, 63, 65, 67, 69,
+];
+
+/// The rune number (1 El … 33 Zod) of a rune code (`"r07"` → 7); `None` for any other code.
+fn rune_number(code: &str) -> Option<u8> {
+    match items::code_kind(items::code_bytes(code)?) {
+        Some(DropKind::Rune(n)) => Some(n),
+        _ => None,
+    }
+}
+
+/// The runeword spelled by the rune `codes` in socket order (`["r07", "r05"]` (Tal Eth) →
+/// Stealth); `None` when a code isn't a rune or no runeword has exactly that sequence.
+#[must_use]
+pub fn runeword_by_runes(codes: &[String]) -> Option<&'static Runeword> {
+    let names = codes
+        .iter()
+        .map(|c| {
+            RUNE_NAMES
+                .get(usize::from(rune_number(c)?).checked_sub(1)?)
+                .copied()
+        })
+        .collect::<Option<Vec<&str>>>()?;
+    RUNEWORDS.iter().find(|w| w.runes == names.as_slice())
+}
+
+/// The required character level of runeword `word`'s runes: the highest rune `levelreq`
+/// (a runeword item needs the max of that and its base's own requirement).
+#[must_use]
+pub fn runes_level(word: &Runeword) -> Option<u32> {
+    word.runes
+        .iter()
+        .map(|r| {
+            let i = RUNE_NAMES.iter().position(|n| n == r)?;
+            RUNE_LEVELS.get(i).copied()
+        })
+        .collect::<Option<Vec<u32>>>()?
+        .into_iter()
+        .max()
+}
 
 /// Gem grade prefixes by [`items::gem`] grade; the normal grade has none.
 const GEM_GRADES: [&str; 5] = ["Chipped ", "Flawed ", "", "Flawless ", "Perfect "];
@@ -226,6 +272,39 @@ mod tests {
             vec!["Harlequin Crest", "uap", "Sigon's Visor"]
         );
         assert_eq!(stash_names(&[]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn rune_sequences_name_their_runeword_in_socket_order() {
+        let codes = |c: &[&str]| c.iter().map(|&s| s.to_owned()).collect::<Vec<_>>();
+        // Live 2026-11-18: Elemental's body armour held r07 r05, the staff r03 r08.
+        let stealth = runeword_by_runes(&codes(&["r07", "r05"]));
+        assert_eq!(stealth.map(|w| w.name), Some("Stealth"));
+        assert_eq!(stealth.and_then(runes_level), Some(17), "Tal 17 > Eth 15");
+        let leaf = runeword_by_runes(&codes(&["r03", "r08"]));
+        assert_eq!(leaf.map(|w| w.name), Some("Leaf"));
+        assert_eq!(leaf.and_then(runes_level), Some(19));
+        assert_eq!(
+            runeword_by_runes(&codes(&["r08", "r09", "r07"])).map(|w| w.name),
+            Some("Ancient's Pledge")
+        );
+        assert_eq!(runeword_by_runes(&codes(&["r05", "r07"])), None, "order matters");
+        assert_eq!(
+            runeword_by_runes(&codes(&["r07"])),
+            None,
+            "a prefix is no runeword"
+        );
+        assert_eq!(
+            runeword_by_runes(&codes(&["r07", "gcv"])),
+            None,
+            "a gem is no rune"
+        );
+        assert_eq!(runeword_by_runes(&[]), None);
+        // Hel's levelreq is 0, so Authority (Hel Shael Ral) needs Shael's 29.
+        assert_eq!(
+            crate::runewords_data::lookup("Authority").and_then(runes_level),
+            Some(29)
+        );
     }
 
     #[test]

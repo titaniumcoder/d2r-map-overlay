@@ -33,7 +33,8 @@ pub mod unit {
     pub const PATH: u64 = 0x38;
     /// ptr to the unit's `StatList` (verified live on items, 2026-11-15).
     pub const STATS: u64 = 0x88;
-    /// ptr to the unit's `Inventory` (see [`super::inventory`]); live 2026-11-15 on player units.
+    /// ptr to the unit's `Inventory` (see [`super::inventory`]); live 2026-11-15 on player units,
+    /// 2026-11-18 on socketed item units (the chain holds the socketed runes/gems/jewels).
     pub const INVENTORY: u64 = 0x90;
     /// ptr to the player's [`super::skills`] header. Live-verified 2026-11-17 (Warlock, clvl 38,
     /// python probe `skillprobe.py`): the header's first-skill chain held 19 skills — Attack,
@@ -303,7 +304,8 @@ pub mod item_data {
     pub const FLAGS: u64 = 0x18;
     /// `FLAGS` bit of an ethereal item (classic; to verify live).
     pub const FLAG_ETHEREAL: u32 = 0x0040_0000;
-    /// `FLAGS` bit of a finished runeword (classic; UNVERIFIED in D2R, the journal logs `FLAGS`).
+    /// `FLAGS` bit of a finished runeword. Live 2026-11-18: set (flags `0x0480_0810`) on an
+    /// equipped Stealth armour and Leaf staff, clear on the other equipped items.
     pub const FLAG_RUNEWORD: u32 = 0x0400_0000;
     /// `FLAGS` bit of an identified item (classic; live: set on an identified quest unique).
     pub const FLAG_IDENTIFIED: u32 = 0x10;
@@ -334,7 +336,8 @@ pub mod item_data {
     pub const QUANTITY: u64 = 0x9C;
     /// ptr to the next item unit in the same `Inventory` (see
     /// [`super::inventory::FIRST_ITEM`]); null ends the chain. Live 2026-11-17 on the shared
-    /// stash tabs (every item of each tab, the advanced tab's stacks included).
+    /// stash tabs (every item of each tab, the advanced tab's stacks included); live 2026-11-18
+    /// also on a socketed item's own inventory (its runes, in socket order).
     pub const NEXT_IN_INVENTORY: u64 = 0xB0;
     /// Bytes of `ItemData` copied into the journal's drop event for checking the offsets above.
     pub const HEAD_LEN: usize = 0x50;

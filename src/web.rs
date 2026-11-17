@@ -1025,6 +1025,14 @@ fn piece_state(req: Option<u32>, equipped_level: Option<u32>, lvl: u32) -> &'sta
     }
 }
 
+/// Whether a piece named `name` is equipped already (any slot), by the equipped items'
+/// unique/set/runeword names ([`crate::info::same_name`]).
+fn is_worn(name: &str, info: &LiveInfo) -> bool {
+    info.equipped_items
+        .iter()
+        .any(|e| e.name.as_deref().is_some_and(|n| crate::info::same_name(n, name)))
+}
+
 /// The upgrades the character can make right now (`live_json`'s `upgrades` section), each
 /// `{ "key", "kind", "slot", "name", "why" }`; the page chimes when a new `key` appears:
 /// - `"equip"`: a current-stage piece of a character slot that is owned (✓ or ✓ stash),
@@ -1057,18 +1065,16 @@ fn upgrades_json(info: &LiveInfo) -> Vec<serde_json::Value> {
             let name = crate::info::piece_name(piece);
             let req = crate::info::piece_level(piece)?;
             let tick = crate::info::piece_tick(piece, info.owned, info.stash_owned)?;
-            let worn = info
-                .equipped_items
-                .iter()
-                .any(|e| e.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name)));
-            (req <= lvl && !worn && piece_state(Some(req), eq_level, lvl) == "better").then(|| {
-                let place = match tick {
-                    crate::info::Tick::Owned => "you have it",
-                    crate::info::Tick::Stash => "in the shared stash",
-                };
-                let versus = eq_level.map_or_else(String::new, |eq| format!(" (equipped: lvl {eq})"));
-                (name, format!("{place} · lvl {req}{versus}"))
-            })
+            (req <= lvl && !is_worn(name, info) && piece_state(Some(req), eq_level, lvl) == "better").then(
+                || {
+                    let place = match tick {
+                        crate::info::Tick::Owned => "you have it",
+                        crate::info::Tick::Stash => "in the shared stash",
+                    };
+                    let versus = eq_level.map_or_else(String::new, |eq| format!(" (equipped: lvl {eq})"));
+                    (name, format!("{place} · lvl {req}{versus}"))
+                },
+            )
         });
         if let Some((name, why)) = found {
             let key = format!("equip:{column}:{name}");
@@ -1087,9 +1093,7 @@ fn upgrades_json(info: &LiveInfo) -> Vec<serde_json::Value> {
         }
         let slot_piece = crate::config::SLOT_NAMES.iter().find_map(|slot| {
             bis.slots.get(*slot)?.iter().find_map(|p| {
-                crate::info::piece_name(p)
-                    .eq_ignore_ascii_case(recipe.name.trim())
-                    .then_some((*slot, p))
+                crate::info::same_name(crate::info::piece_name(p), &recipe.name).then_some((*slot, p))
             })
         });
         let Some((slot, piece)) = slot_piece else {
@@ -1108,6 +1112,7 @@ fn upgrades_json(info: &LiveInfo) -> Vec<serde_json::Value> {
         let column = if slot.starts_with("ring") { "ring" } else { slot };
         if has_runes
             && runes_owned
+            && !is_worn(&recipe.name, info)
             && req.is_some_and(|r| r <= lvl)
             && piece_state(req, equipped_level(slot_bodies(slot), info), lvl) == "better"
         {
@@ -1587,8 +1592,8 @@ fn add_piece_details(json: &mut serde_json::Value, name: &str, build: Option<&cr
 }
 
 /// The name shown for an equipped piece in a grid column header: the identified unique/set
-/// name, else (normal/superior quality) the base item's name from the armor/weapons
-/// tables, else — for a runeword flag (the runes are unread, so no word can be named) and
+/// or runeword name, else (normal/superior quality) the base item's name from the armor/weapons
+/// tables, else — for a runeword whose runes couldn't be read or matched, and
 /// for magic/rare (the real name comes from the affixes) — the placeholders below.
 fn equipped_name(equipped: &crate::game::Equipped) -> String {
     if let Some(name) = &equipped.name {
@@ -3740,7 +3745,43 @@ mod tests {
         // Below the runeword's level: not yet.
         let json = guide_json(&build, 16, &stash, &held, &[], &[], &[])?;
         assert_eq!(keys(&json), Vec::<String>::new());
+        // Stealth worn already (the reader names a runeword by its socketed runes): no
+        // craft and no equip, even with its runes owned and the piece ticked as owned.
+        let stealth = [rune_worded(3, "lea", "Stealth")];
+        let owned = ["Stealth".to_owned()];
+        let json = guide_json(&build, 17, &stash, &held, &[], &owned, &stealth)?;
+        assert_eq!(keys(&json), Vec::<String>::new());
         Ok(())
+    }
+
+    /// A named runeword on a superior base `code`, equipped in `body`.
+    fn rune_worded(body: u8, code: &str, name: &str) -> crate::game::Equipped {
+        crate::game::Equipped {
+            body,
+            quality: crate::offsets::item_data::QUALITY_SUPERIOR,
+            code: Some(code.to_owned()),
+            name: Some(name.to_owned()),
+            file_index: None,
+            runeword: true,
+        }
+    }
+
+    #[test]
+    fn worn_check_ignores_case_and_apostrophe_placement() {
+        let blocks = crate::render::TextBlocks::default();
+        let mut info = live_info(5, &blocks, &[], &[], &[]);
+        let worn = [
+            rune_worded(5, "buc", "Ancient's Pledge"),
+            rune_worded(4, "sst", "Leaf"),
+        ];
+        info.equipped_items = &worn;
+        assert!(is_worn("Ancients' Pledge", &info), "the builds' spelling");
+        assert!(is_worn("ancient's pledge", &info));
+        assert!(is_worn(" Leaf ", &info));
+        assert!(!is_worn("Stealth", &info));
+        assert!(!is_worn("Lea", &info), "whole names only");
+        info.equipped_items = &[];
+        assert!(!is_worn("Leaf", &info));
     }
 
     #[test]

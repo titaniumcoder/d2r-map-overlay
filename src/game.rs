@@ -45,6 +45,8 @@ pub const TERROR_MIN_MONSTERS: usize = 2;
 const MAX_STASH_ITEMS_PER_TAB: usize = 100;
 /// Most nodes walked in the player's shared-stash tab list (live: 6).
 const MAX_STASH_TABS: usize = 16;
+/// Most items one item can hold in its sockets (6 in D2R).
+const MAX_SOCKETS: usize = 6;
 /// Most nodes walked in the player's skill list (live: 19; a class has 30 skills, plus the
 /// basic ones and gear-granted skills of other classes).
 const MAX_SKILLS: usize = 128;
@@ -743,7 +745,8 @@ pub struct Equipped {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     /// Display name of an identified unique/set item (the `valuables::unique_set_name`
-    /// identity path); `None` otherwise (unidentified, magic, rare, base).
+    /// identity path) or of a runeword (its socketed runes in socket order,
+    /// [`stash::runeword_by_runes`]); `None` otherwise (unidentified, magic, rare, base).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// uniqueitems/setitems row (`item_data::FILE_INDEX`) of a named unique/set. Kept only
@@ -751,7 +754,7 @@ pub struct Equipped {
     /// name it is not trusted (see `item_data::FILE_INDEX`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_index: Option<u32>,
-    /// `ItemData::FLAGS` runeword bit (classic; UNVERIFIED in D2R).
+    /// `ItemData::FLAGS` runeword bit ([`item_data::FLAG_RUNEWORD`], live-verified).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub runeword: bool,
 }
@@ -759,8 +762,8 @@ pub struct Equipped {
 impl Equipped {
     /// The item's required character level, as far as the reader can know it:
     /// - an identified unique/set: the exact `lvl req` of its table row;
-    /// - a runeword: `None` — the socket contents (the runes) are unread, so neither the
-    ///   word nor its level is known;
+    /// - a named runeword: the higher of its runes' `levelreq` and its base's `levelreq`
+    ///   (exact); an unnamed one (runes unreadable or unmatched): `None`;
     /// - everything else (normal, magic, rare, crafted, ...): its BASE item's `levelreq`
     ///   (armor/weapons tables). APPROXIMATION: affixes can raise a magic/rare/crafted
     ///   item's real requirement above the base one.
@@ -776,12 +779,19 @@ impl Equipped {
         match self.quality {
             item_data::QUALITY_UNIQUE => row.and_then(item_levels_data::unique_level),
             item_data::QUALITY_SET => row.and_then(item_levels_data::set_level),
-            _ if self.runeword => None,
-            _ => {
-                let code = self.code.as_deref()?;
-                item_levels_data::armor_level(code).or_else(|| crate::weapons_data::level(code))
+            _ if self.runeword => {
+                let word = crate::runewords_data::lookup(self.name.as_deref()?)?;
+                let runes = stash::runes_level(word)?;
+                Some(self.base_level().map_or(runes, |base| base.max(runes)))
             }
+            _ => self.base_level(),
         }
+    }
+
+    /// The base item's `levelreq` (armor or weapons table); `None` for an unknown code.
+    fn base_level(&self) -> Option<u32> {
+        let code = self.code.as_deref()?;
+        crate::item_levels_data::armor_level(code).or_else(|| crate::weapons_data::level(code))
     }
 }
 
@@ -1791,14 +1801,14 @@ impl<M: ReadMem> Reader<'_, M> {
                         .and_then(|d| valuables::unique_set_name(&d).map(str::to_owned));
                     let names = scan.owned_names.entry(owner).or_default();
                     if let Some(name) = name
-                        && !names.iter().any(|n| n.eq_ignore_ascii_case(&name))
+                        && !names.iter().any(|n| crate::info::same_name(n, &name))
                     {
                         names.push(name);
                     }
                 }
             }
             // Equipped pieces by owner kind, for the `BiS` per-slot display.
-            self.collect_equipped(&mut scan, &head, items_table, candidates);
+            self.collect_equipped(&mut scan, addr, &head, items_table, candidates);
         }
         scan
     }
@@ -1810,6 +1820,7 @@ impl<M: ReadMem> Reader<'_, M> {
     fn collect_equipped(
         &self,
         scan: &mut ItemScan,
+        addr: u64,
         head: &UnitHead,
         items_table: Option<u64>,
         candidates: &[u32],
@@ -1836,7 +1847,15 @@ impl<M: ReadMem> Reader<'_, M> {
         if !merc {
             let items = scan.equipped_items.entry(owner).or_default();
             if items.iter().all(|e| e.body != slot) {
-                items.push(self.equipped_item(head, slot, quality, items_table));
+                let item = self.equipped_item(addr, head, slot, quality, items_table);
+                // A worn runeword is owned: the `BiS` list ticks it like a unique.
+                if let Some(word) = item.name.as_deref().filter(|_| item.runeword) {
+                    let names = scan.owned_names.entry(owner).or_default();
+                    if !names.iter().any(|n| crate::info::same_name(n, word)) {
+                        names.push(word.to_owned());
+                    }
+                }
+                items.push(item);
             }
         }
     }
@@ -1862,9 +1881,17 @@ impl<M: ReadMem> Reader<'_, M> {
 
     /// The enriched equipped item of `head` (body slot `slot`, quality `quality`) for the
     /// dashboard's gear grid: the item code from the items table, the `FLAGS` runeword bit
-    /// and, for an identified unique/set, its display name and `FILE_INDEX` row. The
+    /// and, for an identified unique/set, its display name and `FILE_INDEX` row; for a
+    /// runeword, its name from the socketed runes ([`Reader::socketed_codes`]). The
     /// individual reads are optional: a missing items table only leaves the code out.
-    fn equipped_item(&self, head: &UnitHead, slot: u8, quality: u32, items_table: Option<u64>) -> Equipped {
+    fn equipped_item(
+        &self,
+        addr: u64,
+        head: &UnitHead,
+        slot: u8,
+        quality: u32,
+        items_table: Option<u64>,
+    ) -> Equipped {
         let flags = head
             .unit_data
             .and_then(|d| self.u32(d, item_data::FLAGS).ok())
@@ -1881,14 +1908,53 @@ impl<M: ReadMem> Reader<'_, M> {
             .map(items::code_text);
         let name = valuables::unique_set_name_parts(quality, flags, file_index).map(str::to_owned);
         let named_index = if name.is_some() { file_index } else { None };
+        let runeword = flags & item_data::FLAG_RUNEWORD != 0;
+        let name = name.or_else(|| {
+            let table = items_table.filter(|_| runeword)?;
+            let runes = self.socketed_codes(addr, table);
+            stash::runeword_by_runes(&runes).map(|w| w.name.to_owned())
+        });
         Equipped {
             body: slot,
             quality,
             code,
             name,
             file_index: named_index,
-            runeword: flags & item_data::FLAG_RUNEWORD != 0,
+            runeword,
         }
+    }
+
+    /// The item codes of what is socketed in the item at `addr`, in socket order: the
+    /// item's own `Inventory` chain ([`unit::INVENTORY`], [`inventory::FIRST_ITEM`], then
+    /// [`item_data::NEXT_IN_INVENTORY`]), as for a stash tab. Live 2026-11-18: a Stealth
+    /// body armour chained r07 then r05, a Leaf staff r03 then r08. Optional data: an
+    /// unreadable link or code ends the list early (the runeword then stays unnamed).
+    fn socketed_codes(&self, addr: u64, items_table: u64) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = self
+            .ptr(addr, unit::INVENTORY)
+            .ok()
+            .flatten()
+            .and_then(|inv| self.ptr(inv, inventory::FIRST_ITEM).ok().flatten());
+        while let Some(item) = cur {
+            if out.len() >= MAX_SOCKETS {
+                // A runaway or cyclic chain: more than any item can hold.
+                return Vec::new();
+            }
+            let Ok(txt) = self.u32(item, unit::TXT) else {
+                break;
+            };
+            let Some(code) = items::read_code(self.mem, items_table, txt) else {
+                break;
+            };
+            out.push(items::code_text(code));
+            cur = self
+                .ptr(item, unit::UNIT_DATA)
+                .ok()
+                .flatten()
+                .and_then(|d| self.ptr(d, item_data::NEXT_IN_INVENTORY).ok().flatten());
+        }
+        out
     }
 
     /// The owner whose gear stats `item` contributes to: the player's equipped items (body slot)
@@ -2808,7 +2874,8 @@ mod tests {
         stored_item(&mut m, I2, (40, 5, id, 7), (1, 255), &[], I3)?;
         set_owner(&mut m, I2, BOB_ID)?;
         set_body(&mut m, I2, 2)?;
-        // Bob's equipped weapon: a finished runeword on a Crystal Sword.
+        // Bob's equipped weapon: a finished runeword on a Crystal Sword, Tir then Ral in its
+        // sockets (Leaf, by runes only), chained through the weapon's own `Inventory`.
         stored_item(
             &mut m,
             I3,
@@ -2819,6 +2886,12 @@ mod tests {
         )?;
         set_owner(&mut m, I3, BOB_ID)?;
         set_body(&mut m, I3, 4)?;
+        let (rune_tir, rune_ral) = (0x80_7000, 0x80_8000);
+        stored_item(&mut m, rune_tir, (41, 2, 0, 0), (6, 255), &[], 0)?;
+        stored_item(&mut m, rune_ral, (42, 2, 0, 0), (6, 255), &[], 0)?;
+        let sockets = chain_items(&mut m, &[rune_tir, rune_ral])?;
+        tab_inventory(&mut m, INV0, item_data::NO_OWNER, sockets)?;
+        patch(&mut m, I3, UNIT_SIZE, unit::INVENTORY, &INV0.to_le_bytes())?;
         // Bob's equipped body armour: magic, so only the BASE requirement is knowable.
         stored_item(&mut m, I4, (40, 4, id, 0), (1, 255), &[], I5)?;
         set_owner(&mut m, I4, BOB_ID)?;
@@ -2851,9 +2924,18 @@ mod tests {
         let weapon = eq.get(2).context("weapon")?;
         assert_eq!(weapon.code.as_deref(), Some("crs"));
         assert!(weapon.runeword);
-        assert_eq!(weapon.name, None, "a runeword's runes are unread");
+        assert_eq!(
+            weapon.name.as_deref(),
+            Some("Leaf"),
+            "named by its socketed runes"
+        );
         assert_eq!(weapon.file_index, None);
-        assert_eq!(weapon.required_level(), None, "runeword: level unknown");
+        assert_eq!(weapon.required_level(), Some(19), "Ral's 19 beats the base's");
+        assert!(
+            s.owned_names.iter().any(|n| n == "Leaf"),
+            "a worn runeword is owned: {:?}",
+            s.owned_names
+        );
         let armour = eq.get(3).context("armour")?;
         assert_eq!(armour.name, None, "magic: no name");
         assert_eq!(
@@ -3469,7 +3551,7 @@ mod tests {
     fn base_items_table(mem: &mut FakeMem) -> Result<()> {
         let stride = usize::try_from(crate::offsets::items_txt::STRIDE)?;
         let mut b = vec![0u8; 50 * stride];
-        for (row, code) in [(30, b"crs "), (40, b"uap ")] {
+        for (row, code) in [(30, b"crs "), (40, b"uap "), (41, b"r03 "), (42, b"r08 ")] {
             b.get_mut(row * stride..row * stride + 4)
                 .context("row in table")?
                 .copy_from_slice(code);

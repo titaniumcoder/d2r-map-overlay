@@ -161,7 +161,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 
 ## Item fields and valuables (2026-11-15)
 - ItemData `+0x00` quality (2 normal, 4 magic, 5 set, 7 unique verified live), `+0x18` flags (0x10 identified
-  verified; 0x400000 ethereal, 0x4000000 runeword = classic bits, unverified), `+0x34` unique/set row index
+  verified; 0x4000000 runeword verified live 2026-11-18 (flags 0x04800810 on a Stealth leather armour and a Leaf
+  staff, absent on every other equipped item); 0x400000 ethereal = classic bit, unverified), `+0x34` unique/set row index
   (verified: Khalim's Flail = row 127, Hellforge Hammer = row 126, both identified quest items; an UNIDENTIFIED set item
   (Cleglaw's Claw, row 32) read 0 → the index is only filled once identified, so name rules on unidentified items
   stay uncertain). After identifying (Cain or scroll), the index is filled: Darkglow = unique 83, Cleglaw's Claw = set
@@ -284,6 +285,13 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   stacks stay in the tab (the dashboard drops them). Normal-page items still carry the tab unit id as `OWNER`, so
   `game::place` gives them `Place::Shared` for the spare lists; the stacks (`NO_OWNER`) never reach the
   keep/spare lists (gems/runes are never spare, and the materials have their own panel).
+- **Socketed items** (live 2026-11-18, research/sockets.py, `--dump`): an item unit's own `unit + 0x90` Inventory
+  chains its socket contents the same way (`Inventory + 0x10` first, `ItemData + 0xB0` next), in socket order:
+  Stealth armour r07 → r05 (Tal Eth), Leaf staff r03 → r08 (Tir Ral). The runes are ITEM units with body 0,
+  page 255, `OWNER` `NO_OWNER`; unsocketed items have a null inventory or a null first item. The reader names an
+  equipped runeword by matching that rune sequence against `runewords_data::RUNEWORDS`
+  (`stash::runeword_by_runes`, max 6) and its level req = max(rune `levelreq`, base `levelreq`); the upgrades'
+  worn check compares names ignoring case and apostrophes ("Ancient's" vs the builds' "Ancients'").
 - **Session caching (user decision)**: D2R fills the stash only after it was opened in the game, and the tab units
   vanish again later; the session therefore caches the captured tabs for the rest of the game (kept while the live
   read is empty) and drops the cache only when the player unit id changes. Not persisted across overlay restarts.
