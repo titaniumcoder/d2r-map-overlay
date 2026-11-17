@@ -404,10 +404,6 @@ const MARKER_OUTLINE: Rgba = [0, 0, 0, 220];
 const LANDMARK_GOLD: Rgba = [255, 200, 30, 255];
 /// Halo ring radius in px, beyond the star's tips.
 const LANDMARK_RING: f32 = 13.0;
-/// Font size of the party member name labels (user request, 2026-11-17).
-const PARTY_NAME_PX: f32 = 12.0;
-/// px above the dot centre the name label sits.
-const PARTY_NAME_OFFSET: f32 = 8.0;
 /// "?" marker for an unconfirmed landmark: a light gold glyph on a dark translucent disc.
 const SUSPECT_TEXT: Rgba = [255, 235, 150, 255];
 const SUSPECT_DISC: Rgba = [0, 0, 0, 150];
@@ -518,11 +514,8 @@ pub enum Marker {
     /// Live quest boss ([`BOSS_MONSTERS`](crate::levels_data::BOSS_MONSTERS) by txt id): a red
     /// horned skull.
     Boss,
-    /// Another live player of the level (online game, see [`PartyMember`](crate::game::PartyMember)):
-    /// a yellow dot, drawn below the player so the local player stays on top.
-    Party,
     /// The local player's mercenary (`MonsterData` owner id, unverified hypothesis): a pale
-    /// green dot, next to the party members.
+    /// green dot, drawn below the player.
     Merc,
     /// The player. Drawn below drops and rings: on big levels a fresh drop lies within a pixel or
     /// two of the player and would otherwise be hidden (live, Bloody Foothills, a large charm 3.6
@@ -581,7 +574,6 @@ impl Marker {
                 let radius = Self::Drop(kind).style().1 + RING_GAP;
                 (tier_colour(tier), radius, Shape::Circle)
             }
-            Self::Party => ([255, 230, 90, 255], 2.5, Shape::Circle),
             Self::Merc => ([150, 255, 190, 255], 2.5, Shape::Circle),
             Self::Player => ([40, 255, 60, 255], 2.5, Shape::Circle),
         }
@@ -923,11 +915,6 @@ fn markers_with(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f6
         .chain(border_exits(snap))
         .collect();
     out.extend(
-        snap.party
-            .iter()
-            .map(|p| (Marker::Party, f64::from(p.x), f64::from(p.y))),
-    );
-    out.extend(
         snap.monsters
             .iter()
             .filter(|m| !m.is_dead() && m.owner_id == snap.player.id)
@@ -1158,8 +1145,6 @@ fn render_rules(
         }
     }
     if let Some(font) = font {
-        // Party member names above their dots (user request, 2026-11-17).
-        draw_party_names(&mut pm, font, snap, view);
         draw_text_bands(&mut pm, font, snap, &guide);
     }
     Ok(pm)
@@ -1181,22 +1166,6 @@ fn draw_text_bands(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, guide: &[in
         inset,
     );
     info::draw_bands(pm, font, guide);
-}
-
-/// Draws each party member's name centred above their dot (user request, 2026-11-17).
-fn draw_party_names(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, view: View) {
-    for p in &snap.party {
-        let (cx, cy) = view.to_screen(f64::from(p.x), f64::from(p.y));
-        info::draw_text_centred(
-            pm,
-            font,
-            PARTY_NAME_PX,
-            info::PARTY_NAME_TEXT,
-            &p.name,
-            cx,
-            cy - PARTY_NAME_OFFSET,
-        );
-    }
 }
 
 /// Strokes `trail` (world tiles) as one translucent polyline with round joins, broken where two
@@ -1718,7 +1687,6 @@ mod tests {
                 bis: None,
                 wsm: None,
             },
-            party: vec![],
             equipped: vec![],
             merc_equipped: vec![],
             equipped_items: vec![],
@@ -2134,32 +2102,6 @@ mod tests {
         assert_eq!(
             kinds,
             vec![Marker::Exit, Marker::Special(None), Marker::Elite, Marker::Player]
-        );
-    }
-
-    fn party_member(x: u16, y: u16) -> crate::game::PartyMember {
-        crate::game::PartyMember {
-            id: 2,
-            name: "M".into(),
-            class: 0,
-            char_level: None,
-            x,
-            y,
-        }
-    }
-
-    #[test]
-    fn markers_draw_party_below_the_player() {
-        let mut snap = empty_snapshot(5, 5);
-        snap.party = vec![party_member(2, 3), party_member(8, 9)];
-        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
-            .into_iter()
-            .map(|(m, _, _)| m)
-            .collect();
-        assert_eq!(
-            kinds,
-            vec![Marker::Party, Marker::Party, Marker::Player],
-            "members below the player so the local player stays on top"
         );
     }
 

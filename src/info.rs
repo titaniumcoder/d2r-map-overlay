@@ -43,8 +43,6 @@ const TEXT_PX: f32 = 16.0;
 /// the text and the map above it.
 const PAD: u32 = 3;
 const TEXT: [u8; 4] = [255, 255, 255, 255];
-/// Party member name labels above their map dots (user request, 2026-11-17).
-pub const PARTY_NAME_TEXT: [u8; 4] = [255, 230, 90, 255];
 /// The inventory keep lines: green, same outline as the info line.
 pub const KEEP_TEXT: [u8; 4] = [90, 230, 90, 255];
 /// Most keep lines; the last one ends in "+N more" when the list is longer.
@@ -727,12 +725,7 @@ pub fn band_height(font: &FontVec) -> u32 {
 
 /// Width in px of `text` set in `font` (advances plus kerning).
 fn text_width(font: &FontVec, text: &str) -> f32 {
-    text_width_at(font, TEXT_PX, text)
-}
-
-/// Width in px of `text` set in `font` at `size` px (advances plus kerning).
-fn text_width_at(font: &FontVec, size: f32, text: &str) -> f32 {
-    let scaled = font.as_scaled(PxScale::from(size));
+    let scaled = font.as_scaled(PxScale::from(TEXT_PX));
     let mut width = 0.0;
     let mut prev: Option<GlyphId> = None;
     for c in text.chars() {
@@ -744,25 +737,6 @@ fn text_width_at(font: &FontVec, size: f32, text: &str) -> f32 {
         prev = Some(id);
     }
     width
-}
-
-/// Draws `text` at `size` px in `colour` with the info line's dark 1 px outline, its ink box
-/// centred on (`cx`, `cy`). Used for party member names above their map dots.
-pub fn draw_text_centred(
-    pm: &mut Pixmap,
-    font: &FontVec,
-    size: f32,
-    colour: [u8; 4],
-    text: &str,
-    cx: f32,
-    cy: f32,
-) {
-    let scaled = font.as_scaled(PxScale::from(size));
-    let x = cx - text_width_at(font, size, text) / 2.0;
-    // Centred ink box: half the height above the middle is ascent (up to the baseline), the
-    // other half below it descent.
-    let baseline = cy - scaled.height() / 2.0 + scaled.ascent();
-    draw_outlined(pm, font, size, colour, text, (x, baseline), false);
 }
 
 /// The line's text, with the area name cut and ended with `…` until it fits `max_width` px. If even

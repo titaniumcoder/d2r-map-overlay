@@ -685,7 +685,6 @@ mod tests {
                 bis: None,
                 wsm: None,
             },
-            party: vec![],
             equipped: vec![],
             merc_equipped: vec![],
             equipped_items: vec![],

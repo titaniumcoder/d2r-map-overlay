@@ -83,9 +83,6 @@ impl<'de> Deserialize<'de> for Addr {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Snapshot {
     pub player: Player,
-    /// Other live players in this level (online games): drawn as yellow dots with their names.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub party: Vec<PartyMember>,
     /// The local player's equipped `(body slot, quality)` pairs: the `BiS` per-slot "already
     /// better" check.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -259,24 +256,6 @@ pub struct SpeedStats {
     pub res_cold: u32,
     pub res_lightning: u32,
     pub res_poison: u32,
-}
-
-/// Another player in the same level, live (online games; user request, 2026-11-17). Read from a
-/// player-type unit other than the chosen one; only members of the player's current level are
-/// kept (their coordinates wouldn't fit another level's map).
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PartyMember {
-    /// Unit id; stable across ticks, so the map follows the player.
-    pub id: u32,
-    /// Character name ([`Reader::player_name`]).
-    pub name: String,
-    /// Character class (txt row, as [`Player::class`]).
-    pub class: u32,
-    /// Character level; `None` if unreadable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub char_level: Option<u8>,
-    pub x: u16,
-    pub y: u16,
 }
 
 /// The character level from the raw stat value: 1..=99, or the same shifted left by 8 (some D2
@@ -777,35 +756,6 @@ fn player_candidates<M: ReadMem>(r: &mut Reader<'_, M>, unit_table: u64) -> Vec<
     candidates
 }
 
-/// Reads the other live players of the local player's level (an online game). Their unit positions
-/// are valid map coordinates only for their own level, so members elsewhere are dropped.
-fn read_party<M: ReadMem>(
-    r: &mut Reader<'_, M>,
-    candidates: &[Candidate],
-    chosen: Addr,
-    level_id: u32,
-) -> Vec<PartyMember> {
-    let mut party = Vec::new();
-    for c in candidates {
-        if c.addr == chosen {
-            continue;
-        }
-        match r.player(c.addr.0) {
-            Ok((p, _)) if p.level_id == level_id => party.push(PartyMember {
-                id: p.id,
-                name: p.name,
-                class: p.class,
-                char_level: p.char_level,
-                x: p.x,
-                y: p.y,
-            }),
-            Ok(_) => {}
-            Err(e) => r.warn(format!("party player {:#x}: {e:#}", c.addr.0)),
-        }
-    }
-    party
-}
-
 /// Walks `level_addr`'s rooms and collects the level, its presets and links. The Room2 chain
 /// must stay inside this level (as in research/rooms.py); a stop at the first room is an error.
 /// The walk's collected data.
@@ -893,7 +843,6 @@ pub fn snapshot(
         }
     };
     let (mut player, level_addr) = r.player(chosen.addr.0).context("reading the player")?;
-    let party = read_party(&mut r, &candidates, chosen.addr, player.level_id);
     // The guide's numbers: the chosen player's equipped items and carried charms.
     player.speed = scan.gear.get(&chosen.id).copied();
     player.wsm = scan.weapons.get(&chosen.id).copied();
@@ -934,7 +883,6 @@ pub fn snapshot(
 
     Ok(Snapshot {
         player,
-        party,
         equipped,
         merc_equipped,
         equipped_items,
