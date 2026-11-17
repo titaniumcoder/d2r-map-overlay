@@ -110,8 +110,9 @@ pub fn guide_band(player: &Player, difficulty: Option<u8>) -> Option<crate::info
     let speed = player.speed.as_ref()?;
     let (cast_base, cast_speed) = class_data(&CAST, player.class)?;
     let (hit_base, hit_speed) = class_data(&HIT, player.class)?;
+    let wsm = player.wsm.map_or_else(String::new, |w| format!(" (wsm {w})"));
     let mut text = format!(
-        "{} · {} · ias {} · res ",
+        "{} · {} · ias {}{wsm} · res ",
         stat_part("fcr", cast_base, cast_speed, speed.fcr, 200, cast_frames),
         stat_part("fhr", hit_base, hit_speed, speed.fhr, 480, hit_frames),
         speed.ias,
@@ -184,6 +185,7 @@ mod tests {
             }),
             build: Vec::new(),
             bis: None,
+            wsm: None,
         }
     }
 

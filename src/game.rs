@@ -211,6 +211,11 @@ pub struct Player {
     /// as a chase list under the guide. Config-set like `build`, not kept in the JSON.
     #[serde(skip)]
     pub bis: Option<crate::config::Bis>,
+    /// The equipped weapon's WSM (weapon speed modifier, weapons.txt `speed` column); shown
+    /// next to IAS in the guide (its frames need the weapon speed). `None` without a readable
+    /// weapon or items table. Set in `snapshot`, not kept in the JSON.
+    #[serde(skip)]
+    pub wsm: Option<i32>,
 }
 
 /// The player's speed stats and elemental resistances as granted by gear (stat ids from
@@ -372,6 +377,8 @@ struct ItemScan {
     /// Speed/resist stats summed over each owner's equipped items and carried charms (the
     /// guide's numbers; the player's own stat list is base-only, no item stats).
     gear: HashMap<u32, SpeedStats>,
+    /// The equipped weapon's WSM per owner (the guide's IAS note).
+    weapons: HashMap<u32, i32>,
     /// The local player's equipped `(body slot, quality)` pairs (the `BiS` "already better"
     /// check: set/unique quality there hides the slot).
     equipped: Vec<(u8, u32)>,
@@ -700,6 +707,61 @@ fn read_party<M: ReadMem>(
     party
 }
 
+/// Walks `level_addr`'s rooms and collects the level, its presets and links. The Room2 chain
+/// must stay inside this level (as in research/rooms.py); a stop at the first room is an error.
+/// The walk's collected data.
+struct LevelWalk {
+    level: Level,
+    presets: Vec<Preset>,
+    room_links: Vec<RoomLink>,
+    border_links: Vec<BorderLink>,
+}
+
+fn walk_level(r: &mut Reader<'_, impl ReadMem>, level_addr: u64, level_id: u32) -> Result<LevelWalk> {
+    let Some(first_room) = r.ptr(level_addr, level::FIRST_ROOM2)? else {
+        bail!("level {level_addr:#x} has no first room");
+    };
+    let rooms = r.walk(Some(first_room), room2::NEXT, MAX_ROOMS, "room");
+    let mut level = Level {
+        id: level_id,
+        bounds: None,
+        rooms: Vec::new(),
+    };
+    let (mut presets, mut room_links, mut border_links) = (Vec::new(), Vec::new(), Vec::new());
+    for (i, room_addr) in rooms.into_iter().enumerate() {
+        // The Room2 chain must stay inside this level (as in research/rooms.py); stop where it
+        // leaves.
+        let owner = r.ptr(room_addr, room2::LEVEL);
+        if !matches!(owner, Ok(Some(a)) if a == level_addr) {
+            if i == 0 {
+                bail!("first room {room_addr:#x} does not belong to level {level_addr:#x} ({owner:?})");
+            }
+            r.warn(format!(
+                "room {room_addr:#x} belongs to another level ({owner:?}); room walk stopped"
+            ));
+            break;
+        }
+        let room = match r.room(room_addr) {
+            Ok(room) => room,
+            Err(e) => {
+                r.warn(format!("room {room_addr:#x}: {e:#}"));
+                continue;
+            }
+        };
+        let pos = RoomPos { x: room.x, y: room.y };
+        r.presets(room_addr, pos, &mut presets);
+        r.room_links(room_addr, pos, &mut room_links);
+        r.border_links(room_addr, level_addr, &room, &mut border_links);
+        level.rooms.push(room);
+    }
+    Ok(LevelWalk {
+        level,
+        presets,
+        room_links,
+        border_links,
+    })
+}
+
 /// Reads one snapshot. `unit_table` is the hash table address from [`crate::image::Image::unit_table`];
 /// `items_table` is the item-code table from [`items::find_table`] (`None`: unique and set drops only).
 /// `previous` is the unit id of the player chosen before (see [`ChosenBy::Previous`]).
@@ -735,46 +797,16 @@ pub fn snapshot(
     let party = read_party(&mut r, &candidates, chosen.addr, player.level_id);
     // The guide's numbers: the chosen player's equipped items and carried charms.
     player.speed = scan.gear.get(&chosen.id).copied();
+    player.wsm = scan.weapons.get(&chosen.id).copied();
     let equipped = scan.equipped.clone();
     let merc_equipped = scan.merc_equipped.clone();
 
-    let rooms = r.walk(
-        r.ptr(level_addr, level::FIRST_ROOM2)?,
-        room2::NEXT,
-        MAX_ROOMS,
-        "room",
-    );
-    let mut level = Level {
-        id: player.level_id,
-        bounds: None,
-        rooms: Vec::new(),
-    };
-    let (mut presets, mut room_links, mut border_links) = (Vec::new(), Vec::new(), Vec::new());
-    for (i, room_addr) in rooms.into_iter().enumerate() {
-        // The Room2 chain must stay inside this level (as in research/rooms.py); stop where it leaves.
-        let owner = r.ptr(room_addr, room2::LEVEL);
-        if !matches!(owner, Ok(Some(a)) if a == level_addr) {
-            if i == 0 {
-                bail!("first room {room_addr:#x} does not belong to level {level_addr:#x} ({owner:?})");
-            }
-            r.warn(format!(
-                "room {room_addr:#x} belongs to another level ({owner:?}); room walk stopped"
-            ));
-            break;
-        }
-        let room = match r.room(room_addr) {
-            Ok(room) => room,
-            Err(e) => {
-                r.warn(format!("room {room_addr:#x}: {e:#}"));
-                continue;
-            }
-        };
-        let pos = RoomPos { x: room.x, y: room.y };
-        r.presets(room_addr, pos, &mut presets);
-        r.room_links(room_addr, pos, &mut room_links);
-        r.border_links(room_addr, level_addr, &room, &mut border_links);
-        level.rooms.push(room);
-    }
+    let LevelWalk {
+        mut level,
+        mut presets,
+        room_links,
+        border_links,
+    } = walk_level(&mut r, level_addr, player.level_id).context("walking the level's rooms")?;
     level.bounds = bounds(&level.rooms);
     dedup_presets(&mut presets);
 
@@ -1091,6 +1123,7 @@ impl<M: ReadMem> Reader<'_, M> {
             speed: None,
             build: Vec::new(),
             bis: None,
+            wsm: None,
         };
         Ok((player, level))
     }
@@ -1409,6 +1442,7 @@ impl<M: ReadMem> Reader<'_, M> {
                 && candidates.contains(&owner)
             {
                 self.accumulate_gear(addr, &head, scan.gear.entry(owner).or_default());
+                self.capture_weapon_wsm(&head, owner, items_table, &mut scan.weapons);
             }
             // Equipped pieces by owner kind, for the `BiS` per-slot display.
             if let Some(quality) = self.equipped_quality(&head)
@@ -1428,6 +1462,13 @@ impl<M: ReadMem> Reader<'_, M> {
             }
         }
         scan
+    }
+
+    /// The `item_data::BODY` slot of an equipped item (`None` when not equipped).
+    fn head_body_slot(&self, head: &UnitHead) -> Option<u8> {
+        head.unit_data
+            .and_then(|d| self.u8(d, item_data::BODY).ok())
+            .filter(|&b| b != 0 && b != 255)
     }
 
     /// The `item_data::BODY` slot of an equipped item (`None` when not equipped).
@@ -1459,6 +1500,31 @@ impl<M: ReadMem> Reader<'_, M> {
             }
         }
         None
+    }
+
+    /// The equipped weapon's WSM per owner (the guide's IAS note): the weapon is the body-4
+    /// item of `owner`, its code looked up in the items table, the WSM in `weapons_data`.
+    fn capture_weapon_wsm(
+        &self,
+        head: &UnitHead,
+        owner: u32,
+        items_table: Option<u64>,
+        out: &mut HashMap<u32, i32>,
+    ) {
+        let already = out.contains_key(&owner);
+        let owned_by_player = head
+            .unit_data
+            .and_then(|d| self.u32(d, item_data::OWNER).ok())
+            .is_some_and(|o| o == owner);
+        if self.head_body_slot(head) != Some(4) || already || !owned_by_player {
+            return;
+        }
+        let Some(code) = items_table.and_then(|t| items::read_code(self.mem, t, head.txt)) else {
+            return;
+        };
+        if let Some(wsm) = crate::weapons_data::wsm(&items::code_text(code)) {
+            out.insert(owner, wsm);
+        }
     }
 
     /// Adds the speed/resist stats of `item`'s stat-list chain (base list at `unit::STATS`, then

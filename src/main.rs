@@ -30,6 +30,7 @@ mod session;
 #[cfg(test)]
 mod testutil;
 mod valuables;
+mod weapons_data;
 
 use std::thread;
 

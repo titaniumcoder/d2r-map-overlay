@@ -1682,6 +1682,7 @@ mod tests {
                 speed: None,
                 build: vec![],
                 bis: None,
+                wsm: None,
             },
             party: vec![],
             equipped: vec![],
