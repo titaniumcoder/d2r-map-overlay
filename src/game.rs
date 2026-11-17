@@ -414,16 +414,18 @@ struct ItemScan {
     gear: HashMap<u32, SpeedStats>,
     /// The equipped weapon's WSM per owner (the guide's IAS note).
     weapons: HashMap<u32, i32>,
-    /// Display names of identified unique/set items owned by a candidate (equipped, carried,
-    /// stashed): the `BiS` list marks owned pieces with a ✓.
-    owned_names: Vec<String>,
-    /// The local player's equipped `(body slot, quality)` pairs (the `BiS` "already better"
+    /// Display names of identified unique/set items per owning candidate (equipped, carried,
+    /// stashed): the `BiS` list marks owned pieces with a ✓. Keyed by owner because the
+    /// player is chosen only after the scan — in a group game every candidate's items are
+    /// units (live 2026-11-17: other players' gear showed in the grid).
+    owned_names: HashMap<u32, Vec<String>>,
+    /// Each candidate's equipped `(body slot, quality)` pairs (the `BiS` "already better"
     /// check: set/unique quality there hides the slot).
-    equipped: Vec<(u8, u32)>,
+    equipped: HashMap<u32, Vec<(u8, u32)>>,
     /// The same items, enriched for the dashboard's gear grid ([`game::Equipped`]): one per
-    /// body slot (weapon and swap weapon share body 4, like the pairs). Player only: the
+    /// body slot (weapon and swap weapon share body 4, like the pairs), per candidate. The
     /// mercenary's gear has no grid.
-    equipped_items: Vec<Equipped>,
+    equipped_items: HashMap<u32, Vec<Equipped>>,
     /// The same for the mercenary's gear (owner `NO_OWNER`).
     merc_equipped: Vec<(u8, u32)>,
 }
@@ -877,10 +879,10 @@ pub fn snapshot(
     // The guide's numbers: the chosen player's equipped items and carried charms.
     player.speed = scan.gear.get(&chosen.id).copied();
     player.wsm = scan.weapons.get(&chosen.id).copied();
-    let equipped = scan.equipped.clone();
+    let equipped = scan.equipped.get(&chosen.id).cloned().unwrap_or_default();
     let merc_equipped = scan.merc_equipped.clone();
-    let equipped_items = scan.equipped_items.clone();
-    let owned_names = scan.owned_names.clone();
+    let equipped_items = scan.equipped_items.get(&chosen.id).cloned().unwrap_or_default();
+    let owned_names = scan.owned_names.get(&chosen.id).cloned().unwrap_or_default();
 
     let LevelWalk {
         mut level,
@@ -1774,10 +1776,11 @@ impl<M: ReadMem> Reader<'_, M> {
                         .item_fields(addr, &head, items_table)
                         .ok()
                         .and_then(|d| valuables::unique_set_name(&d).map(str::to_owned));
+                    let names = scan.owned_names.entry(owner).or_default();
                     if let Some(name) = name
-                        && !scan.owned_names.iter().any(|n| n.eq_ignore_ascii_case(&name))
+                        && !names.iter().any(|n| n.eq_ignore_ascii_case(&name))
                     {
-                        scan.owned_names.push(name);
+                        names.push(name);
                     }
                 }
             }
@@ -1806,21 +1809,22 @@ impl<M: ReadMem> Reader<'_, M> {
         };
         let owner = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok());
         let merc = owner == Some(item_data::NO_OWNER);
-        let mine = candidates.contains(&owner.unwrap_or(0));
-        if !merc && !mine {
+        let Some(owner) = owner.filter(|o| merc || candidates.contains(o)) else {
             return;
-        }
+        };
         let list = if merc {
             &mut scan.merc_equipped
         } else {
-            &mut scan.equipped
+            scan.equipped.entry(owner).or_default()
         };
         if !list.contains(&(slot, quality)) {
             list.push((slot, quality));
         }
-        if !merc && scan.equipped_items.iter().all(|e| e.body != slot) {
-            let item = self.equipped_item(head, slot, quality, items_table);
-            scan.equipped_items.push(item);
+        if !merc {
+            let items = scan.equipped_items.entry(owner).or_default();
+            if items.iter().all(|e| e.body != slot) {
+                items.push(self.equipped_item(head, slot, quality, items_table));
+            }
         }
     }
 
@@ -2844,6 +2848,38 @@ mod tests {
             Some(43),
             "magic: the BASE item's levelreq (affixes can raise the real one)"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn only_the_chosen_players_gear_counts_in_a_group_game() -> Result<()> {
+        // Live 2026-11-17: in a public game the other players' equipped items filled the grid.
+        let mut m = world()?;
+        let id = item_data::FLAG_IDENTIFIED;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        // Bob wears a Shako; Alice wears a magic body armour.
+        stored_item(&mut m, I1, (40, 7, id, 248), (1, 255), &[], I2)?;
+        set_owner(&mut m, I1, BOB_ID)?;
+        set_body(&mut m, I1, 1)?;
+        stored_item(&mut m, I2, (40, 4, id, 0), (1, 255), &[], 0)?;
+        set_owner(&mut m, I2, ALICE_ID)?;
+        set_body(&mut m, I2, 3)?;
+        base_items_table(&mut m)?;
+
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Alice"), None)?;
+        assert_eq!(s.equipped, vec![(3, 4)], "only Alice's armour");
+        assert_eq!(
+            s.equipped_items.iter().map(|e| e.body).collect::<Vec<_>>(),
+            vec![3]
+        );
+        assert!(
+            s.owned_names.is_empty(),
+            "Bob's Shako is not Alice's: {:?}",
+            s.owned_names
+        );
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        assert_eq!(s.equipped, vec![(1, 7)]);
+        assert_eq!(s.owned_names, vec!["Harlequin Crest"]);
         Ok(())
     }
 
