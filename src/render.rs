@@ -953,22 +953,25 @@ fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<(Strin
 }
 
 /// A frame with only the level, keep, sell and give-away lines (for towns, where the map is hidden);
-/// `None` if there is nothing to show (empty lists, or no font to draw them with).
+/// `None` if there is nothing to show (empty lists, or no font to draw them with). The frame is
+/// exactly as tall as the lines need, so the overlay (anchored top-right, sized to its frame) sits
+/// in the screen's top-right corner instead of hovering a map-sized empty box over the vendor
+/// panels (user request, 2026-11-17).
 ///
 /// # Errors
 /// Fails if the canvas size is zero or too large for tiny-skia.
 pub fn render_keep_only(
     snap: &Snapshot,
     width: u32,
-    height: u32,
+    _height: u32,
     font: Option<&FontVec>,
 ) -> Result<Option<Pixmap>> {
     let lines = keep_lines(snap, width, font);
     let Some(font) = font.filter(|_| !lines.is_empty()) else {
         return Ok(None);
     };
-    let mut pm =
-        Pixmap::new(width, height).with_context(|| format!("invalid canvas size {width}x{height}"))?;
+    let h = info::keep_frame_height(font, lines.len());
+    let mut pm = Pixmap::new(width, h).with_context(|| format!("invalid canvas size {width}x{h}"))?;
     info::draw_keep(&mut pm, font, &lines);
     Ok(Some(pm))
 }

@@ -407,6 +407,9 @@ mod tests {
             anyhow::bail!("no frame in town with a keep list");
         };
         let lh = info::line_height(font);
+        // The town frame is only as tall as its lines: it hugs the top-right corner instead of
+        // hovering a map-sized box over the vendor panels.
+        assert!(pm.height() <= 3 * lh + 8, "town frame is {} px tall", pm.height());
         let mut green = 0;
         for (index, px) in pm.pixels().iter().enumerate() {
             let colour = px.demultiply();

@@ -269,6 +269,13 @@ pub fn keep_band_height(font: &FontVec, lines: usize) -> u32 {
     u32::try_from(lines).map_or(0, |n| n.saturating_mul(line_height(font)))
 }
 
+/// The canvas height `draw_keep` needs for `lines`: the band plus padding above and below. A
+/// town frame is exactly this tall, so the lines hug the top-right corner (the overlay is
+/// anchored there and sized to its frame).
+pub fn keep_frame_height(font: &FontVec, lines: usize) -> u32 {
+    keep_band_height(font, lines) + 2 * PAD
+}
+
 /// One sell or give-away entry as text: `Gravenspine (inv)`, `Magefist ×2 (stash)`.
 pub fn spare_entry(s: &Spare) -> String {
     let place = s.place.label();
@@ -394,7 +401,7 @@ fn wrap(
 /// the bottom. Draws nothing if the canvas is shorter than the lines.
 pub fn draw_keep(pm: &mut Pixmap, font: &FontVec, lines: &[(String, [u8; 4])]) {
     let h = pm.height();
-    if h < keep_band_height(font, lines.len()) + 2 * PAD {
+    if h < keep_frame_height(font, lines.len()) {
         return;
     }
     let scaled = font.as_scaled(PxScale::from(TEXT_PX));
