@@ -257,9 +257,10 @@ fn api_live() -> String {
 /// for the instant it was produced.
 fn respond_no_store(status: &str, content_type: &str, body: &str) -> String {
     let mut response = respond(status, content_type, body);
-    let header = "Cache-Control: no-store\r\n";
+    // Insert before the blank line that ends the headers; the leading `\r\n` opens a new
+    // header line, so the blank line (and the body offset it implies) stays intact.
     let split = response.find("\r\n\r\n").unwrap_or(0);
-    response.insert_str(split, header);
+    response.insert_str(split, "\r\nCache-Control: no-store");
     response
 }
 
