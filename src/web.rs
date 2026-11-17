@@ -1061,7 +1061,7 @@ fn upgrades_json(info: &LiveInfo) -> Vec<serde_json::Value> {
         };
         let column = if slot.starts_with("ring") { "ring" } else { slot };
         let eq_level = equipped_level(slot_bodies(slot), info);
-        let found = pieces.iter().find_map(|piece| {
+        let found = pieces.iter().filter(|p| !outgrown(p, info)).find_map(|piece| {
             let name = crate::info::piece_name(piece);
             let req = crate::info::piece_level(piece)?;
             let tick = crate::info::piece_tick(piece, info.owned, info.stash_owned)?;
@@ -1096,7 +1096,7 @@ fn upgrades_json(info: &LiveInfo) -> Vec<serde_json::Value> {
                 crate::info::same_name(crate::info::piece_name(p), &recipe.name).then_some((*slot, p))
             })
         });
-        let Some((slot, piece)) = slot_piece else {
+        let Some((slot, piece)) = slot_piece.filter(|(_, p)| !outgrown(p, info)) else {
             continue;
         };
         let req = crate::info::piece_level(piece);
@@ -1544,7 +1544,11 @@ fn grid_pieces(pieces: &[String], equipped_level: Option<u32>, info: &LiveInfo) 
     let lvl = u32::from(info.char_level.unwrap_or(0));
     pieces
         .iter()
-        .map(|piece| {
+        .filter_map(|piece| {
+            if outgrown(piece, info) {
+                return None;
+            }
+            let (range, rune) = piece_window(piece, info);
             let req = crate::info::piece_level(piece);
             let state = piece_state(req, equipped_level, lvl);
             let mut json = serde_json::json!({
@@ -1562,9 +1566,44 @@ fn grid_pieces(pieces: &[String], equipped_level: Option<u32>, info: &LiveInfo) 
                 obj.insert("bases".to_owned(), serde_json::json!(rw.bases));
             }
             add_piece_details(&mut json, crate::info::piece_name(piece), info.build);
-            json
+            if let (Some((from, to)), Some(obj)) = (range, json.as_object_mut()) {
+                if rune {
+                    obj.insert("setup".to_owned(), serde_json::json!(format!("lvl {from}+")));
+                } else if info.char_level.is_some() && (from..=to).contains(&lvl) {
+                    obj.insert("now".to_owned(), serde_json::json!(true));
+                }
+            }
+            Some(json)
         })
         .collect()
+}
+
+/// A build piece's level window from its `setup` ("lvl 13-26"), and whether it is a rune.
+fn piece_window(piece: &str, info: &LiveInfo) -> (Option<(u32, u32)>, bool) {
+    let details = info
+        .build
+        .and_then(|b| b.pieces.get(crate::info::piece_name(piece)));
+    (
+        details.and_then(|p| level_range(&p.setup)),
+        details.is_some_and(|p| p.kind == "rune"),
+    )
+}
+
+/// True when the character outgrew the piece's leveling window: it leaves the dashboard
+/// (user request, 2026-11-18). A rune never runs out, it only has a minimum level.
+fn outgrown(piece: &str, info: &LiveInfo) -> bool {
+    let (range, rune) = piece_window(piece, info);
+    match (range, info.char_level) {
+        (Some((_, to)), Some(lvl)) => !rune && u32::from(lvl) > to,
+        _ => false,
+    }
+}
+
+/// The character-level range of a build piece's `setup` ("lvl 13-26" → (13, 26)); `None` for
+/// the other setups ("starter", "standard", "alternative") and anything unparsable.
+fn level_range(setup: &str) -> Option<(u32, u32)> {
+    let (from, to) = setup.strip_prefix("lvl ")?.split_once('-')?;
+    Some((from.trim().parse().ok()?, to.trim().parse().ok()?))
 }
 
 /// Adds the build file's details of piece `name` (`[pieces."<name>"]`) to its JSON: `kind`,
@@ -1928,6 +1967,7 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .pc.too_high { opacity: .5; }
 .pc.worse { opacity: .38; } .pc.worse .nm { text-decoration: line-through; }
 .badge { font-size: 10px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--dim); }
+.badge.now { color: var(--good); border-color: currentColor; }
 
 /* Where to go */
 .lv3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
@@ -2110,7 +2150,8 @@ function piece(p) {
     ? `<ul class="st">${p.stats.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : "";
   const why = (p.why ? `<div class="why">${esc(p.why)}</div>` : "")
     + (p.notes ? `<div class="note">${esc(p.notes)}</div>` : "");
-  const setup = p.setup && p.setup !== "alternative" ? ` <span class="badge">${esc(p.setup)}</span>` : "";
+  const setup = (p.now ? ' <span class="badge now">wear now</span>' : "")
+    + (p.setup && p.setup !== "alternative" ? ` <span class="badge">${esc(p.setup)}</span>` : "");
   return `<div class="pc ${esc(kindOf(p))} ${esc(p.state || "better")}"><div class="top"><span class="nm">${esc(p.name)}${tick}</span>${setup}${lvl}</div>${sub}${stats}${why}</div>`;
 }
 // A slot's pieces: the guide's own picks (starter / standard, and pieces without a setup)
@@ -3406,6 +3447,53 @@ mod tests {
         assert_eq!(at("/merc/0/pieces/0/name"), "Insight");
         assert_eq!(at("/extras/0/title"), "charms");
         assert_eq!(at("/extras/0/pieces/0/level"), 70);
+    }
+
+    #[test]
+    fn outgrown_leveling_pieces_leave_and_runes_never_expire() {
+        let window = |kind: &str, setup: &str| crate::config::PieceInfo {
+            kind: kind.to_owned(),
+            setup: setup.to_owned(),
+            ..crate::config::PieceInfo::default()
+        };
+        let build = crate::config::Build {
+            name: "Druid leveling".to_owned(),
+            pieces: [
+                ("Old Pelt".to_owned(), window("base", "lvl 1-13")),
+                ("Stealth".to_owned(), window("runeword", "lvl 13-26")),
+                ("Lore".to_owned(), window("runeword", "lvl 26-38")),
+                ("Tal Rune".to_owned(), window("rune", "lvl 13-26")),
+                ("Shako".to_owned(), window("unique", "standard")),
+            ]
+            .into(),
+            ..crate::config::Build::default()
+        };
+        let blocks = crate::render::TextBlocks::default();
+        let mut info = live_info(0, &blocks, &[], &[], &[]);
+        info.build = Some(&build);
+        info.char_level = Some(21);
+        let pieces = ["Old Pelt", "Stealth@17", "Lore@27", "Tal Rune@17", "Shako@62"].map(str::to_owned);
+        let json = grid_pieces(&pieces, None, &info);
+        let names: Vec<_> = json.iter().filter_map(|p| p.get("name")?.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Stealth", "Lore", "Tal Rune", "Shako"],
+            "lvl 1-13 is past at 21"
+        );
+        let field = |name: &str, key: &str| {
+            json.iter()
+                .find(|p| p.get("name").and_then(|n| n.as_str()) == Some(name))
+                .and_then(|p| p.get(key).cloned())
+        };
+        assert_eq!(field("Stealth", "now"), Some(serde_json::json!(true)));
+        assert_eq!(field("Lore", "now"), None, "not yet");
+        assert_eq!(field("Tal Rune", "setup"), Some(serde_json::json!("lvl 13+")));
+        info.char_level = Some(60);
+        let json = grid_pieces(&pieces, None, &info);
+        let names: Vec<_> = json.iter().filter_map(|p| p.get("name")?.as_str()).collect();
+        assert_eq!(names, ["Tal Rune", "Shako"], "a rune never runs out");
+        assert_eq!(level_range("lvl 13-26"), Some((13, 26)));
+        assert_eq!(level_range("standard"), None);
     }
 
     /// A skill-plan entry.
