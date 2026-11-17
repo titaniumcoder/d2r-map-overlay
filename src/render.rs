@@ -2611,16 +2611,17 @@ mod tests {
             texts,
             vec![
                 "",
-                "Level 1 → Burial Grounds (3), Crypt (3)",
+                "Level 1 → Burial Grounds (3), Crypt (3), Mausoleum (3), Cold Plains (2)",
+                "Cave Level 1 (2), Cave Level 2 (2), Blood Moor (1), Den of Evil (1)",
                 "",
                 "Keep: Harlequin Crest (S)"
             ],
-            "gap, level row, gap, keep"
+            "gap, level rows, gap, keep"
         );
         let lh = info::line_height(font);
         assert_eq!(
             map_height(h, Some(font), rows.len()),
-            map_height(h, Some(font), 0) - 4 * lh
+            map_height(h, Some(font), 0) - 5 * lh
         );
         let pm = render_with(&snap, w, h, Some(font))?;
         // Row `k` from the bottom spans `(h - 4 - (k + 1) lh, h - 4 - k lh]` (PAD 3 + 1).
