@@ -4,9 +4,9 @@
 //! authored by the agent in `builds/*.toml` and shown read-only, annotated with the live ✓
 //! (owned / in the shared stash) and strike-through where the equipped piece is already
 //! better. The overlay watches the config file and the `builds/` directory and hot-reloads
-//! them (see `live`). The app also serves the live dashboard: the same text blocks the overlay
-//! draws (where to go, gear, keep/sell), published by `live` each tick and read by
-//! `GET /api/live`.
+//! them (see `live`). The app also serves the live dashboard: the level, keep, sell, give-away
+//! and `BiS` blocks (the overlay itself draws only the breakpoint guide), published by `live`
+//! each tick and read by `GET /api/live`.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -438,8 +438,8 @@ fn builds_json(config: &crate::config::Config) -> serde_json::Value {
     serde_json::json!({ "builds": builds })
 }
 
-/// One tick's dashboard data, gathered by `live` from the snapshot and the same text blocks
-/// the overlay draws ([`crate::render::TextBlocks`]) and serialized by [`live_json`].
+/// One tick's dashboard data, gathered by `live` from the snapshot and the dashboard's text
+/// blocks ([`crate::render::TextBlocks`]) and serialized by [`live_json`].
 #[derive(Debug)]
 pub struct LiveInfo<'a> {
     pub player_name: &'a str,
@@ -477,8 +477,8 @@ pub struct LiveInfo<'a> {
 /// piece. The `levels` lines are the whole level-suggestion band, one area per line, each as
 /// `{ "text", "colour", "mlvl", "bucket" }` ([`crate::info::LevelEntry`]: the own-level-first
 /// order in `text`, and the `below`/`equal`/`above` bucket the dashboard lays its "Where to
-/// go" panel out in three columns from) (the overlay's capped short display stays
-/// overlay-only). The give-away lines have no panel of their own, so they ride with `sell` in
+/// go" panel out in three columns from). The give-away lines have no panel of their own, so
+/// they ride with `sell` in
 /// the dashboard's Sell panel.
 #[must_use]
 pub fn live_json(info: &LiveInfo) -> String {
@@ -793,8 +793,9 @@ load();
 }
 
 /// The live dashboard page (a single string: no assets, no framework). Polls `/api/live` once
-/// a second and renders the same text the overlay draws, in its colours: where to go, gear
-/// and `BiS`, sell and keep. Dark-themed like the config page.
+/// a second and renders the dashboard's text blocks in their colours: where to go, gear and
+/// `BiS`, sell and keep (the overlay itself draws only the breakpoint guide). Dark-themed like
+/// the config page.
 const fn dashboard_page() -> &'static str {
     r##"<!doctype html>
 <html><head><meta charset="utf-8"><title>d2r-map-overlay live</title>
@@ -1191,7 +1192,6 @@ mod tests {
                 tick: None,
                 runeword: None,
             }],
-            ..crate::render::TextBlocks::default()
         };
         let equipped = [(1, 7)];
         let stash = test_stash();

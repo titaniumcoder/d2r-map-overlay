@@ -50,20 +50,18 @@ pub const KEEP_TEXT: [u8; 4] = [90, 230, 90, 255];
 /// Most keep lines; the last one ends in "+N more" when the list is longer.
 pub const MAX_KEEP_LINES: usize = 3;
 const KEEP_PREFIX: &str = "Keep: ";
-/// The sell lines below the keep lines: grey.
+/// The sell lines: grey (dashboard Sell panel).
 pub const SELL_TEXT: [u8; 4] = [175, 175, 175, 255];
 pub const SELL_PREFIX: &str = "Sell: ";
-/// The give-away lines below the sell lines: yellow.
+/// The give-away lines: yellow (dashboard, riding with the Sell panel).
 pub const GIVE_TEXT: [u8; 4] = [255, 225, 60, 255];
 pub const GIVE_PREFIX: &str = "Give away: ";
-/// The level-suggestion line(s) between the info line and the keep lines: light blue.
+/// The level-suggestion lines (dashboard Where-to-go panel): light blue.
 pub const LEVEL_TEXT: [u8; 4] = [120, 210, 255, 255];
 /// The breakpoint/gear/runeword guide lines (user request, 2026-11-17): light violet.
 pub const GUIDE_TEXT: [u8; 4] = [200, 130, 255, 255];
 /// The `BiS` chase list ([`bis_lines`]): light gold.
 pub const BIS_TEXT: [u8; 4] = [255, 210, 120, 255];
-/// Most level-suggestion lines in the overlay (the dashboard gets the whole band).
-const MAX_LEVEL_LINES: usize = 2;
 /// Most `BiS` chase lines per section (per-slot lines; hard truncation beyond it).
 const MAX_BIS_LINES: usize = 12;
 /// From this character level on no areas are suggested (everywhere is fine).
@@ -75,7 +73,7 @@ const SUGGEST_BONUS: u8 = 4;
 /// The suggested areas' monster level is at least this many below the character level (monsters
 /// more than this many levels below give heavily penalized experience).
 const SUGGEST_FLOOR: u8 = 5;
-/// Most suggested areas in the overlay's short display (the dashboard gets the whole band).
+/// Most suggested areas in the nearest-areas fallback (the dashboard gets the whole band).
 const MAX_SUGGESTIONS: usize = 5;
 /// Town level ids: never suggested.
 pub const TOWNS: [u32; 5] = [1, 40, 75, 103, 109];
@@ -189,9 +187,7 @@ pub fn info_line(
 /// range, the nearest ones (a monster level above the target wins a tie), at most
 /// [`MAX_SUGGESTIONS`]. Towns, the cow level, special levels and areas without monster levels are
 /// never suggested. Empty for an unknown level or difficulty, and from level [`SUGGEST_UNTIL`] on.
-/// The whole band: the overlay's short display caps at [`MAX_SUGGESTIONS`] areas and
-/// [`MAX_LEVEL_LINES`] lines ([`level_lines`]); the dashboard shows all of it
-/// ([`level_lines_full`]).
+/// The whole band: the dashboard shows all of it ([`level_lines_full`]).
 pub fn level_suggestions(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<(&'static str, u8)> {
     let (Some(lvl), Some(d)) = (char_level.filter(|&l| l < SUGGEST_UNTIL), difficulty) else {
         return Vec::new();
@@ -472,35 +468,6 @@ const RUNEWORD_LEVELS: [(&str, u32); 20] = [
     ("Mang Song's Lesson", 82),
 ];
 
-/// Wraps each `lines` entry to `max_width` px ([`fit_plain`]); over-long lines are truncated.
-/// The level suggestions as lines of at most `max_width` px in `font`:
-/// `Level 34 → Halls of Death's Calling (34), Halls of Anguish (33)`, at most
-/// [`MAX_SUGGESTIONS`] areas in at most [`MAX_LEVEL_LINES`] lines (the last then ends in
-/// `+N more`) — the overlay's short display. Empty without suggestions. The dashboard gets the
-/// whole band from [`level_lines_full`] instead.
-pub fn level_lines(
-    font: &FontVec,
-    char_level: Option<u8>,
-    difficulty: Option<u8>,
-    max_width: f32,
-) -> Vec<String> {
-    let (Some(lvl), areas) = (char_level, level_suggestions(char_level, difficulty)) else {
-        return Vec::new();
-    };
-    let entries: Vec<String> = areas
-        .iter()
-        .take(MAX_SUGGESTIONS)
-        .map(|(name, mlvl)| format!("{name} ({mlvl})"))
-        .collect();
-    wrap(
-        &format!("Level {lvl} → "),
-        COMMA,
-        &entries,
-        MAX_LEVEL_LINES,
-        |t| text_width(font, t) <= max_width,
-    )
-}
-
 /// One dashboard level-suggestion entry ([`level_lines_full`]): the rendered line, the area's
 /// monster level, and which of the dashboard's three columns it belongs to — `below` / `equal`
 /// / `above` the character level (`equal` = `mlvl == char_level`). The suggestions are ordered
@@ -516,9 +483,9 @@ pub struct LevelEntry {
     pub bucket: &'static str,
 }
 
-/// [`level_lines`] without the display caps, for the dashboard: one entry per area in the band
-/// (the first carries the `Level N →` prefix), in the same usefulness order, uncapped within
-/// the band; the nearest-areas fallback (empty band) keeps its 5-entry cap.
+/// The whole level-suggestion band for the dashboard: one entry per area (the first carries
+/// the `Level N →` prefix), in the same usefulness order, uncapped within the band; the
+/// nearest-areas fallback (empty band) keeps its 5-entry cap.
 pub fn level_lines_full(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<LevelEntry> {
     let (Some(lvl), areas) = (char_level, level_suggestions(char_level, difficulty)) else {
         return Vec::new();
@@ -567,16 +534,16 @@ pub fn line_height(font: &FontVec) -> u32 {
 }
 
 /// Extra canvas px at the bottom for `lines` text rows below the info line, gap rows included
-/// (0 for none; see [`stack`]).
-pub fn keep_band_height(font: &FontVec, lines: usize) -> u32 {
+/// (0 for none; see [`draw_bands`]).
+pub fn text_band_height(font: &FontVec, lines: usize) -> u32 {
     u32::try_from(lines).map_or(0, |n| n.saturating_mul(line_height(font)))
 }
 
-/// The canvas height `draw_keep` needs for `lines`: the band plus padding above and below. A
+/// The canvas height `draw_bands` needs for `lines`: the band plus padding above and below. A
 /// town frame is exactly this tall, so the lines hug the top-right corner (the overlay is
 /// anchored there and sized to its frame).
-pub fn keep_frame_height(font: &FontVec, lines: usize) -> u32 {
-    keep_band_height(font, lines) + 2 * PAD
+pub fn text_frame_height(font: &FontVec, lines: usize) -> u32 {
+    text_band_height(font, lines) + 2 * PAD
 }
 
 /// One sell or give-away entry as text: `Gravenspine (inv)`, `Magefist ×2 (stash)`.
@@ -596,46 +563,6 @@ pub fn spare_lines(font: &FontVec, prefix: &str, spares: &[Spare], max_width: f3
     wrap(prefix, COMMA, &entries, MAX_KEEP_LINES, |t| {
         text_width(font, t) <= max_width
     })
-}
-
-/// The text rows below the info line, top to bottom, each with its colour: the level
-/// suggestions (light blue), the keep lines (green), the sell lines (grey), the give-away lines
-/// (yellow), with an empty gap row before each non-empty block (so also between the info line
-/// and the first block).
-pub fn stack(
-    guide: Vec<Band>,
-    level: Vec<String>,
-    keep: Vec<String>,
-    sell: Vec<String>,
-    give: Vec<String>,
-    bis: Vec<BisLine>,
-) -> Vec<Band> {
-    let mut rows = Vec::new();
-    let plain = |lines: Vec<String>, colour: [u8; 4]| -> Vec<Band> {
-        lines.into_iter().map(|l| Band::plain(l, colour)).collect()
-    };
-    for (lines, colour) in [
-        (guide, GUIDE_TEXT),
-        (plain(level, LEVEL_TEXT), LEVEL_TEXT),
-        (plain(keep, KEEP_TEXT), KEEP_TEXT),
-        (plain(sell, SELL_TEXT), SELL_TEXT),
-        (plain(give, GIVE_TEXT), GIVE_TEXT),
-        (
-            bis.into_iter()
-                .map(|l| Band::plain(l.text, BIS_TEXT))
-                .collect::<Vec<_>>(),
-            BIS_TEXT,
-        ),
-    ] {
-        if lines.is_empty() {
-            continue;
-        }
-        // A gap row before every block, also the first: it keeps the lists apart from the info
-        // line above them (user request, 2026-11-15).
-        rows.push(Band::gap(colour));
-        rows.extend(lines);
-    }
-    rows
 }
 
 /// One keep-list entry as text: `Harlequin Crest (S)`, `Lem Rune ×2 (A)`.
@@ -712,11 +639,11 @@ fn wrap(
     lines.iter().enumerate().map(|(i, l)| render(i, l)).collect()
 }
 
-/// Draws the text `lines` ([`stack`]) bottom-left into `pm` in their colours, the last one at
-/// the bottom. Draws nothing if the canvas is shorter than the lines.
-pub fn draw_keep(pm: &mut Pixmap, font: &FontVec, lines: &[Band]) {
+/// Draws the text `lines` (each a [`Band`]) bottom-left into `pm` in their colours, the last
+/// one at the bottom. Draws nothing if the canvas is shorter than the lines.
+pub fn draw_bands(pm: &mut Pixmap, font: &FontVec, lines: &[Band]) {
     let h = pm.height();
-    if h < keep_frame_height(font, lines.len()) {
+    if h < text_frame_height(font, lines.len()) {
         return;
     }
     let scaled = font.as_scaled(PxScale::from(TEXT_PX));
@@ -864,7 +791,7 @@ pub fn fit_text(font: &FontVec, line: &InfoLine, max_width: f32) -> String {
     }
 }
 
-/// Draws `line` bottom-left into `pm`, `inset` px above the bottom (room for the keep lines):
+/// Draws `line` bottom-left into `pm`, `inset` px above the bottom (room for the guide rows):
 /// white text with a dark 1 px outline, a terrorized line's last part in violet. Draws nothing
 /// if the canvas is smaller than the band.
 pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine, inset: u32) {
@@ -1343,63 +1270,6 @@ mod tests {
     }
 
     #[test]
-    fn stack_orders_colours_and_gaps() {
-        let l = |s: &str| vec![s.to_owned()];
-        let rows = stack(
-            vec![],
-            l("Level 3 → a (5)"),
-            l("Keep: k"),
-            l("Sell: s"),
-            vec!["Give away: g".into(), "h".into()],
-            vec![],
-        );
-        // The BiS block is last: the guide sits at the top, the chase list far below.
-        assert_eq!(
-            stack(
-                vec![Band::plain("g", GUIDE_TEXT)],
-                vec![],
-                vec![],
-                vec![],
-                vec![],
-                vec![]
-            )
-            .len(),
-            2,
-            "guide: gap + line"
-        );
-        let want: Vec<Band> = vec![
-            Band::gap(LEVEL_TEXT),
-            Band::plain("Level 3 → a (5)", LEVEL_TEXT),
-            Band::gap(KEEP_TEXT),
-            Band::plain("Keep: k", KEEP_TEXT),
-            Band::gap(SELL_TEXT),
-            Band::plain("Sell: s", SELL_TEXT),
-            Band::gap(GIVE_TEXT),
-            Band::plain("Give away: g", GIVE_TEXT),
-            Band::plain("h", GIVE_TEXT),
-        ];
-        assert_eq!(rows, want);
-        assert_eq!(
-            stack(vec![], vec![], vec![], vec![], l("Give away: g"), vec![]),
-            vec![Band::gap(GIVE_TEXT), Band::plain("Give away: g", GIVE_TEXT),],
-            "a gap below the info line even for the only block"
-        );
-        assert_eq!(stack(vec![], vec![], vec![], vec![], vec![], vec![]), vec![]);
-        // The BiS block comes last with its own colour.
-        let bis_line = |s: &str| {
-            vec![BisLine {
-                text: s.to_owned(),
-                tick: None,
-                runeword: None,
-            }]
-        };
-        assert_eq!(
-            stack(vec![], vec![], vec![], vec![], vec![], bis_line("BiS b → x")).len(),
-            2
-        );
-    }
-
-    #[test]
     fn level_suggestions_prefer_own_level_and_below() {
         // Normal 1: the character level itself first (its champions are +2, its uniques +3 —
         // the efficient XP zone for melee), then downwards to the band floor, the above-level
@@ -1561,32 +1431,9 @@ mod tests {
     }
 
     #[test]
-    fn level_lines_text_and_cap() {
-        let Some(font) = font() else {
-            eprintln!("skipped: no info-line font on this machine");
-            return;
-        };
-        assert_eq!(
-            level_lines(font, Some(1), Some(0), 1000.0),
-            vec![
-                "Level 1 → Blood Moor (1), Den of Evil (1), Cold Plains (2), Cave Level 1 (2), Cave Level 2 (2)"
-            ]
-        );
-        // At a tiny width every area gets its own line and the cap cuts the rest, marked with
-        // a +N more tail.
-        assert_eq!(
-            level_lines(font, Some(1), Some(0), 10.0),
-            vec!["Level 1 → Blood Moor (1)", "+4 more"],
-            "wraps and marks the cut with +N more"
-        );
-        assert_eq!(level_lines(font, Some(80), Some(0), 1000.0), Vec::<String>::new());
-        assert_eq!(level_lines(font, None, Some(0), 1000.0), Vec::<String>::new());
-    }
-
-    #[test]
     fn level_lines_full_lists_the_whole_band_one_per_line() {
         // One line per area in the usefulness order, the `Level N →` prefix only on the first;
-        // no `+N more` tail, no cap (the overlay's short display is [`level_lines`]).
+        // no `+N more` tail, no cap.
         let full = level_lines_full(Some(1), Some(0));
         assert_eq!(full.len(), 14, "the whole −5…+4 band: {full:?}");
         let first = full.first().map_or_else(LevelEntry::default, Clone::clone);
@@ -1633,21 +1480,17 @@ mod tests {
     }
 
     #[test]
-    fn keep_band_heights() {
+    fn text_band_heights() {
         let Some(font) = font() else {
             eprintln!("skipped: no info-line font on this machine");
             return;
         };
         let lh = line_height(font);
         assert!(lh > 10, "{lh}");
-        assert_eq!(keep_band_height(font, 0), 0, "no lines, no band");
-        assert_eq!(keep_band_height(font, 1), lh);
-        assert_eq!(keep_band_height(font, 3), 3 * lh);
-        assert_eq!(
-            keep_band_height(font, 7),
-            7 * lh,
-            "keep, sell, give away and gaps"
-        );
+        assert_eq!(text_band_height(font, 0), 0, "no lines, no band");
+        assert_eq!(text_band_height(font, 1), lh);
+        assert_eq!(text_band_height(font, 3), 3 * lh);
+        assert_eq!(text_band_height(font, 7), 7 * lh, "gap + guide rows");
     }
 
     #[test]

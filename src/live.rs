@@ -308,9 +308,10 @@ fn follow_game(
                 }
                 cow_stats.record(&update, session.cow_kills());
                 saver.tick(&mut session, Instant::now());
-                // The webapp's live dashboard gets the same text blocks the overlay draws
-                // (user request, 2026-11-17); serialization of a few short lines at 5 Hz is
-                // cheap. Cleared again on snapshot errors (menu, loading) and game exit.
+                // The webapp's live dashboard gets the level, keep, sell, give-away and BiS
+                // blocks the overlay no longer draws (2026-11-17 text-stack migration);
+                // serialization of a few short lines at 5 Hz is cheap. Cleared again on
+                // snapshot errors (menu, loading) and game exit.
                 let blocks = render::text_blocks(&snap, w, info::font());
                 // The config page annotates its resolved `BiS` view with the live ✓ and the
                 // equipped-quality pairs; published alongside the dashboard JSON.
@@ -422,28 +423,23 @@ impl ItemsTable {
     }
 }
 
-/// What one snapshot's tick sends, if anything. In a town only the level, keep, sell and
-/// give-away lines are shown (no map, info line or markers), and the overlay hides when there are none; elsewhere
+/// What one snapshot's tick sends, if anything. In a town only the breakpoint guide line is
+/// shown (no map, info line or markers), and the overlay hides when there is none; elsewhere
 /// the map. `None`: the screen is up to date (or rendering failed, logged).
 fn tick_msg(dedup: &mut Dedup, snap: Snapshot, (w, h): (u32, u32), font: Option<&FontVec>) -> Option<Msg> {
     let town = game::is_town(snap.level.id);
-    if town
-        && snap.inventory_keep.is_empty()
-        && snap.sell.is_empty()
-        && snap.give_away.is_empty()
-        && info::level_suggestions(snap.player.char_level, snap.difficulty).is_empty()
-    {
+    if town && crate::breakpoints::guide_band(&snap.player, snap.difficulty).is_none() {
         return dedup.hide(Hidden::Town).then_some(Msg::Hide);
     }
     let snap = dedup.changed(snap)?;
     let frame = if town {
-        render::render_keep_only(snap, w, h, font)
+        render::render_town(snap, w, h, font)
     } else {
         render::render_with(snap, w, h, font).map(Some)
     };
     match frame {
         Ok(Some(frame)) => Some(Msg::Frame(frame)),
-        // No font for the keep lines: nothing to show in town.
+        // No font for the guide line: nothing to show in town.
         Ok(None) => dedup.hide(Hidden::Town).then_some(Msg::Hide),
         Err(e) => {
             eprintln!("rendering failed: {e:#}");
@@ -519,17 +515,21 @@ mod tests {
         serde_json::from_str(json).context("parsing fixture")
     }
 
-    fn keep() -> crate::valuables::Keep {
-        crate::valuables::Keep {
-            name: "Harlequin Crest".into(),
-            tier: crate::valuables::Tier::S,
-            category: crate::valuables::Category::Trade,
-            count: 1,
+    /// A readable speed stat list: the breakpoint guide's input (see [`crate::game::SpeedStats`]).
+    fn speed() -> crate::game::SpeedStats {
+        crate::game::SpeedStats {
+            fcr: 22,
+            ias: 0,
+            fhr: 48,
+            res_fire: 40,
+            res_cold: 75,
+            res_lightning: 10,
+            res_poison: 75,
         }
     }
 
     #[test]
-    fn town_without_keep_list_hides() -> Result<()> {
+    fn town_without_a_guide_hides() -> Result<()> {
         let mut d = Dedup::default();
         let mut town = fixture()?;
         town.level.id = 1;
@@ -549,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn town_with_keep_list_shows_only_the_green_lines() -> Result<()> {
+    fn town_with_a_guide_shows_only_the_guide_line() -> Result<()> {
         let Some(font) = info::font() else {
             eprintln!("skipped: no info-line font on this machine");
             return Ok(());
@@ -557,41 +557,44 @@ mod tests {
         let mut dedup = Dedup::default();
         let mut town = fixture()?;
         town.level.id = 1;
-        town.inventory_keep = vec![keep()];
+        town.player.speed = Some(speed());
         let Some(Msg::Frame(pm)) = tick_msg(&mut dedup, town, (200, 200), Some(font)) else {
-            anyhow::bail!("no frame in town with a keep list");
+            anyhow::bail!("no frame in town with a guide");
         };
         let lh = info::line_height(font);
         // The town frame is only as tall as its lines: it hugs the top-right corner instead of
         // hovering a map-sized box over the vendor panels.
         assert!(pm.height() <= 3 * lh + 8, "town frame is {} px tall", pm.height());
-        let mut green = 0;
+        let mut violet = 0;
         for (index, px) in pm.pixels().iter().enumerate() {
             let colour = px.demultiply();
             if colour.alpha() == 0 {
                 continue;
             }
             let row = u32::try_from(index)? / pm.width();
-            assert!(row + lh + 8 >= pm.height(), "ink above the keep line at y {row}");
-            // Ink is the green text or its dark outline; no map, markers or white info line.
+            assert!(row + lh + 8 >= pm.height(), "ink above the guide at y {row}");
+            // Ink is the guide's violet text, its red low-resistance values or their dark
+            // outline; no map, markers, white info line or (green) keep list.
             let (red, grn, blue) = (colour.red(), colour.green(), colour.blue());
             assert!(
-                grn >= red && grn >= blue && red < 160,
-                "non-green pixel {red},{grn},{blue} at y {row}"
+                grn <= red.max(blue),
+                "non-guide pixel {red},{grn},{blue} at y {row}"
             );
-            if grn > 180 && colour.alpha() == 255 {
-                green += 1;
+            if blue > 200 && red > 150 && colour.alpha() == 255 {
+                violet += 1;
             }
         }
-        assert!(green > 20, "only {green} green pixels");
+        assert!(violet > 20, "only {violet} violet pixels");
         Ok(())
     }
 
     #[test]
-    fn town_with_only_a_sell_list_shows_a_frame() -> Result<()> {
+    fn town_without_a_guide_hides_even_with_a_sell_list_or_a_level_suggestion() -> Result<()> {
         let Some(font) = info::font() else {
             return Ok(());
         };
+        // The sell list and the level suggestions live on the dashboard now: a town shows only
+        // the guide, so without one it hides even with them.
         let mut town = fixture()?;
         town.level.id = 1;
         town.sell = vec![crate::valuables::Spare {
@@ -600,52 +603,37 @@ mod tests {
             count: 1,
         }];
         let mut d = Dedup::default();
-        assert!(matches!(
-            tick_msg(&mut d, town, (200, 200), Some(font)),
-            Some(Msg::Frame(_))
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn town_with_a_level_suggestion_shows_a_frame() -> Result<()> {
-        let Some(font) = info::font() else {
-            return Ok(());
-        };
+        assert!(
+            matches!(tick_msg(&mut d, town, (200, 200), Some(font)), Some(Msg::Hide)),
+            "a sell list alone no longer shows a town frame"
+        );
         let mut town = fixture()?;
         town.level.id = 40;
         town.difficulty = Some(1);
         town.player.char_level = Some(46);
         let mut d = Dedup::default();
-        assert!(matches!(
-            tick_msg(&mut d, town, (200, 200), Some(font)),
-            Some(Msg::Frame(_))
-        ));
-        let mut town = fixture()?;
-        town.level.id = 40;
-        town.difficulty = Some(1);
-        town.player.char_level = Some(80);
         assert!(
             matches!(tick_msg(&mut d, town, (200, 200), Some(font)), Some(Msg::Hide)),
-            "level 80 has no suggestion: hidden"
+            "a level suggestion alone no longer shows a town frame"
         );
         Ok(())
     }
 
     #[test]
-    fn keep_lines_shrink_the_map_outside_towns() -> Result<()> {
+    fn the_guide_shrinks_the_map_outside_towns() -> Result<()> {
         let Some(font) = info::font() else {
             return Ok(());
         };
         let h = 300;
         let plain = render::map_height(h, Some(font), 0);
+        // The guide occupies two rows: its gap row above it and the band itself.
         assert_eq!(
-            render::map_height(h, Some(font), 1),
-            plain - info::line_height(font)
+            render::map_height(h, Some(font), 2),
+            plain - 2 * info::line_height(font)
         );
         assert_eq!(render::map_height(h, None, 2), h, "no font: no bands");
         let mut snap = fixture()?;
-        snap.inventory_keep = vec![keep()];
+        snap.player.speed = Some(speed());
         let mut d = Dedup::default();
         assert!(matches!(
             tick_msg(&mut d, snap, (200, h), Some(font)),

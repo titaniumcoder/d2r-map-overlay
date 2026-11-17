@@ -165,7 +165,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - Valuables: research/valuables.json (67 rules, S/A/B, trade/twink) embedded; tiers per category in
   `~/.config/d2r-map-overlay/config.toml` (default S+A both; example: config.example.toml). Ground: ring by tier
   (S red, A orange, dashed = uncertain). Inventory keep list in green below the info line, also in towns: certain
-  S/A, uncertain only S. Unique/set names from src/item_names_data.rs (research/gen_item_names.py).
+  S/A, uncertain only S — moved to the dashboard with the 2026-11-17 text-stack migration (see Overlay), the
+  reader and its tiers unchanged. Unique/set names from src/item_names_data.rs (research/gen_item_names.py).
 
 ## Shrines and wells (2026-11-15)
 - Object units: unit block 2, static path position (+0x10/+0x14). ObjectData (unit +0x10) `+0x08` u8 = shrine type
@@ -251,9 +252,9 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   level is in the band clvl − 5 … clvl + 4 (user feedback 2026-11-17, example "clvl 23 →
   monsters 18–27"; −5 is the XP-penalty threshold), ranked own level first (its champions are +2
   and its uniques +3 — the efficient XP zone for melee), then downwards, the above-level areas
-  last (user spec, 2026-11-17), until clvl 75. The overlay caps the display at 5 areas in 2 lines
-  ("+N more"); the dashboard gets the whole band, one area per line (user request, 2026-11-17).
-  The seven same-named Tal Rasha's Tombs dedupe to one (name+mlvl; same-named
+  last (user spec, 2026-11-17), until clvl 75. The dashboard gets the whole band, one area per
+  line, laid out in three below/equal/above columns (user request, 2026-11-17). The seven
+  same-named Tal Rasha's Tombs dedupe to one (name+mlvl; same-named
   areas with different levels stay separate); the cow level is never suggested.
 - Build colouring uses per-area immunity counts from monstats (`ResDm` = physical). Nightmare has almost no
   immunities, so it is mostly green; Hell is where red shows up.
@@ -278,8 +279,8 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   until the next live read with items (or a new game).
 - `Snapshot.stash`/`stash_names` feed a fourth dashboard panel ("Shared stash", tabs with quality-tagged item lines)
   and the `BiS` ✓: `bis_lines` ticks a line `owned` (character's own) or `stash` from the two name lists; the
-  overlay embeds the plain ✓ for both, the dashboard gets the structured per-line `tick` and marks ✓(stash)
-  distinctly (no string scraping).
+  dashboard gets the structured per-line `tick` and marks ✓(stash) distinctly (no string scraping) — the
+  `BiS` lines are dashboard-only since the 2026-11-17 text-stack migration.
 
 ## Build definitions and BiS selection (2026-11-17)
 - **Agent-authored build files**: `~/.config/d2r-map-overlay/builds/<slug>.toml`, one build per file
@@ -303,6 +304,12 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - Layer-shell surface, layer `overlay`, anchored top-right, default 400×400 (config), **empty input region** (click-through), no keyboard.
 - Draw current level only: room footprints (loaded rooms brighter), player dot, waypoint (blue), exits (purple + target name),
   superuniques (gold + name if known), champion/unique packs (red), at ~5 Hz from a reader thread.
+- Text stack (migrated 2026-11-17): the overlay draws only the info line (its monster levels still
+  coloured by build damages) and the breakpoint guide line below it, with a gap row between. The
+  level suggestions (where to go), keep, sell, give-away and `BiS` lines are dashboard-only now:
+  `live` publishes them via `GET /api/live` (`render::text_blocks`); the overlay's draw path
+  (`render::guide_bands`) composes the guide alone. In towns (no map) the overlay shows only the
+  guide line and hides when there is none (`render::render_town`).
 - Iso projection `sx = x − y, sy = (x + y)/2`, scaled to fit the level bounds.
 - Visible only while the Hyprland active window class is `steam_app_battlenet` with title `Diablo II: Resurrected`.
 

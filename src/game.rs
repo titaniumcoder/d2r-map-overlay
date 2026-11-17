@@ -146,7 +146,7 @@ pub struct Snapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inventory_keep: Vec<valuables::Keep>,
     /// The player's stored items to sell (inventory, cube, personal and shared stash; see
-    /// [`valuables::spare_lists`]). Grey lines below the keep lines. Left out of the JSON when
+    /// [`valuables::spare_lists`]). Grey lines (dashboard). Left out of the JSON when
     /// empty, like `give_away`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sell: Vec<valuables::Spare>,

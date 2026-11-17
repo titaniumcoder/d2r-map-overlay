@@ -950,38 +950,36 @@ pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
 }
 
 /// The canvas height the map is fitted into: all of it, less the info line's band and the
-/// band of `keep_lines` text rows below it (keep, sell, give away and the gaps between them;
-/// see [`info::stack`]) if there is a font to draw them with.
-pub fn map_height(height: u32, font: Option<&FontVec>, keep_lines: usize) -> u32 {
+/// band of `text_rows` rows below it (the breakpoint guide and its gap row; see
+/// [`info::draw_bands`]) if there is a font to draw them with.
+pub fn map_height(height: u32, font: Option<&FontVec>, text_rows: usize) -> u32 {
     font.map_or(height, |f| {
-        let bands = info::band_height(f) + info::keep_band_height(f, keep_lines);
+        let bands = info::band_height(f) + info::text_band_height(f, text_rows);
         height.saturating_sub(bands).max(1)
     })
 }
 
 /// The text blocks below the info line, kept separate: the breakpoint guide bands, the level
-/// suggestions, the inventory keep list, the sell and give-away lists and the `BiS` chase list
-/// (see [`info::stack`]). Shared by the overlay stack ([`keep_lines`]) and the webapp's live
-/// dashboard, which `live` publishes from the same tick.
+/// suggestions, the inventory keep list, the sell and give-away lists and the `BiS` chase list.
+/// The webapp's live dashboard (`live` publishes from the same tick) consumes all of them; the
+/// overlay draws only the guide ([`guide_bands`]).
 #[derive(Debug, Default)]
 pub struct TextBlocks {
     pub guide: Vec<info::Band>,
-    pub level: Vec<String>,
     pub keep: Vec<String>,
     pub sell: Vec<String>,
     pub give: Vec<String>,
     /// The `BiS` chase lines with their structural tick ([`info::BisLine::tick`]): the
-    /// overlay draws the text (plain ✓ embedded), the dashboard marks ✓(stash) from the tick.
+    /// dashboard marks ✓(stash) from the tick.
     pub bis: Vec<info::BisLine>,
-    /// The whole level-suggestion band ([`info::level_lines_full`]), for the dashboard: the
-    /// overlay draws the capped short display ([`TextBlocks::level`]) instead. Each entry
-    /// carries its monster level and below/equal/above bucket so the dashboard can lay the
-    /// band out in three columns.
+    /// The whole level-suggestion band ([`info::level_lines_full`]) for the dashboard's
+    /// "Where to go" panel. Each entry carries its monster level and below/equal/above bucket
+    /// so the dashboard can lay the band out in three columns.
     pub level_full: Vec<info::LevelEntry>,
 }
 
-/// The overlay's text rows for a `width` px canvas ([`keep_lines`]) and the dashboard's groups
-/// ([`TextBlocks`]) from one snapshot. None of it without a font.
+/// The dashboard's groups ([`TextBlocks`]) for a `width` px canvas from one snapshot. None of
+/// it without a font.
 pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextBlocks {
     let Some(f) = font else {
         return TextBlocks::default();
@@ -994,14 +992,12 @@ pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextB
                 .into_iter()
                 .map(|band| info::fit_band(band, f, max_width))
                 .collect(),
-        level: info::level_lines(f, snap.player.char_level, snap.difficulty, max_width),
         level_full: info::level_lines_full(snap.player.char_level, snap.difficulty),
         keep: info::keep_lines(f, &snap.inventory_keep, max_width),
         sell: info::spare_lines(f, info::SELL_PREFIX, &snap.sell, max_width),
         give: info::spare_lines(f, info::GIVE_PREFIX, &snap.give_away, max_width),
-        // The BiS chase list (user request, 2026-11-17) last: much further down than the other
-        // text, under the keep/sell/give-away lines. The tick is computed from the owned and
-        // shared-stash names separately, so the dashboard can mark ✓(stash) distinctly.
+        // The BiS chase list (user request, 2026-11-17): the tick is computed from the owned
+        // and shared-stash names separately, so the dashboard can mark ✓(stash) distinctly.
         bis: snap.player.bis.as_ref().map_or_else(Vec::new, |bis| {
             info::bis_lines(
                 bis,
@@ -1017,42 +1013,40 @@ pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextB
     }
 }
 
-/// The text rows below the info line for a `width` px canvas: the guide lines, the level
-/// suggestions, the inventory keep list, then the sell and give-away lists, with gap rows
-/// ([`info::stack`]); none without a font.
-fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<info::Band> {
-    let blocks = text_blocks(snap, width, font);
-    info::stack(
-        blocks.guide,
-        blocks.level,
-        blocks.keep,
-        blocks.sell,
-        blocks.give,
-        blocks.bis,
-    )
+/// The overlay's text rows for a `width` px canvas: the breakpoint guide band with a gap row
+/// above it ([`info::Band::gap`]; the level, keep, sell and give-away lists live on the
+/// dashboard now — see [`text_blocks`]); none without a font.
+fn guide_bands(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<info::Band> {
+    let mut bands = text_blocks(snap, width, font).guide;
+    if !bands.is_empty() {
+        // The gap row keeps the guide apart from the info line above it (user request, 2026-11-15).
+        bands.insert(0, info::Band::gap(info::GUIDE_TEXT));
+    }
+    bands
 }
 
-/// A frame with only the level, keep, sell and give-away lines (for towns, where the map is hidden);
-/// `None` if there is nothing to show (empty lists, or no font to draw them with). The frame is
-/// exactly as tall as the lines need, so the overlay (anchored top-right, sized to its frame) sits
-/// in the screen's top-right corner instead of hovering a map-sized empty box over the vendor
-/// panels (user request, 2026-11-17).
+/// A town frame with only the breakpoint guide line (the map is hidden in towns; the level,
+/// keep, sell and give-away lists live on the dashboard now — see [`text_blocks`]); `None` if
+/// there is no guide to show (no font, or no readable speed stats). The frame is exactly as
+/// tall as the guide needs, so the overlay (anchored top-right, sized to its frame) sits in the
+/// screen's top-right corner instead of hovering a map-sized empty box over the vendor panels
+/// (user request, 2026-11-17).
 ///
 /// # Errors
 /// Fails if the canvas size is zero or too large for tiny-skia.
-pub fn render_keep_only(
+pub fn render_town(
     snap: &Snapshot,
     width: u32,
     _height: u32,
     font: Option<&FontVec>,
 ) -> Result<Option<Pixmap>> {
-    let lines = keep_lines(snap, width, font);
-    let Some(font) = font.filter(|_| !lines.is_empty()) else {
+    let bands = guide_bands(snap, width, font);
+    let Some(font) = font.filter(|_| !bands.is_empty()) else {
         return Ok(None);
     };
-    let h = info::keep_frame_height(font, lines.len());
+    let h = info::text_frame_height(font, bands.len());
     let mut pm = Pixmap::new(width, h).with_context(|| format!("invalid canvas size {width}x{h}"))?;
-    info::draw_keep(&mut pm, font, &lines);
+    info::draw_bands(&mut pm, font, &bands);
     Ok(Some(pm))
 }
 
@@ -1074,8 +1068,8 @@ fn render_rules(
 ) -> Result<Pixmap> {
     let mut pm =
         Pixmap::new(width, height).with_context(|| format!("invalid canvas size {width}x{height}"))?;
-    let keep = keep_lines(snap, width, font);
-    let view = View::fit(level_bounds(snap), width, map_height(height, font, keep.len()));
+    let guide = guide_bands(snap, width, font);
+    let view = View::fit(level_bounds(snap), width, map_height(height, font, guide.len()));
     fill_rooms(&mut pm, view, snap);
     draw_trail(&mut pm, view, &snap.trail);
 
@@ -1166,14 +1160,14 @@ fn render_rules(
     if let Some(font) = font {
         // Party member names above their dots (user request, 2026-11-17).
         draw_party_names(&mut pm, font, snap, view);
-        draw_text_bands(&mut pm, font, snap, &keep);
+        draw_text_bands(&mut pm, font, snap, &guide);
     }
     Ok(pm)
 }
 
-/// The info line at the bottom, then the keep/sell/give-away rows below it.
-fn draw_text_bands(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, keep: &[info::Band]) {
-    let inset = info::keep_band_height(font, keep.len());
+/// The info line at the bottom, then the breakpoint guide rows below it.
+fn draw_text_bands(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, guide: &[info::Band]) {
+    let inset = info::text_band_height(font, guide.len());
     info::draw(
         pm,
         font,
@@ -1186,7 +1180,7 @@ fn draw_text_bands(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, keep: &[inf
         ),
         inset,
     );
-    info::draw_keep(pm, font, keep);
+    info::draw_bands(pm, font, guide);
 }
 
 /// Draws each party member's name centred above their dot (user request, 2026-11-17).
@@ -1667,6 +1661,7 @@ fn paint([r, g, b, a]: Rgba) -> Paint<'static> {
 mod tests {
     use super::*;
     use crate::game::{Addr, BorderLink, ItemDrop, Level, Player, RoomLink, RoomPos};
+    use std::collections::BTreeMap;
 
     const FIXTURE: &str = include_str!("../tests/fixtures/jail1-snapshot.json");
 
@@ -2709,7 +2704,7 @@ mod tests {
     }
 
     #[test]
-    fn keep_sell_and_give_away_blocks_with_gaps_and_colours() -> Result<()> {
+    fn text_blocks_holds_the_dashboard_blocks() -> Result<()> {
         use crate::valuables::{Category, Keep, Place, Spare, Tier};
         let Some(font) = info::font() else {
             eprintln!("skipped: no info-line font on this machine");
@@ -2717,6 +2712,72 @@ mod tests {
         };
         let mut snap = fixture()?;
         snap.difficulty = Some(0);
+        snap.player.char_level = Some(34);
+        snap.player.bis = Some(crate::config::Bis {
+            build: String::new(),
+            slots: BTreeMap::from([("helm".to_owned(), vec!["Peasant Crown@28".to_owned()])]),
+            merc_slots: BTreeMap::new(),
+        });
+        snap.inventory_keep = vec![Keep {
+            name: "Harlequin Crest".into(),
+            tier: Tier::S,
+            category: Category::Trade,
+            count: 1,
+        }];
+        let spare = |name: &str, place| Spare {
+            name: name.into(),
+            place,
+            count: 1,
+        };
+        snap.sell = vec![spare("Gravenspine", Place::Inventory)];
+        snap.give_away = vec![spare("Magefist", Place::Shared)];
+        let blocks = text_blocks(&snap, 400, Some(font));
+        // The dashboard's JSON is built from these blocks (crate::web::live_json); the overlay
+        // draws only the guide, so the lists are asserted here, not in a rendered frame.
+        assert_eq!(blocks.keep, vec!["Keep: Harlequin Crest (S)"]);
+        assert_eq!(blocks.sell, vec!["Sell: Gravenspine (inv)"]);
+        assert_eq!(blocks.give, vec!["Give away: Magefist (shared)"]);
+        assert!(
+            blocks
+                .level_full
+                .first()
+                .is_some_and(|e| e.text.starts_with("Level 34 → ")),
+            "level suggestions for clvl 34: {:?}",
+            blocks.level_full
+        );
+        assert!(!blocks.level_full.is_empty(), "the whole band for the panel");
+        let Some(bis) = blocks.bis.first() else {
+            anyhow::bail!("no helm chase line: {:?}", blocks.bis);
+        };
+        assert_eq!(bis.text, "helm: Peasant Crown (28)");
+        assert_eq!(bis.tick, None, "nothing owned yet");
+        Ok(())
+    }
+
+    #[test]
+    fn the_overlay_frame_draws_only_the_guide_band() -> Result<()> {
+        use crate::valuables::{Category, Keep, Place, Spare, Tier};
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let mut snap = fixture()?;
+        snap.difficulty = Some(0);
+        snap.player.char_level = Some(34);
+        snap.player.speed = Some(crate::game::SpeedStats {
+            fcr: 22,
+            ias: 0,
+            fhr: 48,
+            res_fire: 40,
+            res_cold: 75,
+            res_lightning: 10,
+            res_poison: 75,
+        });
+        snap.player.bis = Some(crate::config::Bis {
+            build: String::new(),
+            slots: BTreeMap::from([("helm".to_owned(), vec!["Peasant Crown@28".to_owned()])]),
+            merc_slots: BTreeMap::new(),
+        });
         snap.inventory_keep = vec![Keep {
             name: "Harlequin Crest".into(),
             tier: Tier::S,
@@ -2731,83 +2792,17 @@ mod tests {
         snap.sell = vec![spare("Gravenspine", Place::Inventory)];
         snap.give_away = vec![spare("Magefist", Place::Shared)];
         let (w, h) = (400, 400);
-        assert_eq!(keep_lines(&snap, w, Some(font)).len(), 6, "3 lines, 3 gaps");
-        let lh = info::line_height(font);
-        assert_eq!(
-            map_height(h, Some(font), 6),
-            map_height(h, Some(font), 0) - 6 * lh,
-            "the map shrinks by every row"
-        );
-        let pm = render_with(&snap, w, h, Some(font))?;
-        // Row `k` from the bottom spans `(h - 4 - (k + 1) lh, h - 4 - k lh]` (PAD 3 + 1).
-        let count = |k: u32, pred: &dyn Fn(Rgba) -> bool| -> Result<u32> {
-            let (bottom, top) = (h - 4 - k * lh, h - 4 - (k + 1) * lh);
-            let mut n = 0;
-            for y in top + 1..=bottom {
-                for x in 0..w {
-                    n += u32::from(pred(rgba(&pm, x, y)?));
-                }
-            }
-            Ok(n)
+        let rows = guide_bands(&snap, w, Some(font));
+        let [gap, guide] = rows.as_slice() else {
+            anyhow::bail!("expected the gap row and the guide, got {rows:?}");
         };
-        let solid = |p: Rgba| p[3] == 255;
-        let yellow = |p: Rgba| solid(p) && p[0] > 200 && p[1] > 170 && p[2] < 120;
-        let grey = |p: Rgba| solid(p) && p[0] > 130 && p[0].abs_diff(p[1]) < 12 && p[0].abs_diff(p[2]) < 12;
-        let green = |p: Rgba| solid(p) && p[1] > 180 && p[0] < 140 && p[2] < 140;
-        let ink = |p: Rgba| p[3] > 0;
-        assert!(count(0, &yellow)? > 20, "give away at the bottom, yellow");
-        assert_eq!(count(0, &grey)?, 0, "no grey in the give-away row");
-        assert!(count(2, &grey)? > 20, "sell above it, grey");
-        assert_eq!(count(2, &yellow)?, 0, "no yellow in the sell row");
-        assert!(count(4, &green)? > 20, "keep on top, green");
-        // The gap rows hold no text; the outline of a neighbour row may reach in by a pixel.
-        for k in [1, 3] {
-            let (bottom, top) = (h - 4 - k * lh, h - 4 - (k + 1) * lh);
-            let mut n = 0;
-            for y in top + 3..=bottom - 3 {
-                for x in 0..w {
-                    n += u32::from(ink(rgba(&pm, x, y)?));
-                }
-            }
-            assert_eq!(n, 0, "gap row {k}");
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn level_row_sits_between_the_info_line_and_the_keep_lines() -> Result<()> {
-        use crate::valuables::{Category, Keep, Tier};
-        let Some(font) = info::font() else {
-            eprintln!("skipped: no info-line font on this machine");
-            return Ok(());
-        };
-        let mut snap = fixture()?;
-        snap.difficulty = Some(0);
-        snap.player.char_level = Some(1);
-        snap.inventory_keep = vec![Keep {
-            name: "Harlequin Crest".into(),
-            tier: Tier::S,
-            category: Category::Trade,
-            count: 1,
-        }];
-        let (w, h) = (400, 400);
-        let rows = keep_lines(&snap, w, Some(font));
-        let texts: Vec<&str> = rows.iter().map(|t| t.text.as_str()).collect();
-        assert_eq!(
-            texts,
-            vec![
-                "",
-                "Level 1 → Blood Moor (1), Den of Evil (1), Cold Plains (2)",
-                "Cave Level 1 (2), Cave Level 2 (2)",
-                "",
-                "Keep: Harlequin Crest (S)"
-            ],
-            "gap, level rows, gap, keep"
-        );
+        assert!(gap.text.is_empty(), "the gap row first");
+        assert!(guide.text.starts_with("fcr ("), "the guide: {}", guide.text);
         let lh = info::line_height(font);
         assert_eq!(
             map_height(h, Some(font), rows.len()),
-            map_height(h, Some(font), 0) - 5 * lh
+            map_height(h, Some(font), 0) - 2 * lh,
+            "the map shrinks by the guide's two rows only"
         );
         let pm = render_with(&snap, w, h, Some(font))?;
         // Row `k` from the bottom spans `(h - 4 - (k + 1) lh, h - 4 - k lh]` (PAD 3 + 1).
@@ -2822,19 +2817,32 @@ mod tests {
             Ok(n)
         };
         let solid = |p: Rgba| p[3] == 255;
+        let violet = |p: Rgba| solid(p) && p[2] > 200 && p[0] > 150 && p[1] < 180;
         let cyan = |p: Rgba| solid(p) && p[2] > 200 && p[1] > 170 && p[0] < 160;
+        let yellow = |p: Rgba| solid(p) && p[0] > 200 && p[1] > 170 && p[2] < 120;
+        let grey = |p: Rgba| solid(p) && p[0] > 130 && p[0].abs_diff(p[1]) < 12 && p[0].abs_diff(p[2]) < 12;
         let green = |p: Rgba| solid(p) && p[1] > 180 && p[0] < 140 && p[2] < 140;
-        assert!(count(0, &green)? > 20, "keep at the bottom, green");
-        assert_eq!(count(0, &cyan)?, 0, "no light blue in the keep row");
-        assert!(count(2, &cyan)? > 20, "level row above it, light blue");
-        assert_eq!(count(2, &green)?, 0, "no green in the level row");
-
-        snap.player.char_level = Some(75);
-        assert_eq!(
-            keep_lines(&snap, w, Some(font)).len(),
-            2,
-            "no level row from 75 on"
-        );
+        let gold = |p: Rgba| solid(p) && p[0] > 200 && p[1] > 170 && (100..=170).contains(&p[2]);
+        let ink = |p: Rgba| p[3] > 0;
+        assert!(count(0, &violet)? > 20, "the guide at the bottom, violet");
+        for (name, pred) in [
+            ("level", &cyan as &dyn Fn(Rgba) -> bool),
+            ("keep", &green),
+            ("sell", &grey),
+            ("give away", &yellow),
+            ("BiS", &gold),
+        ] {
+            assert_eq!(count(0, pred)?, 0, "no {name} text in the overlay frame");
+        }
+        // The gap row holds no text; the outline of the guide below may reach in by a pixel.
+        let (bottom, top) = (h - 4 - lh, h - 4 - 2 * lh);
+        let mut n = 0;
+        for y in top + 3..=bottom - 3 {
+            for x in 0..w {
+                n += u32::from(ink(rgba(&pm, x, y)?));
+            }
+        }
+        assert_eq!(n, 0, "the gap row is empty");
         Ok(())
     }
 

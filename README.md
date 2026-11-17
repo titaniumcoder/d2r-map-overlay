@@ -11,8 +11,9 @@ the screen. The minimap shows:
 - **Landmarks:** quest spots such as the Summoner, the real Tal Rasha tomb's orifice, the Horadric Cube,
   Radament and the Cairn Stones.
 - **Shrines and wells, and valuable drops.**
-- **Text lines** under the map: a "keep / sell / give away" summary of your inventory and stashes, and the
-  areas that suit your character level and build.
+- **Breakpoint guide line** under the map: the character's cast/hit-recovery frames and resistances.
+  The level suggestions and the keep / sell / give-away / BiS lists live on the web dashboard
+  (`/dashboard`, served by the overlay's localhost web app; `/api/live`).
 
 ## ⚠️ Use at your own risk: it could get your account banned
 
