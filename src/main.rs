@@ -26,6 +26,7 @@ mod offsets;
 mod overlay;
 mod process;
 mod render;
+mod runewords_data;
 mod session;
 #[cfg(test)]
 mod testutil;

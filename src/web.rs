@@ -3,6 +3,7 @@
 //! `config.toml` with comments preserved (user request, 2026-11-17). The overlay watches the
 //! config file and hot-reloads it (see `live`).
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -191,17 +192,30 @@ fn page() -> String {
     respond("200 OK", "text/html", config_page())
 }
 
-/// `200 OK` with the current config as JSON for the form.
+/// `200 OK` with the current config as JSON for the form: the characters (with their `BiS`
+/// slots and, per slot, the runeword hints for its pieces) and the runeword table the
+/// form's datalist offers.
 fn api_config() -> String {
     let config = crate::config::load_from(&crate::config::default_path().unwrap_or_default());
     let characters: Vec<_> = config
         .bis
         .iter()
         .map(|(name, bis)| {
+            let hints: BTreeMap<&str, Vec<String>> = bis
+                .slots
+                .iter()
+                .map(|(slot, pieces)| {
+                    (
+                        slot.as_str(),
+                        pieces.iter().filter_map(|p| runeword_hint(p)).collect(),
+                    )
+                })
+                .collect();
             serde_json::json!({
                 "name": name,
                 "build": bis.build,
                 "slots": bis.slots,
+                "hints": hints,
             })
         })
         .chain(
@@ -216,8 +230,41 @@ fn api_config() -> String {
     respond(
         "200 OK",
         "application/json",
-        &serde_json::to_string(&characters).unwrap_or_default(),
+        &serde_json::json!({ "characters": characters, "runewords": runewords_json() }).to_string(),
     )
+}
+
+/// The runeword name part of a `BiS` piece string (`"Insight@27"` → `"Insight"`).
+fn piece_name(piece: &str) -> &str {
+    piece.split_once('@').map_or(piece, |(name, _)| name).trim()
+}
+
+/// The runeword hint for a `BiS` piece string (`"Insight@27"` → `"Insight: Ral+Tir+Tal+Sol ·
+/// polearms, staves, missile weapons"`), or `None` when it is not a runeword name.
+#[must_use]
+fn runeword_hint(piece: &str) -> Option<String> {
+    let rw = crate::runewords_data::lookup(piece_name(piece))?;
+    Some(format!(
+        "{}: {} · {}",
+        rw.name,
+        rw.runes.join("+"),
+        rw.bases.join(", ")
+    ))
+}
+
+/// The runeword table as a JSON object keyed by lowercase name (`{"steel": {"name":
+/// "Steel", …}, …}`), for the form's runeword datalist.
+fn runewords_json() -> serde_json::Value {
+    crate::runewords_data::RUNEWORDS
+        .iter()
+        .map(|rw| {
+            (
+                rw.name.to_lowercase(),
+                serde_json::json!({ "name": rw.name, "runes": rw.runes, "bases": rw.bases }),
+            )
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into()
 }
 
 /// Reads `config.toml`, applies `edit`, and writes it back atomically. The whole
@@ -315,16 +362,22 @@ input { background: #2a2a2a; color: #eee; border: 1px solid #555; padding: 4px; 
 button { padding: 4px 10px; }
 .char { border: 1px solid #444; padding: 1em; margin-bottom: 1em; }
 .slot { margin: 4px 0; }
+.hint { color: #9c9; font-size: 0.85em; margin-left: 5.5em; }
 </style></head><body>
 <h1>d2r-map-overlay config</h1>
 <div id="chars"></div>
+<datalist id="runewords"></datalist>
 <h2>Add character</h2>
 <input id="newname" placeholder="character name"> <button onclick="addChar()">Add</button>
 <script>
 const SLOTS = ["amulet","ring1","ring2","body","helm","gloves","boots","belt","weapon","offhand","swap"];
 const DAMAGES = ["physical","fire","cold","lightning","poison","magic"];
 async function load() {
-  const chars = await (await fetch("/api/config")).json();
+  const cfg = await (await fetch("/api/config")).json();
+  const chars = cfg.characters;
+  const runewords = cfg.runewords || {};
+  document.getElementById("runewords").innerHTML =
+    Object.values(runewords).map(rw => `<option value="${rw.name}">`).join("");
   const root = document.getElementById("chars");
   root.innerHTML = "";
   for (const c of chars) {
@@ -338,7 +391,9 @@ async function load() {
     html += `<div>build: <input id="build-${c.name}" value="${c.build}" size="30" placeholder="build name"></div>`;
     for (const s of SLOTS) {
       const pieces = (c.slots[s] || []).join(", ");
-      html += `<div class="slot">${s}: <input id="bis-${c.name}-${s}" value="${pieces}" size="50" placeholder="Stealth@17, Enigma@65"></div>`;
+      const hints = (c.hints?.[s] || []).join("<br>");
+      html += `<div class="slot">${s}: <input id="bis-${c.name}-${s}" value="${pieces}" size="50" placeholder="Stealth@17, Enigma@65" list="runewords">`
+        + (hints ? `<div class="hint">${hints}</div>` : "") + `</div>`;
     }
     html += `<button onclick="saveBis('${c.name}')">Save BiS</button>`;
     div.innerHTML = html;
@@ -483,6 +538,29 @@ mod tests {
         };
         assert_eq!(body, b"ok");
         Ok(())
+    }
+
+    #[test]
+    fn piece_names_strip_the_level_suffix() {
+        assert_eq!(piece_name("Insight@27"), "Insight");
+        assert_eq!(piece_name("Stealth"), "Stealth");
+        assert_eq!(piece_name(" White@35 "), "White");
+    }
+
+    #[test]
+    fn runeword_hints_name_runes_and_bases() -> Result<()> {
+        let hint = runeword_hint("Insight@27").ok_or_else(|| anyhow!("Insight is a runeword"))?;
+        assert!(hint.starts_with("Insight: Ral+Tir+Tal+Sol · "), "{hint}");
+        assert!(hint.contains("staves"), "{hint}");
+        assert!(runeword_hint("Crafted Rare").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn runeword_json_keys_are_lowercase() {
+        let json = runewords_json();
+        assert!(json.get("steel").is_some(), "lowercase keys");
+        assert!(json.get("Steel").is_none(), "no display-name keys");
     }
 
     #[test]
