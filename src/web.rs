@@ -2360,8 +2360,8 @@ function recipeCard(r) {
   const counted = (r.inputs || []).filter(i => i.status === "have" || i.status === "missing");
   const ready = counted.length && counted.every(i => i.status === "have");
   // Quest-reward recipes: whether the reward waits (used ones never arrive).
-  const quest = r.quest === "ready" ? '<span class="qt ready">reward ready</span>'
-    : r.quest === "todo" ? '<span class="qt">quest not done yet</span>' : "";
+  // An unfinished quest needs no tag: the card leaves by itself once the reward is used.
+  const quest = r.quest === "ready" ? '<span class="qt ready">reward ready</span>' : "";
   return `<div class="rc ${esc(r.kind)}${ready ? " ready" : ""}">${r.req ? `<div class="rc-req">${esc(r.req)}</div>` : ""}`
     + `<div class="rc-h"><span class="nm">${esc(r.name)}</span>${quest}</div><ul class="ins">${ins}</ul>`
     + `${r.result ? `<div class="res">→ ${esc(r.result)}</div>` : ""}${r.notes ? `<div class="note">${esc(r.notes)}</div>` : ""}</div>`;
