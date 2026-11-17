@@ -1568,7 +1568,10 @@ fn grid_pieces(pieces: &[String], equipped_level: Option<u32>, info: &LiveInfo) 
             add_piece_details(&mut json, crate::info::piece_name(piece), info.build);
             if let (Some((from, to)), Some(obj)) = (range, json.as_object_mut()) {
                 if rune {
-                    obj.insert("setup".to_owned(), serde_json::json!(format!("lvl {from}+")));
+                    // The rune's own requirement when known; the guide window only says when
+                    // the guide starts using it.
+                    let min = req.unwrap_or(from);
+                    obj.insert("setup".to_owned(), serde_json::json!(format!("lvl {min}+")));
                 } else if info.char_level.is_some() && (from..=to).contains(&lvl) {
                     obj.insert("now".to_owned(), serde_json::json!(true));
                 }
@@ -3487,7 +3490,7 @@ mod tests {
         };
         assert_eq!(field("Stealth", "now"), Some(serde_json::json!(true)));
         assert_eq!(field("Lore", "now"), None, "not yet");
-        assert_eq!(field("Tal Rune", "setup"), Some(serde_json::json!("lvl 13+")));
+        assert_eq!(field("Tal Rune", "setup"), Some(serde_json::json!("lvl 17+")));
         info.char_level = Some(60);
         let json = grid_pieces(&pieces, None, &info);
         let names: Vec<_> = json.iter().filter_map(|p| p.get("name")?.as_str()).collect();
