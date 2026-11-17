@@ -2068,7 +2068,7 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .rc-h { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
 .rc-h .nm { font-weight: 650; flex: 1 1 14em; min-width: 0; overflow-wrap: break-word; }
 .rc.runeword .rc-h .nm { color: var(--rune); }
-.rc-h .lv { font-size: 11px; color: var(--dim); flex: 0 1 auto; margin-left: auto; text-align: right; }
+.rc-req { font-size: 11px; color: var(--dim); margin-bottom: 2px; overflow-wrap: break-word; }
 .rc-h .qt { font-size: 11px; color: var(--dim); white-space: nowrap; } .rc-h .qt.ready { color: #6fdc6f; }
 .ins { margin: 6px 0 4px; padding: 0; list-style: none; font-size: 12.5px; }
 .ins li { display: flex; flex-wrap: wrap; gap: 0 6px; padding: 1px 0; }
@@ -2362,8 +2362,8 @@ function recipeCard(r) {
   // Quest-reward recipes: whether the reward waits (used ones never arrive).
   const quest = r.quest === "ready" ? '<span class="qt ready">reward ready</span>'
     : r.quest === "todo" ? '<span class="qt">quest not done yet</span>' : "";
-  return `<div class="rc ${esc(r.kind)}${ready ? " ready" : ""}"><div class="rc-h"><span class="nm">${esc(r.name)}</span>${quest}`
-    + `${r.req ? `<span class="lv">${esc(r.req)}</span>` : ""}</div><ul class="ins">${ins}</ul>`
+  return `<div class="rc ${esc(r.kind)}${ready ? " ready" : ""}">${r.req ? `<div class="rc-req">${esc(r.req)}</div>` : ""}`
+    + `<div class="rc-h"><span class="nm">${esc(r.name)}</span>${quest}</div><ul class="ins">${ins}</ul>`
     + `${r.result ? `<div class="res">→ ${esc(r.result)}</div>` : ""}${r.notes ? `<div class="note">${esc(r.notes)}</div>` : ""}</div>`;
 }
 function recipes(list) {
