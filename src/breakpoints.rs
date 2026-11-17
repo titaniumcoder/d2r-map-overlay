@@ -14,7 +14,7 @@
 //! of every class table exactly (the Warlock row assumes necromancer-like values — its
 //! d2runewizard table matches; Druid values are for human form).
 
-use crate::game::{Player, SpeedStats};
+use crate::game::Player;
 
 /// Cast animation data per class: (casting base, animation speed). The bases are one higher
 /// than maxroll's table lists them (their own FCR tables and the formula agree on these).
@@ -99,44 +99,58 @@ fn stat_part(
     )
 }
 
-/// The resistances from gear with the difficulty penalty applied: `f/c/l/p`.
-fn res_part(speed: &SpeedStats, difficulty: Option<u8>) -> String {
+/// The guide band: `fcr (…) · fhr (…) · ias … · res f/c/l/p (penalty)`, each resistance below
+/// 75 (after the difficulty penalty) coloured red (user request, 2026-11-17). `None` without
+/// readable speed stats.
+///
+/// The IAS value is shown even though its frames depend on the weapon's base speed and the
+/// attack skill used (user decision: what to show is not for the overlay to decide).
+#[must_use]
+pub fn guide_band(player: &Player, difficulty: Option<u8>) -> Option<crate::info::Band> {
+    let speed = player.speed.as_ref()?;
+    let (cast_base, cast_speed) = class_data(&CAST, player.class)?;
+    let (hit_base, hit_speed) = class_data(&HIT, player.class)?;
+    let mut text = format!(
+        "{} · {} · ias {} · res ",
+        stat_part("fcr", cast_base, cast_speed, speed.fcr, 200, cast_frames),
+        stat_part("fhr", hit_base, hit_speed, speed.fhr, 480, hit_frames),
+        speed.ias,
+    );
+    let mut spans = Vec::new();
     let penalty = difficulty
         .and_then(|d| RES_PENALTY.get(usize::from(d)).copied())
         .unwrap_or(0);
     let res = |v: u32| i32::try_from(v).unwrap_or(i32::MAX) - penalty;
-    let note = match difficulty {
+    for (n, value) in [
+        speed.res_fire,
+        speed.res_cold,
+        speed.res_lightning,
+        speed.res_poison,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let v = res(value);
+        if v < 75 {
+            // The value's own bytes: ASCII, so the offset is a char boundary.
+            spans.push((text.len(), crate::info::BAD_TEXT));
+        }
+        text.push_str(&v.to_string());
+        if n < 3 {
+            text.push('/');
+        }
+    }
+    text.push_str(match difficulty {
         Some(1) => " (nm −40)",
         Some(2) => " (hell −100)",
         _ => "",
-    };
-    format!(
-        "res {}/{}/{}/{}{note}",
-        res(speed.res_fire),
-        res(speed.res_cold),
-        res(speed.res_lightning),
-        res(speed.res_poison)
-    )
+    });
+    Some(crate::info::Band {
+        text,
+        colour: crate::info::GUIDE_TEXT,
+        spans,
+    })
 }
-
-/// The guide line: `fcr (…) · fhr (…) · res …`. `None` without readable speed stats.
-///
-/// No IAS on purpose (user question, 2026-11-17): IAS frames depend on the weapon's base speed
-/// AND the attack skill used, neither of which the reader knows — and for casters (Blood Boil
-/// is a cast) the relevant attack-speed stat is FCR anyway.
-#[must_use]
-pub fn guide_line(player: &Player, difficulty: Option<u8>) -> Option<String> {
-    let speed = player.speed.as_ref()?;
-    let (cast_base, cast_speed) = class_data(&CAST, player.class)?;
-    let (hit_base, hit_speed) = class_data(&HIT, player.class)?;
-    Some(format!(
-        "{} · {} · {}",
-        stat_part("fcr", cast_base, cast_speed, speed.fcr, 200, cast_frames),
-        stat_part("fhr", hit_base, hit_speed, speed.fhr, 480, hit_frames),
-        res_part(speed, difficulty),
-    ))
-}
-
 /// The `(base, speed)` pair of `class`, or `None` for an unknown class id.
 fn class_data(data: &[(u32, u32)], class: u32) -> Option<(u32, u32)> {
     data.get(usize::try_from(class).ok()?).copied()
@@ -146,6 +160,7 @@ fn class_data(data: &[(u32, u32)], class: u32) -> Option<(u32, u32)> {
 mod tests {
     use super::*;
     use crate::game::{Addr, SpeedStats};
+    use anyhow::{Result, anyhow};
 
     fn player(class: u32, fcr: u32, fhr: u32, ias: u32) -> Player {
         Player {
@@ -241,27 +256,42 @@ mod tests {
     }
 
     #[test]
-    fn guide_line_has_the_users_format() {
+    fn guide_band_has_the_users_format() -> Result<()> {
         // Warlock (class 7) with 20 FCR: 13 frames (base 15), next breakpoint 30.
         let p = player(7, 20, 0, 0);
-        let line = guide_line(&p, Some(0)).unwrap_or_default();
-        assert!(line.starts_with("fcr (13 / 20 / 30)"), "{line}");
+        let Some(band) = guide_band(&p, Some(0)) else {
+            return Err(anyhow!("no guide band"));
+        };
+        assert!(band.text.starts_with("fcr (13 / 20 / 30)"), "{}", band.text);
+        // IAS is back in the line (user decision).
+        assert!(band.text.contains("ias 0"), "{}", band.text);
         // Resists with no penalty in Normal.
-        assert!(line.ends_with("res 25/15/25/5"), "{line}");
-        // Nightmare applies −40.
-        let line = guide_line(&p, Some(1)).unwrap_or_default();
-        assert!(line.contains("res -15/-25/-15/-35 (nm −40)"), "{line}");
-        // No IAS in the line (weapon-dependent; FCR is the caster's attack-speed stat).
-        let p = player(7, 20, 0, 30);
-        let line = guide_line(&p, None).unwrap_or_default();
-        assert!(!line.contains("ias"), "{line}");
+        assert!(band.text.ends_with("res 25/15/25/5"), "{}", band.text);
+        // The test values 25/15/25/5 are all below 75: all four values red already in Normal.
+        assert_eq!(band.spans.len(), 4, "all four values red: {band:?}");
+        // Nightmare applies −40; all four values drop below 75 and go red.
+        let Some(band) = guide_band(&p, Some(1)) else {
+            return Err(anyhow!("no guide band"));
+        };
+        assert!(
+            band.text.ends_with("res -15/-25/-15/-35 (nm −40)"),
+            "{}",
+            band.text
+        );
+        assert_eq!(band.spans.len(), 4, "all four values red");
+        for (off, colour) in &band.spans {
+            assert_eq!(colour, &crate::info::BAD_TEXT);
+            let rest = &band.text[*off..];
+            assert!(rest.starts_with('-'), "a penalized value at {off}: {rest}");
+        }
+        Ok(())
     }
 
     #[test]
-    fn unknown_class_or_stats_give_no_line() {
-        assert_eq!(guide_line(&player(8, 0, 0, 0), None), None);
+    fn unknown_class_or_stats_give_no_band() {
+        assert_eq!(guide_band(&player(8, 0, 0, 0), None), None);
         let mut p = player(7, 0, 0, 0);
         p.speed = None;
-        assert_eq!(guide_line(&p, None), None);
+        assert_eq!(guide_band(&p, None), None);
     }
 }

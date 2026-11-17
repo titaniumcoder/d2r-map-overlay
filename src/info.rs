@@ -89,7 +89,8 @@ const TERRORIZED: &str = "terrorized";
 const TERROR_TEXT: [u8; 4] = [190, 120, 255, 255];
 const OUTLINE: [u8; 4] = [0, 0, 0, 220];
 /// The monster-level part in an area bad for the build ([`Rating::Bad`]).
-const BAD_TEXT: [u8; 4] = [235, 70, 60, 255];
+/// The red of a bad rating — also the colour of a resistance below 75 (user request).
+pub const BAD_TEXT: [u8; 4] = [235, 70, 60, 255];
 /// The monster-level part in an area good for the build ([`Rating::Good`]).
 const GOOD_TEXT: [u8; 4] = [80, 220, 100, 255];
 
@@ -444,29 +445,32 @@ pub fn spare_lines(font: &FontVec, prefix: &str, spares: &[Spare], max_width: f3
 /// (yellow), with an empty gap row before each non-empty block (so also between the info line
 /// and the first block).
 pub fn stack(
-    guide: Vec<String>,
+    guide: Vec<Band>,
     level: Vec<String>,
     keep: Vec<String>,
     sell: Vec<String>,
     give: Vec<String>,
     bis: Vec<String>,
-) -> Vec<(String, [u8; 4])> {
+) -> Vec<Band> {
     let mut rows = Vec::new();
+    let plain = |lines: Vec<String>, colour: [u8; 4]| -> Vec<Band> {
+        lines.into_iter().map(|l| Band::plain(l, colour)).collect()
+    };
     for (lines, colour) in [
         (guide, GUIDE_TEXT),
-        (level, LEVEL_TEXT),
-        (keep, KEEP_TEXT),
-        (sell, SELL_TEXT),
-        (give, GIVE_TEXT),
-        (bis, BIS_TEXT),
+        (plain(level, LEVEL_TEXT), LEVEL_TEXT),
+        (plain(keep, KEEP_TEXT), KEEP_TEXT),
+        (plain(sell, SELL_TEXT), SELL_TEXT),
+        (plain(give, GIVE_TEXT), GIVE_TEXT),
+        (plain(bis, BIS_TEXT), BIS_TEXT),
     ] {
         if lines.is_empty() {
             continue;
         }
         // A gap row before every block, also the first: it keeps the lists apart from the info
         // line above them (user request, 2026-11-15).
-        rows.push((String::new(), colour));
-        rows.extend(lines.into_iter().map(|l| (l, colour)));
+        rows.push(Band::gap(colour));
+        rows.extend(lines);
     }
     rows
 }
@@ -547,7 +551,7 @@ fn wrap(
 
 /// Draws the text `lines` ([`stack`]) bottom-left into `pm` in their colours, the last one at
 /// the bottom. Draws nothing if the canvas is shorter than the lines.
-pub fn draw_keep(pm: &mut Pixmap, font: &FontVec, lines: &[(String, [u8; 4])]) {
+pub fn draw_keep(pm: &mut Pixmap, font: &FontVec, lines: &[Band]) {
     let h = pm.height();
     if h < keep_frame_height(font, lines.len()) {
         return;
@@ -555,12 +559,72 @@ pub fn draw_keep(pm: &mut Pixmap, font: &FontVec, lines: &[(String, [u8; 4])]) {
     let scaled = font.as_scaled(PxScale::from(TEXT_PX));
     let lh = line_height(font);
     let x0 = f32_px(PAD + 1);
-    for (from_bottom, (line, colour)) in (0u32..).zip(lines.iter().rev()) {
-        if line.is_empty() {
+    for (from_bottom, band) in (0u32..).zip(lines.iter().rev()) {
+        if band.text.is_empty() {
             continue; // a gap row
         }
         let baseline = f32_px(h - PAD - 1 - from_bottom * lh) + scaled.descent();
-        draw_outlined(pm, font, TEXT_PX, *colour, line, (x0, baseline), false);
+        if band.spans.is_empty() {
+            draw_outlined(pm, font, TEXT_PX, band.colour, &band.text, (x0, baseline), false);
+        } else {
+            // Spanned row: draw each segment in its colour, advancing the pen. A span starts
+            // at its byte offset and runs to the next one (or the end).
+            let mut marks = band.spans.clone();
+            marks.sort_by_key(|&(off, _)| off);
+            marks.dedup();
+            let mut pen = x0;
+            let mut pos = 0usize;
+            for (off, colour) in marks {
+                let off = off.min(band.text.len());
+                if off > pos {
+                    let head = band.text.get(pos..off).unwrap_or_default();
+                    draw_outlined(pm, font, TEXT_PX, band.colour, head, (pen, baseline), false);
+                    pen += text_width(font, head);
+                    pos = off;
+                }
+                let end = band
+                    .spans
+                    .iter()
+                    .map(|&(o, _)| o)
+                    .filter(|&o| o > pos)
+                    .min()
+                    .unwrap_or(band.text.len());
+                let seg = band.text.get(pos..end.max(pos)).unwrap_or_default();
+                draw_outlined(pm, font, TEXT_PX, colour, seg, (pen, baseline), false);
+                pen += text_width(font, seg);
+                pos = end.max(pos);
+            }
+            if pos < band.text.len() {
+                let seg = band.text.get(pos..).unwrap_or_default();
+                draw_outlined(pm, font, TEXT_PX, band.colour, seg, (pen, baseline), false);
+            }
+        }
+    }
+}
+
+/// One text row below the info line: its text, colour, and optional coloured segments
+/// (`spans`: byte offset into `text` where a differently coloured part starts — used for the
+/// guide's low-resistance values, user request, 2026-11-17).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Band {
+    pub text: String,
+    pub colour: [u8; 4],
+    pub spans: Vec<(usize, [u8; 4])>,
+}
+
+impl Band {
+    /// A plain row without spans.
+    pub fn plain(text: impl Into<String>, colour: [u8; 4]) -> Self {
+        Self {
+            text: text.into(),
+            colour,
+            spans: Vec::new(),
+        }
+    }
+
+    /// A gap row (empty text).
+    pub fn gap(colour: [u8; 4]) -> Self {
+        Self::plain(String::new(), colour)
     }
 }
 
@@ -692,6 +756,28 @@ fn spans<'a>(line: &InfoLine, text: &'a str) -> Vec<(&'a str, [u8; 4])> {
         .into_iter()
         .filter(|(part, _)| !part.is_empty())
         .collect()
+}
+
+/// Truncates a [`Band`] to `max_width` px in `font`, appending `…` when it doesn't fit; spans
+/// beyond the cut are dropped (their text is gone anyway). For plain one-line texts use
+/// [`fit_plain`]; the info line has its own span-aware fitting.
+#[must_use]
+pub fn fit_band(mut band: Band, font: &FontVec, max_width: f32) -> Band {
+    if text_width(font, &band.text) <= max_width {
+        return band;
+    }
+    let chars: Vec<char> = band.text.chars().collect();
+    for keep in (1..chars.len()).rev() {
+        let cut: String = chars.get(..keep).unwrap_or_default().iter().collect();
+        let cut = format!("{}…", cut.trim_end());
+        if text_width(font, &cut) <= max_width {
+            let limit = cut.len() - '…'.len_utf8();
+            band.spans.retain(|&(off, _)| off < limit);
+            band.text = cut;
+            return band;
+        }
+    }
+    band
 }
 
 /// Truncates `text` to `max_width` px in `font`, appending `…` when it doesn't fit. For plain
@@ -1056,25 +1142,33 @@ mod tests {
         );
         // The BiS block is last: the guide sits at the top, the chase list far below.
         assert_eq!(
-            stack(l("g"), vec![], vec![], vec![], vec![], vec![]).len(),
+            stack(
+                vec![Band::plain("g", GUIDE_TEXT)],
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                vec![]
+            )
+            .len(),
             2,
             "guide: gap + line"
         );
-        let want: Vec<(String, [u8; 4])> = vec![
-            (String::new(), LEVEL_TEXT),
-            ("Level 3 → a (5)".into(), LEVEL_TEXT),
-            (String::new(), KEEP_TEXT),
-            ("Keep: k".into(), KEEP_TEXT),
-            (String::new(), SELL_TEXT),
-            ("Sell: s".into(), SELL_TEXT),
-            (String::new(), GIVE_TEXT),
-            ("Give away: g".into(), GIVE_TEXT),
-            ("h".into(), GIVE_TEXT),
+        let want: Vec<Band> = vec![
+            Band::gap(LEVEL_TEXT),
+            Band::plain("Level 3 → a (5)", LEVEL_TEXT),
+            Band::gap(KEEP_TEXT),
+            Band::plain("Keep: k", KEEP_TEXT),
+            Band::gap(SELL_TEXT),
+            Band::plain("Sell: s", SELL_TEXT),
+            Band::gap(GIVE_TEXT),
+            Band::plain("Give away: g", GIVE_TEXT),
+            Band::plain("h", GIVE_TEXT),
         ];
         assert_eq!(rows, want);
         assert_eq!(
             stack(vec![], vec![], vec![], vec![], l("Give away: g"), vec![]),
-            vec![(String::new(), GIVE_TEXT), ("Give away: g".to_owned(), GIVE_TEXT)],
+            vec![Band::gap(GIVE_TEXT), Band::plain("Give away: g", GIVE_TEXT),],
             "a gap below the info line even for the only block"
         );
         assert_eq!(stack(vec![], vec![], vec![], vec![], vec![], vec![]), vec![]);

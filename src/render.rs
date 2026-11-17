@@ -962,17 +962,17 @@ pub fn map_height(height: u32, font: Option<&FontVec>, keep_lines: usize) -> u32
 /// The text rows below the info line for a `width` px canvas: the guide lines, the level
 /// suggestions, the inventory keep list, then the sell and give-away lists, with gap rows
 /// ([`info::stack`]); none without a font.
-fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<(String, Rgba)> {
+fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<info::Band> {
     let Some(f) = font else {
         return Vec::new();
     };
     let max_width = f32::from(u16::try_from(width).unwrap_or(u16::MAX)) - 8.0;
     info::stack(
         // The breakpoint guide first (user request, 2026-11-17), width-fitted like the other
-        // blocks.
-        crate::breakpoints::guide_line(&snap.player, snap.difficulty)
+        // blocks (spans ride along: low resistances are red).
+        crate::breakpoints::guide_band(&snap.player, snap.difficulty)
             .into_iter()
-            .map(|line| info::fit_plain(f, &line, max_width))
+            .map(|band| info::fit_band(band, f, max_width))
             .collect(),
         info::level_lines(f, snap.player.char_level, snap.difficulty, max_width),
         info::keep_lines(f, &snap.inventory_keep, max_width),
@@ -1133,7 +1133,7 @@ fn render_rules(
 }
 
 /// The info line at the bottom, then the keep/sell/give-away rows below it.
-fn draw_text_bands(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, keep: &[(String, Rgba)]) {
+fn draw_text_bands(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, keep: &[info::Band]) {
     let inset = info::keep_band_height(font, keep.len());
     info::draw(
         pm,
@@ -2749,7 +2749,7 @@ mod tests {
         }];
         let (w, h) = (400, 400);
         let rows = keep_lines(&snap, w, Some(font));
-        let texts: Vec<&str> = rows.iter().map(|(t, _)| t.as_str()).collect();
+        let texts: Vec<&str> = rows.iter().map(|t| t.text.as_str()).collect();
         assert_eq!(
             texts,
             vec![
