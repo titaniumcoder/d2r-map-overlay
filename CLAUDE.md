@@ -20,7 +20,7 @@ Have the `reviewer` agent run the gate and review the diff before committing.
 ## Git
 
 Commit small and often: at least one commit per milestone sub-step, each passing the gate.
-Remote: `origin` = github.com/titaniumcoder/d2r-map-overlay (public). Push only when the user asks.
+Remote: `origin` = github.com/titaniumcoder/d2r-map-overlay (public). Push to `origin main` right after each commit; no need to ask.
 
 ## Live game
 
