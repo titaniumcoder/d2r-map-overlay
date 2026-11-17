@@ -354,6 +354,12 @@ pub struct LiveInfo<'a> {
     pub blocks: &'a crate::render::TextBlocks,
     /// The equipped `(body slot, quality)` pairs, shown under the `BiS` chase list.
     pub equipped: &'a [(u8, u32)],
+    /// The (session-cached) shared-stash tabs, shown in their own panel.
+    pub stash: &'a [crate::stash::StashTab],
+    /// Names of the identified unique/set items in the shared stash, emitted as
+    /// `stash_owned` for reference; the per-`BiS`-line `tick` ([`info::Tick`]) is what the
+    /// page marks ✓(stash) from.
+    pub stash_owned: &'a [String],
     /// Unix seconds of the tick that produced this data.
     pub updated_at: u64,
 }
@@ -362,10 +368,13 @@ pub struct LiveInfo<'a> {
 /// tests need no game. Shape:
 /// `{ "live": true, "updated_at": <unix secs>, "player": {"name", "class", "level",
 /// "difficulty"}, "area": …, "guide": […], "levels": […], "keep": […], "sell": […],
-/// "give": […], "bis": […], "equipped": […] }`, where each line is `{ "text": …,
-/// "colour": "#rrggbb" }` (the overlay line's colour as hex; the guide's per-span colours
-/// are flattened to the base colour). The give-away lines have no panel of their own, so they
-/// ride with `sell` in the dashboard's Sell panel.
+/// "give": […], "bis": […], "equipped": […], "stash": […], "stash_owned": […] }`, where
+/// each line is `{ "text": …, "colour": "#rrggbb" }` (the overlay line's colour as hex; the
+/// guide's per-span colours are flattened to the base colour) — except the `bis` lines, which
+/// carry a structured `"tick": "owned" | "stash" | null` (computed in Rust from the owned and
+/// stash name lists, [`info::Tick`]): the page marks ✓(stash) from it instead of scraping the
+/// line text. The give-away lines have no panel of their own, so they ride with `sell` in the
+/// dashboard's Sell panel.
 #[must_use]
 pub fn live_json(info: &LiveInfo) -> String {
     let class = CLASS_NAMES
@@ -387,10 +396,66 @@ pub fn live_json(info: &LiveInfo) -> String {
         "keep": text_lines(&info.blocks.keep, crate::info::KEEP_TEXT),
         "sell": text_lines(&info.blocks.sell, crate::info::SELL_TEXT),
         "give": text_lines(&info.blocks.give, crate::info::GIVE_TEXT),
-        "bis": text_lines(&info.blocks.bis, crate::info::BIS_TEXT),
+        "bis": info.blocks.bis.iter().map(bis_line).collect::<Vec<_>>(),
         "equipped": text_lines(&equipped_lines(info.equipped), [255, 255, 255, 255]),
+        "stash": stash_lines(info.stash),
+        "stash_owned": info.stash_owned,
     })
     .to_string()
+}
+
+/// The shared-stash tabs as dashboard lines: a header per tab, then one line per item with
+/// its quality tag. Uniques are gold and sets green (the overlay's drop colours); magic and
+/// rare get their classic colours, everything else stays plain.
+fn stash_lines(tabs: &[crate::stash::StashTab]) -> Vec<serde_json::Value> {
+    use crate::offsets::item_data;
+    let mut out = Vec::new();
+    for tab in tabs {
+        out.push(serde_json::json!({
+            "text": format!("tab {} ({} items)", tab.index, tab.items.len()),
+            "colour": "#afafaf",
+        }));
+        for item in &tab.items {
+            let (tag, colour) = match u32::from(item.quality) {
+                item_data::QUALITY_UNIQUE => ("unique", "#ffd278"),
+                item_data::QUALITY_SET => ("set", "#5ae65a"),
+                item_data::QUALITY_RARE => ("rare", "#ffff5f"),
+                item_data::QUALITY_MAGIC => ("magic", "#8f88ff"),
+                _ => ("", "#dddddd"),
+            };
+            let mut tag = tag.to_owned();
+            // Base-name items already carry an "eth " prefix from the keep-list naming; only
+            // the unique/set names need the tag.
+            if item.ethereal
+                && matches!(
+                    u32::from(item.quality),
+                    item_data::QUALITY_UNIQUE | item_data::QUALITY_SET
+                )
+            {
+                tag.push_str(" eth");
+            }
+            if item.runeword {
+                tag.push_str(" runeword");
+            }
+            let text = if tag.is_empty() {
+                item.name.clone()
+            } else {
+                format!("{} ({tag})", item.name)
+            };
+            out.push(serde_json::json!({ "text": text, "colour": colour }));
+        }
+    }
+    out
+}
+
+/// One `BiS` line as `{ "text", "colour", "tick" }`: the tick is the structural ✓ source
+/// ([`info::Tick`]) — `null` when the piece is owned by neither the character nor the stash.
+fn bis_line(line: &crate::info::BisLine) -> serde_json::Value {
+    serde_json::json!({
+        "text": line.text,
+        "colour": hex(crate::info::BIS_TEXT),
+        "tick": line.tick.map(crate::info::Tick::as_str),
+    })
 }
 
 /// `levels`/`keep`/… lines as `{ "text", "colour" }` objects in the block's colour.
@@ -612,11 +677,13 @@ h2 { font-size: 1.05em; border-bottom: 1px solid #444; padding-bottom: 4px; }
 .panel { border: 1px solid #444; padding: 1em; margin-bottom: 1em; }
 .line { white-space: pre-wrap; font-size: 0.95em; }
 .waiting { color: #999; font-style: italic; }
+.note { color: #888; font-size: 0.72em; margin-bottom: 4px; }
 </style></head><body>
 <h1>d2r-map-overlay live &nbsp; <a style="font-size:0.6em" href="/">config →</a></h1>
 <h2 id="header"><span class="waiting">waiting for game…</span></h2>
 <div class="panel"><h2>Where to go</h2><div id="levels"></div></div>
 <div class="panel"><h2>Gear / BiS</h2><div id="gear"></div></div>
+<div class="panel"><h2>Shared stash</h2><div class="note">tab numbers are memory order, not verified against the UI yet</div><div id="stash"></div></div>
 <div class="panel"><h2>Sell / Keep</h2><div id="sell"></div></div>
 <script>
 // HTML-escape: line texts come from item and area names read out of the game. Numeric
@@ -634,15 +701,24 @@ async function poll() {
     const header = document.getElementById("header");
     if (!r.live) {
       header.innerHTML = '<span class="waiting">waiting for game…</span>';
-      for (const id of ["levels", "gear", "sell"]) document.getElementById(id).innerHTML = "";
+      for (const id of ["levels", "gear", "stash", "sell"]) document.getElementById(id).innerHTML = "";
     } else {
       const p = r.player;
       header.textContent = [p.name, p.class, p.level != null ? "level " + p.level : null,
         p.difficulty, r.area].filter(Boolean).join(" · ")
         + "  (updated " + new Date(r.updated_at * 1000).toLocaleTimeString() + ")";
       lines(document.getElementById("levels"), r.levels);
-      // The breakpoint guide belongs with the gear it describes.
-      lines(document.getElementById("gear"), (r.guide || []).concat(r.bis || []).concat(r.equipped || []));
+      // The breakpoint guide belongs with the gear it describes. A BiS line whose tick is
+      // "stash" (the ✓ comes from the shared stash) is marked ✓(stash); the tick comes
+      // structured per line ("owned" | "stash" | null), not scraped from the line text.
+      const bis = (r.bis || []).map(l => {
+        if (l.tick === "stash" && typeof l.text === "string" && l.text.includes("\u2713")) {
+          return { text: l.text.replace("\u2713", "\u2713(stash)"), colour: l.colour };
+        }
+        return l;
+      });
+      lines(document.getElementById("gear"), (r.guide || []).concat(bis).concat(r.equipped || []));
+      lines(document.getElementById("stash"), r.stash || []);
       lines(document.getElementById("sell"), (r.sell || []).concat(r.keep || []).concat(r.give || []));
     }
   } catch (e) { /* server gone or mid-restart: keep the last frame, try again */ }
@@ -809,11 +885,36 @@ mod tests {
         ));
     }
 
+    /// One tab with an identified unique and a plain ethereal base, for the stash panel.
+    fn test_stash() -> Vec<crate::stash::StashTab> {
+        vec![crate::stash::StashTab {
+            index: 1,
+            items: vec![
+                crate::stash::StashItem {
+                    name: "Harlequin Crest".to_owned(),
+                    quality: u8::try_from(crate::offsets::item_data::QUALITY_UNIQUE).unwrap_or_default(),
+                    identified: true,
+                    ethereal: false,
+                    runeword: false,
+                },
+                crate::stash::StashItem {
+                    name: "eth Crystal Sword 4os".to_owned(),
+                    quality: u8::try_from(crate::offsets::item_data::QUALITY_NORMAL).unwrap_or_default(),
+                    identified: true,
+                    ethereal: true,
+                    runeword: false,
+                },
+            ],
+        }]
+    }
+
     /// A `LiveInfo` over borrowed test data: difficulty 2 is hell.
     fn live_info<'a>(
         class: u32,
         blocks: &'a crate::render::TextBlocks,
         equipped: &'a [(u8, u32)],
+        stash: &'a [crate::stash::StashTab],
+        stash_owned: &'a [String],
     ) -> LiveInfo<'a> {
         LiveInfo {
             player_name: "Hork",
@@ -823,6 +924,8 @@ mod tests {
             area: "Durance of Hate Level 3",
             blocks,
             equipped,
+            stash,
+            stash_owned,
             updated_at: 1_700_000_000,
         }
     }
@@ -835,11 +938,22 @@ mod tests {
             keep: vec!["Keep: Harlequin Crest (S)".to_owned()],
             sell: vec!["Sell: Gravenspine (inv)".to_owned()],
             give: vec!["Give away: Lem Rune (stash)".to_owned()],
-            bis: vec!["helm: Harlequin Crest (82)".to_owned()],
+            bis: vec![crate::info::BisLine {
+                text: "helm: Harlequin Crest (82)".to_owned(),
+                tick: None,
+            }],
         };
         let equipped = [(1, 7)];
-        let json = serde_json::from_str::<serde_json::Value>(&live_json(&live_info(1, &blocks, &equipped)))
-            .map_err(|e| anyhow!("valid json: {e}"))?;
+        let stash = test_stash();
+        let stash_owned = ["Harlequin Crest".to_owned()];
+        let json = serde_json::from_str::<serde_json::Value>(&live_json(&live_info(
+            1,
+            &blocks,
+            &equipped,
+            &stash,
+            &stash_owned,
+        )))
+        .map_err(|e| anyhow!("valid json: {e}"))?;
         assert_eq!(json.get("live"), Some(&serde_json::json!(true)));
         assert_eq!(json.get("updated_at"), Some(&serde_json::json!(1_700_000_000)));
         assert_eq!(
@@ -902,15 +1016,80 @@ mod tests {
             colour_of("equipped"),
             vec![("helm: unique".to_owned(), "#ffffff".to_owned())]
         );
+        // The stash panel: a tab header, then the items with their quality tags (uniques gold).
+        // Lowercase `tab`: unit-table order, not verified against the UI's tab numbering.
+        assert_eq!(
+            colour_of("stash"),
+            vec![
+                ("tab 1 (2 items)".to_owned(), "#afafaf".to_owned()),
+                ("Harlequin Crest (unique)".to_owned(), "#ffd278".to_owned()),
+                ("eth Crystal Sword 4os".to_owned(), "#dddddd".to_owned()),
+            ]
+        );
+        assert_eq!(
+            json.get("stash_owned"),
+            Some(&serde_json::json!(["Harlequin Crest"]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn live_json_bis_lines_carry_structural_ticks() -> Result<()> {
+        let blocks = crate::render::TextBlocks {
+            bis: vec![
+                crate::info::BisLine {
+                    text: "helm: Harlequin Crest (82)".to_owned(),
+                    tick: Some(crate::info::Tick::Owned),
+                },
+                crate::info::BisLine {
+                    text: "merc body: ✓ Treachery (23)".to_owned(),
+                    tick: Some(crate::info::Tick::Stash),
+                },
+                crate::info::BisLine {
+                    text: "weapon: Mang Song's Lesson (82)".to_owned(),
+                    tick: None,
+                },
+            ],
+            ..crate::render::TextBlocks::default()
+        };
+        let json =
+            serde_json::from_str::<serde_json::Value>(&live_json(&live_info(1, &blocks, &[], &[], &[])))
+                .map_err(|e| anyhow!("valid json: {e}"))?;
+        let ticks: Vec<String> = json
+            .get("bis")
+            .and_then(|v| v.as_array())
+            .map_or_else(Vec::new, |lines| {
+                lines
+                    .iter()
+                    .map(|l| {
+                        l.get("tick").map_or_else(
+                            || "missing".to_owned(),
+                            |t| {
+                                if t.is_null() {
+                                    String::new()
+                                } else {
+                                    t.as_str().unwrap_or("not a string").to_owned()
+                                }
+                            },
+                        )
+                    })
+                    .collect()
+            });
+        assert_eq!(ticks, ["owned", "stash", ""]);
         Ok(())
     }
 
     #[test]
     fn unknown_classes_slots_and_qualities_are_shown_not_dropped() -> Result<()> {
         let blocks = crate::render::TextBlocks::default();
-        let json =
-            serde_json::from_str::<serde_json::Value>(&live_json(&live_info(13, &blocks, &[(13, 42)])))
-                .map_err(|e| anyhow!("valid json: {e}"))?;
+        let json = serde_json::from_str::<serde_json::Value>(&live_json(&live_info(
+            13,
+            &blocks,
+            &[(13, 42)],
+            &[],
+            &[],
+        )))
+        .map_err(|e| anyhow!("valid json: {e}"))?;
         assert_eq!(
             json.pointer("/player/class").and_then(|v| v.as_str()),
             Some("class 13")

@@ -28,6 +28,7 @@ mod process;
 mod render;
 mod runewords_data;
 mod session;
+mod stash;
 #[cfg(test)]
 mod testutil;
 mod valuables;

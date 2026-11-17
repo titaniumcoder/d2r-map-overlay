@@ -970,7 +970,9 @@ pub struct TextBlocks {
     pub keep: Vec<String>,
     pub sell: Vec<String>,
     pub give: Vec<String>,
-    pub bis: Vec<String>,
+    /// The `BiS` chase lines with their structural tick ([`info::BisLine::tick`]): the
+    /// overlay draws the text (plain ✓ embedded), the dashboard marks ✓(stash) from the tick.
+    pub bis: Vec<info::BisLine>,
 }
 
 /// The overlay's text rows for a `width` px canvas ([`keep_lines`]) and the dashboard's groups
@@ -992,7 +994,8 @@ pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextB
         sell: info::spare_lines(f, info::SELL_PREFIX, &snap.sell, max_width),
         give: info::spare_lines(f, info::GIVE_PREFIX, &snap.give_away, max_width),
         // The BiS chase list (user request, 2026-11-17) last: much further down than the other
-        // text, under the keep/sell/give-away lines.
+        // text, under the keep/sell/give-away lines. The tick is computed from the owned and
+        // shared-stash names separately, so the dashboard can mark ✓(stash) distinctly.
         bis: snap.player.bis.as_ref().map_or_else(Vec::new, |bis| {
             info::bis_lines(
                 bis,
@@ -1000,6 +1003,7 @@ pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextB
                 &snap.equipped,
                 &snap.merc_equipped,
                 &snap.owned_names,
+                &snap.stash_names,
                 f,
                 max_width,
             )
@@ -1717,6 +1721,8 @@ mod tests {
             equipped: vec![],
             merc_equipped: vec![],
             owned_names: vec![],
+            stash: vec![],
+            stash_names: vec![],
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
             level: Level {

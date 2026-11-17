@@ -283,8 +283,18 @@ fn follow_game(
                         .map_or_else(|| format!("Level {}", snap.level.id), str::to_owned),
                     blocks: &blocks,
                     equipped: &snap.equipped,
+                    stash: &snap.stash,
+                    stash_owned: &snap.stash_names,
                     updated_at: now_secs(),
                 }));
+                if let Some((tabs, items)) = update.stash_captured {
+                    eprintln!("shared stash captured: {tabs} tabs, {items} items");
+                    journal.stash(true, tabs, items);
+                }
+                if update.stash_invalidated {
+                    eprintln!("shared stash cache dropped (new game)");
+                    journal.stash(false, 0, 0);
+                }
                 if let Some(msg) = tick_msg(&mut dedup, snap, (w, h), info::font()) {
                     send(tx, msg)?;
                 }

@@ -122,6 +122,8 @@ mod tests {
             equipped: vec![],
             merc_equipped: vec![],
             owned_names: vec![],
+            stash: vec![],
+            stash_names: vec![],
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
             level: Level {

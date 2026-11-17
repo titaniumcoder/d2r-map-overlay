@@ -19,6 +19,7 @@ use crate::offsets::{
 };
 use crate::process::ReadMem;
 use crate::render::is_consumable_quest_object;
+use crate::stash::{self, StashTab};
 use crate::valuables;
 
 /// Most units walked per unit type (over all hash slots).
@@ -38,6 +39,9 @@ const MAX_WARNINGS: usize = 50;
 /// Living desecrated monsters needed to call a level terrorized. Two rather than one, so a
 /// single misread unit can't flip the info line; the player's summons never carry the state.
 pub const TERROR_MIN_MONSTERS: usize = 2;
+/// Most items read per shared-stash tab (a tab holds 10×10); a runaway attribute means a
+/// misread, and the warnings tell the rest.
+const MAX_STASH_ITEMS_PER_TAB: usize = 100;
 
 /// Agreeing owner ids (`item_data::OWNER`) after which a storage page stops voting.
 const OWNER_VOTES: u32 = 8;
@@ -91,6 +95,16 @@ pub struct Snapshot {
     /// stashed): the `BiS` list marks owned pieces with a ✓.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned_names: Vec<String>,
+    /// The shared-stash tabs as read this snapshot. Empty once the tab units vanish (stash UI
+    /// closed); the session keeps the last capture ([`crate::session::Session`]). Left out of
+    /// the JSON when empty, so older dumps stay loadable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stash: Vec<StashTab>,
+    /// Display names of the identified unique/set items in [`Snapshot::stash`]: the `BiS` ✓
+    /// for pieces sitting in the shared stash, kept apart from [`Snapshot::owned_names`] so
+    /// the dashboard can show ✓(stash) distinctly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stash_names: Vec<String>,
     pub player_candidates: Vec<Candidate>,
     /// Which rule picked `player` among `player_candidates`. Left out of the JSON when it is the
     /// default (first candidate), so older dumps round-trip.
@@ -391,6 +405,18 @@ struct ItemScan {
     equipped: Vec<(u8, u32)>,
     /// The same for the mercenary's gear (owner `NO_OWNER`).
     merc_equipped: Vec<(u8, u32)>,
+    /// Every stored page-4 item with its unit address, head and owner id: the shared-stash
+    /// tabs are known only after the player is chosen, so [`Reader::stash`] attributes these
+    /// to the live tab unit ids afterwards ([`stash::StashTab`]).
+    stash_heads: Vec<StashHead>,
+}
+
+/// A stored page-4 item kept for the shared-stash attribution.
+#[derive(Debug)]
+struct StashHead {
+    addr: u64,
+    head: UnitHead,
+    owner: u32,
 }
 
 /// A stored item with its `item_data::PAGE` and `item_data::OWNER`.
@@ -828,6 +854,8 @@ pub fn snapshot(
     let (shrines, wells, operated_objects) = r.objects(unit_table);
     let inventory_items = u32::try_from(scan.inventory.len()).unwrap_or(u32::MAX);
     let shared_tabs = r.shared_tabs(unit_table, chosen.id);
+    let stash = r.stash(&scan.stash_heads, items_table, &shared_tabs);
+    let stash_names = stash::stash_names(&stash);
     let mine = player_items(scan.inventory, scan.stored, chosen.id, &shared_tabs);
     let inventory_keep = valuables::keep_list(&mine);
     let (sell, give_away) = valuables::spare_lists(&mine);
@@ -840,6 +868,8 @@ pub fn snapshot(
         equipped,
         merc_equipped,
         owned_names,
+        stash,
+        stash_names,
         player_candidates: candidates,
         player_chosen_by: chosen_by,
         level,
@@ -893,6 +923,7 @@ fn bounds(rooms: &[Room]) -> Option<Bounds> {
 }
 
 /// Fields shared by all unit types.
+#[derive(Clone, Debug)]
 struct UnitHead {
     txt: u32,
     id: u32,
@@ -1073,18 +1104,65 @@ impl<M: ReadMem> Reader<'_, M> {
         Ok(String::from_utf8_lossy(raw.get(..end).unwrap_or_default()).into_owned())
     }
 
-    /// Unit ids of `player`'s shared-stash tabs: other player-type units whose inventory names
-    /// `player` as its owner ([`inventory::OWNER_ID`]). Unreadable units are skipped.
+    /// Unit ids of `player`'s shared-stash tabs: other player-type units **without an act**
+    /// (research note §3.1/§3.3) whose inventory names `player` as its owner
+    /// ([`inventory::OWNER_ID`]). Unreadable units are skipped.
     fn shared_tabs(&mut self, unit_table: u64, player: u32) -> Vec<u32> {
         let addrs = self.units(unit_table, unit_table::PLAYER);
         addrs
             .into_iter()
             .filter_map(|addr| {
+                // The act check is hardening: today nothing else player-type names the player
+                // as inventory owner, but a phantom tab here would shift every index.
                 let id = self.u32(addr, unit::ID).ok()?;
                 let inv = self.ptr(addr, unit::INVENTORY).ok()??;
-                (id != player && self.u32(inv, inventory::OWNER_ID).ok()? == player).then_some(id)
+                (id != player
+                    && self.ptr(addr, unit::ACT).ok()?.is_none()
+                    && self.u32(inv, inventory::OWNER_ID).ok()? == player)
+                    .then_some(id)
             })
             .collect()
+    }
+
+    /// The shared-stash tabs `tab_ids` (in [`Reader::shared_tabs`] order, 1-based `index`)
+    /// with their page-4 items: each item's `item_data::OWNER` is the tab unit's id, the same
+    /// ownership the spare lists use ([`place`]). Unreadable items are skipped without a
+    /// warning: optional data, and the ordinary item scan already warned about them. The
+    /// [`MAX_STASH_ITEMS_PER_TAB`] cap warns once per tab (a runaway tab means a misread).
+    fn stash(&mut self, heads: &[StashHead], items_table: Option<u64>, tab_ids: &[u32]) -> Vec<StashTab> {
+        let mut tabs: Vec<StashTab> = tab_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| StashTab {
+                index: u8::try_from(i + 1).unwrap_or(u8::MAX),
+                items: Vec::new(),
+            })
+            .collect();
+        let mut warned = vec![false; tabs.len()];
+        for StashHead { addr, head, owner } in heads {
+            let Some(slot) = tab_ids.iter().position(|&id| id == *owner) else {
+                continue;
+            };
+            let Some(tab) = tabs.get_mut(slot) else { continue };
+            if tab.items.len() >= MAX_STASH_ITEMS_PER_TAB {
+                // Once per tab: the cap hit is not per-item news.
+                if let Some(w) = warned.get_mut(slot)
+                    && !*w
+                {
+                    *w = true;
+                    self.warn(format!(
+                        "stash tab {}: over {MAX_STASH_ITEMS_PER_TAB} items, the rest are \
+                         skipped (a runaway tab means a misread)",
+                        slot + 1
+                    ));
+                }
+                continue;
+            }
+            if let Ok(item) = self.item_fields(*addr, head, items_table) {
+                tab.items.push(stash::stash_item(&item));
+            }
+        }
+        tabs
     }
 
     /// `Some` if the unit is a live player: non-null act and path, non-zero position.
@@ -1428,6 +1506,9 @@ impl<M: ReadMem> Reader<'_, M> {
                     Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
                 }
             }
+            // Shared-stash tab items are page-4 units owned by a tab unit id (live
+            // 2026-11-15); the live tab ids are only known after the player is chosen.
+            Self::keep_stash_head(&mut scan, addr, &head, page, owner);
             let found = match head.mode {
                 item_mode::ON_GROUND => {
                     scan.ground = scan.ground.saturating_add(1);
@@ -1488,6 +1569,27 @@ impl<M: ReadMem> Reader<'_, M> {
             }
         }
         scan
+    }
+
+    /// Keeps a stored page-4 item for [`Reader::stash`]: page-4 units are owned by the tab
+    /// unit that holds them, and the live tab ids are only known after the player is chosen.
+    fn keep_stash_head(
+        scan: &mut ItemScan,
+        addr: u64,
+        head: &UnitHead,
+        page: Option<u8>,
+        owner: Option<u32>,
+    ) {
+        if page != Some(item_data::PAGE_STASH) {
+            return;
+        }
+        if let Some(owner) = owner {
+            scan.stash_heads.push(StashHead {
+                addr,
+                head: head.clone(),
+                owner,
+            });
+        }
     }
 
     /// The `item_data::BODY` slot of an equipped item (`None` when not equipped).
@@ -3024,6 +3126,117 @@ mod tests {
             .context("owner in ItemData")?
             .copy_from_slice(&owner.to_le_bytes());
         mem.add(data, b);
+        Ok(())
+    }
+
+    /// A shared-stash tab unit: a player-type unit without act or path whose `Inventory`
+    /// names `owner` ([`inventory::OWNER_ID`]). The id is the address >> 12.
+    fn tab_unit(mem: &mut FakeMem, addr: u64, inventory: u64, next: u64) -> Result<()> {
+        put(
+            mem,
+            addr,
+            UNIT_SIZE,
+            &[
+                (unit::TYPE, &unit_table::PLAYER.to_le_bytes()),
+                (unit::TXT, &1u32.to_le_bytes()),
+                (unit::ID, &(u32::try_from(addr >> 12)?).to_le_bytes()),
+                (unit::MODE, &1u32.to_le_bytes()),
+                (unit::INVENTORY, &inventory.to_le_bytes()),
+                (unit::NEXT, &next.to_le_bytes()),
+            ],
+        )
+    }
+
+    const TAB0: u64 = 0x20_3000; // unit id 0x203, Bob's live tab
+    const TAB1: u64 = 0x20_4000; // unit id 0x204, a stale tab (another character's)
+    const INV0: u64 = 0x23_0000;
+    const INV1: u64 = 0x23_1000;
+
+    /// [`world`] plus two tab units: `TAB0` names Bob its inventory owner (live), `TAB1`
+    /// names Alice (stale while playing Bob).
+    fn world_with_tabs() -> Result<FakeMem> {
+        let mut m = world()?;
+        table(
+            &mut m,
+            &[
+                (unit_table::PLAYER, 3, P_STALE),
+                (unit_table::PLAYER, 5, TAB0),
+                (unit_table::PLAYER, 6, TAB1),
+                (unit_table::PLAYER, 9, P_BOB),
+                (unit_table::MONSTER, 0, M0),
+                (unit_table::ITEM, 2, I0),
+            ],
+        )?;
+        tab_unit(&mut m, TAB0, INV0, 0)?;
+        tab_unit(&mut m, TAB1, INV1, 0)?;
+        put(
+            &mut m,
+            INV0,
+            0x50,
+            &[(inventory::OWNER_ID, &BOB_ID.to_le_bytes())],
+        )?;
+        put(
+            &mut m,
+            INV1,
+            0x50,
+            &[(inventory::OWNER_ID, &ALICE_ID.to_le_bytes())],
+        )?;
+        Ok(m)
+    }
+
+    #[test]
+    fn shared_stash_tabs_hold_their_page4_items() -> Result<()> {
+        let mut m = world_with_tabs()?;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        // items.txt row 40 uap (Shako), uniqueitems 248 Harlequin Crest; row 30 crs.
+        owned_unique(&mut m, I1, (40, 248), (4, 0x203), I2)?; // live tab: unique
+        stored_item(&mut m, I2, (30, 2, 0, 0), (item_mode::STORED, 4), &[], I3)?;
+        set_owner(&mut m, I2, 0x203)?; // live tab: normal base
+        owned_unique(&mut m, I3, (40, 248), (4, 0x204), I4)?; // stale tab: out
+        owned_unique(&mut m, I4, (40, 248), (4, BOB_ID), 0)?; // personal stash: out
+        base_items_table(&mut m)?;
+
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        assert_eq!(s.stash.len(), 1, "only the live tab; stale and personal out");
+        let tab = s.stash.first().context("the live tab")?;
+        assert_eq!(tab.index, 1);
+        let items = tab.items.clone();
+        assert_eq!(
+            items,
+            vec![
+                crate::stash::StashItem {
+                    name: "Harlequin Crest".to_owned(),
+                    quality: 7,
+                    identified: true,
+                    ethereal: false,
+                    runeword: false,
+                },
+                crate::stash::StashItem {
+                    name: "Crystal Sword".to_owned(),
+                    quality: 2,
+                    identified: false,
+                    ethereal: false,
+                    runeword: false,
+                },
+            ]
+        );
+        assert_eq!(s.stash_names, vec!["Harlequin Crest"]);
+        Ok(())
+    }
+
+    #[test]
+    fn stash_tabs_without_items_still_show() -> Result<()> {
+        let m = world_with_tabs()?;
+        let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
+        assert_eq!(
+            s.stash,
+            vec![crate::stash::StashTab {
+                index: 1,
+                items: vec![]
+            }],
+            "the empty live tab is listed, the stale one is not"
+        );
+        assert_eq!(s.stash_names, Vec::<String>::new());
         Ok(())
     }
 

@@ -223,27 +223,67 @@ pub fn level_suggestions(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<
     areas
 }
 
+/// Why a `BiS` line carries its ✓: the piece is the character's own ([`Tick::Owned`]:
+/// equipped, carried or personally stashed) or sits in the shared stash ([`Tick::Stash`]).
+/// The overlay ticks both the same (plain ✓, embedded in [`BisLine::text`]); the dashboard
+/// distinguishes them via the line's structured `tick` field ([`crate::web::live_json`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tick {
+    Owned,
+    Stash,
+}
+
+impl Tick {
+    /// The string the dashboard JSON emits for a [`Tick`].
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Owned => "owned",
+            Self::Stash => "stash",
+        }
+    }
+}
+
+/// One `BiS` chase line: the overlay's text (any ✓ already embedded) and, structurally, why
+/// it is ticked (`None` when the piece is owned neither by the character nor the stash).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BisLine {
+    pub text: String,
+    pub tick: Option<Tick>,
+}
+
 /// The `BiS` per-slot chase lines (user request, 2026-11-17): one line per configured slot —
 /// `helm: Mang Song's Lesson (82)` — in the user's slot order, only pieces relevant for the
 /// character's level (required level ≤ character level + 5), and skipping slots where the
 /// equipped piece is already set/unique quality (presumed the current `BiS`). The mercenary's
 /// slots follow prefixed `merc`. At most [`MAX_BIS_LINES`] per section.
+// One line: the bis query's inputs are flat snapshot fields; a struct would only shuffle them.
+#[allow(clippy::too_many_arguments)]
 pub fn bis_lines(
     bis: &crate::config::Bis,
     char_level: Option<u8>,
     equipped: &[(u8, u32)],
     merc_equipped: &[(u8, u32)],
     owned_names: &[String],
+    stash_names: &[String],
     font: &FontVec,
     max_width: f32,
-) -> Vec<String> {
+) -> Vec<BisLine> {
     let mut out = Vec::new();
     let lvl = u32::from(char_level.unwrap_or(0));
     // A piece the character already owns (equipped, carried or stashed) gets a ✓ (user pick,
-    // 2026-11-17): equip it instead of chasing a second one.
-    let owned = |piece: &str| {
-        let name = piece.split('@').next().unwrap_or(piece);
-        owned_names.iter().any(|n| n.eq_ignore_ascii_case(name.trim()))
+    // 2026-11-17): equip it instead of chasing a second one. A piece sitting in the shared
+    // stash is ticked too ([`Tick::Stash`]); the overlay shows the same plain ✓, the dashboard
+    // marks ✓(stash) from the line's tick.
+    let tick = |piece: &str| -> Option<Tick> {
+        let name = piece.split('@').next().unwrap_or(piece).trim();
+        if owned_names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            Some(Tick::Owned)
+        } else if stash_names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+            Some(Tick::Stash)
+        } else {
+            None
+        }
     };
     for slot in crate::config::SLOT_NAMES {
         let Some(pieces) = bis.slots.get(slot) else {
@@ -265,11 +305,16 @@ pub fn bis_lines(
         else {
             continue;
         };
+        let t = tick(piece);
+        let mark = if t.is_some() { "✓ " } else { "" };
         if out.len() < MAX_BIS_LINES {
-            out.push(format!(
-                "{slot}: {} ({req})",
-                piece.split('@').next().unwrap_or(piece)
-            ));
+            out.push(BisLine {
+                text: format!(
+                    "{slot}: {mark}{} ({req})",
+                    piece.split('@').next().unwrap_or(piece)
+                ),
+                tick: t,
+            });
         }
     }
     for slot in crate::config::SLOT_NAMES {
@@ -291,15 +336,25 @@ pub fn bis_lines(
         else {
             continue;
         };
-        let mark = if owned(piece) { "✓ " } else { "" };
+        let t = tick(piece);
+        let mark = if t.is_some() { "✓ " } else { "" };
         if out.len() < MAX_BIS_LINES {
-            out.push(format!(
-                "merc {slot}: {mark}{} ({req})",
-                piece.split('@').next().unwrap_or(piece)
-            ));
+            out.push(BisLine {
+                text: format!(
+                    "merc {slot}: {mark}{} ({req})",
+                    piece.split('@').next().unwrap_or(piece)
+                ),
+                tick: t,
+            });
         }
     }
-    wrap_plain(out, font, max_width)
+    // Wrapped per line so text and tick stay aligned even when fit_plain shortens a line.
+    out.into_iter()
+        .map(|l| BisLine {
+            tick: l.tick,
+            text: fit_plain(font, &l.text, max_width),
+        })
+        .collect()
 }
 
 /// The area name of `level_id` from the levels table, or `None` for an unknown id (callers
@@ -389,13 +444,6 @@ const RUNEWORD_LEVELS: [(&str, u32); 20] = [
 ];
 
 /// Wraps each `lines` entry to `max_width` px ([`fit_plain`]); over-long lines are truncated.
-fn wrap_plain(lines: Vec<String>, font: &FontVec, max_width: f32) -> Vec<String> {
-    lines
-        .into_iter()
-        .map(|line| fit_plain(font, &line, max_width))
-        .collect()
-}
-
 /// The level suggestions as lines of at most `max_width` px in `font`:
 /// `Level 34 → Halls of Death's Calling (34), Halls of Anguish (33)`, at most
 /// [`MAX_LEVEL_LINES`] (the last then ends in `+N more`). Empty without suggestions.
@@ -487,7 +535,7 @@ pub fn stack(
     keep: Vec<String>,
     sell: Vec<String>,
     give: Vec<String>,
-    bis: Vec<String>,
+    bis: Vec<BisLine>,
 ) -> Vec<Band> {
     let mut rows = Vec::new();
     let plain = |lines: Vec<String>, colour: [u8; 4]| -> Vec<Band> {
@@ -499,7 +547,12 @@ pub fn stack(
         (plain(keep, KEEP_TEXT), KEEP_TEXT),
         (plain(sell, SELL_TEXT), SELL_TEXT),
         (plain(give, GIVE_TEXT), GIVE_TEXT),
-        (plain(bis, BIS_TEXT), BIS_TEXT),
+        (
+            bis.into_iter()
+                .map(|l| Band::plain(l.text, BIS_TEXT))
+                .collect::<Vec<_>>(),
+            BIS_TEXT,
+        ),
     ] {
         if lines.is_empty() {
             continue;
@@ -1167,6 +1220,44 @@ mod tests {
     }
 
     #[test]
+    fn bis_lines_tick_owned_and_stash_pieces() {
+        let Some(font) = font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return;
+        };
+        let bis = crate::config::Bis {
+            build: "test".to_owned(),
+            slots: [("helm".to_owned(), vec!["Harlequin Crest@82".to_owned()])].into(),
+            merc_slots: [("body".to_owned(), vec!["Treachery@23".to_owned()])].into(),
+        };
+        let owned = ["Harlequin Crest".to_owned()];
+        let stash = ["Treachery".to_owned()];
+        let lines = bis_lines(&bis, Some(90), &[], &[], &owned, &stash, font, 10_000.0);
+        // The character line carries its tick too (not just the merc lines), and the overlay
+        // text shows the plain ✓ for both tick kinds.
+        assert_eq!(
+            lines,
+            vec![
+                BisLine {
+                    text: "helm: ✓ Harlequin Crest (82)".to_owned(),
+                    tick: Some(Tick::Owned),
+                },
+                BisLine {
+                    text: "merc body: ✓ Treachery (23)".to_owned(),
+                    tick: Some(Tick::Stash),
+                },
+            ]
+        );
+        // Unticked pieces keep `tick: null` and no mark.
+        let none = bis_lines(&bis, Some(90), &[], &[], &[], &[], font, 10_000.0);
+        assert_eq!(none.first().map(|l| l.tick), Some(None));
+        assert_eq!(
+            none.first().map(|l| l.text.clone()),
+            Some("helm: Harlequin Crest (82)".to_owned())
+        );
+    }
+
+    #[test]
     fn stack_orders_colours_and_gaps() {
         let l = |s: &str| vec![s.to_owned()];
         let rows = stack(
@@ -1210,8 +1301,14 @@ mod tests {
         );
         assert_eq!(stack(vec![], vec![], vec![], vec![], vec![], vec![]), vec![]);
         // The BiS block comes last with its own colour.
+        let bis_line = |s: &str| {
+            vec![BisLine {
+                text: s.to_owned(),
+                tick: None,
+            }]
+        };
         assert_eq!(
-            stack(vec![], vec![], vec![], vec![], vec![], l("BiS b → x")).len(),
+            stack(vec![], vec![], vec![], vec![], vec![], bis_line("BiS b → x")).len(),
             2
         );
     }

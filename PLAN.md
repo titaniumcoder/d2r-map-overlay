@@ -258,6 +258,27 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - Trail is kept per level and game; cow counter in level 39 (cows.json for lifetime stats).
 - Valuables rules can say `"keep": "one"` (Sigon's set for twinks).
 
+## Shared stash reader (added 2026-11-17, implemented from research/notes/stash-format.md §3)
+- Each shared tab is a **player-type unit without an act, one per page**; the live ones have
+  `Inventory(+0x90) + 0x48` = the current player's unit id (stale ones from earlier characters are excluded by that
+  check). Their items are ordinary page-4 item units whose `item_data::OWNER` is the tab unit's id — the same
+  ownership the spare lists already used (`game::place`). No new memory offsets were needed.
+- The tab **index is the 1-based unit-table order, NOT verified against the UI's tab number** (the dashboard labels
+  it generically as "tab N" with that caveat); the journal logs the capture so a live check can confirm it. The
+  journal also records the first capture per game (tab + item counts — answers whether the stash must be opened
+  before anything is readable, §3.4); the event fires only for a capture with at least one item, so a torn
+  mid-load read is never journaled as an under-count. The invalidation is recorded too.
+- **Session caching (user decision)**: D2R fills the stash only after it was opened in the game, and the tab units
+  vanish again later; the session therefore caches the captured tabs for the rest of the game (kept while the live
+  read is empty) and drops the cache only when the player unit id changes. Not persisted across overlay restarts.
+  A degraded live read (tab units present but every tab still empty — a torn mid-load capture, §3.4) never
+  downgrades a cache that has items; the trade-off is that a fully emptied stash keeps showing its last capture
+  until the next live read with items (or a new game).
+- `Snapshot.stash`/`stash_names` feed a fourth dashboard panel ("Shared stash", tabs with quality-tagged item lines)
+  and the `BiS` ✓: `bis_lines` ticks a line `owned` (character's own) or `stash` from the two name lists; the
+  overlay embeds the plain ✓ for both, the dashboard gets the structured per-line `tick` and marks ✓(stash)
+  distinctly (no string scraping).
+
 ## Overlay
 - Layer-shell surface, layer `overlay`, anchored top-right, default 400×400 (config), **empty input region** (click-through), no keyboard.
 - Draw current level only: room footprints (loaded rooms brighter), player dot, waypoint (blue), exits (purple + target name),

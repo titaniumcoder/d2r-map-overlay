@@ -309,8 +309,10 @@ pub fn keep_list(items: &[(ItemDrop, Place)]) -> Vec<Keep> {
 }
 
 /// What to call `item` in the keep list: its unique/set name if known; else the base name
-/// (from the rules, else the item code), with "eth" before and the socket count after.
-fn display_name(item: &ItemDrop) -> String {
+/// (from the rules, else the item code), with "eth" before and the socket count after. The
+/// stash panel names its items the same way (see [`crate::stash::stash_item`]).
+#[must_use]
+pub fn display_name(item: &ItemDrop) -> String {
     if let Some(name) = identity(item) {
         return shown(name).to_owned();
     }

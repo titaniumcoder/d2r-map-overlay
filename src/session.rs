@@ -49,6 +49,7 @@ use crate::game::{BorderLink, Monster, Preset, PresetKind, RoomLink, RoomRect, S
 use crate::levels_data::SUPERUNIQUES;
 use crate::offsets::monster_data;
 use crate::render::{is_consumable_quest_object, quest_monster};
+use crate::stash::{self, StashTab};
 
 /// Most distance in tiles between a dead superunique and the superunique preset it is credited
 /// to. Generous: it only picks which marker to remove (the nearest), and superunique presets of
@@ -88,6 +89,13 @@ pub struct Update {
     pub cow_run: bool,
     /// Cows newly counted dead in this snapshot.
     pub new_cows: u32,
+    /// The shared stash was captured for the first time this game: (tab count, item count).
+    /// D2R fills the stash only once the stash was opened in the game. Fires only for a
+    /// capture with at least one item, so the journal never records a torn under-count (see
+    /// [`Session::stash_tick`]).
+    pub stash_captured: Option<(u32, u32)>,
+    /// The session's cached shared stash was dropped: a new game (player unit id changed).
+    pub stash_invalidated: bool,
 }
 
 /// The per-game part of a [`Session`]: everything that must survive an overlay restart within
@@ -261,6 +269,11 @@ pub struct Session {
     last_level: Option<u32>,
     /// Level whose arrival point may still move, and how many more snapshots it may.
     settling: Option<(u32, u8)>,
+    /// The shared stash captured the last time live tab units were seen (the user had opened
+    /// the stash at least once this game). Kept until the player unit id changes: the tab
+    /// units vanish once the stash UI closes or on area transitions, but the contents stay
+    /// valid for the game (user decision, 2026-11-17). Not saved to disk.
+    stash: Option<Vec<StashTab>>,
 }
 
 /// Snapshots (~1 s at 5 Hz) after an arrival during which the arrival point follows the player
@@ -338,17 +351,11 @@ impl Session {
             new_game: self.enter_game(snap.player.id),
             ..Update::default()
         };
+        self.stash_tick(snap, &mut update);
         self.changed |= self.state.remember(snap);
         let level = snap.level.id;
         // Terror Zones rotate hourly: the latch holds for one visit, and a new visit re-detects.
-        if self.last_level != Some(level) {
-            self.changed |= self.state.terrorized.remove(&level);
-        }
-        if snap.terrorized {
-            self.changed |= self.state.terrorized.insert(level);
-        } else {
-            snap.terrorized = self.state.terrorized.contains(&level);
-        }
+        self.latch_terrorized(snap, level);
         let previous = self.last_level.replace(level);
         let level_changed = previous.is_some_and(|old| old != level);
         let here = (snap.player.x, snap.player.y);
@@ -449,6 +456,52 @@ impl Session {
 }
 
 impl Session {
+    /// Latches the level's terrorized state for this visit: a level once seen terrorized stays
+    /// so until the player leaves it (re-detected on the next visit).
+    fn latch_terrorized(&mut self, snap: &mut Snapshot, level: u32) {
+        if self.last_level != Some(level) {
+            self.changed |= self.state.terrorized.remove(&level);
+        }
+        if snap.terrorized {
+            self.changed |= self.state.terrorized.insert(level);
+        } else {
+            snap.terrorized = self.state.terrorized.contains(&level);
+        }
+    }
+
+    /// Captures, caches and serves the shared stash (see [`crate::stash`]): the live tabs are
+    /// captured the first time they appear (the user opened the stash), kept while the tab
+    /// units are gone, and dropped on a new game. Reports a first capture or an invalidation
+    /// in `update`.
+    ///
+    /// A degraded live read — tab units present but every tab still empty (a torn mid-load
+    /// capture, research note §3.4) — never downgrades a cache that has items: the session
+    /// would otherwise serve an empty or partial stash until the user reopens the stash UI.
+    /// The trade-off: a stash emptied entirely keeps showing its last capture until the next
+    /// live read that has items (or a new game). The first-capture event fires only for a
+    /// read with at least one item, so the journal never records a torn under-count.
+    fn stash_tick(&mut self, snap: &mut Snapshot, update: &mut Update) {
+        if update.new_game && self.stash.take().is_some() {
+            update.stash_invalidated = true;
+        }
+        let live = std::mem::take(&mut snap.stash);
+        let live_items: usize = live.iter().map(|t| t.items.len()).sum();
+        let cached_items: usize = self.stash.iter().flatten().map(|t| t.items.len()).sum();
+        if !live.is_empty() && (live_items > 0 || cached_items == 0) {
+            if cached_items == 0 && live_items > 0 {
+                update.stash_captured = Some((
+                    u32::try_from(live.len()).unwrap_or(u32::MAX),
+                    u32::try_from(live_items).unwrap_or(u32::MAX),
+                ));
+            }
+            self.stash = Some(live);
+        }
+        if let Some(cached) = self.stash.clone() {
+            snap.stash = cached;
+            snap.stash_names = stash::stash_names(&snap.stash);
+        }
+    }
+
     /// In the Moo Moo Farm: marks the game as a cow run (once), counts each dead cow once by
     /// unit id and sets [`Snapshot::cows`] for the info line.
     fn count_cows(&mut self, snap: &mut Snapshot, update: &mut Update) {
@@ -614,6 +667,8 @@ mod tests {
             equipped: vec![],
             merc_equipped: vec![],
             owned_names: vec![],
+            stash: vec![],
+            stash_names: vec![],
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
             level: Level {
@@ -640,6 +695,85 @@ mod tests {
             trail: vec![],
             warnings: vec![],
         }
+    }
+
+    /// A stash snapshot with one live tab holding `names` (identified uniques).
+    fn stash_snap(player_id: u32, act: u64, level: u32, names: &[&str]) -> Snapshot {
+        let mut s = snap(player_id, act, level);
+        s.stash = vec![crate::stash::StashTab {
+            index: 1,
+            items: names
+                .iter()
+                .map(|n| crate::stash::StashItem {
+                    name: (*n).to_owned(),
+                    quality: 7,
+                    identified: true,
+                    ethereal: false,
+                    runeword: false,
+                })
+                .collect(),
+        }];
+        s
+    }
+
+    #[test]
+    fn the_stash_is_cached_until_the_player_id_changes() {
+        let mut session = Session::default();
+        let mut first = stash_snap(7, 0xa000, 1, &["Harlequin Crest"]);
+        let update = session.apply(&mut first);
+        assert_eq!(update.stash_captured, Some((1, 1)), "first capture logs");
+        assert!(!update.stash_invalidated);
+
+        // The tab units vanish (stash UI closed): the capture is served and its names stay.
+        let mut gone = snap(7, 0xa000, 40);
+        session.apply(&mut gone);
+        assert_eq!(gone.stash.len(), 1, "cached stash survives empty live reads");
+        assert_eq!(gone.stash_names, vec!["Harlequin Crest"]);
+
+        // Live tabs again: recaptured silently (no second capture event).
+        let mut again = stash_snap(7, 0xa000, 1, &["Harlequin Crest", "Sigon's Visor"]);
+        let update = session.apply(&mut again);
+        assert_eq!(update.stash_captured, None, "already captured this game");
+        assert_eq!(again.stash_names.len(), 2);
+
+        // A new game (player unit id changed) drops the cache.
+        let mut next_game = snap(8, 0xa000, 1);
+        let update = session.apply(&mut next_game);
+        assert!(update.stash_invalidated);
+        assert!(next_game.stash.is_empty() && next_game.stash_names.is_empty());
+    }
+
+    #[test]
+    fn a_torn_all_tabs_empty_read_does_not_downgrade_the_cache() {
+        let mut session = Session::default();
+        let mut first = stash_snap(7, 0xa000, 1, &["Harlequin Crest"]);
+        session.apply(&mut first);
+
+        // Tab units seen again but still empty (torn mid-load capture, §3.4): the cache with
+        // its item survives and keeps being served.
+        let mut torn = stash_snap(7, 0xa000, 1, &[]);
+        let update = session.apply(&mut torn);
+        assert_eq!(update.stash_captured, None);
+        assert_eq!(torn.stash.len(), 1, "the cached capture is served");
+        assert_eq!(torn.stash_names, vec!["Harlequin Crest"]);
+    }
+
+    #[test]
+    fn the_first_capture_event_waits_for_a_read_with_items() {
+        let mut session = Session::default();
+        // A torn first read (tab units exist, no items yet) is stored but silent.
+        let mut torn = stash_snap(7, 0xa000, 1, &[]);
+        let update = session.apply(&mut torn);
+        assert_eq!(update.stash_captured, None, "no under-count in the journal");
+        assert_eq!(torn.stash.len(), 1, "the empty capture is cached");
+
+        // The first itemful read is the capture the journal records, exactly once.
+        let mut filled = stash_snap(7, 0xa000, 1, &["Harlequin Crest"]);
+        let update = session.apply(&mut filled);
+        assert_eq!(update.stash_captured, Some((1, 1)));
+        let mut again = stash_snap(7, 0xa000, 1, &["Harlequin Crest"]);
+        let update = session.apply(&mut again);
+        assert_eq!(update.stash_captured, None, "already captured this game");
     }
 
     #[test]

@@ -151,6 +151,11 @@ pub enum Event {
         y: u16,
         mode: u32,
     },
+    /// The shared-stash tab units were first seen live in a game (`captured`, with the tab
+    /// and item counts) or the session's stash cache was dropped (a new game; counts 0).
+    /// Answers whether the stash must be opened before the tab units exist (research note
+    /// `stash-format.md` §3.4).
+    Stash { captured: bool, tabs: u32, items: u32 },
 }
 
 /// Rooms sharing a preset id: how many and their bounding box (world tiles, max exclusive).
@@ -500,6 +505,20 @@ impl Journal {
         }
     }
 
+    /// Records a shared-stash capture or invalidation reported by `Session::apply`.
+    pub fn stash(&mut self, captured: bool, tabs: u32, items: u32) {
+        if self.is_enabled() {
+            self.write(
+                &[Event::Stash {
+                    captured,
+                    tabs,
+                    items,
+                }],
+                unix_now(),
+            );
+        }
+    }
+
     /// Appends `events` at time `t` and flushes; the first error disables the journal.
     fn write(&mut self, events: &[Event], t: u64) {
         if events.is_empty() {
@@ -617,6 +636,8 @@ mod tests {
             equipped: vec![],
             merc_equipped: vec![],
             owned_names: vec![],
+            stash: vec![],
+            stash_names: vec![],
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
             level: Level {
@@ -686,6 +707,7 @@ mod tests {
                 Event::Well { .. } => "well",
                 Event::Terror { .. } => "terror",
                 Event::Merc { .. } => "merc",
+                Event::Stash { .. } => "stash",
             })
             .collect()
     }
