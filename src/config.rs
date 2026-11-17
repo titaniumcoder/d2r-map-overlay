@@ -84,6 +84,32 @@ pub struct Build {
     pub slots: BTreeMap<String, Vec<String>>,
     /// The mercenary's slot name → pieces.
     pub merc_slots: BTreeMap<String, Vec<String>>,
+    /// Per-piece details by piece name (`[pieces."<name>"]`): what the dashboard shows under
+    /// each piece (kind, base, stats, why). A piece without an entry shows only its name.
+    pub pieces: BTreeMap<String, PieceInfo>,
+    /// Free-text goals of the build (breakpoints, attributes, mercenary), shown above the grid.
+    pub targets: Vec<String>,
+    /// Items outside the equipment slots (`[extras]`: charms, jewels, runes …), group name →
+    /// pieces in the same `"Name@<required level>"` format.
+    pub extras: BTreeMap<String, Vec<String>>,
+}
+
+/// `[pieces."<name>"]` of a build file: the details of one piece (all optional).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PieceInfo {
+    /// unique, set, runeword, crafted, rare, magic or base (drives the colour).
+    pub kind: String,
+    /// The guide setup the piece belongs to: starter, standard or alternative.
+    pub setup: String,
+    /// Base item (a runeword's allowed bases and sockets).
+    pub base: String,
+    /// The key mods with their ranges, one short line each.
+    pub stats: Vec<String>,
+    /// Why the build uses it (from the guide).
+    pub why: String,
+    /// Caveats (unverified data, example rolls).
+    pub notes: String,
 }
 
 /// The whole configuration.
@@ -370,6 +396,9 @@ struct RawBuild {
     notes: String,
     slots: BTreeMap<String, Vec<String>>,
     merc_slots: BTreeMap<String, Vec<String>>,
+    pieces: BTreeMap<String, PieceInfo>,
+    targets: Vec<String>,
+    extras: BTreeMap<String, Vec<String>>,
 }
 
 /// Parses one build file's text: the lowercased build name (the slug a `[bis.<name>]` `build`
@@ -393,6 +422,19 @@ fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de::Err
             notes: (!notes.is_empty()).then_some(notes),
             slots,
             merc_slots,
+            pieces: raw.pieces,
+            targets: raw
+                .targets
+                .iter()
+                .map(|t| t.trim().to_owned())
+                .filter(|t| !t.is_empty())
+                .collect(),
+            extras: raw
+                .extras
+                .into_iter()
+                .map(|(group, pieces)| (group, clean_pieces(&pieces)))
+                .filter(|(_, pieces)| !pieces.is_empty())
+                .collect(),
         },
         warnings,
     ))
@@ -708,6 +750,33 @@ mod tests {
     }
 
     #[test]
+    fn build_piece_details_targets_and_extras() -> Result<()> {
+        let text = "name = \"B\"\ntargets = [\"75% FCR\", \" \"]\n\
+             [slots]\nhelm = [\"Harlequin Crest@62\"]\n\
+             [extras]\ncharms = [\"Annihilus@70\", \"\"]\njewels = []\n\
+             [pieces.\"Harlequin Crest\"]\nkind = \"unique\"\nsetup = \"alternative\"\nbase = \"Shako\"\n\
+             stats = [\"+2 to All Skills\"]\nwhy = \"skills\"\n";
+        let (_, def, warnings) = parse_build(text)?;
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(def.targets, ["75% FCR"], "blank targets dropped");
+        assert_eq!(
+            def.extras.keys().collect::<Vec<_>>(),
+            ["charms"],
+            "empty groups dropped"
+        );
+        assert_eq!(def.extras.get("charms").map(Vec::len), Some(1));
+        let shako = def
+            .pieces
+            .get("Harlequin Crest")
+            .ok_or_else(|| anyhow!("no piece"))?;
+        assert_eq!((shako.kind.as_str(), shako.base.as_str()), ("unique", "Shako"));
+        assert_eq!(shako.stats, ["+2 to All Skills"]);
+        // Unknown keys in a piece are an error, like everywhere else in the build file.
+        assert!(parse_build("name = \"B\"\n[pieces.X]\ncolour = \"red\"\n").is_err());
+        Ok(())
+    }
+
+    #[test]
     fn build_files() -> Result<()> {
         let dir = temp_dir("builds")?;
         std::fs::create_dir_all(&dir)?;
@@ -753,7 +822,7 @@ mod tests {
                 damages: vec![Damage::Physical, Damage::Fire],
                 notes: None,
                 slots: [("weapon".to_owned(), vec!["Heart of the Oak@55".to_owned()])].into(),
-                merc_slots: BTreeMap::new(),
+                ..Build::default()
             },
         );
         config.bis.insert(

@@ -50,6 +50,36 @@ pub mod inventory {
     /// offline shared stash carry another id. Cathan's Seal moved page 1→5 through tab units
     /// 3537311729, 4184574968, 2092279292, 1046131454, 523057535, all with this field = Vex's id.
     pub const OWNER_ID: u64 = 0x48;
+    /// ptr to the first item unit stored in this inventory (null when empty); the rest follow
+    /// through [`super::item_data::NEXT_IN_INVENTORY`]. Live 2026-11-17 on the shared-stash tab
+    /// units: page 5 chained Sigon's Visor and Shelter, the gems/runes/materials tab its 49
+    /// stacks. `+0x18` is the last item and the u32 at `+0x4C` the item count (2 and 49 then).
+    pub const FIRST_ITEM: u64 = 0x10;
+    /// Candidate offsets of the player's shared-stash tab list header: ptr to the first node
+    /// ([`super::stash_tab_node`]), then [`TAB_LIST_LAST`] and [`TAB_LIST_COUNT`] relative to
+    /// it; the nodes are in the game's UI order. Live 2026-11-17 on the PLAYER unit's
+    /// inventory, two games: the header was at `+0x60` in one (six nodes, the five normal
+    /// pages then the gems/runes/materials tab; page 5's tab unit held Sigon's set, as in the
+    /// UI) and at `+0x68` in the next (`+0x60` null), so the reader accepts the first
+    /// candidate whose first → last walk matches the count.
+    pub const TAB_LIST: [u64; 2] = [0x60, 0x68];
+    /// ptr to the last node, relative to a [`TAB_LIST`] header.
+    pub const TAB_LIST_LAST: u64 = 0x08;
+    /// u32 node count (6 live), relative to a [`TAB_LIST`] header.
+    pub const TAB_LIST_COUNT: u64 = 0x10;
+}
+
+/// A node of the player inventory's shared-stash tab list ([`inventory::TAB_LIST`]).
+/// Live 2026-11-17: `+0x04` u32 was 0x10 on every node, `+0x08` u64 `0x6ffffb000100` on the
+/// normal pages and `0x6ffffb010100` on the gems/runes/materials tab.
+pub mod stash_tab_node {
+    /// u32 unit id of the tab unit (a player-type unit without an act).
+    pub const TAB_ID: u64 = 0x00;
+    /// u8: 1 on the gems/runes/materials ("advanced") tab, 0 on the normal pages. A hint seen
+    /// on one account (one advanced tab, five pages), not proven to be a kind field.
+    pub const ADVANCED: u64 = 0x0A;
+    /// ptr to the next node; null ends the list.
+    pub const NEXT: u64 = 0x10;
 }
 
 /// `Path` (dynamic path of a moving unit).
@@ -253,9 +283,18 @@ pub mod item_data {
     /// The Horadric Cube (live 2026-11-15, owner = the player's unit id).
     pub const PAGE_CUBE: u8 = 3;
     /// Personal stash (owner = the player's unit id) and the shared stash tabs (live
-    /// 2026-11-15: each tab is its own pseudo-owner id, no player's). Also 38 items of owner
-    /// [`NO_OWNER`], all at (0,0) with quality 2, purpose unknown.
+    /// 2026-11-15: each tab is its own pseudo-owner id, no player's). Also items of owner
+    /// [`NO_OWNER`], all at (0,0) with quality 2: the stacks of the gems/runes/materials tab
+    /// (live 2026-11-17, reached through that tab's [`super::inventory::FIRST_ITEM`] chain).
     pub const PAGE_STASH: u8 = 4;
+    /// u32 stack size of an item on the shared stash's gems/runes/materials tab. Live
+    /// 2026-11-17: rvs 50, rvl 43, gcy 19, r01 8, gzv 0 (an emptied stack stays in the tab);
+    /// those items carry no stat list, [`OWNER`] [`NO_OWNER`] and [`PAGE`] [`PAGE_STASH`].
+    pub const QUANTITY: u64 = 0x9C;
+    /// ptr to the next item unit in the same `Inventory` (see
+    /// [`super::inventory::FIRST_ITEM`]); null ends the chain. Live 2026-11-17 on the shared
+    /// stash tabs (every item of each tab, the advanced tab's stacks included).
+    pub const NEXT_IN_INVENTORY: u64 = 0xB0;
     /// Bytes of `ItemData` copied into the journal's drop event for checking the offsets above.
     pub const HEAD_LEN: usize = 0x50;
 }

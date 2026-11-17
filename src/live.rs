@@ -330,6 +330,7 @@ fn follow_game(
                         .map_or_else(|| format!("Level {}", snap.level.id), str::to_owned),
                     blocks: &blocks,
                     bis: snap.player.bis.as_ref(),
+                    build: config.selected_build(&snap.player.name),
                     equipped: &snap.equipped,
                     equipped_items: &snap.equipped_items,
                     owned: &snap.owned_names,

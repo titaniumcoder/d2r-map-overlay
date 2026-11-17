@@ -13,7 +13,7 @@ the screen. The minimap shows:
 - **Shrines and wells, and valuable drops.**
 - **Breakpoint guide line** under the map: the character's cast/hit-recovery frames and resistances.
   The level suggestions and the keep / sell / give-away / BiS lists live on the web dashboard
-  (`/dashboard`, served by the overlay's localhost web app; `/api/live`).
+  (`/`, served by the overlay's localhost web app; `/api/live`).
 
 ## ⚠️ Use at your own risk: it could get your account banned
 

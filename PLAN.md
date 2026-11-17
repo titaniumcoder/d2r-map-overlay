@@ -264,20 +264,28 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 ## Shared stash reader (added 2026-11-17, implemented from research/notes/stash-format.md §3)
 - Each shared tab is a **player-type unit without an act, one per page**; the live ones have
   `Inventory(+0x90) + 0x48` = the current player's unit id (stale ones from earlier characters are excluded by that
-  check). Their items are ordinary page-4 item units whose `item_data::OWNER` is the tab unit's id — the same
-  ownership the spare lists already used (`game::place`). No new memory offsets were needed.
-- The tab **index is the 1-based unit-table order, NOT verified against the UI's tab number** (the dashboard labels
-  it generically as "tab N" with that caveat); the journal logs the capture so a live check can confirm it. The
-  journal also records the first capture per game (tab + item counts — answers whether the stash must be opened
-  before anything is readable, §3.4); the event fires only for a capture with at least one item, so a torn
-  mid-load read is never journaled as an under-count. The invalidation is recorded too.
+  check).
+- **UI order (live 2026-11-17)**: the PLAYER unit's own inventory holds a linked list of the live tabs in UI order
+  (`offsets::inventory::TAB_LIST`: header = first node, last node, u32 count; the header sat at `+0x60` in one game
+  and at `+0x68` in the next, so the reader takes the first candidate whose first→last walk matches the count).
+  Node: `+0x00` tab unit id, `+0x0A` byte 1 = the gems/runes/materials ("advanced") tab (a hint, one account seen),
+  `+0x10` next. Normal pages are numbered 1-based in list order (`stash::TabKind::Page(n)`), the advanced tab is
+  `TabKind::Materials`. A listed tab whose unit isn't in the unit table is an empty tab (numbers never shift). No list
+  but live tab units: pages in unit-table order plus a snapshot warning. Verified: Sigon's set on page 5, 49 stacks.
+- **Tab items**: each tab unit's `Inventory + 0x10` = first item unit, then `ItemData + 0xB0` = next item in the
+  same inventory (`item_data::NEXT_IN_INVENTORY`), capped at 100 per tab. The advanced tab's stacks have `OWNER`
+  `NO_OWNER`, page 4, no stat list, and their stack size at `ItemData + 0x9C` (`item_data::QUANTITY`); zero-size
+  stacks stay in the tab (the dashboard drops them). Normal-page items still carry the tab unit id as `OWNER`, so
+  `game::place` gives them `Place::Shared` for the spare lists; the stacks (`NO_OWNER`) never reach the
+  keep/spare lists (gems/runes are never spare, and the materials have their own panel).
 - **Session caching (user decision)**: D2R fills the stash only after it was opened in the game, and the tab units
   vanish again later; the session therefore caches the captured tabs for the rest of the game (kept while the live
   read is empty) and drops the cache only when the player unit id changes. Not persisted across overlay restarts.
   A degraded live read (tab units present but every tab still empty — a torn mid-load capture, §3.4) never
   downgrades a cache that has items; the trade-off is that a fully emptied stash keeps showing its last capture
   until the next live read with items (or a new game).
-- `Snapshot.stash`/`stash_names` feed a fourth dashboard panel ("Shared stash", tabs with quality-tagged item lines)
+- `Snapshot.stash`/`stash_names` feed the dashboard as `stash_pages` (`[{page, items: [{text, colour}]}]`, UI order)
+  and `stash_materials` (`{gems, runes, other}` of `{name, qty, code}`; gems by colour then grade, runes by number)
   and the `BiS` ✓: `bis_lines` ticks a line `owned` (character's own) or `stash` from the two name lists; the
   dashboard gets the structured per-line `tick` and marks ✓(stash) distinctly (no string scraping) — the
   `BiS` lines are dashboard-only since the 2026-11-17 text-stack migration.

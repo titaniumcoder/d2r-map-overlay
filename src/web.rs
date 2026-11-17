@@ -169,7 +169,7 @@ pub fn serve() {
         eprintln!("web: could not bind localhost:{PORT}; the page is off");
         return;
     };
-    eprintln!("web: config page at http://localhost:{PORT}");
+    eprintln!("web: dashboard at http://localhost:{PORT} (config at /config)");
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -243,8 +243,7 @@ fn handle(stream: TcpStream) {
     let response = match parsed {
         Parsed::TooLarge => respond("413 Content Too Large", "text/plain", "request body too large\n"),
         Parsed::Request(method, path, body) => match (method.as_str(), path.as_str()) {
-            ("GET", "/" | "/index.html") => page(),
-            ("GET", "/dashboard") => respond("200 OK", "text/html", &dashboard_page()),
+            ("GET", "/" | "/index.html" | "/dashboard" | "/config") => html_page(&path),
             ("GET", "/api/config") => api_config(),
             ("GET", "/api/builds") => api_builds(),
             ("GET", "/api/live") => api_live(),
@@ -270,6 +269,17 @@ fn respond(status: &str, content_type: &str, body: &str) -> String {
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
+}
+
+/// The response for one of the HTML pages: the dashboard is the start page (user request,
+/// 2026-11-17; `/dashboard` stays as an alias for old bookmarks), `/config` the build
+/// selection page; any other path is a 404.
+fn html_page(path: &str) -> String {
+    match path {
+        "/" | "/index.html" | "/dashboard" => respond("200 OK", "text/html", &dashboard_page()),
+        "/config" => page(),
+        _ => respond("404 Not Found", "text/plain", "not found\n"),
+    }
 }
 
 /// The form page (see `config_page` for the embedded source).
@@ -564,6 +574,9 @@ pub struct LiveInfo<'a> {
     /// The character's resolved `BiS` slots (`None` without a build): the gear grid lists
     /// each slot's pieces.
     pub bis: Option<&'a crate::config::Bis>,
+    /// The selected build definition (`None` without one): the per-piece details, the
+    /// targets and the extras (charms, jewels, runes) the gear panel shows.
+    pub build: Option<&'a crate::config::Build>,
     /// The equipped `(body slot, quality)` pairs, shown under the `BiS` chase list.
     pub equipped: &'a [(u8, u32)],
     /// The equipped items enriched for the gear grid's column headers
@@ -586,7 +599,8 @@ pub struct LiveInfo<'a> {
 /// tests need no game. Shape:
 /// `{ "live": true, "updated_at": <unix secs>, "player": {"name", "class", "level",
 /// "difficulty"}, "area": …, "guide": […], "levels": […], "keep": […], "sell": […],
-/// "give": […], "bis": […], "equipped": […], "stash": […], "stash_owned": […] }`, where
+/// "give": […], "bis": […], "equipped": […], "stash_pages": […], "stash_materials": {…},
+/// "stash_owned": […] }`, where
 /// each line is `{ "text": …, "colour": "#rrggbb" }` (the overlay line's colour as hex; the
 /// guide's per-span colours are flattened to the base colour) — except the `bis` lines, which
 /// carry a structured `"tick": "owned" | "stash" | null` (computed in Rust from the owned and
@@ -599,7 +613,9 @@ pub struct LiveInfo<'a> {
 /// they ride with `sell` in
 /// the dashboard's Sell panel. The `gear` section is the 2×5 `BiS` grid: one column per
 /// gear slot ([`gear_json`]), each with the equipped piece in that slot and the build's
-/// pieces ordered best→worst, their `state` computed here (see [`grid_pieces`]).
+/// pieces ordered best→worst, their `state` computed here (see [`grid_pieces`]). The shared
+/// stash comes as `stash_pages` (the normal tabs in the game's UI order, [`stash_pages`]) and
+/// `stash_materials` (the gems/runes/materials tab's stacks, [`stash_materials`]).
 #[must_use]
 pub fn live_json(info: &LiveInfo) -> String {
     let class = CLASS_NAMES
@@ -624,54 +640,95 @@ pub fn live_json(info: &LiveInfo) -> String {
         "bis": info.blocks.bis.iter().map(bis_line).collect::<Vec<_>>(),
         "gear": gear_json(info),
         "equipped": text_lines(&equipped_lines(info.equipped), [255, 255, 255, 255]),
-        "stash": stash_lines(info.stash),
+        "stash_pages": stash_pages(info.stash),
+        "stash_materials": stash_materials(info.stash),
         "stash_owned": info.stash_owned,
     })
     .to_string()
 }
 
-/// The shared-stash tabs as dashboard lines: a header per tab, then one line per item with
-/// its quality tag. Uniques are gold and sets green (the overlay's drop colours); magic and
-/// rare get their classic colours, everything else stays plain.
-fn stash_lines(tabs: &[crate::stash::StashTab]) -> Vec<serde_json::Value> {
+/// The normal shared-stash pages as `[{ "page": n, "items": [{ "text", "colour" }] }]`, UI
+/// order, 1-based page numbers ([`crate::stash::TabKind::Page`]); the materials tab is left
+/// to [`stash_materials`].
+fn stash_pages(tabs: &[crate::stash::StashTab]) -> Vec<serde_json::Value> {
+    tabs.iter()
+        .filter_map(|tab| match tab.kind {
+            crate::stash::TabKind::Page(page) => Some(serde_json::json!({
+                "page": page,
+                "items": tab.items.iter().map(stash_item_line).collect::<Vec<_>>(),
+            })),
+            crate::stash::TabKind::Materials => None,
+        })
+        .collect()
+}
+
+/// One stash item with its quality tag as `{ "text", "colour" }`. Uniques are gold and sets
+/// green (the overlay's drop colours); magic and rare get their classic colours, everything
+/// else stays plain.
+fn stash_item_line(item: &crate::stash::StashItem) -> serde_json::Value {
     use crate::offsets::item_data;
-    let mut out = Vec::new();
-    for tab in tabs {
-        out.push(serde_json::json!({
-            "text": format!("tab {} ({} items)", tab.index, tab.items.len()),
-            "colour": "#afafaf",
-        }));
-        for item in &tab.items {
-            let (tag, colour) = match u32::from(item.quality) {
-                item_data::QUALITY_UNIQUE => ("unique", "#ffd278"),
-                item_data::QUALITY_SET => ("set", "#5ae65a"),
-                item_data::QUALITY_RARE => ("rare", "#ffff5f"),
-                item_data::QUALITY_MAGIC => ("magic", "#8f88ff"),
-                _ => ("", "#dddddd"),
-            };
-            let mut tag = tag.to_owned();
-            // Base-name items already carry an "eth " prefix from the keep-list naming; only
-            // the unique/set names need the tag.
-            if item.ethereal
-                && matches!(
-                    u32::from(item.quality),
-                    item_data::QUALITY_UNIQUE | item_data::QUALITY_SET
-                )
-            {
-                tag.push_str(" eth");
-            }
-            if item.runeword {
-                tag.push_str(" runeword");
-            }
-            let text = if tag.is_empty() {
-                item.name.clone()
-            } else {
-                format!("{} ({tag})", item.name)
-            };
-            out.push(serde_json::json!({ "text": text, "colour": colour }));
+    let (tag, colour) = match u32::from(item.quality) {
+        item_data::QUALITY_UNIQUE => ("unique", "#ffd278"),
+        item_data::QUALITY_SET => ("set", "#5ae65a"),
+        item_data::QUALITY_RARE => ("rare", "#ffff5f"),
+        item_data::QUALITY_MAGIC => ("magic", "#8f88ff"),
+        _ => ("", "#dddddd"),
+    };
+    let mut tag = tag.to_owned();
+    // Base-name items already carry an "eth " prefix from the keep-list naming; only the
+    // unique/set names need the tag.
+    if item.ethereal
+        && matches!(
+            u32::from(item.quality),
+            item_data::QUALITY_UNIQUE | item_data::QUALITY_SET
+        )
+    {
+        tag.push_str(" eth");
+    }
+    if item.runeword {
+        tag.push_str(" runeword");
+    }
+    let text = if tag.is_empty() {
+        item.name.clone()
+    } else {
+        format!("{} ({tag})", item.name)
+    };
+    serde_json::json!({ "text": text, "colour": colour })
+}
+
+/// The gems/runes/materials tab's stacks as `{ "gems": [...], "runes": [...], "other": [...] }`,
+/// each entry `{ "name", "qty", "code" }`: gems by colour (amethyst … skull) then grade
+/// (chipped … perfect), runes by rune number, the rest by name. Emptied stacks (quantity 0)
+/// are left out; a stack whose size was unreadable keeps `"qty": null`.
+fn stash_materials(tabs: &[crate::stash::StashTab]) -> serde_json::Value {
+    use crate::items::{self, DropKind};
+    // A fn, not a closure: closures can't be generic over the three key types.
+    fn values<K>(v: Vec<(K, serde_json::Value)>) -> Vec<serde_json::Value> {
+        v.into_iter().map(|(_, e)| e).collect()
+    }
+    let mut gems = Vec::new();
+    let mut runes = Vec::new();
+    let mut other = Vec::new();
+    let stacks = tabs
+        .iter()
+        .filter(|t| t.kind == crate::stash::TabKind::Materials)
+        .flat_map(|t| &t.items)
+        .filter(|i| i.quantity != Some(0));
+    for item in stacks {
+        let bytes = item.code.as_deref().and_then(items::code_bytes);
+        let entry = serde_json::json!({ "name": item.name, "qty": item.quantity, "code": item.code });
+        if let Some(gem) = bytes.and_then(items::gem) {
+            gems.push((gem, entry));
+        } else if let Some(DropKind::Rune(n)) = bytes.and_then(items::code_kind) {
+            runes.push((n, entry));
+        } else {
+            other.push((item.name.clone(), entry));
         }
     }
-    out
+    gems.sort_by_key(|(k, _)| *k);
+    runes.sort_by_key(|(k, _)| *k);
+    other.sort_by(|a, b| a.0.cmp(&b.0));
+    serde_json::json!({ "gems": values(gems), "runes": values(runes), "other": values(other) })
 }
 
 /// One `BiS` line as `{ "text", "colour", "tick" }`: the tick is the structural ✓ source
@@ -739,7 +796,41 @@ fn gear_json(info: &LiveInfo) -> serde_json::Value {
     }
     let ring = grid_column("Ring", Some(&ring_pieces), &[6, 7], info);
     columns.insert(6, ring);
-    serde_json::json!({ "columns": columns })
+    // The mercenary's slots (its equipped items are not attributed yet: no header) and the
+    // build's extras (charms, jewels, runes), with the same per-piece state and details.
+    let merc: Vec<_> = [
+        ("Merc weapon", "weapon"),
+        ("Merc body", "body"),
+        ("Merc helm", "helm"),
+    ]
+    .iter()
+    .filter_map(|&(title, slot)| {
+        let pieces = info.bis.and_then(|b| b.merc_slots.get(slot))?;
+        Some(serde_json::json!({
+            "title": title,
+            "pieces": grid_pieces(pieces, None, info),
+        }))
+    })
+    .collect();
+    let extras: Vec<_> = info
+        .build
+        .map(|b| &b.extras)
+        .into_iter()
+        .flatten()
+        .map(|(group, pieces)| {
+            serde_json::json!({
+                "title": group,
+                "pieces": grid_pieces(pieces, None, info),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "columns": columns,
+        "build": info.bis.map(|b| b.build.as_str()),
+        "targets": info.build.map_or(&[][..], |b| b.targets.as_slice()),
+        "merc": merc,
+        "extras": extras,
+    })
 }
 
 /// One gear-grid column: the equipped header piece(s) for `bodies`, the build's `pieces`
@@ -820,9 +911,34 @@ fn grid_pieces(pieces: &[String], equipped_level: Option<u32>, info: &LiveInfo) 
                 obj.insert("runes".to_owned(), serde_json::json!(rw.runes));
                 obj.insert("bases".to_owned(), serde_json::json!(rw.bases));
             }
+            add_piece_details(&mut json, crate::info::piece_name(piece), info.build);
             json
         })
         .collect()
+}
+
+/// Adds the build file's details of piece `name` (`[pieces."<name>"]`) to its JSON: `kind`,
+/// `setup`, `base`, `stats`, `why`, `notes` — each only when set, so the page can test for
+/// presence.
+fn add_piece_details(json: &mut serde_json::Value, name: &str, build: Option<&crate::config::Build>) {
+    let Some(info) = build.and_then(|b| b.pieces.get(name)) else {
+        return;
+    };
+    let Some(obj) = json.as_object_mut() else { return };
+    for (key, value) in [
+        ("kind", &info.kind),
+        ("setup", &info.setup),
+        ("base", &info.base),
+        ("why", &info.why),
+        ("notes", &info.notes),
+    ] {
+        if !value.is_empty() {
+            obj.insert(key.to_owned(), serde_json::json!(value));
+        }
+    }
+    if !info.stats.is_empty() {
+        obj.insert("stats".to_owned(), serde_json::json!(info.stats));
+    }
 }
 
 /// The name shown for an equipped piece in a grid column header: the identified unique/set
@@ -994,7 +1110,7 @@ button { padding: 4px 10px; }
 .stash { color: #6f6; }
 .better { text-decoration: line-through; color: #777; }
 </style></head><body>
-<h1>d2r-map-overlay config &nbsp; <a style="font-size:0.6em" href="/dashboard">live dashboard →</a></h1>
+<h1>d2r-map-overlay config &nbsp; <a style="font-size:0.6em" href="/">live dashboard →</a></h1>
 <p class="hint">Pick a build per character. The gear lists live in
 <code>~/.config/d2r-map-overlay/builds/*.toml</code> (agent-authored) and are shown read-only:
 ✓ = owned (identified set/unique pieces), ✓(stash) = in the shared stash, struck through =
@@ -1069,129 +1185,283 @@ load();
 "#
 }
 
-/// The live dashboard page (a single string: no assets, no framework). The panels render
-/// the text blocks in their colours; dark-themed like the config page.
-/// The dashboard page up to the panels (its head, style and panel skeletons); the
-/// script follows in [`DASHBOARD_SCRIPT`]. The raw delimiter is `##` (the page contains
-/// `"` and `#`).
+/// The live dashboard page (a single string: no assets, no framework), dark-themed. Layout:
+/// a sticky character bar with the breakpoint chips, the gear grid (equipped piece on top of
+/// each slot card, the build's pieces below with their stats), then "Where to go" beside the
+/// shared stash. The script follows in [`DASHBOARD_SCRIPT`].
 const DASHBOARD_HEAD: &str = r#"<!doctype html>
-<html><head><meta charset="utf-8"><title>d2r-map-overlay live</title>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D2R Dashboard</title>
 <style>
-body { font-family: sans-serif; background: #1a1a1a; color: #ddd; margin: 2em; }
-a { color: #7cf; }
-h1 { font-size: 1.3em; }
-h2 { font-size: 1.05em; border-bottom: 1px solid #444; padding-bottom: 4px; }
-.panel { border: 1px solid #444; padding: 1em; margin-bottom: 1em; }
-.cols { display: flex; gap: 1.5em; flex-wrap: wrap; }
-.col { min-width: 12em; }
-.col h3 { font-size: 0.85em; color: #888; margin: 0 0 4px; }
-.line { white-space: pre-wrap; font-size: 0.95em; }
-.waiting { color: #999; font-style: italic; }
-.note { color: #888; font-size: 0.72em; margin-bottom: 4px; }
-.hint { color: #888; font-size: 0.75em; margin-left: 1.5em; }
-.geargrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.8em; }
-.gcol { min-width: 0; }
-.gtitle { color: #888; font-size: 0.8em; border-bottom: 1px solid #333; margin-bottom: 4px; }
-.geq { font-size: 0.8em; color: #ffd278; margin-bottom: 6px; min-height: 2.2em; }
-.geq .unknown { color: #888; }
-.gnote { color: #f66; font-size: 0.75em; }
-.piece { font-size: 0.85em; margin: 2px 0; }
-.piece.better { color: #fff; }
-.piece.worse { color: #666; text-decoration: line-through; }
-.piece.too_high { color: #666; }
-.piece .tick { color: #6f6; }
+:root {
+  --bg: #0f0e0c; --panel: #1a1815; --panel2: #221f1b; --line: #3a342c; --line2: #2b2721;
+  --text: #e4ddd0; --dim: #9a8f7f; --faint: #6b6255;
+  --gold: #c8a85a; --unique: #c7b377; --set: #3fcf5a; --rune: #e0a040; --magic: #7a8cff;
+  --good: #6fdc6f; --bad: #ff6b5b; --accent: #d49a3a;
+  --radius: 8px;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+a { color: var(--gold); text-decoration: none; } a:hover { text-decoration: underline; }
+.wrap { max-width: 1680px; margin: 0 auto; padding: 16px; }
+
+/* Character bar */
+.bar { position: sticky; top: 0; z-index: 5; background: rgba(15,14,12,.94);
+  backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+.bar .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 10px 16px; }
+.who { font-size: 18px; font-weight: 650; color: var(--gold); letter-spacing: .02em; }
+.who small { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+.chip { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px;
+  padding: 2px 10px; font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chip b { color: var(--dim); font-weight: 500; margin-right: 4px; text-transform: uppercase; font-size: 11px; }
+.meta { color: var(--faint); font-size: 12px; }
+.waiting { color: var(--dim); font-style: italic; }
+
+/* Panels */
+.grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); margin-top: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
+.panel.full { grid-column: 1 / -1; }
+.panel h2 { margin: 0 0 10px; font-size: 13px; font-weight: 650; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--gold); display: flex; align-items: baseline; gap: 10px; }
+.panel h2 .sub { color: var(--faint); font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 12px; }
+.targets { margin: 0 0 12px; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.targets li { font-size: 12px; background: rgba(200,168,90,.08); border: 1px solid rgba(200,168,90,.3);
+  color: var(--text); border-radius: 6px; padding: 3px 8px; }
+.row-h { margin: 16px 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); font-weight: 600; }
+#mercbox .gear + .gear { margin-top: 10px; }
+details.alts { margin-top: 2px; }
+details.alts > summary { cursor: pointer; font-size: 11.5px; color: var(--faint); padding: 2px 0; }
+details.alts[open] > summary { margin-bottom: 5px; }
+details.alts .pc { margin-bottom: 5px; }
+.pc .note { font-size: 11px; color: var(--faint); margin-top: 2px; }
+.pc.rare .nm { color: #f0e060; } .pc.rare { border-left-color: #b8a640; }
+.pc.magic .nm { color: var(--magic); } .pc.magic { border-left-color: var(--magic); }
+.pc.crafted .nm { color: #e08a3c; } .pc.crafted { border-left-color: #e08a3c; }
+.pc.base .nm { color: var(--text); }
+details.help { color: var(--dim); font-size: 12px; margin-bottom: 10px; }
+details.help summary { cursor: pointer; color: var(--faint); }
+.empty { color: var(--faint); font-style: italic; font-size: 12.5px; }
+
+/* Gear */
+.gear { display: grid; gap: 10px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.slot { background: var(--panel2); border: 1px solid var(--line2); border-radius: var(--radius);
+  display: flex; flex-direction: column; min-width: 0; }
+.slot-h { display: flex; justify-content: space-between; padding: 7px 10px 0; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+.eq { margin: 6px 8px 8px; padding: 7px 9px; border-radius: 6px; background: #12110f;
+  border: 1px dashed var(--line); font-size: 13px; }
+.eq .lbl { display: block; font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; }
+.eq .nm { color: var(--text); }
+.eq .nm.unknown { color: var(--dim); }
+.eq .warn { color: var(--bad); font-size: 11.5px; display: block; }
+.pieces { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 5px; }
+.pc { border-left: 3px solid var(--line); padding: 4px 8px; border-radius: 0 5px 5px 0; background: rgba(255,255,255,.015); }
+.pc .top { display: flex; gap: 6px; align-items: baseline; }
+.pc .nm { font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pc .lv { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pc .tick { color: var(--good); font-weight: 700; font-size: 12px; }
+.pc .sub { font-size: 11.5px; color: var(--dim); }
+.pc ul.st { margin: 3px 0 0; padding: 0; list-style: none; font-size: 11.5px; color: #b9c4ff; }
+.pc ul.st li::before { content: "· "; color: var(--faint); }
+.pc .why { font-size: 11.5px; color: var(--dim); font-style: italic; margin-top: 2px; }
+.pc.unique { border-left-color: var(--unique); } .pc.unique .nm { color: var(--unique); }
+.pc.set { border-left-color: var(--set); } .pc.set .nm { color: var(--set); }
+.pc.runeword { border-left-color: var(--rune); } .pc.runeword .nm { color: var(--rune); }
+.pc.better { box-shadow: inset 0 0 0 1px rgba(111,220,111,.25); }
+.pc.better .lv::before { content: "▲ "; color: var(--good); }
+.pc.too_high { opacity: .5; }
+.pc.worse { opacity: .38; } .pc.worse .nm { text-decoration: line-through; }
+.badge { font-size: 10px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--dim); }
+
+/* Where to go */
+.lv3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.lvc { background: var(--panel2); border: 1px solid var(--line2); border-radius: var(--radius); padding: 8px 10px; min-width: 0; }
+.lvc.equal { border-color: var(--accent); }
+.lvc h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+.lvc.equal h3 { color: var(--accent); }
+.area { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 1px 0; }
+.area .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.area .m { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 12px; }
+
+/* Stash */
+.pages { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.page { background: var(--panel2); border: 1px solid var(--line2); border-radius: 6px; padding: 6px 8px; min-height: 54px; min-width: 0; }
+.page h3 { margin: 0 0 4px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; display: flex; justify-content: space-between; }
+.page .it { font-size: 12.5px; overflow-wrap: anywhere; }
+.mats { margin-top: 12px; display: grid; gap: 10px; }
+.mats h3 { margin: 0 0 6px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+.stacks { display: flex; flex-wrap: wrap; gap: 5px; }
+.stk { display: inline-flex; gap: 5px; align-items: baseline; background: var(--panel2);
+  border: 1px solid var(--line2); border-radius: 5px; padding: 2px 7px; font-size: 12.5px; }
+.stk .q { color: var(--gold); font-variant-numeric: tabular-nums; font-weight: 650; }
+.stk.rune .nm { color: var(--rune); }
+.lines .line { white-space: pre-wrap; font-size: 13px; }
+
+@media (max-width: 1200px) { .gear { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 900px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .gear, .pages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lv3 { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 520px) { .gear, .pages { grid-template-columns: minmax(0, 1fr); } .bar { position: static; } }
 </style></head><body>
-<h1>d2r-map-overlay live &nbsp; <a style="font-size:0.6em" href="/">config →</a></h1>
-<h2 id="header"><span class="waiting">waiting for game…</span></h2>
-<div class="panel"><h2>Where to go</h2><div id="levels"></div></div>
-<div class="panel"><h2>Gear / BiS</h2>
-<div class="note">per slot: the equipped piece (name + required level), then the build's pieces best→worst —
-white = better than the equipped piece, struck through = already beaten, grey = above the level gate (character level + 5).
-A column without strike-throughs has no comparable equipped piece (nothing equipped, a runeword or an unidentified item).
-Rings merge the ring1/ring2 slots; “runeword (unnamed)” = a finished runeword whose runes the reader does not decode.
-The Swap header mirrors the active weapon set (the inactive one is unread from memory).</div>
-<div id="gear"></div>
-<div id="bisgrid" class="geargrid"></div></div>
-<div class="panel"><h2>Shared stash</h2><div class="note">tab numbers are memory order, not verified against the UI yet</div><div id="stash"></div></div>
-<div class="panel"><h2>Sell / Keep</h2><div id="sell"></div></div>
+<div class="bar"><div class="wrap">
+  <div class="who" id="who"><span class="waiting">waiting for game…</span></div>
+  <div class="chips" id="guide"></div>
+  <div class="meta"><span id="updated"></span> · <a href="/config">config</a></div>
+</div></div>
+<div class="wrap">
+<section class="panel full"><h2>Gear <span class="sub" id="buildname"></span></h2>
+<details class="help"><summary>How to read this</summary>
+Each card is a slot. The dashed box shows what is equipped (name and required level), and below it are the build's pieces, best first.
+▲ / green outline = an upgrade you can wear now, faded = above the level gate (character level + 5), struck through = already beaten by what you wear.
+✓ = owned, ✓ stash = in the shared stash. A runeword the reader can't decode shows as “runeword (unnamed)”. The Swap card mirrors the active weapon set.
+</details>
+<ul class="targets" id="targets"></ul>
+<div class="gear" id="gear"></div>
+<div id="mercbox"><h3 class="row-h">Mercenary · charms · sockets</h3>
+<div class="gear" id="merc"></div><div class="gear extras" id="extras"></div></div></section>
+<div class="grid">
+<section class="panel"><h2>Where to go <span class="sub">monster level around yours</span></h2><div id="levels"></div></section>
+<section class="panel"><h2>Shared stash</h2><div id="stash"></div></section>
+<section class="panel full" id="sellpanel"><h2>Sell / Keep</h2><div id="sell" class="lines"></div></section>
+</div></div>
 "#;
 
 /// The dashboard page's script: first-paint fetch, then the SSE stream (`render` is the
-/// onmessage handler), the level columns and the 2×5 gear grid.
-const DASHBOARD_SCRIPT: &str = r##"<script>
-// HTML-escape: line texts come from item and area names read out of the game. Numeric
-// character references (&#38; …), so the replacement strings stay plain ASCII here.
+/// onmessage handler), the level columns, the gear cards and the stash panel.
+const DASHBOARD_SCRIPT: &str = r#"<script>
+// HTML-escape: texts come from item and area names read out of the game. Numeric character
+// references (&#38; …), so the replacement strings stay plain ASCII here.
 function esc(s) {
-  return s.replace(/[&<>"']/g, c => "&#" + c.charCodeAt(0) + ";");
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => "&#" + c.charCodeAt(0) + ";");
 }
-function lines(el, entries) {
-  el.innerHTML = (entries || []).map(e => {
-    // A BiS line that is a runeword carries its runes and bases: a dim hint under the piece.
-    const hint = e.runes
-      ? `<div class="hint">${esc(e.runes.join(" + "))} · ${esc((e.bases || []).join(", "))}</div>`
-      : "";
-    return `<div class="line" style="color:${e.colour || "#ddd"}">${esc(e.text)}</div>` + hint;
+const $ = id => document.getElementById(id);
+// A server colour as a CSS value: only a #rrggbb hex passes, anything else inherits (so a future
+// build-sourced colour can never break out of the style attribute).
+const col = c => /^#[0-9a-fA-F]{6}$/.test(c || "") ? c : "inherit";
+// The guide line ("fcr (15 / 0 / 9) · fhr … · res 21/0/44/7") as one chip per part.
+function guide(entries) {
+  $("guide").innerHTML = (entries || []).flatMap(e => e.text.split(" · ").map(part => {
+    const m = part.match(/^(\S+)\s+(.*)$/);
+    const body = m ? `<b>${esc(m[1])}</b>${esc(m[2])}` : esc(part);
+    return `<span class="chip" style="color:${col(e.colour)}">${body}</span>`;
+  })).join("");
+}
+// "Where to go": three cards (below / equal / above the character level). The server sends
+// the entries structured ("mlvl" + "bucket"); the text's trailing "(N)" moves to the right.
+function levels(entries) {
+  const cards = ["below", "equal", "above"].map(bucket => {
+    const rows = (entries || []).filter(e => e.bucket === bucket).map(e => {
+      const name = e.text.replace(/\s*\(\d+\)\s*$/, "");
+      return `<div class="area" style="color:${col(e.colour)}"><span class="n" title="${esc(name)}">${esc(name)}</span><span class="m">${e.mlvl != null ? e.mlvl : ""}</span></div>`;
+    }).join("");
+    return `<div class="lvc ${bucket}"><h3>${bucket}</h3>${rows || '<div class="empty">none</div>'}</div>`;
   }).join("");
+  $("levels").innerHTML = `<div class="lv3">${cards}</div>`;
 }
-// The "Where to go" band in three columns: below / equal / above the character level. The
-// server sends the level entries structured ("mlvl" + "bucket"), so the grouping is a filter,
-// not a parse of the "Level N → Area (M)" text; each column keeps the band's own order.
-function levelColumns(el, entries) {
-  const groups = ["below", "equal", "above"].map(bucket => ({
-    bucket,
-    lines: (entries || []).filter(e => e.bucket === bucket),
-  }));
-  el.innerHTML = `<div class="cols">` + groups.map(g =>
-    `<div class="col"><h3>${g.bucket}</h3>`
-    + g.lines.map(e => `<div class="line" style="color:${e.colour || "#ddd"}">${esc(e.text)}</div>`).join("")
-    + `</div>`
-  ).join("") + `</div>`;
+// The kind of a build piece, for its colour: explicit "kind" when the build carries one, a
+// runeword when it lists runes, else unique (the build files are mostly uniques/sets).
+function kindOf(p) {
+  if (p.kind) return p.kind;
+  if (p.runes) return "runeword";
+  return "unique";
+}
+function piece(p) {
+  const tick = p.tick === "owned" ? ' <span class="tick">✓</span>'
+    : p.tick === "stash" ? ' <span class="tick">✓ stash</span>' : "";
+  const lvl = p.level != null ? `<span class="lv">lvl ${p.level}</span>` : "";
+  const sub = p.runes
+    ? `<div class="sub">${esc(p.runes.join(" "))}${p.bases && p.bases.length ? " · " + esc(p.bases.join(", ")) : ""}</div>`
+    : p.base ? `<div class="sub">${esc(p.base)}</div>` : "";
+  const stats = p.stats && p.stats.length
+    ? `<ul class="st">${p.stats.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : "";
+  const why = (p.why ? `<div class="why">${esc(p.why)}</div>` : "")
+    + (p.notes ? `<div class="note">${esc(p.notes)}</div>` : "");
+  const setup = p.setup && p.setup !== "alternative" ? ` <span class="badge">${esc(p.setup)}</span>` : "";
+  return `<div class="pc ${esc(kindOf(p))} ${esc(p.state || "better")}"><div class="top"><span class="nm">${esc(p.name)}${tick}</span>${setup}${lvl}</div>${sub}${stats}${why}</div>`;
+}
+// A slot's pieces: the guide's own picks (starter / standard, and pieces without a setup)
+// stay visible; the alternatives fold into a <details> so a 14-weapon list stays readable.
+function pieceList(pieces) {
+  const main = pieces.filter(p => p.setup !== "alternative");
+  const alt = pieces.filter(p => p.setup === "alternative");
+  const shown = main.map(piece).join("");
+  const folded = alt.length
+    ? `<details class="alts"><summary>${alt.length} alternative${alt.length > 1 ? "s" : ""}</summary>${alt.map(piece).join("")}</details>`
+    : "";
+  return (shown + folded) || '<div class="empty">no build piece for this slot</div>';
+}
+function slotCard(title, eqHtml, pieces) {
+  const eq = eqHtml == null ? "" : `<div class="eq"><span class="lbl">equipped</span>${eqHtml}</div>`;
+  return `<div class="slot"><div class="slot-h"><span>${esc(title)}</span></div>${eq}<div class="pieces">${pieceList(pieces || [])}</div></div>`;
+}
+function gear(g) {
+  g = g || {};
+  $("buildname").textContent = g.build || "";
+  $("targets").innerHTML = (g.targets || []).map(t => `<li>${esc(t)}</li>`).join("");
+  $("gear").innerHTML = (g.columns || []).map(col => {
+    const eq = (col.equipped || []).map(e => {
+      const unknown = !e.name || e.name === "(unknown)";
+      const lvl = e.level ? ` <span class="lv">lvl ${e.level}</span>` : "";
+      return `<span class="nm${unknown ? " unknown" : ""}">${esc(unknown ? "unidentified / magic" : e.name)}</span>${lvl}`;
+    }).join("<br>") || '<span class="nm unknown">empty</span>';
+    const note = col.note ? `<span class="warn">${esc(col.note)}</span>` : "";
+    return slotCard(col.title, eq + note, col.pieces);
+  }).join("");
+  $("merc").innerHTML = (g.merc || []).map(c => slotCard(c.title, null, c.pieces)).join("");
+  $("extras").innerHTML = (g.extras || []).map(c => slotCard(c.title, null, c.pieces)).join("");
+  $("mercbox").hidden = !(g.merc || []).length && !(g.extras || []).length;
+}
+// The shared stash: five page cards in UI order, then the gem/rune/material stacks.
+function stash(r) {
+  const el = $("stash");
+  const pages = (r.stash_pages || []).map(p => {
+    const items = (p.items || []).map(i => `<div class="it" style="color:${col(i.colour)}">${esc(i.text)}</div>`).join("")
+      || '<div class="empty">empty</div>';
+    return `<div class="page"><h3><span>page ${esc(p.page)}</span><span>${(p.items || []).length || ""}</span></h3>${items}</div>`;
+  }).join("");
+  const m = r.stash_materials || {};
+  const stacks = (list, cls) => (list || []).map(s =>
+    `<span class="stk ${cls}" title="${esc(s.code || "")}"><span class="nm">${esc(s.name)}</span><span class="q">${esc(s.qty)}</span></span>`).join("");
+  const group = (title, list, cls) => list && list.length
+    ? `<div><h3>${title}</h3><div class="stacks">${stacks(list, cls)}</div></div>` : "";
+  const mats = group("Runes", m.runes, "rune") + group("Gems", m.gems, "gem") + group("Materials", m.other, "mat");
+  const loaded = (r.stash_pages || []).some(p => (p.items || []).length) || mats;
+  el.innerHTML = (loaded ? "" : '<div class="empty">open the stash in game once to load it</div>')
+    + `<div class="pages">${pages}</div><div class="mats">${mats}</div>`;
+}
+function sell(r) {
+  const all = (r.sell || []).concat(r.keep || []).concat(r.give || []);
+  $("sell").innerHTML = all.map(e => `<div class="line" style="color:${col(e.colour)}">${esc(e.text)}</div>`).join("")
+    || '<div class="empty">nothing to sell or keep right now</div>';
 }
 // One rendered frame from a live payload (the first-paint fetch and every SSE event).
 function render(r) {
-  const header = document.getElementById("header");
   if (!r || !r.live) {
-    header.innerHTML = '<span class="waiting">waiting for game…</span>';
-    for (const id of ["levels", "gear", "bisgrid", "stash", "sell"]) document.getElementById(id).innerHTML = "";
+    $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
+    for (const id of ["guide", "levels", "gear", "merc", "extras", "targets", "stash", "sell"]) $(id).innerHTML = "";
+    $("updated").textContent = "";
+    document.title = "D2R Dashboard (waiting for game)";
+    $("mercbox").hidden = true;
     return;
   }
   const p = r.player;
-  header.textContent = [p.name, p.class, p.level != null ? "level " + p.level : null,
-    p.difficulty, r.area].filter(Boolean).join(" · ")
-    + "  (updated " + new Date(r.updated_at * 1000).toLocaleTimeString() + ")";
-  levelColumns(document.getElementById("levels"), r.levels);
-  // The breakpoint guide belongs with the gear grid it describes.
-  lines(document.getElementById("gear"), r.guide || []);
-  gearGrid(document.getElementById("bisgrid"), r.gear);
-  lines(document.getElementById("stash"), r.stash || []);
-  lines(document.getElementById("sell"), (r.sell || []).concat(r.keep || []).concat(r.give || []));
+  $("who").innerHTML = `${esc(p.name)}<small>${esc([p.class, p.level != null ? "level " + p.level : null, p.difficulty, r.area].filter(Boolean).join(" · "))}</small>`;
+  $("updated").textContent = "updated " + new Date(r.updated_at * 1000).toLocaleTimeString();
+  document.title = `${p.name}${p.level != null ? " L" + p.level : ""} · ${r.area || "?"} — D2R Dashboard`;
+  guide(r.guide);
+  levels(r.levels);
+  gear(r.gear);
+  stash(r);
+  sell(r);
 }
-// The 2×5 BiS grid: two rows of five columns (Helm…Foot, then Amulet…Swap), each column
-// headed by the equipped piece and listing the build's pieces with their server-computed
-// state ("better" white / "worse" struck grey / "too_high" grey).
-function gearGrid(el, gear) {
-  el.innerHTML = ((gear && gear.columns) || []).map(col => {
-    const eq = (col.equipped || []).map(e => {
-      const lvl = e.level != null ? " (" + e.level + ")" : "";
-      return '<span class="unknown">' + esc(e.name) + lvl + '</span>';
-    }).join(", ");
-    const note = col.note ? ' <span class="gnote">' + esc(col.note) + '</span>' : "";
-    const pieces = (col.pieces || []).map(p => {
-      const tick = p.tick === "owned" ? ' <span class="tick">\u2713</span>'
-        : p.tick === "stash" ? ' <span class="tick">\u2713</span>(stash)' : "";
-      const lvl = p.level != null ? " (" + p.level + ")" : "";
-      const hint = p.runes
-        ? '<div class="hint">' + esc(p.runes.join(" + ")) + ' · ' + esc((p.bases || []).join(", ")) + '</div>'
-        : "";
-      return '<div class="piece ' + esc(p.state || "better") + '">' + esc(p.name) + lvl + tick + '</div>' + hint;
-    }).join("");
-    return '<div class="gcol"><div class="gtitle">' + esc(col.title) + '</div>'
-      + '<div class="geq">' + eq + note + '</div>' + (pieces || '') + '</div>';
-  }).join("");
-}
-// First paint from the one-shot endpoint (the stream only starts after it), then live
-// updates from the Server-Sent-Events stream: the server pushes whenever the JSON changes
-// and the browser reconnects on its own after a drop.
+// First paint from the one-shot endpoint, then live updates from the Server-Sent-Events
+// stream: the server pushes whenever the JSON changes and the browser reconnects on its own.
 fetch("/api/live").then(r => r.json()).then(render).catch(() => {});
 const stream = new EventSource("/api/live-stream");
 stream.onmessage = e => {
@@ -1199,7 +1469,7 @@ stream.onmessage = e => {
 };
 stream.onerror = () => { /* EventSource retries on its own */ };
 </script></body></html>
-"##;
+"#;
 
 /// The whole dashboard page: [`DASHBOARD_HEAD`] plus [`DASHBOARD_SCRIPT`].
 fn dashboard_page() -> String {
@@ -1279,6 +1549,7 @@ mod tests {
                 notes: Some("guide".to_owned()),
                 slots: [("weapon".to_owned(), vec!["Heart of the Oak@55".to_owned()])].into(),
                 merc_slots: [("weapon".to_owned(), vec!["Insight@27".to_owned()])].into(),
+                ..crate::config::Build::default()
             },
         );
         config.bis.insert(
@@ -1650,27 +1921,51 @@ mod tests {
         ));
     }
 
-    /// One tab with an identified unique and a plain ethereal base, for the stash panel.
+    /// A stash item for the panel tests (identified, not a runeword).
+    fn stash_item(name: &str, code: &str, quality: u32, quantity: Option<u32>) -> crate::stash::StashItem {
+        crate::stash::StashItem {
+            name: name.to_owned(),
+            code: Some(code.to_owned()),
+            quality: u8::try_from(quality).unwrap_or_default(),
+            identified: true,
+            ethereal: name.starts_with("eth "),
+            runeword: false,
+            quantity,
+        }
+    }
+
+    /// Page 1 with an identified unique and a plain ethereal base, an empty page 2, and the
+    /// materials tab with gems, runes and potions in memory order (one emptied stack).
     fn test_stash() -> Vec<crate::stash::StashTab> {
-        vec![crate::stash::StashTab {
-            index: 1,
-            items: vec![
-                crate::stash::StashItem {
-                    name: "Harlequin Crest".to_owned(),
-                    quality: u8::try_from(crate::offsets::item_data::QUALITY_UNIQUE).unwrap_or_default(),
-                    identified: true,
-                    ethereal: false,
-                    runeword: false,
-                },
-                crate::stash::StashItem {
-                    name: "eth Crystal Sword 4os".to_owned(),
-                    quality: u8::try_from(crate::offsets::item_data::QUALITY_NORMAL).unwrap_or_default(),
-                    identified: true,
-                    ethereal: true,
-                    runeword: false,
-                },
-            ],
-        }]
+        use crate::offsets::item_data::{QUALITY_NORMAL, QUALITY_UNIQUE};
+        use crate::stash::{StashTab, TabKind};
+        let n = QUALITY_NORMAL;
+        vec![
+            StashTab {
+                kind: TabKind::Page(1),
+                items: vec![
+                    stash_item("Harlequin Crest", "uap", QUALITY_UNIQUE, None),
+                    stash_item("eth Crystal Sword 4os", "crs", n, None),
+                ],
+            },
+            StashTab {
+                kind: TabKind::Page(2),
+                items: vec![],
+            },
+            StashTab {
+                kind: TabKind::Materials,
+                items: vec![
+                    stash_item("Rejuvenation Potion", "rvs", n, Some(50)),
+                    stash_item("Io Rune", "r16", n, Some(1)),
+                    stash_item("Perfect Topaz", "gpy", n, Some(2)),
+                    stash_item("El Rune", "r01", n, Some(8)),
+                    stash_item("Chipped Topaz", "gcy", n, Some(19)),
+                    stash_item("Flawless Amethyst", "gzv", n, Some(0)),
+                    stash_item("Chipped Amethyst", "gcv", n, Some(3)),
+                    stash_item("Full Rejuvenation Potion", "rvl", n, Some(43)),
+                ],
+            },
+        ]
     }
 
     /// A `LiveInfo` over borrowed test data: difficulty 2 is hell.
@@ -1689,6 +1984,7 @@ mod tests {
             area: "Durance of Hate Level 3",
             blocks,
             bis: None,
+            build: None,
             equipped,
             equipped_items: &[],
             owned: &[],
@@ -1721,6 +2017,7 @@ mod tests {
             area: "test",
             blocks: &crate::render::TextBlocks::default(),
             bis: Some(&bis),
+            build: None,
             equipped: &[],
             equipped_items,
             owned,
@@ -1854,20 +2151,52 @@ mod tests {
             colour_of("equipped"),
             vec![("helm: unique".to_owned(), "#ffffff".to_owned())]
         );
-        // The stash panel: a tab header, then the items with their quality tags (uniques gold).
-        // Lowercase `tab`: unit-table order, not verified against the UI's tab numbering.
-        assert_eq!(
-            colour_of("stash"),
-            vec![
-                ("tab 1 (2 items)".to_owned(), "#afafaf".to_owned()),
-                ("Harlequin Crest (unique)".to_owned(), "#ffd278".to_owned()),
-                ("eth Crystal Sword 4os".to_owned(), "#dddddd".to_owned()),
-            ]
-        );
         assert_eq!(
             json.get("stash_owned"),
             Some(&serde_json::json!(["Harlequin Crest"]))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn live_json_has_the_stash_pages_and_materials() -> Result<()> {
+        let blocks = crate::render::TextBlocks::default();
+        let stash = test_stash();
+        let json =
+            serde_json::from_str::<serde_json::Value>(&live_json(&live_info(1, &blocks, &[], &stash, &[])))
+                .map_err(|e| anyhow!("valid json: {e}"))?;
+        // The normal pages in UI order with quality-tagged item lines (uniques gold); the
+        // materials tab is not a page.
+        assert_eq!(
+            json.get("stash_pages"),
+            Some(&serde_json::json!([
+                {"page": 1, "items": [
+                    {"text": "Harlequin Crest (unique)", "colour": "#ffd278"},
+                    {"text": "eth Crystal Sword 4os", "colour": "#dddddd"},
+                ]},
+                {"page": 2, "items": []},
+            ]))
+        );
+        // Gems by colour then grade, runes by number, the rest by name; the empty stack is out.
+        assert_eq!(
+            json.get("stash_materials"),
+            Some(&serde_json::json!({
+                "gems": [
+                    {"name": "Chipped Amethyst", "qty": 3, "code": "gcv"},
+                    {"name": "Chipped Topaz", "qty": 19, "code": "gcy"},
+                    {"name": "Perfect Topaz", "qty": 2, "code": "gpy"},
+                ],
+                "runes": [
+                    {"name": "El Rune", "qty": 8, "code": "r01"},
+                    {"name": "Io Rune", "qty": 1, "code": "r16"},
+                ],
+                "other": [
+                    {"name": "Full Rejuvenation Potion", "qty": 43, "code": "rvl"},
+                    {"name": "Rejuvenation Potion", "qty": 50, "code": "rvs"},
+                ],
+            }))
+        );
+        assert_eq!(json.get("stash"), None, "the flat line list is gone");
         Ok(())
     }
 
@@ -2042,5 +2371,74 @@ mod tests {
         clear_live();
         assert_eq!(read_chunk(&mut client)?, "data: {\"live\": false}\n\n");
         Ok(())
+    }
+
+    #[test]
+    fn gear_carries_build_details_merc_and_extras() {
+        let build = crate::config::Build {
+            name: "Blood Boil".to_owned(),
+            targets: vec!["75% FCR".to_owned()],
+            extras: [("charms".to_owned(), vec!["Annihilus@70".to_owned()])].into(),
+            pieces: [(
+                "Harlequin Crest".to_owned(),
+                crate::config::PieceInfo {
+                    kind: "unique".to_owned(),
+                    base: "Shako".to_owned(),
+                    stats: vec!["+2 to All Skills".to_owned()],
+                    ..crate::config::PieceInfo::default()
+                },
+            )]
+            .into(),
+            ..crate::config::Build::default()
+        };
+        let bis = crate::config::Bis {
+            build: "Blood Boil".to_owned(),
+            slots: [("helm".to_owned(), vec!["Harlequin Crest@62".to_owned()])].into(),
+            merc_slots: [("weapon".to_owned(), vec!["Insight@27".to_owned()])].into(),
+        };
+        let blocks = crate::render::TextBlocks::default();
+        let mut info = live_info(0, &blocks, &[], &[], &[]);
+        info.bis = Some(&bis);
+        info.build = Some(&build);
+        let gear = gear_json(&info);
+        let at = |path: &str| gear.pointer(path).cloned().unwrap_or_default();
+        assert_eq!(at("/build"), "Blood Boil");
+        assert_eq!(at("/targets"), serde_json::json!(["75% FCR"]));
+        let helm = at("/columns/0/pieces/0");
+        assert_eq!(
+            (
+                at("/columns/0/pieces/0/name"),
+                at("/columns/0/pieces/0/kind"),
+                at("/columns/0/pieces/0/base")
+            ),
+            (
+                serde_json::json!("Harlequin Crest"),
+                serde_json::json!("unique"),
+                serde_json::json!("Shako")
+            )
+        );
+        assert_eq!(
+            at("/columns/0/pieces/0/stats"),
+            serde_json::json!(["+2 to All Skills"])
+        );
+        assert!(helm.get("why").is_none(), "unset details are left out");
+        assert_eq!(at("/merc/0/title"), "Merc weapon");
+        assert_eq!(at("/merc/0/pieces/0/name"), "Insight");
+        assert_eq!(at("/extras/0/title"), "charms");
+        assert_eq!(at("/extras/0/pieces/0/level"), 70);
+    }
+
+    #[test]
+    fn root_is_the_dashboard_and_config_moved() {
+        for path in ["/", "/index.html", "/dashboard"] {
+            let r = html_page(path);
+            assert!(
+                r.starts_with("HTTP/1.1 200") && r.contains("<title>D2R Dashboard</title>"),
+                "{path}"
+            );
+        }
+        let config = html_page("/config");
+        assert!(config.contains("d2r-map-overlay config"), "{config}");
+        assert!(html_page("/nope").starts_with("HTTP/1.1 404"));
     }
 }

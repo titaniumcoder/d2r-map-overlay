@@ -1,9 +1,11 @@
 //! The shared stash as read from unit memory (see `research/notes/stash-format.md` §3 and
-//! `PLAN.md`): each shared tab is a player-type unit without an act, one per page, and its
-//! items are ordinary page-4 item units whose `item_data::OWNER` is the tab unit's id. Only
-//! the tab units whose `Inventory` names the current player as owner
-//! ([`crate::offsets::inventory::OWNER_ID`]) are live; stale ones from earlier characters
-//! linger and are excluded by that check (live 2026-11-15, Cathan's Seal moved pages 1–5).
+//! `PLAN.md`): each shared tab is a player-type unit without an act, one per page. The
+//! player unit's own `Inventory` lists the live tabs in the game's UI order
+//! ([`crate::offsets::inventory::TAB_LIST`]: the normal pages, then the gems/runes/materials
+//! tab), and each tab unit's `Inventory` chains its items
+//! ([`crate::offsets::inventory::FIRST_ITEM`]). Stale tab units from earlier characters linger
+//! in the unit table; they are not in the list (and the fallback discriminator,
+//! [`crate::offsets::inventory::OWNER_ID`] = the current player, leaves them out too).
 //!
 //! D2R loads the stash contents only once the stash has been opened in the game, and the tab
 //! units vanish again later (UI closed, area transitions), so the session caches the captured
@@ -14,6 +16,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::game::ItemDrop;
+use crate::items::{self, DropKind};
 use crate::offsets::item_data;
 use crate::valuables;
 
@@ -21,35 +24,101 @@ use crate::valuables;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StashItem {
     /// The unique or set display name when known ([`valuables::unique_set_name`]), else the
-    /// base name with `eth` and sockets, like the keep list ([`valuables::display_name`]).
+    /// base name with `eth` and sockets, like the keep list ([`valuables::display_name`]); a
+    /// materials-tab stack is named by [`material_name`] when its code is known.
     pub name: String,
+    /// The item code (`"r01"`), `None` when the items table wasn't found.
+    pub code: Option<String>,
     /// Raw `ItemData` quality (2 normal, 4 magic, 5 set, 6 rare, 7 unique; see
     /// [`item_data::QUALITY`]).
     pub quality: u8,
     pub identified: bool,
     pub ethereal: bool,
     pub runeword: bool,
+    /// Stack size ([`item_data::QUANTITY`]): only items of the gems/runes/materials tab.
+    pub quantity: Option<u32>,
 }
 
-/// One shared-stash tab with its items. `index` counts the live tab units in unit-table
-/// order (1-based): the mapping to the UI's tab number is NOT verified — the journal logs the
-/// capture so a live check can confirm it (user has one screen; see `CLAUDE.md`).
+/// Which shared-stash tab: a normal page, numbered 1-based in the game's UI order, or the
+/// gems/runes/materials tab. JSON: `{"page": 1}` / `"materials"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabKind {
+    Page(u8),
+    Materials,
+}
+
+/// One shared-stash tab with its items, in the tab's inventory order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StashTab {
-    pub index: u8,
+    pub kind: TabKind,
     pub items: Vec<StashItem>,
 }
 
-/// The `StashItem` for a stored item's fields.
+/// The `StashItem` for a stored item's fields; `quantity` is the stack size of a
+/// materials-tab item (`None` elsewhere).
 #[must_use]
-pub fn stash_item(drop: &ItemDrop) -> StashItem {
-    let name = valuables::unique_set_name(drop).map_or_else(|| valuables::display_name(drop), str::to_owned);
+pub fn stash_item(drop: &ItemDrop, quantity: Option<u32>) -> StashItem {
+    let material = quantity.and(drop.code.as_deref()).and_then(material_name);
+    let name = material.unwrap_or_else(|| {
+        valuables::unique_set_name(drop).map_or_else(|| valuables::display_name(drop), str::to_owned)
+    });
     StashItem {
         name,
+        code: drop.code.clone(),
         quality: u8::try_from(drop.quality).unwrap_or(u8::MAX),
         identified: drop.flags & item_data::FLAG_IDENTIFIED != 0,
         ethereal: drop.ethereal,
         runeword: drop.flags & item_data::FLAG_RUNEWORD != 0,
+        quantity,
+    }
+}
+
+/// Rune names by rune number (`r01` El … `r33` Zod), runes.txt order.
+const RUNE_NAMES: [&str; 33] = [
+    "El", "Eld", "Tir", "Nef", "Eth", "Ith", "Tal", "Ral", "Ort", "Thul", "Amn", "Sol", "Shael", "Dol",
+    "Hel", "Io", "Lum", "Ko", "Fal", "Lem", "Pul", "Um", "Mal", "Ist", "Gul", "Vex", "Ohm", "Lo", "Sur",
+    "Ber", "Jah", "Cham", "Zod",
+];
+
+/// Gem grade prefixes by [`items::gem`] grade; the normal grade has none.
+const GEM_GRADES: [&str; 5] = ["Chipped ", "Flawed ", "", "Flawless ", "Perfect "];
+
+/// Names of the other stackable codes the materials tab can hold (classic misc.txt plus the
+/// D2R uber keys, organs and essences). Unknown codes keep their code as the name.
+const OTHER_MATERIALS: [(&str, &str); 13] = [
+    ("rvs", "Rejuvenation Potion"),
+    ("rvl", "Full Rejuvenation Potion"),
+    ("pk1", "Key of Terror"),
+    ("pk2", "Key of Hate"),
+    ("pk3", "Key of Destruction"),
+    ("dhn", "Diablo's Horn"),
+    ("bey", "Baal's Eye"),
+    ("mbr", "Mephisto's Brain"),
+    ("tes", "Twisted Essence of Suffering"),
+    ("ceh", "Charged Essence of Hatred"),
+    ("bet", "Burning Essence of Terror"),
+    ("fed", "Festering Essence of Destruction"),
+    ("toa", "Token of Absolution"),
+];
+
+/// The in-game name of a gem, rune or other stackable by its code (`"gcv"` → `"Chipped
+/// Amethyst"`, `"r01"` → `"El Rune"`); `None` for an unknown code.
+#[must_use]
+pub fn material_name(code: &str) -> Option<String> {
+    if let Some(&(_, name)) = OTHER_MATERIALS.iter().find(|(c, _)| *c == code) {
+        return Some(name.to_owned());
+    }
+    let bytes = items::code_bytes(code)?;
+    if let Some((colour, grade)) = items::gem(bytes) {
+        let prefix = GEM_GRADES.get(usize::from(grade)).copied().unwrap_or_default();
+        return Some(format!("{prefix}{}", colour.name()));
+    }
+    match items::code_kind(bytes) {
+        Some(DropKind::Rune(n)) => RUNE_NAMES
+            .get(usize::from(n).checked_sub(1)?)
+            .map(|r| format!("{r} Rune")),
+        _ => None,
     }
 }
 
@@ -82,10 +151,12 @@ mod tests {
     fn item(name: &str, quality: u32, flags: u32) -> StashItem {
         StashItem {
             name: name.to_owned(),
+            code: None,
             quality: u8::try_from(quality).unwrap_or(u8::MAX),
             identified: flags & item_data::FLAG_IDENTIFIED != 0,
             ethereal: false,
             runeword: false,
+            quantity: None,
         }
     }
 
@@ -93,7 +164,7 @@ mod tests {
     fn stash_names_keeps_identified_unique_and_set_names() {
         let id = item_data::FLAG_IDENTIFIED;
         let tabs = [StashTab {
-            index: 1,
+            kind: TabKind::Page(1),
             items: vec![
                 item("Harlequin Crest", item_data::QUALITY_UNIQUE, id),
                 item("uap", item_data::QUALITY_UNIQUE, id), // index unreadable: base name
@@ -108,5 +179,31 @@ mod tests {
             vec!["Harlequin Crest", "uap", "Sigon's Visor"]
         );
         assert_eq!(stash_names(&[]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn material_names_cover_gems_runes_and_others() {
+        assert_eq!(material_name("gcv").as_deref(), Some("Chipped Amethyst"));
+        assert_eq!(material_name("gzv").as_deref(), Some("Flawless Amethyst"));
+        assert_eq!(material_name("gsy").as_deref(), Some("Topaz"));
+        assert_eq!(material_name("gpw").as_deref(), Some("Perfect Diamond"));
+        assert_eq!(material_name("skz").as_deref(), Some("Perfect Skull"));
+        assert_eq!(material_name("sku").as_deref(), Some("Skull"));
+        assert_eq!(material_name("r01").as_deref(), Some("El Rune"));
+        assert_eq!(material_name("r16").as_deref(), Some("Io Rune"));
+        assert_eq!(material_name("r33").as_deref(), Some("Zod Rune"));
+        assert_eq!(material_name("rvl").as_deref(), Some("Full Rejuvenation Potion"));
+        assert_eq!(material_name("r34"), None);
+        assert_eq!(material_name("crs"), None);
+    }
+
+    #[test]
+    fn rune_names_are_the_generated_rune_set() {
+        // The generated runeword data lists the same 33 names (in another order).
+        let mut ours = RUNE_NAMES.to_vec();
+        let mut generated = crate::runewords_data::RUNE_NAMES.to_vec();
+        ours.sort_unstable();
+        generated.sort_unstable();
+        assert_eq!(ours, generated);
     }
 }

@@ -14,8 +14,8 @@ use crate::items::{self, DropKind};
 use crate::objects_data::{SHRINE_OBJECTS, WELL_OBJECTS};
 use crate::offsets::{
     ROOM_TILE_SCALE, act, act_misc, inventory, item_data, item_mode, level, level_preset, monster_data,
-    object_data, object_mode, path, player_data, preset, room_tile, room1, room2, stat_list, state,
-    static_path, unit, unit_table,
+    object_data, object_mode, path, player_data, preset, room_tile, room1, room2, stash_tab_node, stat_list,
+    state, static_path, unit, unit_table,
 };
 use crate::process::ReadMem;
 use crate::render::is_consumable_quest_object;
@@ -39,9 +39,11 @@ const MAX_WARNINGS: usize = 50;
 /// Living desecrated monsters needed to call a level terrorized. Two rather than one, so a
 /// single misread unit can't flip the info line; the player's summons never carry the state.
 pub const TERROR_MIN_MONSTERS: usize = 2;
-/// Most items read per shared-stash tab (a tab holds 10×10); a runaway attribute means a
-/// misread, and the warnings tell the rest.
+/// Most items read per shared-stash tab (a tab holds 10×10; the gems/runes/materials tab had
+/// 49 stacks live); a runaway chain means a misread, and the warnings tell the rest.
 const MAX_STASH_ITEMS_PER_TAB: usize = 100;
+/// Most nodes walked in the player's shared-stash tab list (live: 6).
+const MAX_STASH_TABS: usize = 16;
 
 /// Agreeing owner ids (`item_data::OWNER`) after which a storage page stops voting.
 const OWNER_VOTES: u32 = 8;
@@ -414,18 +416,17 @@ struct ItemScan {
     equipped_items: Vec<Equipped>,
     /// The same for the mercenary's gear (owner `NO_OWNER`).
     merc_equipped: Vec<(u8, u32)>,
-    /// Every stored page-4 item with its unit address, head and owner id: the shared-stash
-    /// tabs are known only after the player is chosen, so [`Reader::stash`] attributes these
-    /// to the live tab unit ids afterwards ([`stash::StashTab`]).
-    stash_heads: Vec<StashHead>,
 }
 
-/// A stored page-4 item kept for the shared-stash attribution.
+/// One live shared-stash tab of the player ([`Reader::shared_tabs`]).
 #[derive(Debug)]
-struct StashHead {
-    addr: u64,
-    head: UnitHead,
-    owner: u32,
+struct TabRef {
+    /// The tab unit's id: the `item_data::OWNER` of its normal-page items ([`place`]).
+    id: u32,
+    /// The tab unit's address; `None` while the unit isn't in the unit table (the stash not
+    /// loaded yet), which reads as an empty tab.
+    addr: Option<u64>,
+    kind: stash::TabKind,
 }
 
 /// A stored item with its `item_data::PAGE` and `item_data::OWNER`.
@@ -919,9 +920,12 @@ pub fn snapshot(
     }
     let (shrines, wells, operated_objects) = r.objects(unit_table);
     let inventory_items = u32::try_from(scan.inventory.len()).unwrap_or(u32::MAX);
-    let shared_tabs = r.shared_tabs(unit_table, chosen.id);
-    let stash = r.stash(&scan.stash_heads, items_table, &shared_tabs);
+    let tabs = r.shared_tabs(unit_table, chosen.addr.0, chosen.id);
+    let stash = r.stash(&tabs, items_table);
     let stash_names = stash::stash_names(&stash);
+    // The materials tab's stacks are owned by nobody (`NO_OWNER`), so only the normal pages'
+    // items reach the spare lists through these ids; gems and runes are never spare anyway.
+    let shared_tabs: Vec<u32> = tabs.iter().map(|t| t.id).collect();
     let mine = player_items(scan.inventory, scan.stored, chosen.id, &shared_tabs);
     let inventory_keep = valuables::keep_list(&mine);
     let (sell, give_away) = valuables::spare_lists(&mine);
@@ -1171,65 +1175,184 @@ impl<M: ReadMem> Reader<'_, M> {
         Ok(String::from_utf8_lossy(raw.get(..end).unwrap_or_default()).into_owned())
     }
 
-    /// Unit ids of `player`'s shared-stash tabs: other player-type units **without an act**
-    /// (research note §3.1/§3.3) whose inventory names `player` as its owner
-    /// ([`inventory::OWNER_ID`]). Unreadable units are skipped.
-    fn shared_tabs(&mut self, unit_table: u64, player: u32) -> Vec<u32> {
-        let addrs = self.units(unit_table, unit_table::PLAYER);
-        addrs
+    /// The player's live shared-stash tabs in the game's UI order: the tab list of the player
+    /// unit's own inventory ([`Reader::tab_list`]), each node's unit id looked up among the
+    /// tab units (other player-type units **without an act** whose inventory names `player`
+    /// as owner, [`inventory::OWNER_ID`]; research note §3.1/§3.3). Normal pages are numbered
+    /// 1-based in list order; the node's [`stash_tab_node::ADVANCED`] byte marks the
+    /// gems/runes/materials tab. A node whose unit isn't (yet) in the table is an empty tab, so
+    /// the page numbers never shift. If the list is unreadable or empty while tab units exist,
+    /// the tab units are used in unit-table order (pages only) with a warning.
+    fn shared_tabs(&mut self, unit_table: u64, player_addr: u64, player: u32) -> Vec<TabRef> {
+        let units: Vec<(u32, u64)> = self
+            .units(unit_table, unit_table::PLAYER)
             .into_iter()
             .filter_map(|addr| {
                 // The act check is hardening: today nothing else player-type names the player
-                // as inventory owner, but a phantom tab here would shift every index.
+                // as inventory owner, but a phantom tab here would shift every page.
                 let id = self.u32(addr, unit::ID).ok()?;
                 let inv = self.ptr(addr, unit::INVENTORY).ok()??;
                 (id != player
                     && self.ptr(addr, unit::ACT).ok()?.is_none()
                     && self.u32(inv, inventory::OWNER_ID).ok()? == player)
-                    .then_some(id)
+                    .then_some((id, addr))
+            })
+            .collect();
+        let nodes = match self.tab_list(player_addr) {
+            Ok(nodes) if !nodes.is_empty() => nodes,
+            listed => {
+                if !units.is_empty() {
+                    let why = listed
+                        .err()
+                        .map_or_else(|| "empty".to_owned(), |e| format!("{e:#}"));
+                    self.warn(format!(
+                        "shared stash: tab list unreadable ({why}); pages in memory order, \
+                         no materials tab"
+                    ));
+                }
+                return units
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (id, addr))| TabRef {
+                        id,
+                        addr: Some(addr),
+                        kind: stash::TabKind::Page(u8::try_from(i + 1).unwrap_or(u8::MAX)),
+                    })
+                    .collect();
+            }
+        };
+        let mut page = 0u8;
+        nodes
+            .into_iter()
+            .map(|(id, advanced)| {
+                let kind = if advanced {
+                    stash::TabKind::Materials
+                } else {
+                    page = page.saturating_add(1);
+                    stash::TabKind::Page(page)
+                };
+                let addr = units.iter().find(|&&(u, _)| u == id).map(|&(_, a)| a);
+                TabRef { id, addr, kind }
             })
             .collect()
     }
 
-    /// The shared-stash tabs `tab_ids` (in [`Reader::shared_tabs`] order, 1-based `index`)
-    /// with their page-4 items: each item's `item_data::OWNER` is the tab unit's id, the same
-    /// ownership the spare lists use ([`place`]). Unreadable items are skipped without a
-    /// warning: optional data, and the ordinary item scan already warned about them. The
-    /// [`MAX_STASH_ITEMS_PER_TAB`] cap warns once per tab (a runaway tab means a misread).
-    fn stash(&mut self, heads: &[StashHead], items_table: Option<u64>, tab_ids: &[u32]) -> Vec<StashTab> {
-        let mut tabs: Vec<StashTab> = tab_ids
+    /// The `(tab unit id, advanced)` nodes of the shared-stash tab list in the inventory of the
+    /// player unit at `player_addr`, list order: the first [`inventory::TAB_LIST`] header whose
+    /// walk checks out ([`Reader::tab_nodes`]); empty when none does (the stash not loaded, or
+    /// the layout moved again).
+    fn tab_list(&self, player_addr: u64) -> Result<Vec<(u32, bool)>> {
+        let inv = self.ptr_req(player_addr, unit::INVENTORY, "player inventory")?;
+        let Some(nodes) = inventory::TAB_LIST
             .iter()
-            .enumerate()
-            .map(|(i, _)| StashTab {
-                index: u8::try_from(i + 1).unwrap_or(u8::MAX),
-                items: Vec::new(),
+            .find_map(|&header| self.tab_nodes(field(inv, header).ok()?))
+        else {
+            return Ok(Vec::new());
+        };
+        nodes
+            .into_iter()
+            .map(|node| {
+                Ok((
+                    self.u32(node, stash_tab_node::TAB_ID)?,
+                    self.u8(node, stash_tab_node::ADVANCED)? == 1,
+                ))
             })
-            .collect();
-        let mut warned = vec![false; tabs.len()];
-        for StashHead { addr, head, owner } in heads {
-            let Some(slot) = tab_ids.iter().position(|&id| id == *owner) else {
-                continue;
-            };
-            let Some(tab) = tabs.get_mut(slot) else { continue };
-            if tab.items.len() >= MAX_STASH_ITEMS_PER_TAB {
-                // Once per tab: the cap hit is not per-item news.
-                if let Some(w) = warned.get_mut(slot)
-                    && !*w
-                {
-                    *w = true;
-                    self.warn(format!(
-                        "stash tab {}: over {MAX_STASH_ITEMS_PER_TAB} items, the rest are \
-                         skipped (a runaway tab means a misread)",
-                        slot + 1
-                    ));
-                }
-                continue;
-            }
-            if let Ok(item) = self.item_fields(*addr, head, items_table) {
-                tab.items.push(stash::stash_item(&item));
-            }
+            .collect()
+    }
+
+    /// The node addresses of the tab list whose header is at `header`, if it is one: a count
+    /// of 1..=[`MAX_STASH_TABS`], and the walk from the first node reaches the last node in
+    /// exactly that many steps and ends there. Silent: a candidate header that isn't one is
+    /// expected, not news.
+    fn tab_nodes(&self, header: u64) -> Option<Vec<u64>> {
+        let first = self.ptr(header, 0).ok()??;
+        let last = self.ptr(header, inventory::TAB_LIST_LAST).ok()??;
+        let count = usize::try_from(self.u32(header, inventory::TAB_LIST_COUNT).ok()?).ok()?;
+        if !(1..=MAX_STASH_TABS).contains(&count) {
+            return None;
         }
-        tabs
+        let mut nodes = vec![first];
+        let mut cur = first;
+        while nodes.len() < count {
+            cur = self.ptr(cur, stash_tab_node::NEXT).ok()??;
+            if nodes.contains(&cur) {
+                return None;
+            }
+            nodes.push(cur);
+        }
+        let ends = self.ptr(cur, stash_tab_node::NEXT).ok()?.is_none();
+        (cur == last && ends).then_some(nodes)
+    }
+
+    /// The shared-stash `tabs` with their items, read through each tab unit's inventory chain
+    /// ([`inventory::FIRST_ITEM`], then [`item_data::NEXT_IN_INVENTORY`]); the materials tab's
+    /// items also get their stack size ([`item_data::QUANTITY`]). Unreadable items are skipped
+    /// without a warning (optional data); a broken or runaway chain warns once per tab
+    /// ([`MAX_STASH_ITEMS_PER_TAB`]).
+    fn stash(&mut self, tabs: &[TabRef], items_table: Option<u64>) -> Vec<StashTab> {
+        tabs.iter()
+            .map(|tab| {
+                let materials = tab.kind == stash::TabKind::Materials;
+                let mut items = Vec::new();
+                for addr in tab.addr.map_or_default(|a| self.tab_items(a)) {
+                    let Ok(head) = self.unit_head(addr, unit_table::ITEM) else {
+                        continue;
+                    };
+                    let Ok(item) = self.item_fields(addr, &head, items_table) else {
+                        continue;
+                    };
+                    let quantity = head
+                        .unit_data
+                        .filter(|_| materials)
+                        .and_then(|d| self.u32(d, item_data::QUANTITY).ok());
+                    items.push(stash::stash_item(&item, quantity));
+                }
+                StashTab {
+                    kind: tab.kind,
+                    items,
+                }
+            })
+            .collect()
+    }
+
+    /// The item unit addresses of the tab unit at `tab`, in its inventory's chain order.
+    fn tab_items(&mut self, tab: u64) -> Vec<u64> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        let first = self
+            .ptr(tab, unit::INVENTORY)
+            .ok()
+            .flatten()
+            .and_then(|inv| self.ptr(inv, inventory::FIRST_ITEM).ok().flatten());
+        let mut cur = first;
+        while let Some(item) = cur {
+            if !seen.insert(item) {
+                self.warn(format!("stash tab {tab:#x}: item chain cycles at {item:#x}"));
+                break;
+            }
+            if out.len() >= MAX_STASH_ITEMS_PER_TAB {
+                self.warn(format!(
+                    "stash tab {tab:#x}: over {MAX_STASH_ITEMS_PER_TAB} items, the rest are \
+                     skipped (a runaway chain means a misread)"
+                ));
+                break;
+            }
+            out.push(item);
+            // The next link lives in the item's `ItemData`, not in the unit itself.
+            cur = match self
+                .ptr_req(item, unit::UNIT_DATA, "item data")
+                .and_then(|d| self.ptr(d, item_data::NEXT_IN_INVENTORY))
+            {
+                Ok(next) => next,
+                Err(e) => {
+                    self.warn(format!(
+                        "stash tab {tab:#x}: item chain broken after {item:#x}: {e:#}"
+                    ));
+                    break;
+                }
+            };
+        }
+        out
     }
 
     /// `Some` if the unit is a live player: non-null act and path, non-zero position.
@@ -1573,9 +1696,6 @@ impl<M: ReadMem> Reader<'_, M> {
                     Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
                 }
             }
-            // Shared-stash tab items are page-4 units owned by a tab unit id (live
-            // 2026-11-15); the live tab ids are only known after the player is chosen.
-            Self::keep_stash_head(&mut scan, addr, &head, page, owner);
             let found = match head.mode {
                 item_mode::ON_GROUND => {
                     scan.ground = scan.ground.saturating_add(1);
@@ -1658,27 +1778,6 @@ impl<M: ReadMem> Reader<'_, M> {
         if !merc && scan.equipped_items.iter().all(|e| e.body != slot) {
             let item = self.equipped_item(head, slot, quality, items_table);
             scan.equipped_items.push(item);
-        }
-    }
-
-    /// Keeps a stored page-4 item for [`Reader::stash`]: page-4 units are owned by the tab
-    /// unit that holds them, and the live tab ids are only known after the player is chosen.
-    fn keep_stash_head(
-        scan: &mut ItemScan,
-        addr: u64,
-        head: &UnitHead,
-        page: Option<u8>,
-        owner: Option<u32>,
-    ) {
-        if page != Some(item_data::PAGE_STASH) {
-            return;
-        }
-        if let Some(owner) = owner {
-            scan.stash_heads.push(StashHead {
-                addr,
-                head: head.clone(),
-                owner,
-            });
         }
     }
 
@@ -3140,7 +3239,7 @@ mod tests {
         put(
             mem,
             data,
-            0x60,
+            ITEM_DATA_SIZE,
             &[
                 (item_data::QUALITY, &quality.to_le_bytes()),
                 (item_data::FLAGS, &flags.to_le_bytes()),
@@ -3319,16 +3418,29 @@ mod tests {
         set_owner(mem, addr, owner)
     }
 
+    /// Bytes of the `ItemData` [`stored_item`] lays out (up to `NEXT_IN_INVENTORY`).
+    const ITEM_DATA_SIZE: usize = 0xC0;
+
+    /// Overwrites `bytes` at `base + off` inside the `len`-byte region at `base`.
+    fn patch(mem: &mut FakeMem, base: u64, len: usize, off: u64, bytes: &[u8]) -> Result<()> {
+        let mut b = mem.read_bytes(base, len)?;
+        let at = usize::try_from(off)?;
+        b.get_mut(at..at + bytes.len())
+            .context("patched field outside region")?
+            .copy_from_slice(bytes);
+        mem.add(base, b);
+        Ok(())
+    }
+
     /// Sets `item_data::OWNER` of the item at `addr` (laid out by [`stored_item`]).
     fn set_owner(mem: &mut FakeMem, addr: u64, owner: u32) -> Result<()> {
-        let data = addr + 0x200;
-        let mut b = mem.read_bytes(data, 0x60)?;
-        let at = usize::try_from(item_data::OWNER)?;
-        b.get_mut(at..at + 4)
-            .context("owner in ItemData")?
-            .copy_from_slice(&owner.to_le_bytes());
-        mem.add(data, b);
-        Ok(())
+        patch(
+            mem,
+            addr + 0x200,
+            ITEM_DATA_SIZE,
+            item_data::OWNER,
+            &owner.to_le_bytes(),
+        )
     }
 
     /// A shared-stash tab unit: a player-type unit without act or path whose `Inventory`
@@ -3349,78 +3461,220 @@ mod tests {
         )
     }
 
-    const TAB0: u64 = 0x20_3000; // unit id 0x203, Bob's live tab
+    const TAB0: u64 = 0x20_3000; // unit id 0x203, Bob's live tab: page 2 in the UI
     const TAB1: u64 = 0x20_4000; // unit id 0x204, a stale tab (another character's)
+    const TAB2: u64 = 0x20_5000; // unit id 0x205, Bob's live tab: page 1 in the UI
+    const TAB_M: u64 = 0x20_6000; // unit id 0x206, Bob's gems/runes/materials tab
+    /// Unit id of a listed tab whose unit isn't in the unit table: page 3, empty.
+    const TAB_GONE_ID: u32 = 0x207;
     const INV0: u64 = 0x23_0000;
     const INV1: u64 = 0x23_1000;
+    const INV2: u64 = 0x23_2000;
+    const INV_M: u64 = 0x23_3000;
+    const INV_BOB: u64 = 0x23_4000;
+    /// The tab-list nodes hang off Bob's inventory ([`inventory::TAB_LIST`]).
+    const NODES: u64 = 0x24_0000;
+    const INV_SIZE: usize = 0x80;
 
-    /// [`world`] plus two tab units: `TAB0` names Bob its inventory owner (live), `TAB1`
-    /// names Alice (stale while playing Bob).
+    /// A tab unit's `Inventory` naming `owner`, its item chain starting at `first` (0: none).
+    fn tab_inventory(mem: &mut FakeMem, addr: u64, owner: u32, first: u64) -> Result<()> {
+        put(
+            mem,
+            addr,
+            INV_SIZE,
+            &[
+                (inventory::OWNER_ID, &owner.to_le_bytes()),
+                (inventory::FIRST_ITEM, &first.to_le_bytes()),
+            ],
+        )
+    }
+
+    /// Links the [`stored_item`]s `items` into one inventory chain
+    /// ([`item_data::NEXT_IN_INVENTORY`]) in order; returns the chain head (0 when empty).
+    fn chain_items(mem: &mut FakeMem, items: &[u64]) -> Result<u64> {
+        for pair in items.windows(2) {
+            if let [item, next] = *pair {
+                let next = next.to_le_bytes();
+                patch(
+                    mem,
+                    item + 0x200,
+                    ITEM_DATA_SIZE,
+                    item_data::NEXT_IN_INVENTORY,
+                    &next,
+                )?;
+            }
+        }
+        Ok(items.first().copied().unwrap_or(0))
+    }
+
+    /// Sets `item_data::QUANTITY` of the [`stored_item`] at `addr`.
+    fn set_quantity(mem: &mut FakeMem, addr: u64, quantity: u32) -> Result<()> {
+        patch(
+            mem,
+            addr + 0x200,
+            ITEM_DATA_SIZE,
+            item_data::QUANTITY,
+            &quantity.to_le_bytes(),
+        )
+    }
+
+    /// Bob's `Inventory` with the tab list `nodes` ((tab unit id, advanced byte), UI order),
+    /// its header (first, last, `count`) at `header` (one of [`inventory::TAB_LIST`]).
+    fn bob_tab_list(mem: &mut FakeMem, header: u64, nodes: &[(u32, u8)], count: u32) -> Result<()> {
+        patch(mem, P_BOB, UNIT_SIZE, unit::INVENTORY, &INV_BOB.to_le_bytes())?;
+        let at = |i: usize| -> Result<u64> { Ok(NODES + 0x100 * u64::try_from(i)?) };
+        let (first, last) = match nodes.len() {
+            0 => (0, 0),
+            n => (NODES, at(n - 1)?),
+        };
+        put(
+            mem,
+            INV_BOB,
+            INV_SIZE,
+            &[
+                (header, &first.to_le_bytes()),
+                (header + inventory::TAB_LIST_LAST, &last.to_le_bytes()),
+                (header + inventory::TAB_LIST_COUNT, &count.to_le_bytes()),
+            ],
+        )?;
+        for (i, &(id, advanced)) in nodes.iter().enumerate() {
+            let next = if i + 1 < nodes.len() { at(i + 1)? } else { 0 };
+            put(
+                mem,
+                at(i)?,
+                0x18,
+                &[
+                    (stash_tab_node::TAB_ID, &id.to_le_bytes()),
+                    (stash_tab_node::ADVANCED, &[advanced]),
+                    (stash_tab_node::NEXT, &next.to_le_bytes()),
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Bob's tab list in [`world_with_tabs`]: `TAB2`, `TAB0`, [`TAB_GONE_ID`], `TAB_M`.
+    const BOB_TABS: [(u32, u8); 4] = [(0x205, 0), (0x203, 0), (TAB_GONE_ID, 0), (0x206, 1)];
+
+    /// [`world`] plus the tab units: `TAB2`, `TAB0` and `TAB_M` name Bob their inventory
+    /// owner (live), `TAB1` names Alice (stale while playing Bob). The unit table holds them
+    /// in another order than Bob's tab list (`TAB2`, `TAB0`, [`TAB_GONE_ID`], `TAB_M`), which
+    /// is the UI order. No tab has items; the tests chain them in ([`tab_inventory`]).
     fn world_with_tabs() -> Result<FakeMem> {
         let mut m = world()?;
         table(
             &mut m,
             &[
+                (unit_table::PLAYER, 2, TAB_M),
                 (unit_table::PLAYER, 3, P_STALE),
-                (unit_table::PLAYER, 5, TAB0),
+                (unit_table::PLAYER, 4, TAB0),
+                (unit_table::PLAYER, 5, TAB2),
                 (unit_table::PLAYER, 6, TAB1),
                 (unit_table::PLAYER, 9, P_BOB),
                 (unit_table::MONSTER, 0, M0),
                 (unit_table::ITEM, 2, I0),
             ],
         )?;
-        tab_unit(&mut m, TAB0, INV0, 0)?;
-        tab_unit(&mut m, TAB1, INV1, 0)?;
-        put(
-            &mut m,
-            INV0,
-            0x50,
-            &[(inventory::OWNER_ID, &BOB_ID.to_le_bytes())],
-        )?;
-        put(
-            &mut m,
-            INV1,
-            0x50,
-            &[(inventory::OWNER_ID, &ALICE_ID.to_le_bytes())],
-        )?;
+        for (tab, inv, owner) in [
+            (TAB0, INV0, BOB_ID),
+            (TAB1, INV1, ALICE_ID),
+            (TAB2, INV2, BOB_ID),
+            (TAB_M, INV_M, BOB_ID),
+        ] {
+            tab_unit(&mut m, tab, inv, 0)?;
+            tab_inventory(&mut m, inv, owner, 0)?;
+        }
+        bob_tab_list(&mut m, 0x60, &BOB_TABS, 4)?;
         Ok(m)
     }
 
     #[test]
-    fn shared_stash_tabs_hold_their_page4_items() -> Result<()> {
+    fn shared_stash_tabs_follow_the_ui_order_and_their_item_chains() -> Result<()> {
+        use crate::stash::{StashItem, StashTab, TabKind};
+        const I7: u64 = 0x80_7000;
         let mut m = world_with_tabs()?;
-        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
-        // items.txt row 40 uap (Shako), uniqueitems 248 Harlequin Crest; row 30 crs.
-        owned_unique(&mut m, I1, (40, 248), (4, 0x203), I2)?; // live tab: unique
-        stored_item(&mut m, I2, (30, 2, 0, 0), (item_mode::STORED, 4), &[], I3)?;
-        set_owner(&mut m, I2, 0x203)?; // live tab: normal base
-        owned_unique(&mut m, I3, (40, 248), (4, 0x204), I4)?; // stale tab: out
-        owned_unique(&mut m, I4, (40, 248), (4, BOB_ID), 0)?; // personal stash: out
-        base_items_table(&mut m)?;
+        // The unit-table item chain (I0 → …) is irrelevant to the stash: each tab chains its
+        // own items. items.txt row 40 uap (Shako), uniqueitems 248 Harlequin Crest; row 30 crs.
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, 0)?;
+        owned_unique(&mut m, I1, (40, 248), (4, 0x203), 0)?; // page 2: unique
+        stored_item(&mut m, I2, (30, 2, 0, 0), (item_mode::STORED, 4), &[], 0)?;
+        set_owner(&mut m, I2, 0x203)?; // page 2: normal base
+        owned_unique(&mut m, I3, (40, 248), (4, 0x204), 0)?; // stale tab: out
+        // The materials tab: stacks owned by nobody, with their stack sizes.
+        for (addr, row, qty) in [(I4, 45, 8), (I5, 46, 19), (I6, 47, 0)] {
+            stored_item(&mut m, addr, (row, 2, 0, 0), (item_mode::STORED, 4), &[], 0)?;
+            set_owner(&mut m, addr, item_data::NO_OWNER)?;
+            set_quantity(&mut m, addr, qty)?;
+        }
+        // A page-1 item with a stack field that must not be read as a quantity.
+        stored_item(&mut m, I7, (30, 2, 0, 0), (item_mode::STORED, 4), &[], 0)?;
+        set_owner(&mut m, I7, 0x205)?;
+        set_quantity(&mut m, I7, 5)?;
+        let page2 = chain_items(&mut m, &[I1, I2])?;
+        tab_inventory(&mut m, INV0, BOB_ID, page2)?;
+        let stale = chain_items(&mut m, &[I3])?;
+        tab_inventory(&mut m, INV1, ALICE_ID, stale)?;
+        let materials = chain_items(&mut m, &[I4, I5, I6])?;
+        tab_inventory(&mut m, INV_M, BOB_ID, materials)?;
+        tab_inventory(&mut m, INV2, BOB_ID, I7)?;
+        let stride = usize::try_from(crate::offsets::items_txt::STRIDE)?;
+        let mut b = vec![0u8; 50 * stride];
+        for (row, code) in [
+            (30, b"crs "),
+            (40, b"uap "),
+            (45, b"r01 "),
+            (46, b"gcy "),
+            (47, b"gzv "),
+        ] {
+            b.get_mut(row * stride..row * stride + 4)
+                .context("row in table")?
+                .copy_from_slice(code);
+        }
+        m.add(ITEMS, b);
 
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
-        assert_eq!(s.stash.len(), 1, "only the live tab; stale and personal out");
-        let tab = s.stash.first().context("the live tab")?;
-        assert_eq!(tab.index, 1);
-        let items = tab.items.clone();
+        assert!(
+            s.warnings.iter().all(|w| !w.contains("stash")),
+            "{:?}",
+            s.warnings
+        );
+        let item = |name: &str, code: &str, quality: u8, identified: bool, quantity| StashItem {
+            name: name.to_owned(),
+            code: Some(code.to_owned()),
+            quality,
+            identified,
+            ethereal: false,
+            runeword: false,
+            quantity,
+        };
         assert_eq!(
-            items,
+            s.stash,
             vec![
-                crate::stash::StashItem {
-                    name: "Harlequin Crest".to_owned(),
-                    quality: 7,
-                    identified: true,
-                    ethereal: false,
-                    runeword: false,
+                StashTab {
+                    kind: TabKind::Page(1),
+                    items: vec![item("Crystal Sword", "crs", 2, false, None)],
                 },
-                crate::stash::StashItem {
-                    name: "Crystal Sword".to_owned(),
-                    quality: 2,
-                    identified: false,
-                    ethereal: false,
-                    runeword: false,
+                StashTab {
+                    kind: TabKind::Page(2),
+                    items: vec![
+                        item("Harlequin Crest", "uap", 7, true, None),
+                        item("Crystal Sword", "crs", 2, false, None),
+                    ],
                 },
-            ]
+                StashTab {
+                    kind: TabKind::Page(3),
+                    items: vec![],
+                },
+                StashTab {
+                    kind: TabKind::Materials,
+                    items: vec![
+                        item("El Rune", "r01", 2, false, Some(8)),
+                        item("Chipped Topaz", "gcy", 2, false, Some(19)),
+                        item("Flawless Amethyst", "gzv", 2, false, Some(0)),
+                    ],
+                },
+            ],
+            "UI order from Bob's tab list; the stale tab is out"
         );
         assert_eq!(s.stash_names, vec!["Harlequin Crest"]);
         Ok(())
@@ -3428,17 +3682,79 @@ mod tests {
 
     #[test]
     fn stash_tabs_without_items_still_show() -> Result<()> {
+        use crate::stash::{StashTab, TabKind};
         let m = world_with_tabs()?;
         let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
+        let empty = |kind| StashTab { kind, items: vec![] };
         assert_eq!(
             s.stash,
-            vec![crate::stash::StashTab {
-                index: 1,
-                items: vec![]
-            }],
-            "the empty live tab is listed, the stale one is not"
+            vec![
+                empty(TabKind::Page(1)),
+                empty(TabKind::Page(2)),
+                empty(TabKind::Page(3)),
+                empty(TabKind::Materials),
+            ],
+            "every listed tab, the one without a unit too"
         );
         assert_eq!(s.stash_names, Vec::<String>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn the_tab_list_header_is_found_at_either_offset_and_checked() -> Result<()> {
+        use crate::stash::TabKind;
+        let kinds = |m: &FakeMem| -> Result<Vec<TabKind>> {
+            let s = snapshot(m, TABLE, None, Some("Bob"), None)?;
+            Ok(s.stash.iter().map(|t| t.kind).collect())
+        };
+        let ui = vec![
+            TabKind::Page(1),
+            TabKind::Page(2),
+            TabKind::Page(3),
+            TabKind::Materials,
+        ];
+        // The header one qword later (live in the second game): `+0x60` is null.
+        let mut m = world_with_tabs()?;
+        bob_tab_list(&mut m, 0x68, &BOB_TABS, 4)?;
+        assert_eq!(kinds(&m)?, ui);
+        // A count that doesn't match the walk is no header: memory-order fallback.
+        let mut m = world_with_tabs()?;
+        bob_tab_list(&mut m, 0x60, &BOB_TABS, 3)?;
+        assert_eq!(
+            kinds(&m)?,
+            vec![TabKind::Page(1), TabKind::Page(2), TabKind::Page(3)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn without_a_tab_list_the_tab_units_are_pages_in_memory_order() -> Result<()> {
+        use crate::stash::{StashTab, TabKind};
+        let mut m = world_with_tabs()?;
+        bob_tab_list(&mut m, 0x60, &[], 0)?;
+        let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
+        let pages: Vec<_> = s.stash.iter().map(|t| t.kind).collect();
+        assert_eq!(
+            pages,
+            vec![TabKind::Page(1), TabKind::Page(2), TabKind::Page(3)],
+            "the three live tab units (stale one out), no materials tab"
+        );
+        assert!(
+            s.warnings.iter().any(|w| w.contains("tab list unreadable")),
+            "{:?}",
+            s.warnings
+        );
+
+        // No tab list and no live tab units (the stash not loaded): nothing, no warning.
+        let mut m = world()?;
+        bob_tab_list(&mut m, 0x60, &[], 0)?;
+        let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
+        assert_eq!(s.stash, Vec::<StashTab>::new());
+        assert!(
+            s.warnings.iter().all(|w| !w.contains("stash")),
+            "{:?}",
+            s.warnings
+        );
         Ok(())
     }
 

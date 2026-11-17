@@ -26,6 +26,21 @@ pub enum GemColour {
     Skull,
 }
 
+impl GemColour {
+    /// The in-game name of the colour (`"Amethyst"`, …, `"Skull"`).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Amethyst => "Amethyst",
+            Self::Topaz => "Topaz",
+            Self::Sapphire => "Sapphire",
+            Self::Emerald => "Emerald",
+            Self::Ruby => "Ruby",
+            Self::Diamond => "Diamond",
+            Self::Skull => "Skull",
+        }
+    }
+}
+
 /// Charm size: small (`cm1`), large (`cm2`), grand (`cm3`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -98,6 +113,23 @@ const GEMS: [([u8; 3], GemColour); 35] = {
         (*b"skz", Skull),
     ]
 };
+
+/// A gem's or skull's colour and grade (0 chipped, 1 flawed, 2 normal, 3 flawless, 4
+/// perfect) by its 4-byte code; `None` for anything else. [`GEMS`] lists five grades per colour
+/// in that order.
+pub fn gem(code: [u8; 4]) -> Option<(GemColour, u8)> {
+    let [a, b, c, b' '] = code else { return None };
+    let i = GEMS.iter().position(|(g, _)| *g == [a, b, c])?;
+    let (_, colour) = GEMS.get(i)?;
+    Some((*colour, u8::try_from(i % 5).ok()?))
+}
+
+/// The 4-byte, space-padded code of a code text (`"gcv"` → `gcv `); `None` if longer than 4.
+pub fn code_bytes(code: &str) -> Option<[u8; 4]> {
+    let mut out = *b"    ";
+    out.get_mut(..code.len())?.copy_from_slice(code.as_bytes());
+    Some(out)
+}
 
 /// Highest rune number (`r33`, Zod).
 const MAX_RUNE: u8 = 33;
@@ -394,6 +426,18 @@ mod tests {
     fn code_text_trims() {
         assert_eq!(code_text(*b"gcg "), "gcg");
         assert_eq!(code_text(*b"r01\0"), "r01");
+    }
+
+    #[test]
+    fn gem_grades_and_code_bytes() {
+        assert_eq!(gem(*b"gcv "), Some((GemColour::Amethyst, 0)));
+        assert_eq!(gem(*b"gzv "), Some((GemColour::Amethyst, 3)), "flawless amethyst");
+        assert_eq!(gem(*b"gpw "), Some((GemColour::Diamond, 4)));
+        assert_eq!(gem(*b"sku "), Some((GemColour::Skull, 2)));
+        assert_eq!(gem(*b"r01 "), None);
+        assert_eq!(code_bytes("gcy"), Some(*b"gcy "));
+        assert_eq!(code_bytes("r01"), Some(*b"r01 "));
+        assert_eq!(code_bytes("toolong"), None);
     }
 
     const STRIDE: usize = 0x1C0;

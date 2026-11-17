@@ -455,6 +455,28 @@ impl Session {
     }
 }
 
+/// A live stash read merged over the cached capture, per tab (review 2026-11-17): a live tab
+/// that reads empty keeps the cached tab of the same kind (its unit not loaded yet, or a torn
+/// read), and a live read without a materials tab (the memory-order fallback when the UI-order
+/// tab list is unreadable) never replaces a cache that came from the list.
+fn merge_stash(cached: Option<&[stash::StashTab]>, live: Vec<stash::StashTab>) -> Vec<stash::StashTab> {
+    let Some(cached) = cached else { return live };
+    let has_materials = |tabs: &[stash::StashTab]| tabs.iter().any(|t| t.kind == stash::TabKind::Materials);
+    if has_materials(cached) && !has_materials(&live) {
+        return cached.to_vec();
+    }
+    live.into_iter()
+        .map(|tab| {
+            if tab.items.is_empty()
+                && let Some(old) = cached.iter().find(|c| c.kind == tab.kind && !c.items.is_empty())
+            {
+                return old.clone();
+            }
+            tab
+        })
+        .collect()
+}
+
 impl Session {
     /// Latches the level's terrorized state for this visit: a level once seen terrorized stays
     /// so until the player leaves it (re-detected on the next visit).
@@ -494,7 +516,7 @@ impl Session {
                     u32::try_from(live_items).unwrap_or(u32::MAX),
                 ));
             }
-            self.stash = Some(live);
+            self.stash = Some(merge_stash(self.stash.as_deref(), live));
         }
         if let Some(cached) = self.stash.clone() {
             snap.stash = cached;
@@ -702,15 +724,17 @@ mod tests {
     fn stash_snap(player_id: u32, act: u64, level: u32, names: &[&str]) -> Snapshot {
         let mut s = snap(player_id, act, level);
         s.stash = vec![crate::stash::StashTab {
-            index: 1,
+            kind: crate::stash::TabKind::Page(1),
             items: names
                 .iter()
                 .map(|n| crate::stash::StashItem {
                     name: (*n).to_owned(),
+                    code: None,
                     quality: 7,
                     identified: true,
                     ethereal: false,
                     runeword: false,
+                    quantity: None,
                 })
                 .collect(),
         }];
@@ -1682,5 +1706,43 @@ mod tests {
         let mut next = farm_at(2, crate::cows::COW_LEVEL, 300, 300);
         s.apply(&mut next);
         assert_eq!(next.trail, vec![(300, 300)], "a new game starts a new trail");
+    }
+
+    #[test]
+    fn stash_merge_keeps_cached_tabs_over_empty_or_fallback_reads() {
+        use crate::stash::{StashItem, StashTab, TabKind};
+        let item = |name: &str| StashItem {
+            name: name.to_owned(),
+            quality: 5,
+            identified: true,
+            ethereal: false,
+            runeword: false,
+            code: None,
+            quantity: None,
+        };
+        let tab = |kind, items: Vec<StashItem>| StashTab { kind, items };
+        let cached = vec![
+            tab(TabKind::Page(1), vec![item("A")]),
+            tab(TabKind::Page(5), vec![item("Sigon")]),
+            tab(TabKind::Materials, vec![item("El")]),
+        ];
+        // Page 1's unit not loaded (empty), page 5 changed: page 1 keeps its cached items.
+        let live = vec![
+            tab(TabKind::Page(1), vec![]),
+            tab(TabKind::Page(5), vec![item("New")]),
+            tab(TabKind::Materials, vec![item("El")]),
+        ];
+        let merged = super::merge_stash(Some(&cached), live);
+        let names: Vec<_> = merged
+            .iter()
+            .map(|t| t.items.first().map_or("", |i| i.name.as_str()))
+            .collect();
+        assert_eq!(names, ["A", "New", "El"]);
+        // A fallback read (no materials tab) never replaces a list-ordered cache.
+        let fallback = vec![tab(TabKind::Page(1), vec![item("Sigon")])];
+        assert_eq!(super::merge_stash(Some(&cached), fallback), cached);
+        // Without a cache the live read is taken as is.
+        let live = vec![tab(TabKind::Page(1), vec![])];
+        assert_eq!(super::merge_stash(None, live.clone()), live);
     }
 }
