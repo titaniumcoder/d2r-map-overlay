@@ -1,13 +1,15 @@
-//! The companion web page: a small HTTP server on `localhost` that lets the user edit the
+//! The companion web app: a small HTTP server on `localhost` that lets the user edit the
 //! config (per-character builds and `BiS` gear lists) in a browser form, writing back to
 //! `config.toml` with comments preserved (user request, 2026-11-17). The overlay watches the
-//! config file and hot-reloads it (see `live`).
+//! config file and hot-reloads it (see `live`). It also serves the live dashboard: the same
+//! text blocks the overlay draws (where to go, gear, keep/sell), published by `live` each tick
+//! and read by `GET /api/live`.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -25,6 +27,47 @@ const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// Serializes the read-edit-write of `config.toml` across connection threads, so two saves
 /// cannot both start from the same old text and lose one of the updates.
 static CONFIG_WRITE: Mutex<()> = Mutex::new(());
+
+/// The pre-serialized JSON of the latest live snapshot, published by `live` each tick and read
+/// by `GET /api/live`. `None` while no game is attached: the dashboard then shows
+/// [`NO_LIVE_JSON`]. A [`RwLock`] in a [`OnceLock`]: written ~5 Hz by the live loop, read on
+/// request; both hold it only for the swap/clone.
+static LIVE: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+
+/// The answer of `GET /api/live` while no game is attached (or between games).
+const NO_LIVE_JSON: &str = "{\"live\": false}";
+
+/// The character classes by txt row id, in [`crate::breakpoints`] per-class table order.
+const CLASS_NAMES: [&str; 8] = [
+    "amazon",
+    "sorceress",
+    "necromancer",
+    "paladin",
+    "barbarian",
+    "druid",
+    "assassin",
+    "warlock",
+];
+
+/// The shared cell behind [`LIVE`].
+fn live_cell() -> &'static RwLock<Option<String>> {
+    LIVE.get_or_init(|| RwLock::new(None))
+}
+
+/// Replaces the live snapshot JSON the dashboard serves. Called by `live` every tick; a brief
+/// write lock, a short string.
+pub fn publish_live(json: String) {
+    // A poisoned lock still holds a working cell; a poisoned writer can only mean a panic
+    // elsewhere while writing, and the next tick overwrites the value anyway.
+    *live_cell().write().unwrap_or_else(PoisonError::into_inner) = Some(json);
+}
+
+/// Drops the live snapshot JSON: the game is gone or in the menu, so the dashboard must show
+/// "waiting for game" instead of stale data.
+pub fn clear_live() {
+    // See [`publish_live`] for the poison handling.
+    *live_cell().write().unwrap_or_else(PoisonError::into_inner) = None;
+}
 
 /// Edits the `[builds]` entry of `name` in `text` to `damages` (comment-preserving).
 /// `None` when `text` is not valid TOML: the caller answers the browser with an error.
@@ -166,7 +209,9 @@ fn handle(stream: TcpStream) {
         Parsed::TooLarge => respond("413 Content Too Large", "text/plain", "request body too large\n"),
         Parsed::Request(method, path, body) => match (method.as_str(), path.as_str()) {
             ("GET", "/" | "/index.html") => page(),
+            ("GET", "/dashboard") => respond("200 OK", "text/html", dashboard_page()),
             ("GET", "/api/config") => api_config(),
+            ("GET", "/api/live") => api_live(),
             ("POST", "/api/build") => api_build(&String::from_utf8_lossy(&body)),
             ("POST", "/api/bis") => api_bis(&String::from_utf8_lossy(&body)),
             _ => respond("404 Not Found", "text/plain", "not found\n"),
@@ -190,6 +235,32 @@ fn respond(status: &str, content_type: &str, body: &str) -> String {
 /// The form page (see `config_page` for the embedded source).
 fn page() -> String {
     respond("200 OK", "text/html", config_page())
+}
+
+/// `200 OK` with the latest live snapshot's JSON verbatim (published by `live`), or
+/// [`NO_LIVE_JSON`] while no game is attached. The page handles both.
+fn api_live() -> String {
+    let json = live_cell()
+        .read()
+        // See [`publish_live`] for the poison handling.
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    // `no-store`: the snapshot is per-tick, caching it would show stale game state.
+    respond_no_store(
+        "200 OK",
+        "application/json",
+        json.as_deref().unwrap_or(NO_LIVE_JSON),
+    )
+}
+
+/// [`respond`] plus `Cache-Control: no-store`, for endpoints whose answer is only valid
+/// for the instant it was produced.
+fn respond_no_store(status: &str, content_type: &str, body: &str) -> String {
+    let mut response = respond(status, content_type, body);
+    let header = "Cache-Control: no-store\r\n";
+    let split = response.find("\r\n\r\n").unwrap_or(0);
+    response.insert_str(split, header);
+    response
 }
 
 /// `200 OK` with the current config as JSON for the form: the characters (with their `BiS`
@@ -265,6 +336,109 @@ fn runewords_json() -> serde_json::Value {
         })
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into()
+}
+
+/// One tick's dashboard data, gathered by `live` from the snapshot and the same text blocks
+/// the overlay draws ([`crate::render::TextBlocks`]) and serialized by [`live_json`].
+#[derive(Debug)]
+pub struct LiveInfo<'a> {
+    pub player_name: &'a str,
+    /// Character class txt row (see [`CLASS_NAMES`]).
+    pub class: u32,
+    /// `None` when the level stat was unreadable.
+    pub char_level: Option<u8>,
+    /// `None` when unreadable (in the menu no snapshot exists at all).
+    pub difficulty: Option<u8>,
+    /// The current area's name (or a `Level <id>` fallback).
+    pub area: &'a str,
+    pub blocks: &'a crate::render::TextBlocks,
+    /// The equipped `(body slot, quality)` pairs, shown under the `BiS` chase list.
+    pub equipped: &'a [(u8, u32)],
+    /// Unix seconds of the tick that produced this data.
+    pub updated_at: u64,
+}
+
+/// Serializes one tick's dashboard data. Pure: the same input gives the same JSON, so the
+/// tests need no game. Shape:
+/// `{ "live": true, "updated_at": <unix secs>, "player": {"name", "class", "level",
+/// "difficulty"}, "area": …, "guide": […], "levels": […], "keep": […], "sell": […],
+/// "give": […], "bis": […], "equipped": […] }`, where each line is `{ "text": …,
+/// "colour": "#rrggbb" }` (the overlay line's colour as hex; the guide's per-span colours
+/// are flattened to the base colour). The give-away lines have no panel of their own, so they
+/// ride with `sell` in the dashboard's Sell panel.
+#[must_use]
+pub fn live_json(info: &LiveInfo) -> String {
+    let class = CLASS_NAMES
+        .get(usize::try_from(info.class).unwrap_or(usize::MAX))
+        .map_or_else(|| format!("class {}", info.class), |name| (*name).to_owned());
+    let difficulty = info.difficulty.and_then(crate::info::difficulty_name);
+    serde_json::json!({
+        "live": true,
+        "updated_at": info.updated_at,
+        "player": {
+            "name": info.player_name,
+            "class": class,
+            "level": info.char_level,
+            "difficulty": difficulty,
+        },
+        "area": info.area,
+        "guide": info.blocks.guide.iter().map(band_line).collect::<Vec<_>>(),
+        "levels": text_lines(&info.blocks.level, crate::info::LEVEL_TEXT),
+        "keep": text_lines(&info.blocks.keep, crate::info::KEEP_TEXT),
+        "sell": text_lines(&info.blocks.sell, crate::info::SELL_TEXT),
+        "give": text_lines(&info.blocks.give, crate::info::GIVE_TEXT),
+        "bis": text_lines(&info.blocks.bis, crate::info::BIS_TEXT),
+        "equipped": text_lines(&equipped_lines(info.equipped), [255, 255, 255, 255]),
+    })
+    .to_string()
+}
+
+/// `levels`/`keep`/… lines as `{ "text", "colour" }` objects in the block's colour.
+fn text_lines(lines: &[String], colour: [u8; 4]) -> Vec<serde_json::Value> {
+    let hex = hex(colour);
+    lines
+        .iter()
+        .map(|text| serde_json::json!({ "text": text, "colour": hex }))
+        .collect()
+}
+
+/// A guide band as a `{ "text", "colour" }` object: the band's base colour as hex, spans
+/// flattened away (the dashboard keeps the values readable, not the per-span red).
+fn band_line(band: &crate::info::Band) -> serde_json::Value {
+    serde_json::json!({ "text": band.text, "colour": hex(band.colour) })
+}
+
+/// An overlay `[u8; 4]` RGBA colour as `#rrggbb` (the alpha is the same 255 everywhere).
+fn hex([r, g, b, _]: [u8; 4]) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// The equipped items as dashboard lines: `helm: unique`, `ring2: rare`, … (the `BiS` "already
+/// better" pairs; see [`crate::game::Snapshot::equipped`]). Unknown slots and qualities are
+/// shown as such rather than dropped.
+fn equipped_lines(equipped: &[(u8, u32)]) -> Vec<String> {
+    equipped
+        .iter()
+        .map(|&(body, quality)| {
+            let slot =
+                crate::info::body_slot_name(body).map_or_else(|| format!("slot {body}"), str::to_owned);
+            format!("{slot}: {}", quality_name(quality))
+        })
+        .collect()
+}
+
+/// The classic quality name of an `ItemData` quality (see [`crate::offsets::item_data`]).
+fn quality_name(quality: u32) -> String {
+    use crate::offsets::item_data;
+    match quality {
+        item_data::QUALITY_SET => "set".to_owned(),
+        item_data::QUALITY_UNIQUE => "unique".to_owned(),
+        item_data::QUALITY_RARE => "rare".to_owned(),
+        item_data::QUALITY_MAGIC => "magic".to_owned(),
+        item_data::QUALITY_SUPERIOR => "superior".to_owned(),
+        item_data::QUALITY_NORMAL => "normal".to_owned(),
+        _ => format!("quality {quality}"),
+    }
 }
 
 /// Reads `config.toml`, applies `edit`, and writes it back atomically. The whole
@@ -364,7 +538,7 @@ button { padding: 4px 10px; }
 .slot { margin: 4px 0; }
 .hint { color: #9c9; font-size: 0.85em; margin-left: 5.5em; }
 </style></head><body>
-<h1>d2r-map-overlay config</h1>
+<h1>d2r-map-overlay config &nbsp; <a style="font-size:0.6em" href="/dashboard">live dashboard →</a></h1>
 <div id="chars"></div>
 <datalist id="runewords"></datalist>
 <h2>Add character</h2>
@@ -422,6 +596,61 @@ async function saveBis(name) {
 load();
 </script></body></html>
 "#
+}
+
+/// The live dashboard page (a single string: no assets, no framework). Polls `/api/live` once
+/// a second and renders the same text the overlay draws, in its colours: where to go, gear
+/// and `BiS`, sell and keep. Dark-themed like the config page.
+const fn dashboard_page() -> &'static str {
+    r##"<!doctype html>
+<html><head><meta charset="utf-8"><title>d2r-map-overlay live</title>
+<style>
+body { font-family: sans-serif; background: #1a1a1a; color: #ddd; margin: 2em; }
+a { color: #7cf; }
+h1 { font-size: 1.3em; }
+h2 { font-size: 1.05em; border-bottom: 1px solid #444; padding-bottom: 4px; }
+.panel { border: 1px solid #444; padding: 1em; margin-bottom: 1em; }
+.line { white-space: pre-wrap; font-size: 0.95em; }
+.waiting { color: #999; font-style: italic; }
+</style></head><body>
+<h1>d2r-map-overlay live &nbsp; <a style="font-size:0.6em" href="/">config →</a></h1>
+<h2 id="header"><span class="waiting">waiting for game…</span></h2>
+<div class="panel"><h2>Where to go</h2><div id="levels"></div></div>
+<div class="panel"><h2>Gear / BiS</h2><div id="gear"></div></div>
+<div class="panel"><h2>Sell / Keep</h2><div id="sell"></div></div>
+<script>
+// HTML-escape: line texts come from item and area names read out of the game. Numeric
+// character references (&#38; …), so the replacement strings stay plain ASCII here.
+function esc(s) {
+  return s.replace(/[&<>"']/g, c => "&#" + c.charCodeAt(0) + ";");
+}
+function lines(el, entries) {
+  el.innerHTML = (entries || []).map(e =>
+    `<div class="line" style="color:${e.colour || "#ddd"}">${esc(e.text)}</div>`).join("");
+}
+async function poll() {
+  try {
+    const r = await (await fetch("/api/live")).json();
+    const header = document.getElementById("header");
+    if (!r.live) {
+      header.innerHTML = '<span class="waiting">waiting for game…</span>';
+      for (const id of ["levels", "gear", "sell"]) document.getElementById(id).innerHTML = "";
+    } else {
+      const p = r.player;
+      header.textContent = [p.name, p.class, p.level != null ? "level " + p.level : null,
+        p.difficulty, r.area].filter(Boolean).join(" · ")
+        + "  (updated " + new Date(r.updated_at * 1000).toLocaleTimeString() + ")";
+      lines(document.getElementById("levels"), r.levels);
+      // The breakpoint guide belongs with the gear it describes.
+      lines(document.getElementById("gear"), (r.guide || []).concat(r.bis || []).concat(r.equipped || []));
+      lines(document.getElementById("sell"), (r.sell || []).concat(r.keep || []).concat(r.give || []));
+    }
+  } catch (e) { /* server gone or mid-restart: keep the last frame, try again */ }
+  setTimeout(poll, 1000);
+}
+poll();
+</script></body></html>
+"##
 }
 
 #[cfg(test)]
@@ -578,5 +807,126 @@ mod tests {
             read_request(&mut Cursor::new(request)),
             Some(Parsed::Request(_, _, _))
         ));
+    }
+
+    /// A `LiveInfo` over borrowed test data: difficulty 2 is hell.
+    fn live_info<'a>(
+        class: u32,
+        blocks: &'a crate::render::TextBlocks,
+        equipped: &'a [(u8, u32)],
+    ) -> LiveInfo<'a> {
+        LiveInfo {
+            player_name: "Hork",
+            class,
+            char_level: Some(42),
+            difficulty: Some(2),
+            area: "Durance of Hate Level 3",
+            blocks,
+            equipped,
+            updated_at: 1_700_000_000,
+        }
+    }
+
+    #[test]
+    fn live_json_has_the_documented_shape() -> Result<()> {
+        let blocks = crate::render::TextBlocks {
+            guide: vec![crate::info::Band::plain("fcr (7 / 105)", crate::info::GUIDE_TEXT)],
+            level: vec!["Level 3 → a (5)".to_owned()],
+            keep: vec!["Keep: Harlequin Crest (S)".to_owned()],
+            sell: vec!["Sell: Gravenspine (inv)".to_owned()],
+            give: vec!["Give away: Lem Rune (stash)".to_owned()],
+            bis: vec!["helm: Harlequin Crest (82)".to_owned()],
+        };
+        let equipped = [(1, 7)];
+        let json = serde_json::from_str::<serde_json::Value>(&live_json(&live_info(1, &blocks, &equipped)))
+            .map_err(|e| anyhow!("valid json: {e}"))?;
+        assert_eq!(json.get("live"), Some(&serde_json::json!(true)));
+        assert_eq!(json.get("updated_at"), Some(&serde_json::json!(1_700_000_000)));
+        assert_eq!(
+            json.get("player"),
+            Some(&serde_json::json!({
+                "name": "Hork", "class": "sorceress", "level": 42, "difficulty": "Hell",
+            }))
+        );
+        assert_eq!(
+            json.get("area").and_then(|v| v.as_str()),
+            Some("Durance of Hate Level 3")
+        );
+        // Each block becomes `{ "text", "colour" }` lines in the block's overlay colour.
+        let colour_of = |key: &str| -> Vec<(String, String)> {
+            json.get(key)
+                .and_then(|v| v.as_array())
+                .map_or_else(Vec::new, |lines| {
+                    lines
+                        .iter()
+                        .map(|l| {
+                            (
+                                l.get("text")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                                l.get("colour")
+                                    .and_then(|c| c.as_str())
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                            )
+                        })
+                        .collect()
+                })
+        };
+        assert_eq!(
+            colour_of("guide"),
+            vec![("fcr (7 / 105)".to_owned(), "#c882ff".to_owned())]
+        );
+        assert_eq!(
+            colour_of("levels"),
+            vec![("Level 3 → a (5)".to_owned(), "#78d2ff".to_owned())]
+        );
+        assert_eq!(
+            colour_of("keep"),
+            vec![("Keep: Harlequin Crest (S)".to_owned(), "#5ae65a".to_owned())]
+        );
+        assert_eq!(
+            colour_of("sell"),
+            vec![("Sell: Gravenspine (inv)".to_owned(), "#afafaf".to_owned())]
+        );
+        assert_eq!(
+            colour_of("give"),
+            vec![("Give away: Lem Rune (stash)".to_owned(), "#ffe13c".to_owned())]
+        );
+        assert_eq!(
+            colour_of("bis"),
+            vec![("helm: Harlequin Crest (82)".to_owned(), "#ffd278".to_owned())]
+        );
+        assert_eq!(
+            colour_of("equipped"),
+            vec![("helm: unique".to_owned(), "#ffffff".to_owned())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_classes_slots_and_qualities_are_shown_not_dropped() -> Result<()> {
+        let blocks = crate::render::TextBlocks::default();
+        let json =
+            serde_json::from_str::<serde_json::Value>(&live_json(&live_info(13, &blocks, &[(13, 42)])))
+                .map_err(|e| anyhow!("valid json: {e}"))?;
+        assert_eq!(
+            json.pointer("/player/class").and_then(|v| v.as_str()),
+            Some("class 13")
+        );
+        assert_eq!(
+            json.pointer("/equipped/0/text").and_then(|v| v.as_str()),
+            Some("slot 13: quality 42")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn no_live_json_parses_with_live_false() -> Result<()> {
+        let json = serde_json::from_str::<serde_json::Value>(NO_LIVE_JSON)
+            .map_err(|e| anyhow!("valid json: {e}"))?;
+        assert_eq!(json.get("live"), Some(&serde_json::json!(false)));
+        Ok(())
     }
 }

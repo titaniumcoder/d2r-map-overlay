@@ -46,7 +46,7 @@ const TEXT: [u8; 4] = [255, 255, 255, 255];
 /// Party member name labels above their map dots (user request, 2026-11-17).
 pub const PARTY_NAME_TEXT: [u8; 4] = [255, 230, 90, 255];
 /// The inventory keep lines: green, same outline as the info line.
-const KEEP_TEXT: [u8; 4] = [90, 230, 90, 255];
+pub const KEEP_TEXT: [u8; 4] = [90, 230, 90, 255];
 /// Most keep lines; the last one ends in "+N more" when the list is longer.
 pub const MAX_KEEP_LINES: usize = 3;
 const KEEP_PREFIX: &str = "Keep: ";
@@ -57,7 +57,7 @@ pub const SELL_PREFIX: &str = "Sell: ";
 pub const GIVE_TEXT: [u8; 4] = [255, 225, 60, 255];
 pub const GIVE_PREFIX: &str = "Give away: ";
 /// The level-suggestion line(s) between the info line and the keep lines: light blue.
-const LEVEL_TEXT: [u8; 4] = [120, 210, 255, 255];
+pub const LEVEL_TEXT: [u8; 4] = [120, 210, 255, 255];
 /// The breakpoint/gear/runeword guide lines (user request, 2026-11-17): light violet.
 pub const GUIDE_TEXT: [u8; 4] = [200, 130, 255, 255];
 /// The `BiS` chase list ([`bis_lines`]): light gold.
@@ -300,6 +300,35 @@ pub fn bis_lines(
         }
     }
     wrap_plain(out, font, max_width)
+}
+
+/// The area name of `level_id` from the levels table, or `None` for an unknown id (callers
+/// fall back to `Level <id>`, like [`info_line`]).
+#[must_use]
+pub fn level_name(level_id: u32) -> Option<&'static str> {
+    LEVELS
+        .iter()
+        .find(|&&(id, _, _)| id == level_id)
+        .map(|&(_, name, _)| name)
+}
+
+/// The slot name of a body equip-location id (the reverse of [`slot_body`]; the swap slot
+/// shares the weapon's id). `None` for ids with no `BiS` slot (the mercenary's or the head).
+#[must_use]
+pub const fn body_slot_name(body: u8) -> Option<&'static str> {
+    match body {
+        1 => Some("helm"),
+        2 => Some("amulet"),
+        3 => Some("body"),
+        4 => Some("weapon"),
+        5 => Some("offhand"),
+        6 => Some("ring1"),
+        7 => Some("ring2"),
+        8 => Some("belt"),
+        9 => Some("boots"),
+        10 => Some("gloves"),
+        _ => None,
+    }
 }
 
 /// The required character level of a `BiS` piece: the `@level` config suffix, else the known

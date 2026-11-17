@@ -21,7 +21,9 @@ use crate::process::ProcMem;
 use crate::session::Session;
 use ab_glyph::FontVec;
 
-use crate::{config, cows, game_file, image, info, items, journal, offset_cache, process, render, valuables};
+use crate::{
+    config, cows, game_file, image, info, items, journal, offset_cache, process, render, valuables, web,
+};
 
 /// Snapshot interval (~5 Hz).
 const TICK: Duration = Duration::from_millis(200);
@@ -40,6 +42,13 @@ const fn table_retry_delay(failures: u32) -> Duration {
 /// The UI loop dropped its end of the channel: stop.
 #[derive(Debug)]
 struct UiGone;
+
+/// Unix seconds right now (`0` before the epoch, which no live clock is).
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
 
 fn send(tx: &Sender<Msg>, msg: Msg) -> Result<(), UiGone> {
     tx.send(msg).map_err(|_| UiGone)
@@ -111,6 +120,8 @@ pub fn run(
         // reload the same file twice.
         config_modified = config_path.as_ref().and_then(|p| modified_at(p));
         // The process is gone (or never got a table): hide until the next one is in a game.
+        // The dashboard stops showing stale data with the same breath.
+        web::clear_live();
         if follow.and_then(|()| send(tx, Msg::Hide)).is_err() {
             return;
         }
@@ -259,6 +270,21 @@ fn follow_game(
                 }
                 cow_stats.record(&update, session.cow_kills());
                 saver.tick(&mut session, Instant::now());
+                // The webapp's live dashboard gets the same text blocks the overlay draws
+                // (user request, 2026-11-17); serialization of a few short lines at 5 Hz is
+                // cheap. Cleared again on snapshot errors (menu, loading) and game exit.
+                let blocks = render::text_blocks(&snap, w, info::font());
+                web::publish_live(web::live_json(&web::LiveInfo {
+                    player_name: &snap.player.name,
+                    class: snap.player.class,
+                    char_level: snap.player.char_level,
+                    difficulty: snap.difficulty,
+                    area: &info::level_name(snap.level.id)
+                        .map_or_else(|| format!("Level {}", snap.level.id), str::to_owned),
+                    blocks: &blocks,
+                    equipped: &snap.equipped,
+                    updated_at: now_secs(),
+                }));
                 if let Some(msg) = tick_msg(&mut dedup, snap, (w, h), info::font()) {
                     send(tx, msg)?;
                 }
@@ -268,6 +294,8 @@ fn follow_game(
                     cow_stats.flush();
                     return Ok(());
                 }
+                // Menu or loading: the dashboard must not keep showing the last game.
+                web::clear_live();
                 if dedup.hide(Hidden::NoGame) {
                     eprintln!("no game state (menu or loading?): {e:#}");
                     send(tx, Msg::Hide)?;

@@ -959,28 +959,41 @@ pub fn map_height(height: u32, font: Option<&FontVec>, keep_lines: usize) -> u32
     })
 }
 
-/// The text rows below the info line for a `width` px canvas: the guide lines, the level
-/// suggestions, the inventory keep list, then the sell and give-away lists, with gap rows
-/// ([`info::stack`]); none without a font.
-fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<info::Band> {
+/// The text blocks below the info line, kept separate: the breakpoint guide bands, the level
+/// suggestions, the inventory keep list, the sell and give-away lists and the `BiS` chase list
+/// (see [`info::stack`]). Shared by the overlay stack ([`keep_lines`]) and the webapp's live
+/// dashboard, which `live` publishes from the same tick.
+#[derive(Debug, Default)]
+pub struct TextBlocks {
+    pub guide: Vec<info::Band>,
+    pub level: Vec<String>,
+    pub keep: Vec<String>,
+    pub sell: Vec<String>,
+    pub give: Vec<String>,
+    pub bis: Vec<String>,
+}
+
+/// The overlay's text rows for a `width` px canvas ([`keep_lines`]) and the dashboard's groups
+/// ([`TextBlocks`]) from one snapshot. None of it without a font.
+pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextBlocks {
     let Some(f) = font else {
-        return Vec::new();
+        return TextBlocks::default();
     };
     let max_width = f32::from(u16::try_from(width).unwrap_or(u16::MAX)) - 8.0;
-    info::stack(
-        // The breakpoint guide first (user request, 2026-11-17), width-fitted like the other
-        // blocks (spans ride along: low resistances are red).
-        crate::breakpoints::guide_band(&snap.player, snap.difficulty)
-            .into_iter()
-            .map(|band| info::fit_band(band, f, max_width))
-            .collect(),
-        info::level_lines(f, snap.player.char_level, snap.difficulty, max_width),
-        info::keep_lines(f, &snap.inventory_keep, max_width),
-        info::spare_lines(f, info::SELL_PREFIX, &snap.sell, max_width),
-        info::spare_lines(f, info::GIVE_PREFIX, &snap.give_away, max_width),
+    TextBlocks {
+        guide:
+            // Width-fitted like the other blocks (spans ride along: low resistances are red).
+            crate::breakpoints::guide_band(&snap.player, snap.difficulty)
+                .into_iter()
+                .map(|band| info::fit_band(band, f, max_width))
+                .collect(),
+        level: info::level_lines(f, snap.player.char_level, snap.difficulty, max_width),
+        keep: info::keep_lines(f, &snap.inventory_keep, max_width),
+        sell: info::spare_lines(f, info::SELL_PREFIX, &snap.sell, max_width),
+        give: info::spare_lines(f, info::GIVE_PREFIX, &snap.give_away, max_width),
         // The BiS chase list (user request, 2026-11-17) last: much further down than the other
         // text, under the keep/sell/give-away lines.
-        snap.player.bis.as_ref().map_or_else(Vec::new, |bis| {
+        bis: snap.player.bis.as_ref().map_or_else(Vec::new, |bis| {
             info::bis_lines(
                 bis,
                 snap.player.char_level,
@@ -991,6 +1004,21 @@ fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<info::
                 max_width,
             )
         }),
+    }
+}
+
+/// The text rows below the info line for a `width` px canvas: the guide lines, the level
+/// suggestions, the inventory keep list, then the sell and give-away lists, with gap rows
+/// ([`info::stack`]); none without a font.
+fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<info::Band> {
+    let blocks = text_blocks(snap, width, font);
+    info::stack(
+        blocks.guide,
+        blocks.level,
+        blocks.keep,
+        blocks.sell,
+        blocks.give,
+        blocks.bis,
     )
 }
 
