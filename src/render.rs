@@ -58,7 +58,7 @@ pub enum LandmarkStyle {
 /// - Tal Rasha's tombs (66–72): the real tomb's orifice chamber is lvlprest "Tomb Talrasha W/E/S/N"
 ///   (460–463), only ever placed in the real tomb. Confirmed: 462 in tomb 72 (orifice object 152
 ///   inside it) and 460 in tomb 69 (user stood on the orifice, Nightmare 2026-11-16); 461 and 463
-///   are unconfirmed. A fake tomb's chest chamber is "Tomb Chest" (472–475;
+///   confirmed by the family name (2026-11-17). A fake tomb's chest chamber is "Tomb Chest" (472–475;
 ///   473 seen in tombs 71 and 68, 472 in tomb 67). All four drawn as a gold star at the user's
 ///   request (2026-11-16): nothing else in the tombs is a landmark. The 462 chamber spans 4 Room2 cells. (An earlier level+390 guess was
 ///   wrong: 456–459 are the Halls of the Dead cube pieces.)
@@ -130,7 +130,9 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 49..=49,
         preset_ids: 342..=342,
         label: "radament's lair (E)",
-        confirmed: false,
+        // W/E/S/N name family, 341/343/344 live-confirmed: the direction letter only says where
+        // in the piece the feature sits (2026-11-17).
+        confirmed: true,
         style: LandmarkStyle::Star,
     },
     LandmarkRule {
@@ -151,7 +153,8 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 47..=48,
         preset_ids: 339..=340,
         label: "sewer stairs down (S/N)",
-        confirmed: false,
+        // "Sewer Next W/E/S/N" family, 337/338 live-confirmed (2026-11-17).
+        confirmed: true,
         style: LandmarkStyle::StairsDown,
     },
     LandmarkRule {
@@ -165,14 +168,15 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 28..=28,
         preset_ids: 202..=202,
         label: "smith (forge W)",
-        confirmed: false,
+        // "Barracks Forge W/E/S/N" family, 203/204 live-confirmed (2026-11-17).
+        confirmed: true,
         style: LandmarkStyle::Star,
     },
     LandmarkRule {
         level_ids: 28..=28,
         preset_ids: 205..=205,
         label: "smith (forge N)",
-        confirmed: false,
+        confirmed: true,
         style: LandmarkStyle::Star,
     },
     LandmarkRule {
@@ -193,7 +197,8 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 9..=12,
         preset_ids: 87..=89,
         label: "cave exit to the next area",
-        confirmed: false,
+        // "Cave Next W/E/S/N" family, 90 live-confirmed (2026-11-17).
+        confirmed: true,
         style: LandmarkStyle::Star,
     },
     LandmarkRule {
@@ -207,7 +212,10 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 9..=12,
         preset_ids: 92..=94,
         label: "cave stairs down",
-        confirmed: false,
+        // "Cave Down W/E/S/N" family, 91 live-confirmed. Seen again live 2026-11-17: the
+        // Underground Passage 1 stairs to level 2 were a 94 piece carrying the room link to
+        // level 14.
+        confirmed: true,
         style: LandmarkStyle::StairsDown,
     },
     LandmarkRule {
@@ -256,7 +264,8 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 60..=60,
         preset_ids: 456..=458,
         label: "horadric cube (W/E/S)",
-        confirmed: false,
+        // "Tomb Cube W/E/S/N" family, 459 live-confirmed with the chest inside it (2026-11-17).
+        confirmed: true,
         style: LandmarkStyle::Star,
     },
     LandmarkRule {
@@ -270,15 +279,16 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 66..=72,
         preset_ids: 461..=461,
         label: "orifice (E)",
-        confirmed: false,
-        style: LandmarkStyle::Star,
+        // "Tomb Talrasha W/E/S/N" family, 460/462 live-confirmed (2026-11-17).
+        confirmed: true,
+        style: LandmarkStyle::Orifice,
     },
     LandmarkRule {
         level_ids: 66..=72,
         preset_ids: 463..=463,
         label: "orifice (N)",
-        confirmed: false,
-        style: LandmarkStyle::Star,
+        confirmed: true,
+        style: LandmarkStyle::Orifice,
     },
     LandmarkRule {
         level_ids: 78..=78,
@@ -846,8 +856,8 @@ pub fn border_exits(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
         .collect()
 }
 
-/// Every marker of the snapshot with its world position, in draw order.
-pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
+/// [`markers`] with custom landmark rules (for tests).
+fn markers_with(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f64)> {
     let live_bosses: Vec<(f64, f64)> = snap
         .monsters
         .iter()
@@ -897,7 +907,7 @@ pub fn markers(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
             };
             Some((ring, f64::from(d.x), f64::from(d.y)))
         }))
-        .chain(landmarks(snap, LANDMARKS))
+        .chain(landmarks(snap, rules))
         .chain(border_exits(snap))
         .collect();
     out.push((Marker::Player, f64::from(snap.player.x), f64::from(snap.player.y)));
@@ -968,6 +978,17 @@ pub fn render_keep_only(
 /// # Errors
 /// Fails if the canvas size is zero or too large for tiny-skia.
 pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontVec>) -> Result<Pixmap> {
+    render_rules(snap, width, height, font, LANDMARKS)
+}
+
+/// [`render_with`] with custom landmark rules (for tests).
+fn render_rules(
+    snap: &Snapshot,
+    width: u32,
+    height: u32,
+    font: Option<&FontVec>,
+    rules: &[LandmarkRule],
+) -> Result<Pixmap> {
     let mut pm =
         Pixmap::new(width, height).with_context(|| format!("invalid canvas size {width}x{height}"))?;
     let keep = keep_lines(snap, width, font);
@@ -1001,7 +1022,7 @@ pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontV
         line_join: LineJoin::Round,
         ..Stroke::default()
     };
-    for (marker, x, y) in markers(snap) {
+    for (marker, x, y) in markers_with(snap, rules) {
         let (colour, size, shape) = marker.style();
         let (cx, cy) = view.to_screen(x, y);
         let Some(dot) = marker_outline(marker, shape, cx, cy, size) else {
@@ -1803,7 +1824,12 @@ mod tests {
             at(PresetKind::Object, 460, 101, 100),  // quest object, not a monster: kept
             at(PresetKind::Tile, 1, 100, 100),      // exit: kept
         ];
-        let kinds = |s: &Snapshot| -> Vec<Marker> { markers(s).into_iter().map(|(m, _, _)| m).collect() };
+        let kinds = |s: &Snapshot| -> Vec<Marker> {
+            markers_with(s, LANDMARKS)
+                .into_iter()
+                .map(|(m, _, _)| m)
+                .collect()
+        };
         let countess = |mode| Monster {
             x: 115,
             y: 112,
@@ -1866,7 +1892,10 @@ mod tests {
                 y: 60,
                 ..monster_txt(txt, flags, 1)
             }];
-            assert!(markers(&snap).iter().any(|&(m, _, _)| m == want), "{want:?}");
+            assert!(
+                markers_with(&snap, LANDMARKS).iter().any(|&(m, _, _)| m == want),
+                "{want:?}"
+            );
             let pm = render(&snap, 200, 200)?;
             let at = View::fit(level_bounds(&snap), 200, 200).to_screen(60.0, 60.0);
             let red = |p: Rgba| p[0] > 180 && p[1] < 80 && p[2] < 80 && p[3] > 200;
@@ -1939,7 +1968,7 @@ mod tests {
         let snap = fixture()?;
         // Jail 1: one waypoint, one exit tile, no elites (only normals and dead minions), the player.
         assert_eq!(
-            markers(&snap),
+            markers_with(&snap, LANDMARKS),
             vec![
                 (Marker::Exit, 17700.0, 5211.0),
                 (Marker::Waypoint, 17519.0, 5144.0),
@@ -1961,7 +1990,12 @@ mod tests {
             monster(0x00, 12),
             wolf,
         ];
-        let kinds = |s: &Snapshot| -> Vec<Marker> { markers(s).into_iter().map(|(m, _, _)| m).collect() };
+        let kinds = |s: &Snapshot| -> Vec<Marker> {
+            markers_with(s, LANDMARKS)
+                .into_iter()
+                .map(|(m, _, _)| m)
+                .collect()
+        };
         assert_eq!(
             kinds(&snap),
             vec![Marker::Elite, Marker::Player],
@@ -1980,7 +2014,10 @@ mod tests {
         let mut snap = empty_snapshot(5, 5);
         snap.monsters = vec![monster(0x08, 1), monster(0x10, 1)];
         snap.presets = vec![preset(PresetKind::Monster, 1), preset(PresetKind::Tile, 1)];
-        let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
+        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .collect();
         assert_eq!(
             kinds,
             vec![Marker::Exit, Marker::Special(None), Marker::Elite, Marker::Player]
@@ -2064,7 +2101,7 @@ mod tests {
             vec![
                 Marker::Landmark("cave exit to the next area (north)"),
                 Marker::StairsDown,
-                Marker::Suspected("cave stairs down"),
+                Marker::StairsDown,
             ]
         );
         // The staircase draws in the exit purple.
@@ -2182,7 +2219,10 @@ mod tests {
             drop_at(DropKind::Rune(8), 2, 2),
             drop_at(DropKind::Gem(GemColour::Ruby), 3, 3),
         ];
-        let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
+        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .collect();
         assert_eq!(
             kinds,
             vec![
@@ -2264,7 +2304,10 @@ mod tests {
             highlighted(DropKind::Base, 1, Tier::A, false),
             drop_at(DropKind::Rune(1), 2, 2),
         ];
-        let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
+        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .collect();
         assert_eq!(
             kinds,
             vec![
@@ -2937,7 +2980,10 @@ mod tests {
         // It is part of the drawn markers, below elites and the player.
         snap.level.id = 74;
         snap.monsters = vec![monster(0x02, 1)];
-        let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
+        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .collect();
         assert_eq!(kinds, vec![summoner, Marker::Superunique, Marker::Player]);
     }
 
@@ -3036,26 +3082,11 @@ mod tests {
     }
 
     #[test]
-    fn unconfirmed_rules_are_the_known_list() {
-        let unconfirmed: Vec<&str> = LANDMARKS
-            .iter()
-            .filter(|r| !r.confirmed)
-            .map(|r| r.label)
-            .collect();
-        assert_eq!(
-            unconfirmed,
-            vec![
-                "radament's lair (E)",
-                "sewer stairs down (S/N)",
-                "smith (forge W)",
-                "smith (forge N)",
-                "cave exit to the next area",
-                "cave stairs down",
-                "horadric cube (W/E/S)",
-                "orifice (E)",
-                "orifice (N)"
-            ]
-        );
+    fn all_landmark_rules_are_confirmed() {
+        // Every rule is live-confirmed: the W/E/S/N variants of a named piece inherit the
+        // confirmation of their family (the direction letter only says where in the piece the
+        // feature sits), so no landmark is drawn as a mere "?" any more.
+        assert!(LANDMARKS.iter().all(|r| r.confirmed));
     }
 
     fn object(txt: u32, x: u32, y: u32) -> Preset {
@@ -3151,8 +3182,17 @@ mod tests {
     fn suspected_landmark_renders_as_a_question_mark() -> Result<()> {
         let snap = tomb_66();
         let (w, h) = (400, 400);
+        // No live rule is unconfirmed any more, so the ? path is exercised with a synthetic one
+        // over the fixture's 461 room.
+        let unconfirmed = [LandmarkRule {
+            level_ids: 66..=72,
+            preset_ids: 461..=461,
+            label: "orifice (E)",
+            confirmed: false,
+            style: LandmarkStyle::Orifice,
+        }];
         // Without a font: a hollow gold ring, no glyph.
-        let plain = render_with(&snap, w, h, None)?;
+        let plain = render_rules(&snap, w, h, None, &unconfirmed)?;
         let v = View::fit(level_bounds(&snap), w, h);
         let at = v.to_screen(90.0, 30.0);
         assert_eq!(count_near(&plain, at, SUSPECT_DISC_RADIUS, is_suspect_text)?, 0);
@@ -3165,7 +3205,7 @@ mod tests {
             eprintln!("skipped the glyph check: no font on this machine");
             return Ok(());
         };
-        let pm = render_with(&snap, w, h, Some(font))?;
+        let pm = render_rules(&snap, w, h, Some(font), &unconfirmed)?;
         let v = View::fit(level_bounds(&snap), w, map_height(h, Some(font), 0));
         let at = v.to_screen(90.0, 30.0);
         let near = count_near(&pm, at, SUSPECT_DISC_RADIUS, is_suspect_text)?;
@@ -3203,7 +3243,10 @@ mod tests {
         let mut snap = sanctuary([None, Some(462), None, None]);
         snap.level.id = 72;
         snap.presets = vec![object(152, 90, 30)];
-        let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
+        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .collect();
         assert_eq!(
             kinds,
             vec![Marker::Orifice, Marker::QuestObject("orifice"), Marker::Player]
@@ -3233,7 +3276,10 @@ mod tests {
         snap.drops = vec![drop_at(DropKind::Unique, 1, 1)];
         snap.shrines = vec![shrine_at(12, 40, 30)];
         snap.wells = vec![well_at(50, 30)];
-        let kinds: Vec<Marker> = markers(&snap).into_iter().map(|(m, _, _)| m).collect();
+        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .collect();
         assert_eq!(
             kinds,
             vec![
