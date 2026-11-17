@@ -91,6 +91,11 @@ pub struct Snapshot {
     /// The mercenary's equipped `(body slot, quality)` pairs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub merc_equipped: Vec<(u8, u32)>,
+    /// The player's equipped items, enriched for the dashboard's gear grid: per body slot
+    /// the item code, the runeword flag and the identified unique/set name + row
+    /// ([`Equipped`]). Kept next to [`Snapshot::equipped`], which other code consumes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub equipped_items: Vec<Equipped>,
     /// Display names of identified unique/set items the player owns (equipped, carried,
     /// stashed): the `BiS` list marks owned pieces with a ✓.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -403,6 +408,10 @@ struct ItemScan {
     /// The local player's equipped `(body slot, quality)` pairs (the `BiS` "already better"
     /// check: set/unique quality there hides the slot).
     equipped: Vec<(u8, u32)>,
+    /// The same items, enriched for the dashboard's gear grid ([`game::Equipped`]): one per
+    /// body slot (weapon and swap weapon share body 4, like the pairs). Player only: the
+    /// mercenary's gear has no grid.
+    equipped_items: Vec<Equipped>,
     /// The same for the mercenary's gear (owner `NO_OWNER`).
     merc_equipped: Vec<(u8, u32)>,
     /// Every stored page-4 item with its unit address, head and owner id: the shared-stash
@@ -698,6 +707,62 @@ pub struct ItemDrop {
     pub y: u32,
 }
 
+/// One equipped body-slot item of the player, with what the dashboard's gear grid needs:
+/// the quality the old `Snapshot::equipped` pairs carry, plus the item code, the runeword
+/// flag and (for an identified unique/set) its name and table row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Equipped {
+    /// `item_data::BODY` slot (1 helm, 2 amulet, 3 body, 4 weapon, 5 off-hand, 6/7 rings,
+    /// 8 belt, 9 boots, 10 gloves).
+    pub body: u8,
+    /// Raw `ItemData` quality (2 normal, 4 magic, 5 set, 7 unique, ...).
+    pub quality: u32,
+    /// 4-char item code ("uap"); `None` if the items table wasn't found yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Display name of an identified unique/set item (the `valuables::unique_set_name`
+    /// identity path); `None` otherwise (unidentified, magic, rare, base).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// uniqueitems/setitems row (`item_data::FILE_INDEX`) of a named unique/set. Kept only
+    /// with a `name`: the index is only filled once the item is identified, so without a
+    /// name it is not trusted (see `item_data::FILE_INDEX`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_index: Option<u32>,
+    /// `ItemData::FLAGS` runeword bit (classic; UNVERIFIED in D2R).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub runeword: bool,
+}
+
+impl Equipped {
+    /// The item's required character level, as far as the reader can know it:
+    /// - an identified unique/set: the exact `lvl req` of its table row;
+    /// - a runeword: `None` — the socket contents (the runes) are unread, so neither the
+    ///   word nor its level is known;
+    /// - everything else (normal, magic, rare, crafted, ...): its BASE item's `levelreq`
+    ///   (armor/weapons tables). APPROXIMATION: affixes can raise a magic/rare/crafted
+    ///   item's real requirement above the base one.
+    #[must_use]
+    pub fn required_level(&self) -> Option<u32> {
+        use crate::item_levels_data;
+        use crate::offsets::item_data;
+        let row = if self.name.is_some() {
+            self.file_index
+        } else {
+            None
+        };
+        match self.quality {
+            item_data::QUALITY_UNIQUE => row.and_then(item_levels_data::unique_level),
+            item_data::QUALITY_SET => row.and_then(item_levels_data::set_level),
+            _ if self.runeword => None,
+            _ => {
+                let code = self.code.as_deref()?;
+                item_levels_data::armor_level(code).or_else(|| crate::weapons_data::level(code))
+            }
+        }
+    }
+}
+
 /// Reads all live player candidates (unit table, `PLAYER` type); unreadable ones warn.
 fn player_candidates<M: ReadMem>(r: &mut Reader<'_, M>, unit_table: u64) -> Vec<Candidate> {
     let mut candidates = Vec::new();
@@ -833,6 +898,7 @@ pub fn snapshot(
     player.wsm = scan.weapons.get(&chosen.id).copied();
     let equipped = scan.equipped.clone();
     let merc_equipped = scan.merc_equipped.clone();
+    let equipped_items = scan.equipped_items.clone();
     let owned_names = scan.owned_names.clone();
 
     let LevelWalk {
@@ -867,6 +933,7 @@ pub fn snapshot(
         party,
         equipped,
         merc_equipped,
+        equipped_items,
         owned_names,
         stash,
         stash_names,
@@ -1552,23 +1619,46 @@ impl<M: ReadMem> Reader<'_, M> {
                 }
             }
             // Equipped pieces by owner kind, for the `BiS` per-slot display.
-            if let Some(quality) = self.equipped_quality(&head)
-                && let Some(slot) = self.equipped_slot(&head)
-            {
-                let owner = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok());
-                let list = if owner == Some(crate::offsets::item_data::NO_OWNER) {
-                    &mut scan.merc_equipped
-                } else if candidates.contains(&owner.unwrap_or(0)) {
-                    &mut scan.equipped
-                } else {
-                    continue;
-                };
-                if !list.contains(&(slot, quality)) {
-                    list.push((slot, quality));
-                }
-            }
+            self.collect_equipped(&mut scan, &head, items_table, candidates);
         }
         scan
+    }
+
+    /// The equipped item of `head` into the `BiS` per-slot display lists: the
+    /// `(body slot, quality)` pair of the player or the mercenary (the old list), and —
+    /// for the player — the enriched [`Equipped`] for the dashboard's gear grid (code,
+    /// runeword bit, unique/set name), one per body slot like the pairs.
+    fn collect_equipped(
+        &self,
+        scan: &mut ItemScan,
+        head: &UnitHead,
+        items_table: Option<u64>,
+        candidates: &[u32],
+    ) {
+        let Some(quality) = self.equipped_quality(head) else {
+            return;
+        };
+        let Some(slot) = self.equipped_slot(head) else {
+            return;
+        };
+        let owner = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok());
+        let merc = owner == Some(item_data::NO_OWNER);
+        let mine = candidates.contains(&owner.unwrap_or(0));
+        if !merc && !mine {
+            return;
+        }
+        let list = if merc {
+            &mut scan.merc_equipped
+        } else {
+            &mut scan.equipped
+        };
+        if !list.contains(&(slot, quality)) {
+            list.push((slot, quality));
+        }
+        if !merc && scan.equipped_items.iter().all(|e| e.body != slot) {
+            let item = self.equipped_item(head, slot, quality, items_table);
+            scan.equipped_items.push(item);
+        }
     }
 
     /// Keeps a stored page-4 item for [`Reader::stash`]: page-4 units are owned by the tab
@@ -1609,6 +1699,37 @@ impl<M: ReadMem> Reader<'_, M> {
     /// The `item_data::QUALITY` of an item (`None` if unreadable).
     fn equipped_quality(&self, head: &UnitHead) -> Option<u32> {
         head.unit_data.and_then(|d| self.u32(d, item_data::QUALITY).ok())
+    }
+
+    /// The enriched equipped item of `head` (body slot `slot`, quality `quality`) for the
+    /// dashboard's gear grid: the item code from the items table, the `FLAGS` runeword bit
+    /// and, for an identified unique/set, its display name and `FILE_INDEX` row. The
+    /// individual reads are optional: a missing items table only leaves the code out.
+    fn equipped_item(&self, head: &UnitHead, slot: u8, quality: u32, items_table: Option<u64>) -> Equipped {
+        let flags = head
+            .unit_data
+            .and_then(|d| self.u32(d, item_data::FLAGS).ok())
+            .unwrap_or(0);
+        // `FILE_INDEX` is only filled once identified, so it is trusted (and kept) only
+        // together with the name the identity path resolves from it.
+        // The raw index: `*ID` 0 is a real row (The Gnasher), so no `!= 0` filter here —
+        // `unique_set_name_parts` gates on FLAG_IDENTIFIED instead.
+        let file_index = head
+            .unit_data
+            .and_then(|d| self.u32(d, item_data::FILE_INDEX).ok());
+        let code = items_table
+            .and_then(|t| items::read_code(self.mem, t, head.txt))
+            .map(items::code_text);
+        let name = valuables::unique_set_name_parts(quality, flags, file_index).map(str::to_owned);
+        let named_index = if name.is_some() { file_index } else { None };
+        Equipped {
+            body: slot,
+            quality,
+            code,
+            name,
+            file_index: named_index,
+            runeword: flags & item_data::FLAG_RUNEWORD != 0,
+        }
     }
 
     /// The owner whose gear stats `item` contributes to: the player's equipped items (body slot)
@@ -2393,6 +2514,87 @@ mod tests {
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_ALICE), ChosenBy::FirstCandidate)
+        );
+        Ok(())
+    }
+
+    /// `ItemData::BODY` of the item at `addr` (its `ItemData` region sits at `addr + 0x200`).
+    fn set_body(mem: &mut FakeMem, addr: u64, body: u8) -> Result<()> {
+        let data = addr + 0x200;
+        let mut b = mem.read_bytes(data, 0x60)?;
+        let at = usize::try_from(item_data::BODY)?;
+        b.get_mut(at..at + 1)
+            .context("body in ItemData")?
+            .copy_from_slice(&[body]);
+        mem.add(data, b);
+        Ok(())
+    }
+
+    #[test]
+    fn equipped_items_are_enriched_with_code_name_and_row() -> Result<()> {
+        let mut m = world()?;
+        let id = item_data::FLAG_IDENTIFIED;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        // Bob's equipped helm: an identified Shako (unique row 248, lvl req 62).
+        stored_item(&mut m, I1, (40, 7, id, 248), (1, 255), &[], I2)?;
+        set_owner(&mut m, I1, BOB_ID)?;
+        set_body(&mut m, I1, 1)?;
+        // Bob's equipped amulet: an identified set piece (Cleglaw's Claw, set row 7, lvl req 4).
+        stored_item(&mut m, I2, (40, 5, id, 7), (1, 255), &[], I3)?;
+        set_owner(&mut m, I2, BOB_ID)?;
+        set_body(&mut m, I2, 2)?;
+        // Bob's equipped weapon: a finished runeword on a Crystal Sword.
+        stored_item(
+            &mut m,
+            I3,
+            (30, 2, id | item_data::FLAG_RUNEWORD, 0),
+            (1, 255),
+            &[],
+            I4,
+        )?;
+        set_owner(&mut m, I3, BOB_ID)?;
+        set_body(&mut m, I3, 4)?;
+        // Bob's equipped body armour: magic, so only the BASE requirement is knowable.
+        stored_item(&mut m, I4, (40, 4, id, 0), (1, 255), &[], I5)?;
+        set_owner(&mut m, I4, BOB_ID)?;
+        set_body(&mut m, I4, 3)?;
+        // The mercenary's equipped armour (NO_OWNER, body 3): pairs only, not enriched.
+        stored_item(&mut m, I5, (40, 2, id, 0), (1, 255), &[], 0)?;
+        set_owner(&mut m, I5, item_data::NO_OWNER)?;
+        set_body(&mut m, I5, 3)?;
+        base_items_table(&mut m)?;
+
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        assert_eq!(s.equipped, vec![(1, 7), (2, 5), (4, 2), (3, 4)]);
+        assert_eq!(s.merc_equipped, vec![(3, 2)], "the merc's piece stays a pair");
+        let eq = &s.equipped_items;
+        assert_eq!(
+            eq.iter().map(|e| e.body).collect::<Vec<_>>(),
+            vec![1, 2, 4, 3],
+            "one enriched item per body slot: {eq:?}"
+        );
+        let helm = eq.first().context("helm")?;
+        assert_eq!(helm.code.as_deref(), Some("uap"));
+        assert_eq!(helm.name.as_deref(), Some("Harlequin Crest"));
+        assert_eq!(helm.file_index, Some(248));
+        assert!(!helm.runeword);
+        assert_eq!(helm.required_level(), Some(62), "the unique's exact lvl req");
+        let amulet = eq.get(1).context("amulet")?;
+        assert_eq!(amulet.name.as_deref(), Some("Cleglaw's Claw"));
+        assert_eq!(amulet.file_index, Some(7));
+        assert_eq!(amulet.required_level(), Some(4), "the set row's lvl req");
+        let weapon = eq.get(2).context("weapon")?;
+        assert_eq!(weapon.code.as_deref(), Some("crs"));
+        assert!(weapon.runeword);
+        assert_eq!(weapon.name, None, "a runeword's runes are unread");
+        assert_eq!(weapon.file_index, None);
+        assert_eq!(weapon.required_level(), None, "runeword: level unknown");
+        let armour = eq.get(3).context("armour")?;
+        assert_eq!(armour.name, None, "magic: no name");
+        assert_eq!(
+            armour.required_level(),
+            Some(43),
+            "magic: the BASE item's levelreq (affixes can raise the real one)"
         );
         Ok(())
     }

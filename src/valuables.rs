@@ -136,20 +136,20 @@ pub struct Highlight {
     pub uncertain: bool,
 }
 
-/// The unique or set name (`index` string) of the drop, if known: only for an identified item
-/// whose file index is in the table of its quality. The index is verified for identified
+/// The unique or set name (`index` string), if known: only for an identified item whose
+/// file index is in the table of its quality. The index is verified for identified
 /// uniques only (see `item_data::FILE_INDEX`); unidentified ones stay unknown, and their name
 /// rules match as uncertain.
-fn identity(drop: &ItemDrop) -> Option<&'static str> {
-    if drop.flags & item_data::FLAG_IDENTIFIED == 0 {
+fn identity(quality: u32, flags: u32, unique_index: Option<u32>) -> Option<&'static str> {
+    if flags & item_data::FLAG_IDENTIFIED == 0 {
         return None;
     }
-    let table = match drop.quality {
+    let table = match quality {
         item_data::QUALITY_UNIQUE => item_names_data::UNIQUE_NAMES,
         item_data::QUALITY_SET => item_names_data::SET_NAMES,
         _ => return None,
     };
-    let index = drop.unique_index?;
+    let index = unique_index?;
     let row = table.binary_search_by_key(&index, |&(i, _)| i).ok()?;
     table.get(row).map(|&(_, name)| name)
 }
@@ -158,7 +158,14 @@ fn identity(drop: &ItemDrop) -> Option<&'static str> {
 /// items carry no name index yet, non-unique/set items none at all).
 #[must_use]
 pub fn unique_set_name(drop: &ItemDrop) -> Option<&'static str> {
-    identity(drop).map(shown)
+    unique_set_name_parts(drop.quality, drop.flags, drop.unique_index)
+}
+
+/// [`unique_set_name`] over the raw fields, for callers that read them directly instead of
+/// building an [`ItemDrop`] (the equipped-item scan of `game::Reader::items`).
+#[must_use]
+pub fn unique_set_name_parts(quality: u32, flags: u32, unique_index: Option<u32>) -> Option<&'static str> {
+    identity(quality, flags, unique_index).map(shown)
 }
 
 /// The in-game name of a unique/set `index` name: some internal keys differ (Piercerib is
@@ -213,7 +220,12 @@ pub fn is_candidate(drop: &ItemDrop) -> bool {
 /// The best rule matching `drop` among the tiers `enabled` turns on: highest tier first, then a
 /// certain match over an uncertain one, then the first rule in the file.
 pub fn best(drop: &ItemDrop, enabled: &config::Valuables) -> Option<Highlight> {
-    best_of(&RULES, drop, identity(drop), enabled)
+    best_of(
+        &RULES,
+        drop,
+        identity(drop.quality, drop.flags, drop.unique_index),
+        enabled,
+    )
 }
 
 fn best_of(
@@ -313,7 +325,7 @@ pub fn keep_list(items: &[(ItemDrop, Place)]) -> Vec<Keep> {
 /// stash panel names its items the same way (see [`crate::stash::stash_item`]).
 #[must_use]
 pub fn display_name(item: &ItemDrop) -> String {
-    if let Some(name) = identity(item) {
+    if let Some(name) = identity(item.quality, item.flags, item.unique_index) {
         return shown(name).to_owned();
     }
     let code = item.code.as_deref().unwrap_or("?");
@@ -414,7 +426,7 @@ pub fn verdict(item: &ItemDrop) -> Option<Verdict> {
     {
         return None;
     }
-    identity(item)?;
+    identity(item.quality, item.flags, item.unique_index)?;
     match best(item, &EVERYTHING) {
         None => Some(Verdict::Sell),
         Some(h) if h.tier == Tier::B => Some(Verdict::GiveAway),
@@ -424,7 +436,7 @@ pub fn verdict(item: &ItemDrop) -> Option<Verdict> {
 
 /// The unique/set name of `item` if its best rule keeps only one copy per name.
 fn keep_one_name(item: &ItemDrop) -> Option<&'static str> {
-    let name = identity(item)?;
+    let name = identity(item.quality, item.flags, item.unique_index)?;
     let (rule, _) = best_rule(&RULES, item, Some(name), &EVERYTHING)?;
     (rule.keep == Copies::One).then_some(name)
 }
@@ -468,7 +480,7 @@ pub fn spare_lists(items: &[(ItemDrop, Place)]) -> (Vec<Spare>, Vec<Spare>) {
         } else {
             verdict(item)
         };
-        let (Some(v), Some(name)) = (v, identity(item)) else {
+        let (Some(v), Some(name)) = (v, identity(item.quality, item.flags, item.unique_index)) else {
             continue;
         };
         let list = match v {
@@ -632,30 +644,53 @@ mod tests {
     fn identity_needs_identified_and_a_known_row() {
         let mut shako = drop("uap", 7, 0, false);
         shako.unique_index = Some(248);
-        assert_eq!(identity(&shako), None, "unidentified");
+        assert_eq!(
+            identity(shako.quality, shako.flags, shako.unique_index),
+            None,
+            "unidentified"
+        );
         assert_eq!(best(&shako, &all()).map(|h| h.uncertain), Some(true));
         shako.flags = item_data::FLAG_IDENTIFIED;
-        assert_eq!(identity(&shako), Some("Harlequin Crest"));
+        assert_eq!(
+            identity(shako.quality, shako.flags, shako.unique_index),
+            Some("Harlequin Crest")
+        );
         assert_eq!(
             best(&shako, &all()).map(|h| (h.tier, h.uncertain)),
             Some((Tier::S, false)),
             "identified Shako: certain"
         );
         shako.unique_index = Some(127);
-        assert_eq!(identity(&shako), Some("KhalimFlail"), "the live-verified row");
+        assert_eq!(
+            identity(shako.quality, shako.flags, shako.unique_index),
+            Some("KhalimFlail"),
+            "the live-verified row"
+        );
         assert_eq!(
             best(&shako, &all()),
             None,
             "a known other unique: no name rule fires"
         );
         shako.unique_index = Some(99_999);
-        assert_eq!(identity(&shako), None, "row not in the table");
+        assert_eq!(
+            identity(shako.quality, shako.flags, shako.unique_index),
+            None,
+            "row not in the table"
+        );
         let mut set = drop("xtb", 5, 0, false);
         set.flags = item_data::FLAG_IDENTIFIED;
         set.unique_index = Some(69);
-        assert_eq!(identity(&set), Some("Aldur's Advance"), "set table for quality 5");
+        assert_eq!(
+            identity(set.quality, set.flags, set.unique_index),
+            Some("Aldur's Advance"),
+            "set table for quality 5"
+        );
         set.quality = 2;
-        assert_eq!(identity(&set), None, "no table for normal items");
+        assert_eq!(
+            identity(set.quality, set.flags, set.unique_index),
+            None,
+            "no table for normal items"
+        );
     }
 
     #[test]

@@ -237,7 +237,8 @@ pub mod item_data {
     /// `FLAGS` bit of an identified item (classic; live: set on an identified quest unique).
     pub const FLAG_IDENTIFIED: u32 = 0x10;
     /// u32 uniqueitems / setitems row (`*ID`) of a unique / set item. Live-verified 2026-11-15 for
-    /// an identified unique (Khalim's Flail: 127 = uniqueitems `KhalimFlail`). NOT verified: sets,
+    /// an identified unique (Khalim's Flail: 127 = uniqueitems `KhalimFlail`). Sets verified
+    /// live too (2026-11-17: the stash reader resolves Sigon's set pieces via this field),
     /// and whether it is filled in before the item is identified (so only trusted with
     /// [`FLAG_IDENTIFIED`]).
     pub const FILE_INDEX: u64 = 0x34;

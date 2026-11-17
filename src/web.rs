@@ -12,9 +12,10 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use toml_edit::DocumentMut;
 
@@ -26,6 +27,22 @@ pub const PORT: u16 = 8471;
 const MAX_BODY: usize = 1 << 20;
 /// Read timeout per request step: a stalled client must not hold a thread forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Concurrent `/api/live-stream` handlers: each runs a thread, and a stuck tab (the reader
+/// stops but the writes never fail — a long-lived SSE write loop has no read timeout to
+/// catch it) must not multiply threads unboundedly. Above the cap a new stream is refused
+/// with 503; the browser's `EventSource` retries until a slot frees up.
+const MAX_SSE_CLIENTS: usize = 8;
+/// How often the SSE loop polls the live cell (a cheap string compare).
+const SSE_POLL: Duration = Duration::from_millis(250);
+/// How often the SSE loop writes a `: keepalive` comment.
+const SSE_KEEPALIVE: Duration = Duration::from_secs(15);
+/// Write timeout for SSE streams: a vanished client releases its cap slot here instead of
+/// holding it until TCP retransmission gives up.
+const SSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Concurrent SSE handlers right now (see [`MAX_SSE_CLIENTS`]).
+static SSE_CLIENTS: AtomicUsize = AtomicUsize::new(0);
 
 /// Serializes the read-edit-write of `config.toml` across connection threads, so two saves
 /// cannot both start from the same old text and lose one of the updates.
@@ -93,11 +110,16 @@ fn live_cell() -> &'static RwLock<Option<String>> {
 }
 
 /// Replaces the live snapshot JSON the dashboard serves. Called by `live` every tick; a brief
-/// write lock, a short string.
+/// write lock, a short string. A byte-identical value is not stored: the SSE handlers compare
+/// the cell against what they last wrote, so an unchanged tick would only cost them a poll.
 pub fn publish_live(json: String) {
     // A poisoned lock still holds a working cell; a poisoned writer can only mean a panic
-    // elsewhere while writing, and the next tick overwrites the value anyway.
-    *live_cell().write().unwrap_or_else(PoisonError::into_inner) = Some(json);
+    // elsewhere while writing, and the next tick overwrites the value anyway. Read-compare-
+    // write under one lock so a concurrent publish can't slip between the two steps.
+    let mut cell = live_cell().write().unwrap_or_else(PoisonError::into_inner);
+    if cell.as_deref() != Some(json.as_str()) {
+        *cell = Some(json);
+    }
 }
 
 /// Drops the live snapshot JSON: the game is gone or in the menu, so the dashboard must show
@@ -222,10 +244,15 @@ fn handle(stream: TcpStream) {
         Parsed::TooLarge => respond("413 Content Too Large", "text/plain", "request body too large\n"),
         Parsed::Request(method, path, body) => match (method.as_str(), path.as_str()) {
             ("GET", "/" | "/index.html") => page(),
-            ("GET", "/dashboard") => respond("200 OK", "text/html", dashboard_page()),
+            ("GET", "/dashboard") => respond("200 OK", "text/html", &dashboard_page()),
             ("GET", "/api/config") => api_config(),
             ("GET", "/api/builds") => api_builds(),
             ("GET", "/api/live") => api_live(),
+            // The stream owns the connection from here on; nothing is written after it.
+            ("GET", "/api/live-stream") => {
+                api_live_stream(stream);
+                return;
+            }
             ("POST", "/api/bis") => api_bis(&String::from_utf8_lossy(&body)),
             _ => respond("404 Not Found", "text/plain", "not found\n"),
         },
@@ -264,6 +291,88 @@ fn api_live() -> String {
         "application/json",
         json.as_deref().unwrap_or(NO_LIVE_JSON),
     )
+}
+
+/// `GET /api/live-stream`: the live JSON as a Server-Sent-Events stream. The headers go out
+/// once, then the loop writes `data: <json>\n\n` whenever the published JSON differs from
+/// the last one written (a cheap string compare every [`SSE_POLL`]; [`publish_live`] skips
+/// byte-identical stores), a `: keepalive\n\n` comment every [`SSE_KEEPALIVE`], and exits on
+/// the first write error — the browser's `EventSource` then reconnects on its own. Plain raw
+/// writes, no chunked encoding (the message boundary is the SSE `\n\n`); a `live: false`
+/// event is sent once when the game detaches, so the page clears its stale frame.
+/// Refused with 503 above [`MAX_SSE_CLIENTS`] concurrent handlers.
+fn api_live_stream(mut stream: TcpStream) {
+    /// Decrements [`SSE_CLIENTS`] on drop — also on an early return or unwind, so a
+    /// handler's slot is always freed. The fetch-add itself is the caller's first step.
+    struct Slot;
+    impl Drop for Slot {
+        fn drop(&mut self) {
+            SSE_CLIENTS.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+    let slot = Slot;
+    if SSE_CLIENTS.fetch_add(1, Ordering::Relaxed) >= MAX_SSE_CLIENTS {
+        drop(slot);
+        let _ = stream.write_all(
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nConnection: close\r\n\r\nno slots\n",
+        );
+        return;
+    }
+    // Unbuffered: every `data:` line must reach the browser as it is written.
+    let mut stream = stream;
+    if let Err(e) = stream.set_nodelay(true) {
+        eprintln!("live-stream: no nodelay: {e}");
+    }
+    // A write timeout releases the slot of a vanished client (laptop sleep, dropped
+    // network) instead of holding it until TCP retransmission gives up.
+    if let Err(e) = stream.set_write_timeout(Some(SSE_WRITE_TIMEOUT)) {
+        eprintln!("live-stream: no write timeout: {e}");
+    }
+    if stream.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+    )
+    .is_err()
+    {
+        return;
+    }
+    let mut last: Option<String> = None;
+    let mut keepalive = Instant::now();
+    loop {
+        thread::sleep(SSE_POLL);
+        let current = live_cell()
+            .read()
+            // See [`publish_live`] for the poison handling.
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        // Equal to what was last written (nothing published yet, same JSON, or detached
+        // twice): nothing to send. A changed value — including the game detaching, which
+        // publishes the `live: false` marker — goes out as one event.
+        let send = if current == last {
+            None
+        } else {
+            Some(current.as_deref().unwrap_or(NO_LIVE_JSON).to_owned())
+        };
+        if let Some(body) = send {
+            if write_chunk(&mut stream, &format!("data: {body}\n\n")).is_err() {
+                return;
+            }
+            last = current;
+            keepalive = Instant::now();
+        } else if keepalive.elapsed() >= SSE_KEEPALIVE {
+            // Reset only after a successful write, or an idle stream would keepalive every
+            // poll interval (250 ms) instead of every [`SSE_KEEPALIVE`].
+            if write_chunk(&mut stream, ": keepalive\n\n").is_err() {
+                return;
+            }
+            keepalive = Instant::now();
+        }
+    }
+}
+
+/// Writes one SSE chunk and flushes it; an error is the connection's end.
+fn write_chunk(stream: &mut TcpStream, chunk: &str) -> std::io::Result<()> {
+    stream.write_all(chunk.as_bytes())?;
+    stream.flush()
 }
 
 /// [`respond`] plus `Cache-Control: no-store`, for endpoints whose answer is only valid
@@ -452,8 +561,17 @@ pub struct LiveInfo<'a> {
     /// The current area's name (or a `Level <id>` fallback).
     pub area: &'a str,
     pub blocks: &'a crate::render::TextBlocks,
+    /// The character's resolved `BiS` slots (`None` without a build): the gear grid lists
+    /// each slot's pieces.
+    pub bis: Option<&'a crate::config::Bis>,
     /// The equipped `(body slot, quality)` pairs, shown under the `BiS` chase list.
     pub equipped: &'a [(u8, u32)],
+    /// The equipped items enriched for the gear grid's column headers
+    /// ([`crate::game::Equipped`]): per body slot code, name and runeword flag.
+    pub equipped_items: &'a [crate::game::Equipped],
+    /// Display names of the identified unique/set items the character owns (equipped,
+    /// carried, personally stashed): the grid pieces' ✓ ticks.
+    pub owned: &'a [String],
     /// The (session-cached) shared-stash tabs, shown in their own panel.
     pub stash: &'a [crate::stash::StashTab],
     /// Names of the identified unique/set items in the shared stash, emitted as
@@ -479,7 +597,9 @@ pub struct LiveInfo<'a> {
 /// order in `text`, and the `below`/`equal`/`above` bucket the dashboard lays its "Where to
 /// go" panel out in three columns from). The give-away lines have no panel of their own, so
 /// they ride with `sell` in
-/// the dashboard's Sell panel.
+/// the dashboard's Sell panel. The `gear` section is the 2×5 `BiS` grid: one column per
+/// gear slot ([`gear_json`]), each with the equipped piece in that slot and the build's
+/// pieces ordered best→worst, their `state` computed here (see [`grid_pieces`]).
 #[must_use]
 pub fn live_json(info: &LiveInfo) -> String {
     let class = CLASS_NAMES
@@ -502,6 +622,7 @@ pub fn live_json(info: &LiveInfo) -> String {
         "sell": text_lines(&info.blocks.sell, crate::info::SELL_TEXT),
         "give": text_lines(&info.blocks.give, crate::info::GIVE_TEXT),
         "bis": info.blocks.bis.iter().map(bis_line).collect::<Vec<_>>(),
+        "gear": gear_json(info),
         "equipped": text_lines(&equipped_lines(info.equipped), [255, 255, 255, 255]),
         "stash": stash_lines(info.stash),
         "stash_owned": info.stash_owned,
@@ -570,6 +691,162 @@ fn bis_line(line: &crate::info::BisLine) -> serde_json::Value {
         obj.insert("bases".to_owned(), serde_json::json!(rw.bases));
     }
     json
+}
+
+/// The 2×5 gear grid (`live_json`'s `gear` section): `{ "columns": [...] }` — the dashboard
+/// lays them out two rows of five, in the given order (Helm, Body, Hands, Belt, Foot /
+/// Amulet, Ring, Weapons, Off-Hand, Swap; the user's row split). Each column is
+/// `{ "title", "equipped": [...], "note": null, "pieces": [...] }` where `equipped` holds
+/// the equipped piece(s) in that slot — two for the merged Ring column — as
+/// `{ "name", "level" }` ([`equipped_name`], [`crate::game::Equipped::required_level`]),
+/// `note` is the off-hand's two-handed remark, and `pieces` are the build's pieces for that
+/// slot ([`grid_pieces`]).
+#[must_use]
+fn gear_json(info: &LiveInfo) -> serde_json::Value {
+    // (column title, build slot name, `ItemData::BODY` slots the header reads). The Swap
+    // column shares body 4 with Weapons: only the active weapon set is equipped, and its
+    // items carry body 4 — the inactive set's pieces are unread.
+    const COLUMNS: [(&str, &str, &[u8]); 9] = [
+        ("Helm", "helm", &[1]),
+        ("Body", "body", &[3]),
+        ("Hands", "gloves", &[10]),
+        ("Belt", "belt", &[8]),
+        ("Foot", "boots", &[9]),
+        ("Amulet", "amulet", &[2]),
+        ("Weapons", "weapon", &[4]),
+        ("Off-Hand", "offhand", &[5]),
+        ("Swap", "swap", &[4]),
+    ];
+    let mut columns: Vec<_> = COLUMNS
+        .iter()
+        .map(|&(title, slot, bodies)| {
+            grid_column(title, info.bis.and_then(|b| b.slots.get(slot)), bodies, info)
+        })
+        .collect();
+    // The Ring column merges ring1 and ring2 (the build stores them as two slots): pieces
+    // from both, deduplicated, in stored order (best→worst).
+    let mut ring_pieces: Vec<String> = Vec::new();
+    for slot in ["ring1", "ring2"] {
+        for piece in info
+            .bis
+            .and_then(|b| b.slots.get(slot))
+            .map_or(&[][..], Vec::as_slice)
+        {
+            if !ring_pieces.contains(piece) {
+                ring_pieces.push(piece.clone());
+            }
+        }
+    }
+    let ring = grid_column("Ring", Some(&ring_pieces), &[6, 7], info);
+    columns.insert(6, ring);
+    serde_json::json!({ "columns": columns })
+}
+
+/// One gear-grid column: the equipped header piece(s) for `bodies`, the build's `pieces`
+/// with their server-side state, and the off-hand's two-handed note.
+fn grid_column(
+    title: &str,
+    pieces: Option<&Vec<String>>,
+    bodies: &[u8],
+    info: &LiveInfo,
+) -> serde_json::Value {
+    let equipped = |bodies: &[u8]| {
+        bodies
+            .iter()
+            .filter_map(|&body| info.equipped_items.iter().find(|e| e.body == body))
+            .collect::<Vec<&crate::game::Equipped>>()
+    };
+    let header = equipped(bodies);
+    // The column's comparison base: the strongest equipped piece's requirement. Two rings
+    // with different levels compare against the higher one (a piece better than one ring
+    // but worse than the other is still worth listing as better).
+    let equipped_level = header.iter().filter_map(|e| e.required_level()).max();
+    // The off-hand is unusable while a two-handed weapon is equipped (weapons.txt
+    // `2handed`, looked up by the weapon's item code).
+    let note = (title == "Off-Hand")
+        .then(|| {
+            equipped(&[4])
+                .into_iter()
+                .next()
+                .and_then(|w| w.code.as_deref())
+                .and_then(crate::weapons_data::two_handed)
+                .filter(|&two| two)
+                .map(|_| "(two-handed weapon equipped)")
+        })
+        .flatten();
+    serde_json::json!({
+        "title": title,
+        "equipped": header
+            .iter()
+            .map(|e| serde_json::json!({ "name": equipped_name(e), "level": e.required_level() }))
+            .collect::<Vec<_>>(),
+        "note": note,
+        "pieces": grid_pieces(pieces.map_or(&[][..], Vec::as_slice), equipped_level, info),
+    })
+}
+
+/// The build's pieces of one grid column with their state, best→worst (they are stored
+/// ordered). `state`:
+/// - `"worse"`: the piece's required level is at or below the equipped piece's (grey +
+///   strike-through) — not worth chasing even when above the level gate;
+/// - `"too_high"`: it would be better but is above the clvl + 5 gate (grey, no strike);
+/// - `"better"`: its level is above the equipped piece's, or the slot has no comparable
+///   equipped piece (nothing equipped, or an unnameable one — a runeword or an
+///   unidentified unique/set), or the piece's level is unknown; never struck through.
+///
+/// A column whose equipped piece is unnameable therefore shows no strike-throughs.
+fn grid_pieces(pieces: &[String], equipped_level: Option<u32>, info: &LiveInfo) -> Vec<serde_json::Value> {
+    let lvl = u32::from(info.char_level.unwrap_or(0));
+    pieces
+        .iter()
+        .map(|piece| {
+            let req = crate::info::piece_level(piece);
+            let state = match req {
+                Some(req) if equipped_level.is_some_and(|eq| req <= eq) => "worse",
+                Some(req) if req > lvl + 5 => "too_high",
+                _ => "better",
+            };
+            let mut json = serde_json::json!({
+                "piece": piece,
+                "name": crate::info::piece_name(piece),
+                "level": req,
+                "state": state,
+                "tick": crate::info::piece_tick(piece, info.owned, info.stash_owned)
+                    .map(crate::info::Tick::as_str),
+            });
+            if let Some(rw) = crate::runewords_data::lookup(crate::info::piece_name(piece))
+                && let Some(obj) = json.as_object_mut()
+            {
+                obj.insert("runes".to_owned(), serde_json::json!(rw.runes));
+                obj.insert("bases".to_owned(), serde_json::json!(rw.bases));
+            }
+            json
+        })
+        .collect()
+}
+
+/// The name shown for an equipped piece in a grid column header: the identified unique/set
+/// name, else (normal/superior quality) the base item's name from the armor/weapons
+/// tables, else — for a runeword flag (the runes are unread, so no word can be named) and
+/// for magic/rare (the real name comes from the affixes) — the placeholders below.
+fn equipped_name(equipped: &crate::game::Equipped) -> String {
+    if let Some(name) = &equipped.name {
+        return name.clone();
+    }
+    if equipped.runeword {
+        return "runeword (unnamed)".to_owned();
+    }
+    if matches!(
+        equipped.quality,
+        crate::offsets::item_data::QUALITY_NORMAL | crate::offsets::item_data::QUALITY_SUPERIOR
+    ) && let Some(code) = equipped.code.as_deref()
+    {
+        let base = crate::item_levels_data::armor_name(code).or_else(|| crate::weapons_data::name(code));
+        if let Some(name) = base {
+            return name.to_owned();
+        }
+    }
+    "(unknown)".to_owned()
 }
 
 /// `levels`/`keep`/… lines as `{ "text", "colour" }` objects in the block's colour.
@@ -792,12 +1069,12 @@ load();
 "#
 }
 
-/// The live dashboard page (a single string: no assets, no framework). Polls `/api/live` once
-/// a second and renders the dashboard's text blocks in their colours: where to go, gear and
-/// `BiS`, sell and keep (the overlay itself draws only the breakpoint guide). Dark-themed like
-/// the config page.
-const fn dashboard_page() -> &'static str {
-    r##"<!doctype html>
+/// The live dashboard page (a single string: no assets, no framework). The panels render
+/// the text blocks in their colours; dark-themed like the config page.
+/// The dashboard page up to the panels (its head, style and panel skeletons); the
+/// script follows in [`DASHBOARD_SCRIPT`]. The raw delimiter is `##` (the page contains
+/// `"` and `#`).
+const DASHBOARD_HEAD: &str = r#"<!doctype html>
 <html><head><meta charset="utf-8"><title>d2r-map-overlay live</title>
 <style>
 body { font-family: sans-serif; background: #1a1a1a; color: #ddd; margin: 2em; }
@@ -812,14 +1089,36 @@ h2 { font-size: 1.05em; border-bottom: 1px solid #444; padding-bottom: 4px; }
 .waiting { color: #999; font-style: italic; }
 .note { color: #888; font-size: 0.72em; margin-bottom: 4px; }
 .hint { color: #888; font-size: 0.75em; margin-left: 1.5em; }
+.geargrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.8em; }
+.gcol { min-width: 0; }
+.gtitle { color: #888; font-size: 0.8em; border-bottom: 1px solid #333; margin-bottom: 4px; }
+.geq { font-size: 0.8em; color: #ffd278; margin-bottom: 6px; min-height: 2.2em; }
+.geq .unknown { color: #888; }
+.gnote { color: #f66; font-size: 0.75em; }
+.piece { font-size: 0.85em; margin: 2px 0; }
+.piece.better { color: #fff; }
+.piece.worse { color: #666; text-decoration: line-through; }
+.piece.too_high { color: #666; }
+.piece .tick { color: #6f6; }
 </style></head><body>
 <h1>d2r-map-overlay live &nbsp; <a style="font-size:0.6em" href="/">config →</a></h1>
 <h2 id="header"><span class="waiting">waiting for game…</span></h2>
 <div class="panel"><h2>Where to go</h2><div id="levels"></div></div>
-<div class="panel"><h2>Gear / BiS</h2><div id="gear"></div></div>
+<div class="panel"><h2>Gear / BiS</h2>
+<div class="note">per slot: the equipped piece (name + required level), then the build's pieces best→worst —
+white = better than the equipped piece, struck through = already beaten, grey = above the level gate (character level + 5).
+A column without strike-throughs has no comparable equipped piece (nothing equipped, a runeword or an unidentified item).
+Rings merge the ring1/ring2 slots; “runeword (unnamed)” = a finished runeword whose runes the reader does not decode.
+The Swap header mirrors the active weapon set (the inactive one is unread from memory).</div>
+<div id="gear"></div>
+<div id="bisgrid" class="geargrid"></div></div>
 <div class="panel"><h2>Shared stash</h2><div class="note">tab numbers are memory order, not verified against the UI yet</div><div id="stash"></div></div>
 <div class="panel"><h2>Sell / Keep</h2><div id="sell"></div></div>
-<script>
+"#;
+
+/// The dashboard page's script: first-paint fetch, then the SSE stream (`render` is the
+/// onmessage handler), the level columns and the 2×5 gear grid.
+const DASHBOARD_SCRIPT: &str = r##"<script>
 // HTML-escape: line texts come from item and area names read out of the game. Numeric
 // character references (&#38; …), so the replacement strings stay plain ASCII here.
 function esc(s) {
@@ -848,46 +1147,70 @@ function levelColumns(el, entries) {
     + `</div>`
   ).join("") + `</div>`;
 }
-async function poll() {
-  try {
-    const r = await (await fetch("/api/live")).json();
-    const header = document.getElementById("header");
-    if (!r.live) {
-      header.innerHTML = '<span class="waiting">waiting for game…</span>';
-      for (const id of ["levels", "gear", "stash", "sell"]) document.getElementById(id).innerHTML = "";
-    } else {
-      const p = r.player;
-      header.textContent = [p.name, p.class, p.level != null ? "level " + p.level : null,
-        p.difficulty, r.area].filter(Boolean).join(" · ")
-        + "  (updated " + new Date(r.updated_at * 1000).toLocaleTimeString() + ")";
-      levelColumns(document.getElementById("levels"), r.levels);
-      // The breakpoint guide belongs with the gear it describes. A BiS line whose tick is
-      // "stash" (the ✓ comes from the shared stash) is marked ✓(stash); the tick comes
-      // structured per line ("owned" | "stash" | null), not scraped from the line text.
-      const bis = (r.bis || []).map(l => {
-        let text = l.text;
-        if (l.tick === "stash" && typeof l.text === "string" && l.text.includes("\u2713")) {
-          text = l.text.replace("\u2713", "\u2713(stash)");
-        }
-        return { text, colour: l.colour, runes: l.runes, bases: l.bases };
-      });
-      lines(document.getElementById("gear"), (r.guide || []).concat(bis).concat(r.equipped || []));
-      lines(document.getElementById("stash"), r.stash || []);
-      lines(document.getElementById("sell"), (r.sell || []).concat(r.keep || []).concat(r.give || []));
-    }
-  } catch (e) { /* server gone or mid-restart: keep the last frame, try again */ }
-  setTimeout(poll, 1000);
+// One rendered frame from a live payload (the first-paint fetch and every SSE event).
+function render(r) {
+  const header = document.getElementById("header");
+  if (!r || !r.live) {
+    header.innerHTML = '<span class="waiting">waiting for game…</span>';
+    for (const id of ["levels", "gear", "bisgrid", "stash", "sell"]) document.getElementById(id).innerHTML = "";
+    return;
+  }
+  const p = r.player;
+  header.textContent = [p.name, p.class, p.level != null ? "level " + p.level : null,
+    p.difficulty, r.area].filter(Boolean).join(" · ")
+    + "  (updated " + new Date(r.updated_at * 1000).toLocaleTimeString() + ")";
+  levelColumns(document.getElementById("levels"), r.levels);
+  // The breakpoint guide belongs with the gear grid it describes.
+  lines(document.getElementById("gear"), r.guide || []);
+  gearGrid(document.getElementById("bisgrid"), r.gear);
+  lines(document.getElementById("stash"), r.stash || []);
+  lines(document.getElementById("sell"), (r.sell || []).concat(r.keep || []).concat(r.give || []));
 }
-poll();
+// The 2×5 BiS grid: two rows of five columns (Helm…Foot, then Amulet…Swap), each column
+// headed by the equipped piece and listing the build's pieces with their server-computed
+// state ("better" white / "worse" struck grey / "too_high" grey).
+function gearGrid(el, gear) {
+  el.innerHTML = ((gear && gear.columns) || []).map(col => {
+    const eq = (col.equipped || []).map(e => {
+      const lvl = e.level != null ? " (" + e.level + ")" : "";
+      return '<span class="unknown">' + esc(e.name) + lvl + '</span>';
+    }).join(", ");
+    const note = col.note ? ' <span class="gnote">' + esc(col.note) + '</span>' : "";
+    const pieces = (col.pieces || []).map(p => {
+      const tick = p.tick === "owned" ? ' <span class="tick">\u2713</span>'
+        : p.tick === "stash" ? ' <span class="tick">\u2713</span>(stash)' : "";
+      const lvl = p.level != null ? " (" + p.level + ")" : "";
+      const hint = p.runes
+        ? '<div class="hint">' + esc(p.runes.join(" + ")) + ' · ' + esc((p.bases || []).join(", ")) + '</div>'
+        : "";
+      return '<div class="piece ' + esc(p.state || "better") + '">' + esc(p.name) + lvl + tick + '</div>' + hint;
+    }).join("");
+    return '<div class="gcol"><div class="gtitle">' + esc(col.title) + '</div>'
+      + '<div class="geq">' + eq + note + '</div>' + (pieces || '') + '</div>';
+  }).join("");
+}
+// First paint from the one-shot endpoint (the stream only starts after it), then live
+// updates from the Server-Sent-Events stream: the server pushes whenever the JSON changes
+// and the browser reconnects on its own after a drop.
+fetch("/api/live").then(r => r.json()).then(render).catch(() => {});
+const stream = new EventSource("/api/live-stream");
+stream.onmessage = e => {
+  try { render(JSON.parse(e.data)); } catch (err) { /* a partial event: the next one wins */ }
+};
+stream.onerror = () => { /* EventSource retries on its own */ };
 </script></body></html>
-"##
+"##;
+
+/// The whole dashboard page: [`DASHBOARD_HEAD`] plus [`DASHBOARD_SCRIPT`].
+fn dashboard_page() -> String {
+    format!("{DASHBOARD_HEAD}{DASHBOARD_SCRIPT}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::{Result, anyhow};
-    use std::io::Cursor;
+    use std::io::{Cursor, Read};
 
     use crate::build::Damage;
     use crate::config;
@@ -1038,6 +1361,233 @@ mod tests {
         );
     }
 
+    /// The gear-grid JSON of one column, by title.
+    fn column_of<'a>(gear: &'a serde_json::Value, title: &str) -> &'a serde_json::Value {
+        gear.get("columns")
+            .and_then(|c| c.as_array())
+            .and_then(|cols| {
+                cols.iter()
+                    .find(|c| c.get("title").and_then(|t| t.as_str()) == Some(title))
+            })
+            .unwrap_or(&serde_json::Value::Null)
+    }
+
+    /// The `(name, level, state, tick)` of a column's pieces.
+    fn piece_states(col: &serde_json::Value) -> Vec<(String, serde_json::Value, String, serde_json::Value)> {
+        col.get("pieces")
+            .and_then(|p| p.as_array())
+            .map_or_else(Vec::new, |pieces| {
+                pieces
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_owned(),
+                            p.get("level").cloned().unwrap_or_default(),
+                            p.get("state")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_owned(),
+                            p.get("tick").cloned().unwrap_or_default(),
+                        )
+                    })
+                    .collect()
+            })
+    }
+
+    #[test]
+    fn gear_grid_states_and_equipped_headers() {
+        use crate::offsets::item_data;
+        // clvl 42: the gate is at 47.
+        let equipped = [
+            // A magic Shako (base uap, levelreq 43): unnameable, but comparable.
+            crate::game::Equipped {
+                body: 1,
+                quality: item_data::QUALITY_MAGIC,
+                code: Some("uap".to_owned()),
+                name: None,
+                file_index: None,
+                runeword: false,
+            },
+            // A finished runeword on a Crystal Sword: uncomparable.
+            crate::game::Equipped {
+                body: 4,
+                quality: item_data::QUALITY_NORMAL,
+                code: Some("crs".to_owned()),
+                name: None,
+                file_index: None,
+                runeword: true,
+            },
+            // An identified Harlequin Crest: exact name and level.
+            equipped_unique(2),
+        ];
+        let slots = [
+            (
+                "helm",
+                vec!["Peasant Crown@25".to_owned(), "Valkyrie Wing@71".to_owned()],
+            ),
+            ("amulet", vec!["Harlequin Crest@62".to_owned()]),
+            ("weapon", vec!["Heart of the Oak@55".to_owned()]),
+            ("ring1", vec!["Naj's Rite@30".to_owned()]),
+            ("ring2", vec!["Dwarf Star@45".to_owned()]),
+            ("offhand", vec!["Spirit Monarch@35".to_owned()]),
+        ];
+        let gear = gear_grid(&slots, &equipped, &["Heart of the Oak".to_owned()]);
+        // 10 columns in the user's two rows of five.
+        let titles: Vec<&str> = gear.get("columns").map_or_default(|v| {
+            v.as_array()
+                .iter()
+                .flat_map(|pieces| pieces.iter())
+                .filter_map(|x| x.get("title").and_then(|val| val.as_str()))
+                .collect()
+        });
+        assert_eq!(
+            titles,
+            [
+                "Helm", "Body", "Hands", "Belt", "Foot", "Amulet", "Ring", "Weapons", "Off-Hand", "Swap"
+            ]
+        );
+        // Helm: a magic equipped piece is unnameable but comparable — the base level 43
+        // strikes the below pieces; the 71 one is better but above the 47 gate.
+        let helm = column_of(&gear, "Helm");
+        assert_eq!(
+            helm.get("equipped").cloned().unwrap_or_default(),
+            serde_json::json!([{ "name": "(unknown)", "level": 43 }])
+        );
+        assert_eq!(
+            piece_states(helm),
+            vec![
+                (
+                    "Peasant Crown".to_owned(),
+                    serde_json::json!(25),
+                    "worse".to_owned(),
+                    serde_json::Value::Null
+                ),
+                (
+                    "Valkyrie Wing".to_owned(),
+                    serde_json::json!(71),
+                    "too_high".to_owned(),
+                    serde_json::Value::Null
+                ),
+            ]
+        );
+        // Amulet: the unique equipped piece is named with its exact level; a below piece
+        // is worse, one above (and inside the gate) is better.
+        let amulet = column_of(&gear, "Amulet");
+        assert_eq!(
+            amulet.get("equipped").cloned().unwrap_or_default(),
+            serde_json::json!([{ "name": "Harlequin Crest", "level": 62 }])
+        );
+        // 62 ≤ 62 → worse even though the piece is the same item.
+        assert_eq!(piece_states(amulet).first().map(|p| p.2.as_str()), Some("worse"),);
+        // Weapons: the equipped runeword is uncomparable, so nothing is struck through
+        // (and the page's hint says so); the 55 piece would be better but sits above the
+        // 47 gate — too_high; the owned piece is ticked.
+        let weapons = column_of(&gear, "Weapons");
+        assert_eq!(
+            weapons.get("equipped").cloned().unwrap_or_default(),
+            serde_json::json!([{ "name": "runeword (unnamed)", "level": serde_json::Value::Null }])
+        );
+        assert_eq!(
+            piece_states(weapons),
+            vec![(
+                "Heart of the Oak".to_owned(),
+                serde_json::json!(55),
+                "too_high".to_owned(),
+                serde_json::json!("owned")
+            )]
+        );
+        // Off-hand: nothing equipped, so the piece is better; no two-handed note (the
+        // equipped Crystal Sword is one-handed).
+        let offhand = column_of(&gear, "Off-Hand");
+        assert_eq!(
+            piece_states(offhand).first().map(|p| p.2.as_str()),
+            Some("better"),
+        );
+        assert_eq!(offhand.get("note"), Some(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn gear_grid_merges_the_ring_slots() {
+        // Two equipped rings: the unique Dwarf Star (row 274, lvl req 45) and a magic one;
+        // the merged column compares against the higher of the two requirements.
+        let equipped = [
+            crate::game::Equipped {
+                body: 6,
+                quality: crate::offsets::item_data::QUALITY_UNIQUE,
+                code: Some("rin".to_owned()),
+                name: Some("Dwarf Star".to_owned()),
+                file_index: Some(274),
+                runeword: false,
+            },
+            crate::game::Equipped {
+                body: 7,
+                quality: crate::offsets::item_data::QUALITY_MAGIC,
+                code: Some("rin".to_owned()),
+                name: None,
+                file_index: None,
+                runeword: false,
+            },
+        ];
+        let slots = [
+            ("ring1", vec!["Dwarf Star@45".to_owned(), "Ring A@20".to_owned()]),
+            ("ring2", vec!["Ring A@20".to_owned(), "Ring C@46".to_owned()]),
+        ];
+        let gear = gear_grid(&slots, &equipped, &[]);
+        let ring = column_of(&gear, "Ring");
+        // Both equipped rings in the header, deduplicated pieces from both slots in order.
+        assert_eq!(
+            ring.get("equipped").map(|e| e.as_array().map_or(0, Vec::len)),
+            Some(2)
+        );
+        let names: Vec<&str> = ring.get("pieces").map_or_default(|v| {
+            v.as_array()
+                .iter()
+                .flat_map(|pieces| pieces.iter())
+                .filter_map(|x| x.get("name").and_then(|val| val.as_str()))
+                .collect()
+        });
+        assert_eq!(names, ["Dwarf Star", "Ring A", "Ring C"]);
+        // Equipped base: the stronger ring's level (45); the 46 piece is better (the 47
+        // gate still holds at clvl 42), the rest worse.
+        let states: Vec<&str> = ring.get("pieces").map_or_default(|v| {
+            v.as_array()
+                .iter()
+                .flat_map(|pieces| pieces.iter())
+                .filter_map(|x| x.get("state").and_then(|val| val.as_str()))
+                .collect()
+        });
+        assert_eq!(states, ["worse", "worse", "better"]);
+    }
+
+    #[test]
+    fn gear_grid_notes_two_handed_weapons() {
+        // An equipped Elder Staff (code 6cs, weapons.txt `2handed` 1): the off-hand is
+        // unusable, and the note says so. With the one-handed Crystal Sword: no note.
+        for (code, expected) in [("6cs", Some("(two-handed weapon equipped)")), ("crs", None)] {
+            let equipped = [crate::game::Equipped {
+                body: 4,
+                quality: crate::offsets::item_data::QUALITY_NORMAL,
+                code: Some(code.to_owned()),
+                name: None,
+                file_index: None,
+                runeword: false,
+            }];
+            let gear = gear_grid(
+                &[("offhand", vec!["Spirit Monarch@35".to_owned()])],
+                &equipped,
+                &[],
+            );
+            assert_eq!(
+                column_of(&gear, "Off-Hand").get("note").and_then(|n| n.as_str()),
+                expected,
+                "weapon code {code}"
+            );
+        }
+    }
+
     #[test]
     fn builds_json_lists_slug_name_damages_and_counts() {
         let json = builds_json(&resolved_config());
@@ -1138,10 +1688,58 @@ mod tests {
             difficulty: Some(2),
             area: "Durance of Hate Level 3",
             blocks,
+            bis: None,
             equipped,
+            equipped_items: &[],
+            owned: &[],
             stash,
             stash_owned,
             updated_at: 1_700_000_000,
+        }
+    }
+
+    /// A gear grid over a one-slot build, one equipped piece and one owned name; the
+    /// pieces' per-column state is what the tests assert on.
+    fn gear_grid<'a>(
+        slots: &[(&str, Vec<String>)],
+        equipped_items: &'a [crate::game::Equipped],
+        owned: &'a [String],
+    ) -> serde_json::Value {
+        let bis = crate::config::Bis {
+            build: "test".to_owned(),
+            slots: slots
+                .iter()
+                .map(|(slot, pieces)| ((*slot).to_owned(), pieces.clone()))
+                .collect(),
+            merc_slots: BTreeMap::new(),
+        };
+        let info = LiveInfo {
+            player_name: "Hork",
+            class: 0,
+            char_level: Some(42),
+            difficulty: Some(2),
+            area: "test",
+            blocks: &crate::render::TextBlocks::default(),
+            bis: Some(&bis),
+            equipped: &[],
+            equipped_items,
+            owned,
+            stash: &[],
+            stash_owned: &[],
+            updated_at: 1_700_000_000,
+        };
+        gear_json(&info)
+    }
+
+    /// A unique equipped piece: Harlequin Crest's live-verified row (248 → lvl req 62).
+    fn equipped_unique(body: u8) -> crate::game::Equipped {
+        crate::game::Equipped {
+            body,
+            quality: crate::offsets::item_data::QUALITY_UNIQUE,
+            code: Some("uap".to_owned()),
+            name: Some("Harlequin Crest".to_owned()),
+            file_index: Some(248),
+            runeword: false,
         }
     }
 
@@ -1389,6 +1987,60 @@ mod tests {
         let json = serde_json::from_str::<serde_json::Value>(NO_LIVE_JSON)
             .map_err(|e| anyhow!("valid json: {e}"))?;
         assert_eq!(json.get("live"), Some(&serde_json::json!(false)));
+        Ok(())
+    }
+
+    /// Reads one `\n\n`-terminated SSE chunk (the first call returns the header block);
+    /// times out like [`std::io::Read`] does when nothing arrives within the socket's
+    /// read timeout.
+    fn read_chunk(client: &mut std::net::TcpStream) -> std::io::Result<String> {
+        let mut buf = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let read = client.read(&mut byte)?;
+            if read == 0 {
+                return Err(std::io::Error::other("connection closed"));
+            }
+            buf.push(byte[0]);
+            // Data frames end `\n\n`, the header block `\r\n\r\n`.
+            if buf.ends_with(b"\n\n") || buf.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        String::from_utf8(buf).map_err(std::io::Error::other)
+    }
+
+    #[test]
+    fn live_stream_pushes_frames_and_skips_identical_ones() -> Result<()> {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        let addr = listener.local_addr()?;
+        // The handler thread runs until the client hangs up (write error); not joined.
+        thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                api_live_stream(stream);
+            }
+        });
+        let mut client = std::net::TcpStream::connect(addr)?;
+        client.set_read_timeout(Some(Duration::from_secs(1)))?;
+        let head = read_chunk(&mut client)?;
+        assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+        assert!(
+            head.contains("text/event-stream") && head.contains("no-store"),
+            "{head}"
+        );
+        // Nothing published yet: no event (the poll only sends changes).
+        assert!(read_chunk(&mut client).is_err(), "no frame before a publish");
+        publish_live("{\"live\": true, \"n\": 1}".to_owned());
+        assert_eq!(read_chunk(&mut client)?, "data: {\"live\": true, \"n\": 1}\n\n");
+        // The same JSON published again ([`publish_live`] skips it, the loop compares):
+        // no duplicate frame within the poll interval + margin.
+        publish_live("{\"live\": true, \"n\": 1}".to_owned());
+        assert!(read_chunk(&mut client).is_err(), "no duplicate frame");
+        // A changed frame goes out; a detached game publishes the live:false marker.
+        publish_live("{\"live\": true, \"n\": 2}".to_owned());
+        assert_eq!(read_chunk(&mut client)?, "data: {\"live\": true, \"n\": 2}\n\n");
+        clear_live();
+        assert_eq!(read_chunk(&mut client)?, "data: {\"live\": false}\n\n");
         Ok(())
     }
 }

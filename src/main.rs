@@ -11,6 +11,7 @@ mod game_file;
 mod hypr;
 mod image;
 mod info;
+mod item_levels_data;
 mod item_names_data;
 mod items;
 mod journal;

@@ -121,6 +121,7 @@ mod tests {
             party: vec![],
             equipped: vec![],
             merc_equipped: vec![],
+            equipped_items: vec![],
             owned_names: vec![],
             stash: vec![],
             stash_names: vec![],

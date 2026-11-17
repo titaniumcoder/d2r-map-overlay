@@ -329,7 +329,10 @@ fn follow_game(
                     area: &info::level_name(snap.level.id)
                         .map_or_else(|| format!("Level {}", snap.level.id), str::to_owned),
                     blocks: &blocks,
+                    bis: snap.player.bis.as_ref(),
                     equipped: &snap.equipped,
+                    equipped_items: &snap.equipped_items,
+                    owned: &snap.owned_names,
                     stash: &snap.stash,
                     stash_owned: &snap.stash_names,
                     updated_at: now_secs(),
