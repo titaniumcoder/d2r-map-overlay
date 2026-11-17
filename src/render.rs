@@ -968,11 +968,10 @@ fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<(Strin
     };
     let max_width = f32::from(u16::try_from(width).unwrap_or(u16::MAX)) - 8.0;
     info::stack(
-        // The breakpoint/gear/runeword guide first (user request, 2026-11-17), width-fitted
-        // like the other blocks.
-        crate::breakpoints::guide_line(&snap.player)
+        // The breakpoint guide first (user request, 2026-11-17), width-fitted like the other
+        // blocks.
+        crate::breakpoints::guide_line(&snap.player, snap.difficulty)
             .into_iter()
-            .chain(crate::breakpoints::runeword_lines(&snap.player))
             .map(|line| info::fit_plain(f, &line, max_width))
             .collect(),
         info::level_lines(f, snap.player.char_level, snap.difficulty, max_width),

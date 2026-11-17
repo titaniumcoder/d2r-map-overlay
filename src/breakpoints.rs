@@ -1,206 +1,144 @@
-//! The breakpoint and gear guide (user request, 2026-11-17): from the character's class, build
-//! and gear stats, text lines under the info line —
-//! - the relevant speed breakpoints (FCR for casting builds; FHR for melee, since IAS frames
-//!   depend on the weapon's base speed, which the reader does not know — IAS is only shown as a
-//!   value) with what is missing for the next one, and
-//! - what to look for on gear, always in the user's priority: the four resistances, then damage,
-//!   then life, and
-//! - the runewords that benefit the build at the current level or the next five, with where to
-//!   farm the runes they need.
+//! The breakpoint guide (user request, 2026-11-17): one line under the info line with the
+//! character's speed stats and resistances —
+//! - `fcr (frames / current / next)`: the current cast animation in frames, the total FCR, and
+//!   the FCR needed for one frame less (the user's format: "6 fps, 22 current, 28 for 7 fps");
+//! - `fhr (frames / current / next)` the same for hit recovery;
+//! - `ias current`: the value only — IAS frames depend on the weapon's base speed (and on druid
+//!   shapeshifting), so no target is shown without a weapon read;
+//! - `res f/c/l/p (difficulty penalty)`: the four resistances from gear with the difficulty
+//!   penalty applied.
 //!
-//! Breakpoint tables are the classic D2 community tables (Amazon Basin); class ids are the
-//! monstats txt rows. Runewords are a curated shopping list (base 1.10+), not a database.
+//! Frames come from the D2 animation formulas (maxroll.gg/d2/resources/breakpoints-animations,
+//! verified against the classic per-class breakpoint tables by hand): the effective rate is
+//! `floor(stat × 120 / (stat + 120))` (FCR capped at 75), and the animation length is
+//! `ceil(256 × base / floor(speed × (100 + EFCR) / 100) − 1)` for casting and the same with
+//! `(50 + EFHR)` for hit recovery. The per-class bases below reproduce every classic breakpoint
+//! of every class table exactly (the Warlock row assumes necromancer-like values — its
+//! d2runewizard table matches; Druid values are for human form).
 
-use crate::build::Damage;
-use crate::config::CLASS_NAMES;
 use crate::game::{Player, SpeedStats};
 
-/// FCR breakpoints per class: the total FCR at which the cast animation shortens (tables from
-/// d2runewizard.com/breakpoints, D2R). The sorceress' Lightning spells have their own faster
-/// table; this is the standard cast table. The Warlock casts like a necromancer/paladin.
-const FCR: [&[u32]; 8] = [
-    &[7, 14, 22, 32, 48, 68, 99, 152], // amazon
-    &[9, 20, 37, 63, 105, 200],        // sorceress
-    &[9, 18, 30, 48, 75, 125],         // necromancer
-    &[9, 18, 30, 48, 75, 125],         // paladin
-    &[9, 20, 37, 63, 105, 200],        // barbarian
-    &[4, 10, 19, 30, 46, 68, 99, 163], // druid (human form)
-    &[8, 16, 27, 42, 65, 102, 174],    // assassin
-    &[9, 18, 30, 48, 75, 125],         // warlock
+/// Cast animation data per class: (casting base, animation speed). The bases are one higher
+/// than maxroll's table lists them (their own FCR tables and the formula agree on these).
+const CAST: [(u32, u32); 8] = [
+    (20, 256), // amazon
+    (14, 256), // sorceress
+    (16, 256), // necromancer
+    (16, 256), // paladin
+    (14, 256), // barbarian
+    (15, 208), // druid (human form)
+    (17, 256), // assassin
+    (16, 256), // warlock (assumed necromancer-like)
 ];
 
-/// FHR breakpoints per class; weapon-independent, so correct without the weapon read.
-const FHR: [&[u32]; 8] = [
-    &[6, 13, 20, 32, 52, 86, 174, 600],        // amazon
-    &[5, 9, 14, 20, 30, 42, 60, 86, 142, 280], // sorceress
-    &[5, 10, 16, 26, 39, 56, 86, 152, 377],    // necromancer
-    &[7, 15, 27, 48, 86, 200],                 // paladin
-    &[7, 15, 27, 48, 86, 200],                 // barbarian
-    &[5, 10, 16, 26, 39, 56, 86, 152, 377],    // druid (human form)
-    &[7, 15, 27, 48, 86, 200],                 // assassin
-    &[5, 10, 16, 26, 39, 56, 86, 152, 377],    // warlock
+/// Hit recovery data per class: (hit base, animation speed).
+const HIT: [(u32, u32); 8] = [
+    (6, 256), // amazon
+    (8, 256), // sorceress
+    (7, 256), // necromancer
+    (5, 256), // paladin
+    (5, 256), // barbarian
+    (7, 256), // druid (human form)
+    (5, 256), // assassin
+    (7, 256), // warlock (assumed necromancer-like)
 ];
 
-/// The rune names in order, El (1) to Zod (33).
-const RUNES: [&str; 33] = [
-    "El", "Eld", "Tir", "Nef", "Eth", "Ith", "Tal", "Ral", "Ort", "Thul", "Amn", "Sol", "Shael", "Dol",
-    "Hel", "Io", "Lum", "Ko", "Fal", "Lem", "Pul", "Um", "Mal", "Ist", "Gul", "Vex", "Ohm", "Lo", "Sur",
-    "Ber", "Jah", "Cham", "Zod",
-];
+/// The resist difficulty penalty by difficulty id: none in Normal, −40 in Nightmare, −100 in
+/// Hell.
+const RES_PENALTY: [i32; 3] = [0, 40, 100];
 
-/// Where a rune drops for a Normal-difficulty character: the Countess' special rune table caps
-/// at Ral, the Normal Hellforge quest at Amn; from Sol on the Hellforge is a Nightmare quest.
-fn rune_farm(rune: &str) -> &'static str {
-    match rune {
-        "Sol" | "Shael" | "Dol" | "Hel" | "Io" | "Lum" | "Ko" => "Hellforge quest (NM)",
-        "Ort" | "Thul" | "Amn" => "Hellforge quest",
-        _ => "Countess (Tower 5)",
-    }
+/// Effective FCR: `floor(fcr × 120 / (fcr + 120))`, hard-capped at 75 (nothing above 200 FCR
+/// does anything).
+const fn efcr(fcr: u32) -> u32 {
+    let e = fcr * 120 / (fcr + 120);
+    if e > 75 { 75 } else { e }
 }
 
-/// What a runeword is good for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Benefit {
-    /// Speed/skills/mana: casting builds.
-    Caster,
-    /// Weapon damage: physical builds.
-    Physical,
-    /// Resistances: always on the list, they are the top gear priority.
-    Resistance,
+/// Effective FHR: `floor(fhr × 120 / (fhr + 120))`; uncapped.
+const fn efhr(fhr: u32) -> u32 {
+    fhr * 120 / (fhr + 120)
 }
 
-/// The useful low-level runewords (base 1.10+), with their packed runes and required character
-/// level. Curated: the shopping list worth wearing on the way up.
-const RUNEWORDS: [(&str, &str, u32, Benefit); 11] = [
-    ("Steel", "TirEl", 13, Benefit::Physical),
-    ("Stealth", "TalEth", 17, Benefit::Caster),
-    ("Leaf", "TirRal", 19, Benefit::Caster),
-    ("Ancient's Pledge", "RalOrtTal", 21, Benefit::Resistance),
-    ("Zephyr", "OrtEth", 21, Benefit::Physical),
-    ("Spirit", "TalThulOrtAmn", 25, Benefit::Caster),
-    ("Strength", "AmnTir", 25, Benefit::Physical),
-    ("Insight", "RalTirTalSol", 27, Benefit::Caster),
-    ("Lore", "OrtSol", 27, Benefit::Caster),
-    ("Honor", "AmnElIthTirSol", 27, Benefit::Physical),
-    ("Smoke", "NefLum", 37, Benefit::Resistance),
-];
-
-/// True if the runeword benefits this build: resistance runewords always, the rest by damage
-/// flavour.
-const fn benefits(benefit: Benefit, build: &[Damage]) -> bool {
-    match benefit {
-        Benefit::Resistance => true,
-        Benefit::Caster => is_caster(build),
-        Benefit::Physical => !is_caster(build),
-    }
+/// The cast animation length in frames for `fcr` total.
+const fn cast_frames(base: u32, speed: u32, fcr: u32) -> u32 {
+    let d = speed * (100 + efcr(fcr)) / 100;
+    (256 * base - 1) / d
 }
 
-/// True if the build's primary damage is a cast flavour (anything but physical): the FCR
-/// breakpoints are what shortens its attacks.
-const fn is_caster(build: &[Damage]) -> bool {
-    !matches!(build.first(), Some(Damage::Physical))
+/// The hit recovery animation length in frames for `fhr` total.
+const fn hit_frames(base: u32, speed: u32, fhr: u32) -> u32 {
+    let d = speed * (50 + efhr(fhr)) / 100;
+    (256 * base - 1) / d
 }
 
-/// The next entry of `table` strictly above `value`: `(threshold, missing)`, or `None` if the
-/// table is exhausted (last breakpoint reached).
-fn next_breakpoint(table: &[u32], value: u32) -> Option<(u32, u32)> {
-    let &next = table.iter().find(|&&t| t > value)?;
-    Some((next, next - value))
+/// The least stat value that shortens the animation by one frame, searched up to a generous
+/// bound; `None` when nothing within it helps any more.
+fn next_threshold(
+    current: u32,
+    base: u32,
+    speed: u32,
+    f: fn(u32, u32, u32) -> u32,
+    bound: u32,
+) -> Option<u32> {
+    let now = f(base, speed, current);
+    (current + 1..=bound).find(|&t| f(base, speed, t) < now)
 }
 
-/// `current → next (+missing)` for the player's stat, or `at cap` past the last breakpoint.
-fn stat_guide(label: &str, table: &[u32], value: u32) -> String {
-    match next_breakpoint(table, value) {
-        Some((next, missing)) => format!("{label} {value} → {next} (+{missing})"),
-        None => format!("{label} {value} (at cap)"),
-    }
-}
-
-/// The guide's first line: class, the relevant speed breakpoints with what is missing, and the
-/// gear priority. `None` without readable speed stats or an unknown class.
-#[must_use]
-pub fn guide_line(player: &Player) -> Option<String> {
-    let speed = player.speed?;
-    let class = CLASS_NAMES.get(usize::try_from(player.class).ok()?)?;
-    let fcr = FCR.get(usize::try_from(player.class).ok()?)?;
-    let fhr = FHR.get(usize::try_from(player.class).ok()?)?;
-    let gear = gear_priority(&speed, &player.build);
-    if is_caster(&player.build) {
-        Some(format!(
-            "{class} · {} · {} · {gear}",
-            stat_guide("FCR", fcr, speed.fcr),
-            stat_guide("FHR", fhr, speed.fhr),
-        ))
-    } else {
-        // IAS frames depend on the weapon's base speed: show the value, guide by FHR.
-        Some(format!(
-            "{class} · IAS {} · {} · {gear}",
-            speed.ias,
-            stat_guide("FHR", fhr, speed.fhr),
-        ))
-    }
-}
-
-/// The gear priority line with the player's current gear resistances: the four resistances
-/// first, then the build's damage, then life.
-fn gear_priority(speed: &SpeedStats, build: &[Damage]) -> String {
-    let damage = build.first().map_or("dmg", |d| d.name());
-    format!(
-        "Gear: res f{} c{} l{} p{} > {damage} > life",
-        speed.res_fire, speed.res_cold, speed.res_lightning, speed.res_poison
+/// `(frames / current / next)` for one animation; without the third part past the last
+/// breakpoint.
+fn stat_part(
+    label: &str,
+    base: u32,
+    speed: u32,
+    current: u32,
+    bound: u32,
+    f: fn(u32, u32, u32) -> u32,
+) -> String {
+    let frames = f(base, speed, current);
+    next_threshold(current, base, speed, f, bound).map_or_else(
+        || format!("{label} ({frames} / {current})"),
+        |next| format!("{label} ({frames} / {current} / {next})"),
     )
 }
 
-/// Splits packed rune names (`TalThulOrtAmn`) by longest-prefix matching over [`RUNES`]; an
-/// unknown substring stops the split and is kept as-is (the name is still displayed).
-fn split_runes(runes: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut rest = runes;
-    while !rest.is_empty() {
-        let Some(name) = RUNES
-            .iter()
-            .filter(|n| rest.starts_with(**n))
-            .max_by_key(|n| n.len())
-        else {
-            break;
-        };
-        out.push(*name);
-        rest = &rest[name.len()..];
-    }
-    if out.is_empty() {
-        out.push(runes);
-    }
-    out
+/// The resistances from gear with the difficulty penalty applied: `f/c/l/p`.
+fn res_part(speed: &SpeedStats, difficulty: Option<u8>) -> String {
+    let penalty = difficulty
+        .and_then(|d| RES_PENALTY.get(usize::from(d)).copied())
+        .unwrap_or(0);
+    let res = |v: u32| i32::try_from(v).unwrap_or(i32::MAX) - penalty;
+    let note = match difficulty {
+        Some(1) => " (nm −40)",
+        Some(2) => " (hell −100)",
+        _ => "",
+    };
+    format!(
+        "res {}/{}/{}/{}{note}",
+        res(speed.res_fire),
+        res(speed.res_cold),
+        res(speed.res_lightning),
+        res(speed.res_poison)
+    )
 }
 
-/// The runeword suggestions for the player's level: entries required at the current level or
-/// within the next five that benefit the build, as `Name (clvl): Rune Rune — farm: …`. At most
-/// two.
+/// The guide line: `fcr (…) · fhr (…) · ias … · res …`. `None` without readable speed stats.
 #[must_use]
-pub fn runeword_lines(player: &Player) -> Vec<String> {
-    let Some(lvl) = player.char_level else {
-        return Vec::new();
-    };
-    let window = u32::from(lvl)..=u32::from(lvl) + 5;
-    let mut out = Vec::new();
-    for &(name, runes, req, benefit) in RUNEWORDS.iter().filter(|&(_, _, req, _)| window.contains(req)) {
-        if !benefits(benefit, &player.build) {
-            continue;
-        }
-        let names = split_runes(runes);
-        // The rarest (highest-order) rune of the word is the farming bottleneck — display order
-        // is not rune order (Zephyr: Ort Eth, but Ort is the rarer one).
-        let rarest = names
-            .iter()
-            .filter(|r| RUNES.contains(r))
-            .max_by_key(|r| RUNES.iter().position(|n| n == *r));
-        let farm = rarest.map_or("no rune table", |r| rune_farm(r));
-        out.push(format!("{name} (clvl {req}): {} — farm: {farm}", names.join(" ")));
-        if out.len() == 2 {
-            break;
-        }
-    }
-    out
+pub fn guide_line(player: &Player, difficulty: Option<u8>) -> Option<String> {
+    let speed = player.speed.as_ref()?;
+    let (cast_base, cast_speed) = class_data(&CAST, player.class)?;
+    let (hit_base, hit_speed) = class_data(&HIT, player.class)?;
+    Some(format!(
+        "{} · {} · ias {} · {}",
+        stat_part("fcr", cast_base, cast_speed, speed.fcr, 200, cast_frames),
+        stat_part("fhr", hit_base, hit_speed, speed.fhr, 480, hit_frames),
+        speed.ias,
+        res_part(speed, difficulty),
+    ))
+}
+
+/// The `(base, speed)` pair of `class`, or `None` for an unknown class id.
+fn class_data(data: &[(u32, u32)], class: u32) -> Option<(u32, u32)> {
+    data.get(usize::try_from(class).ok()?).copied()
 }
 
 #[cfg(test)]
@@ -208,7 +146,7 @@ mod tests {
     use super::*;
     use crate::game::{Addr, SpeedStats};
 
-    fn player(class: u32, lvl: u8, fcr: u32, build: &[Damage]) -> Player {
+    fn player(class: u32, fcr: u32, fhr: u32, ias: u32) -> Player {
         Player {
             addr: Addr(0),
             id: 1,
@@ -218,124 +156,110 @@ mod tests {
             y: 0,
             level_id: 1,
             act: None,
-            char_level: Some(lvl),
+            char_level: Some(17),
             speed: Some(SpeedStats {
                 fcr,
-                ias: 0,
-                fhr: 0,
-                res_fire: 0,
-                res_cold: 0,
-                res_lightning: 0,
-                res_poison: 0,
+                ias,
+                fhr,
+                res_fire: 25,
+                res_cold: 15,
+                res_lightning: 25,
+                res_poison: 5,
             }),
-            build: build.to_vec(),
+            build: Vec::new(),
         }
     }
 
     #[test]
-    fn next_breakpoint_walks_the_table() {
-        assert_eq!(next_breakpoint(&[9, 20, 37], 0), Some((9, 9)));
-        assert_eq!(next_breakpoint(&[9, 20, 37], 20), Some((37, 17)));
-        assert_eq!(next_breakpoint(&[9, 20, 37], 37), None, "at the cap");
-        assert_eq!(next_breakpoint(&[9, 20, 37], 50), None);
+    fn cast_frames_match_the_classic_tables() {
+        // Sorceress: 13 frames at 0, 12 at 9, 11 at 20, 10 at 37, 9 at 63, 8 at 105, 7 at 200.
+        let (base, speed) = CAST[1];
+        assert_eq!(cast_frames(base, speed, 0), 13);
+        assert_eq!(cast_frames(base, speed, 9), 12);
+        assert_eq!(cast_frames(base, speed, 20), 11);
+        assert_eq!(cast_frames(base, speed, 37), 10);
+        assert_eq!(cast_frames(base, speed, 63), 9);
+        assert_eq!(cast_frames(base, speed, 105), 8);
+        assert_eq!(cast_frames(base, speed, 200), 7);
+        // Necromancer: 15 at 0, 14 at 9, 13 at 18, 12 at 30, 11 at 48, 10 at 75, 9 at 125.
+        let (base, speed) = CAST[2];
+        assert_eq!(cast_frames(base, speed, 0), 15);
+        assert_eq!(cast_frames(base, speed, 9), 14);
+        assert_eq!(cast_frames(base, speed, 18), 13);
+        assert_eq!(cast_frames(base, speed, 30), 12);
+        assert_eq!(cast_frames(base, speed, 48), 11);
+        assert_eq!(cast_frames(base, speed, 75), 10);
+        assert_eq!(cast_frames(base, speed, 125), 9);
+        // Druid (human, speed 208): 18 at 0, 17 at 4, 16 at 10, 15 at 19, 14 at 30.
+        let (base, speed) = CAST[5];
+        assert_eq!(cast_frames(base, speed, 0), 18);
+        assert_eq!(cast_frames(base, speed, 4), 17);
+        assert_eq!(cast_frames(base, speed, 10), 16);
+        assert_eq!(cast_frames(base, speed, 19), 15);
+        assert_eq!(cast_frames(base, speed, 30), 14);
     }
 
     #[test]
-    fn guide_line_casters_get_fcr_melee_get_ias() {
-        // Sorceress (class 1) with 20 FCR: next sorceress FCR breakpoint 37; FHR from 0 → 5.
-        let p = player(1, 10, 20, &[Damage::Fire, Damage::Cold]);
-        let line = guide_line(&p).unwrap_or_default();
-        assert!(
-            line.starts_with("sorceress · FCR 20 → 37 (+17) · FHR 0 → 5 (+5)"),
-            "{line}"
-        );
-        assert!(line.ends_with("Gear: res f0 c0 l0 p0 > fire > life"), "{line}");
-        // Barbarian (class 4), physical: IAS value, FHR guide (their table starts at 7).
-        let p = player(4, 10, 0, &[Damage::Physical]);
-        let line = guide_line(&p).unwrap_or_default();
-        assert!(line.starts_with("barbarian · IAS 0 · FHR 0 → 7 (+7)"), "{line}");
-        assert!(
-            line.ends_with("Gear: res f0 c0 l0 p0 > physical > life"),
-            "{line}"
-        );
-        // The Warlock (class 7) casts like a necromancer: FCR 20 → 30, FHR 0 → 5.
-        let p = player(7, 10, 20, &[Damage::Poison]);
-        let line = guide_line(&p).unwrap_or_default();
-        assert!(
-            line.starts_with("warlock · FCR 20 → 30 (+10) · FHR 0 → 5 (+5)"),
-            "{line}"
-        );
+    fn hit_frames_match_the_classic_tables() {
+        // Sorceress: 9 frames at 50 FHR (maxroll's worked example).
+        let (base, speed) = HIT[1];
+        assert_eq!(hit_frames(base, speed, 50), 9);
+        // Amazon: 11 at 0, 10 at 6, 9 at 13, 8 at 20, 7 at 32, 6 at 52, 5 at 86, 4 at 174.
+        let (base, speed) = HIT[0];
+        assert_eq!(hit_frames(base, speed, 0), 11);
+        assert_eq!(hit_frames(base, speed, 6), 10);
+        assert_eq!(hit_frames(base, speed, 13), 9);
+        assert_eq!(hit_frames(base, speed, 20), 8);
+        assert_eq!(hit_frames(base, speed, 32), 7);
+        assert_eq!(hit_frames(base, speed, 52), 6);
+        assert_eq!(hit_frames(base, speed, 86), 5);
+        assert_eq!(hit_frames(base, speed, 174), 4);
+        // Necromancer: 13 at 0, 12 at 5, 11 at 10, 10 at 16, 9 at 26, 8 at 39, 7 at 56, 6 at 86
+        // (d2runewizard's FHR thresholds [5,10,16,26,39,56,86,152] each drop one frame).
+        let (base, speed) = HIT[2];
+        assert_eq!(hit_frames(base, speed, 0), 13);
+        assert_eq!(hit_frames(base, speed, 5), 12);
+        assert_eq!(hit_frames(base, speed, 10), 11);
+        assert_eq!(hit_frames(base, speed, 16), 10);
+        assert_eq!(hit_frames(base, speed, 26), 9);
+        assert_eq!(hit_frames(base, speed, 39), 8);
+        assert_eq!(hit_frames(base, speed, 56), 7);
+        assert_eq!(hit_frames(base, speed, 86), 6);
+    }
+
+    #[test]
+    fn next_threshold_finds_the_next_breakpoint() {
+        let (base, speed) = CAST[1]; // sorceress
+        // From 0 FCR the next cast breakpoint is 9 (13 → 12 frames).
+        assert_eq!(next_threshold(0, base, speed, cast_frames, 200), Some(9));
+        // From 20 the next is 37 (11 → 10 frames).
+        assert_eq!(next_threshold(20, base, speed, cast_frames, 200), Some(37));
+        // Past the cap (200) nothing helps any more.
+        assert_eq!(next_threshold(200, base, speed, cast_frames, 200), None);
+    }
+
+    #[test]
+    fn guide_line_has_the_users_format() {
+        // Warlock (class 7) with 20 FCR: 13 frames (base 15), next breakpoint 30.
+        let p = player(7, 20, 0, 0);
+        let line = guide_line(&p, Some(0)).unwrap_or_default();
+        assert!(line.starts_with("fcr (13 / 20 / 30)"), "{line}");
+        // Resists with no penalty in Normal.
+        assert!(line.ends_with("res 25/15/25/5"), "{line}");
+        // Nightmare applies −40.
+        let line = guide_line(&p, Some(1)).unwrap_or_default();
+        assert!(line.contains("res -15/-25/-15/-35 (nm −40)"), "{line}");
+        // IAS shows as a plain value.
+        let p = player(7, 20, 0, 30);
+        let line = guide_line(&p, None).unwrap_or_default();
+        assert!(line.contains("ias 30"), "{line}");
     }
 
     #[test]
     fn unknown_class_or_stats_give_no_line() {
-        assert_eq!(guide_line(&player(8, 10, 0, &[])), None);
-        let mut p = player(1, 10, 0, &[]);
+        assert_eq!(guide_line(&player(8, 0, 0, 0), None), None);
+        let mut p = player(7, 0, 0, 0);
         p.speed = None;
-        assert_eq!(guide_line(&p), None);
-    }
-
-    #[test]
-    fn runewords_match_the_level_window_and_build() {
-        // Level 17 fire sorceress: Stealth (17) and Leaf (19) in the next-five window, Ancient's
-        // Pledge (21) one too far.
-        let p = player(1, 17, 0, &[Damage::Fire]);
-        let lines = runeword_lines(&p);
-        assert_eq!(lines.len(), 2, "{lines:?}");
-        assert!(
-            lines
-                .first()
-                .is_some_and(|l| l.starts_with("Stealth (clvl 17): Tal Eth")),
-            "{lines:?}"
-        );
-        assert!(
-            lines
-                .get(1)
-                .is_some_and(|l| l.starts_with("Leaf (clvl 19): Tir Ral")),
-            "{lines:?}"
-        );
-        // A physical build at 13 gets Steel (Tir El, clvl 13); its rarest rune Tir (#3) is
-        // Countess-farmable.
-        let p = player(4, 13, 0, &[Damage::Physical]);
-        assert_eq!(
-            runeword_lines(&p),
-            vec!["Steel (clvl 13): Tir El — farm: Countess (Tower 5)".to_owned()]
-        );
-        // At level 1 nothing is in the window yet (Steel needs 13).
-        let p = player(4, 1, 0, &[Damage::Physical]);
-        assert_eq!(runeword_lines(&p), Vec::<String>::new());
-        // Resistance runewords are suggested for any build: Ancient's Pledge at 16-21.
-        let p = player(4, 18, 0, &[Damage::Physical]);
-        assert!(
-            runeword_lines(&p)
-                .iter()
-                .any(|l| l.starts_with("Ancient's Pledge")),
-        );
-    }
-
-    #[test]
-    fn rune_names_split_without_spaces() {
-        assert_eq!(split_runes("TalThulOrtAmn"), vec!["Tal", "Thul", "Ort", "Amn"]);
-        // Longest prefix wins: Eld over El.
-        assert_eq!(split_runes("EldOrt"), vec!["Eld", "Ort"]);
-        assert_eq!(split_runes("NefLum"), vec!["Nef", "Lum"]);
-        // Unknown text is kept whole for display.
-        assert_eq!(split_runes("ZodEater"), vec!["Zod"]);
-    }
-
-    #[test]
-    fn farm_hint_uses_rune_order_not_display_order() {
-        // Zephyr (Ort Eth): Ort (#9) is the bottleneck even though Eth is displayed last.
-        // Ancient's Pledge (Resistance) is in the window too and always suggested, first in
-        // table order; both bottleneck at Ort, which is beyond the Countess' Normal special
-        // table (caps at Ral) — Hellforge territory.
-        let p = player(0, 18, 0, &[Damage::Physical]);
-        assert_eq!(
-            runeword_lines(&p),
-            vec![
-                "Ancient's Pledge (clvl 21): Ral Ort Tal — farm: Hellforge quest".to_owned(),
-                "Zephyr (clvl 21): Ort Eth — farm: Hellforge quest".to_owned(),
-            ]
-        );
+        assert_eq!(guide_line(&p, None), None);
     }
 }
