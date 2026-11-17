@@ -87,6 +87,10 @@ pub struct Snapshot {
     /// The mercenary's equipped `(body slot, quality)` pairs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub merc_equipped: Vec<(u8, u32)>,
+    /// Display names of identified unique/set items the player owns (equipped, carried,
+    /// stashed): the `BiS` list marks owned pieces with a ✓.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owned_names: Vec<String>,
     pub player_candidates: Vec<Candidate>,
     /// Which rule picked `player` among `player_candidates`. Left out of the JSON when it is the
     /// default (first candidate), so older dumps round-trip.
@@ -379,6 +383,9 @@ struct ItemScan {
     gear: HashMap<u32, SpeedStats>,
     /// The equipped weapon's WSM per owner (the guide's IAS note).
     weapons: HashMap<u32, i32>,
+    /// Display names of identified unique/set items owned by a candidate (equipped, carried,
+    /// stashed): the `BiS` list marks owned pieces with a ✓.
+    owned_names: Vec<String>,
     /// The local player's equipped `(body slot, quality)` pairs (the `BiS` "already better"
     /// check: set/unique quality there hides the slot).
     equipped: Vec<(u8, u32)>,
@@ -800,6 +807,7 @@ pub fn snapshot(
     player.wsm = scan.weapons.get(&chosen.id).copied();
     let equipped = scan.equipped.clone();
     let merc_equipped = scan.merc_equipped.clone();
+    let owned_names = scan.owned_names.clone();
 
     let LevelWalk {
         mut level,
@@ -831,6 +839,7 @@ pub fn snapshot(
         party,
         equipped,
         merc_equipped,
+        owned_names,
         player_candidates: candidates,
         player_chosen_by: chosen_by,
         level,
@@ -1443,6 +1452,23 @@ impl<M: ReadMem> Reader<'_, M> {
             {
                 self.accumulate_gear(addr, &head, scan.gear.entry(owner).or_default());
                 self.capture_weapon_wsm(&head, owner, items_table, &mut scan.weapons);
+            }
+            // Owned identified unique/set items: the `BiS` list marks owned pieces with a ✓.
+            if let Some(owner) = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok())
+                && candidates.contains(&owner)
+            {
+                let quality = self.equipped_quality(&head);
+                if matches!(quality, Some(item_data::QUALITY_UNIQUE | item_data::QUALITY_SET)) {
+                    let name = self
+                        .item_fields(addr, &head, items_table)
+                        .ok()
+                        .and_then(|d| valuables::unique_set_name(&d).map(str::to_owned));
+                    if let Some(name) = name
+                        && !scan.owned_names.iter().any(|n| n.eq_ignore_ascii_case(&name))
+                    {
+                        scan.owned_names.push(name);
+                    }
+                }
             }
             // Equipped pieces by owner kind, for the `BiS` per-slot display.
             if let Some(quality) = self.equipped_quality(&head)

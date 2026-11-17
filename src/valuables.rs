@@ -154,6 +154,13 @@ fn identity(drop: &ItemDrop) -> Option<&'static str> {
     table.get(row).map(|&(_, name)| name)
 }
 
+/// The in-game display name of an identified unique/set item (`None` otherwise: unidentified
+/// items carry no name index yet, non-unique/set items none at all).
+#[must_use]
+pub fn unique_set_name(drop: &ItemDrop) -> Option<&'static str> {
+    identity(drop).map(shown)
+}
+
 /// The in-game name of a unique/set `index` name: some internal keys differ (Piercerib is
 /// shown as "Rogue's Bow"; see `item_names_data::DISPLAY_NAMES`).
 fn shown(index: &'static str) -> &'static str {

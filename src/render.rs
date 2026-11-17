@@ -986,6 +986,7 @@ fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<info::
                 snap.player.char_level,
                 &snap.equipped,
                 &snap.merc_equipped,
+                &snap.owned_names,
                 f,
                 max_width,
             )
@@ -1687,6 +1688,7 @@ mod tests {
             party: vec![],
             equipped: vec![],
             merc_equipped: vec![],
+            owned_names: vec![],
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
             level: Level {

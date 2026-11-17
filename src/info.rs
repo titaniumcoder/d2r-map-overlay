@@ -233,11 +233,18 @@ pub fn bis_lines(
     char_level: Option<u8>,
     equipped: &[(u8, u32)],
     merc_equipped: &[(u8, u32)],
+    owned_names: &[String],
     font: &FontVec,
     max_width: f32,
 ) -> Vec<String> {
     let mut out = Vec::new();
     let lvl = u32::from(char_level.unwrap_or(0));
+    // A piece the character already owns (equipped, carried or stashed) gets a ✓ (user pick,
+    // 2026-11-17): equip it instead of chasing a second one.
+    let owned = |piece: &str| {
+        let name = piece.split('@').next().unwrap_or(piece);
+        owned_names.iter().any(|n| n.eq_ignore_ascii_case(name.trim()))
+    };
     for slot in crate::config::SLOT_NAMES {
         let Some(pieces) = bis.slots.get(slot) else {
             continue;
@@ -284,9 +291,10 @@ pub fn bis_lines(
         else {
             continue;
         };
+        let mark = if owned(piece) { "✓ " } else { "" };
         if out.len() < MAX_BIS_LINES {
             out.push(format!(
-                "merc {slot}: {} ({req})",
+                "merc {slot}: {mark}{} ({req})",
                 piece.split('@').next().unwrap_or(piece)
             ));
         }
