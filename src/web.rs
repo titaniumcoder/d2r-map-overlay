@@ -629,6 +629,8 @@ pub struct LiveInfo<'a> {
     pub white_bases: &'a [String],
     /// The quest flags of the current game ([`crate::quests::read`]); empty when unread.
     pub quests: &'a [u16],
+    /// The vendor trade window open right now ([`crate::game::Snapshot::shop`]).
+    pub shop: Option<&'a crate::shop::Shop>,
     /// Unix seconds of the tick that produced this data.
     pub updated_at: u64,
 }
@@ -691,8 +693,79 @@ pub fn live_json(info: &LiveInfo) -> String {
         "stage": stage_json(info.stage.as_ref()),
         "recipes": recipes_json(info),
         "upgrades": upgrades_json(info),
+        "shop": shop_json(info),
     })
     .to_string()
+}
+
+/// The open trade window (`live_json`'s `shop` section), `null` when none is open:
+/// `{ "npc", "items": [{ "name", "quality", "tab", "req", "high", "slot", "count" }] }`.
+/// `tab` is `armor` / `weapons` / `misc` (the store page); `high` = the required level is
+/// above the character's; `slot` = the build slot whose piece the item is
+/// ([`shop_match`]), else `null`. Identical entries (same name, quality and tab: potions,
+/// scrolls) are listed once with their `count`.
+fn shop_json(info: &LiveInfo) -> serde_json::Value {
+    let Some(shop) = info.shop else {
+        return serde_json::Value::Null;
+    };
+    let lvl = info.char_level.map(u32::from);
+    let mut items: Vec<(serde_json::Value, u32)> = Vec::new();
+    for item in &shop.items {
+        let tab = match item.page {
+            0 => "armor",
+            1 | 2 => "weapons",
+            _ => "misc",
+        };
+        let json = serde_json::json!({
+            "name": item.name,
+            "quality": item.quality,
+            "tab": tab,
+            "req": item.req_level,
+            "high": item.req_level.zip(lvl).is_some_and(|(req, lvl)| req > lvl),
+            "slot": shop_match(item, info).map(|(slot, _)| slot),
+        });
+        match items.iter_mut().find(|(j, _)| *j == json) {
+            Some((_, count)) => *count += 1,
+            None => items.push((json, 1)),
+        }
+    }
+    let items: Vec<_> = items
+        .into_iter()
+        .map(|(mut json, count)| {
+            if let Some(obj) = json.as_object_mut() {
+                obj.insert("count".into(), count.into());
+            }
+            json
+        })
+        .collect();
+    serde_json::json!({ "npc": shop.npc, "items": items })
+}
+
+/// The build slot (`gloves`, `ring`, `merc helm`, …) and bare piece name of the first
+/// current-stage piece the store `item` is ([`crate::shop::matches`]): the character's slots
+/// in [`crate::config::SLOT_NAMES`] order, then the mercenary's; outgrown pieces are skipped.
+fn shop_match(item: &crate::shop::ShopItem, info: &LiveInfo) -> Option<(String, String)> {
+    let bis = info.bis?;
+    let piece_in = |pieces: &[String]| {
+        pieces
+            .iter()
+            .filter(|p| !outgrown(p, info))
+            .map(|p| crate::info::piece_name(p))
+            .find(|name| crate::shop::matches(item, name))
+            .map(str::to_owned)
+    };
+    crate::config::SLOT_NAMES
+        .iter()
+        .find_map(|slot| {
+            let name = piece_in(bis.slots.get(*slot)?)?;
+            let column = if slot.starts_with("ring") { "ring" } else { slot };
+            Some((column.to_owned(), name))
+        })
+        .or_else(|| {
+            bis.merc_slots
+                .iter()
+                .find_map(|(slot, pieces)| Some((format!("merc {slot}"), piece_in(pieces)?)))
+        })
 }
 
 /// The guide stage (`live_json`'s `stage` section): `{ "slug", "name", "class_default",
@@ -1057,6 +1130,8 @@ fn is_worn(name: &str, info: &LiveInfo) -> bool {
 ///   not equipped already — the best such piece per slot;
 /// - `"craft"`: a current-stage runeword recipe whose runes are all owned, whose piece is
 ///   wearable and "better" in its slot.
+/// - `"shop"`: an item of the open trade window that is a current-stage piece
+///   ([`shop_match`]; mercenary slots included, any required level) — buying ahead is fine.
 ///
 /// The mercenary's slots are left out: its equipped items are not read, so every owned
 /// piece would always count as better.
@@ -1155,7 +1230,36 @@ fn upgrades_json(info: &LiveInfo) -> Vec<serde_json::Value> {
             }));
         }
     }
+    shop_upgrades(info, lvl, &mut out);
     out
+}
+
+/// Appends the `"shop"` upgrades ([`upgrades_json`]) to `out`: one per current-stage piece
+/// that an open-window item is (the first such item names the entry) ([`shop_match`]), with the vendor and the required level (`lvl` =
+/// the character level) in `why`.
+fn shop_upgrades(info: &LiveInfo, lvl: u32, out: &mut Vec<serde_json::Value>) {
+    for item in info.shop.map_or(&[][..], |shop| shop.items.as_slice()) {
+        let Some((slot, piece)) = shop_match(item, info) else {
+            continue;
+        };
+        // Keyed per build piece, not per item: differently-affixed sashes chime once.
+        let key = format!("shop:{slot}:{piece}");
+        if out
+            .iter()
+            .any(|u| u.get("key").and_then(|k| k.as_str()) == Some(key.as_str()))
+        {
+            continue;
+        }
+        let vendor = info.shop.and_then(|s| s.npc.as_deref()).unwrap_or("the vendor");
+        let req = item.req_level.filter(|&r| r > 0).map_or_else(String::new, |r| {
+            let note = if r > lvl { " — above your level" } else { "" };
+            format!(" · lvl {r}{note}")
+        });
+        out.push(serde_json::json!({
+            "key": key, "kind": "shop", "slot": slot, "name": item.name,
+            "why": format!("{vendor} sells it{req}"),
+        }));
+    }
 }
 
 /// The skill trees (`live_json`'s `skills` section): `{ "total", "left", "right", "trees":
@@ -2044,6 +2148,15 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .up { background: var(--panel2); border: 1px solid rgba(111,220,111,.35); border-radius: 6px; padding: 3px 9px; font-size: 13px; }
 .up .k { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--good); margin-right: 4px; }
 .up.craft .k { color: var(--rune); }
+.up.shop .k { color: var(--gold); }
+/* Vendor: the open trade window, one column per store tab */
+.shop { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 4px 16px; }
+.si { display: flex; gap: 6px; align-items: baseline; font-size: 13px; line-height: 1.5; color: var(--text); }
+.si.magic { color: var(--magic); }
+.si.hit { font-weight: 700; } .si.hit::before { content: "▲"; color: var(--good); font-size: 10px; }
+.si.high { opacity: .4; }
+.si .sl { color: var(--good); font-size: 11px; font-weight: 400; }
+.si .lv { margin-left: auto; color: var(--faint); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .up .sl { color: var(--dim); font-size: 11.5px; } .up .why { color: var(--faint); font-size: 11.5px; }
 .stage { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin: 0 0 12px; padding: 8px 12px;
   background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); font-size: 13px; }
@@ -2098,6 +2211,7 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
 <div class="upbar" id="upgrades" hidden></div>
 <div class="wrap">
 <div class="stage" id="stage" hidden></div>
+<section class="panel full" id="shoppanel" hidden><h2>Vendor <span class="sub" id="shopnpc"></span></h2><div class="shop" id="shop"></div></section>
 <section class="panel full"><h2>Gear <span class="sub" id="buildname"></span></h2>
 <details class="help"><summary>How to read this</summary>
 Each card is a slot. The dashed box shows what is equipped (name and required level), and below it are the build's pieces, best first.
@@ -2341,7 +2455,7 @@ function upgrades(list, who) {
   const el = $("upgrades");
   el.hidden = !list.length;
   el.innerHTML = list.length ? `<div class="wrap"><span class="t">Upgrades available</span>` + list.map(u =>
-    `<span class="up ${esc(u.kind)}"><span class="k">${u.kind === "craft" ? "craft" : "equip"}</span>${esc(u.name)} <span class="sl">${esc(u.slot)}</span> <span class="why">· ${esc(u.why)}</span></span>`).join("") + "</div>" : "";
+    `<span class="up ${esc(u.kind)}"><span class="k">${u.kind === "craft" || u.kind === "shop" ? u.kind : "equip"}</span>${esc(u.name)} <span class="sl">${esc(u.slot)}</span> <span class="why">· ${esc(u.why)}</span></span>`).join("") + "</div>" : "";
 }
 // The recipes the current stage uses, grouped by kind, one card each. Rune and gem upgrades
 // fold into one group (only the ones making an input another recipe still misses arrive).
@@ -2383,12 +2497,28 @@ function recipes(list) {
   });
   $("recipes").innerHTML = groups.join("");
 }
+// The open trade window: one column per store tab, the build's pieces first and bold (with
+// their slot), the ones above the character level dimmed.
+function shop(s) {
+  $("shoppanel").hidden = !s;
+  if (!s) { $("shop").innerHTML = ""; $("shopnpc").textContent = ""; return; }
+  $("shopnpc").textContent = `${s.npc || "trade window"} · bold ▲ = a piece of your build · faded = above your level`;
+  const row = i => `<div class="si${i.slot ? " hit" : ""}${i.high ? " high" : ""}${i.quality === 4 ? " magic" : ""}">`
+    + `<span>${esc(i.name)}${i.count > 1 ? ` ×${esc(i.count)}` : ""}</span>${i.slot ? `<span class="sl">${esc(i.slot)}</span>` : ""}`
+    + `${i.req ? `<span class="lv">lvl ${esc(i.req)}</span>` : ""}</div>`;
+  $("shop").innerHTML = [["armor", "Armor"], ["weapons", "Weapons"], ["misc", "Misc"]].map(([tab, title]) => {
+    const list = (s.items || []).filter(i => i.tab === tab);
+    const sorted = list.filter(i => i.slot).concat(list.filter(i => !i.slot));
+    return list.length ? `<div><h3 class="row-h">${title}</h3>${sorted.map(row).join("")}</div>` : "";
+  }).join("") || '<div class="empty">nothing for sale</div>';
+}
 // One rendered frame from a live payload (the first-paint fetch and every SSE event).
 function render(r) {
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
     for (const id of ["guide", "levels", "gear", "merc", "extras", "targets", "statsplan", "tips", "stash", "sell", "skills", "recipes"]) $(id).innerHTML = "";
     $("recipepanel").hidden = true;
+    shop(null);
     stage(null);
     // The upgrade keys stay remembered: coming back from the menu must not chime again.
     $("upgrades").hidden = true;
@@ -2408,6 +2538,7 @@ function render(r) {
   levels(r.levels);
   stage(r.stage);
   upgrades(r.upgrades, p.name);
+  shop(r.shop);
   gear(r.gear);
   skillTrees(r.skills);
   recipes(r.recipes);
@@ -2956,6 +3087,7 @@ mod tests {
             held_materials: &[],
             white_bases: &[],
             quests: &[],
+            shop: None,
             updated_at: 1_700_000_000,
         }
     }
@@ -2994,6 +3126,7 @@ mod tests {
             held_materials: &[],
             white_bases: &[],
             quests: &[],
+            shop: None,
             updated_at: 1_700_000_000,
         };
         gear_json(&info)
@@ -3875,6 +4008,120 @@ mod tests {
             ]
         );
         Ok(())
+    }
+
+    /// The `shop` section's items as `name|slot|high|count` lines.
+    fn shop_rows(json: &serde_json::Value) -> Vec<String> {
+        let items = json.get("items").and_then(|i| i.as_array());
+        items.map_or_else(Vec::new, |items| {
+            items
+                .iter()
+                .map(|i| {
+                    let field = |k: &str| i.get(k).map_or_else(String::new, ToString::to_string);
+                    format!(
+                        "{}|{}|{}|{}",
+                        field("name"),
+                        field("slot"),
+                        field("high"),
+                        field("count")
+                    )
+                })
+                .collect()
+        })
+    }
+
+    /// The druid-leveling build's slots (pieces as in the build file) and a trade window
+    /// with two of its pieces, one non-matching item, two identical potions.
+    #[test]
+    fn shop_marks_build_pieces_and_chimes_them_as_upgrades() {
+        use crate::shop::shop_item;
+        let bis = crate::config::Bis {
+            build: "test".to_owned(),
+            slots: BTreeMap::from([
+                ("gloves".to_owned(), vec!["Coral Heavy Gloves@13".to_owned()]),
+                (
+                    "swap".to_owned(),
+                    vec!["Battle Staff of Teleportation@24".to_owned()],
+                ),
+            ]),
+            merc_slots: BTreeMap::from([("helm".to_owned(), vec!["Full Helm".to_owned()])]),
+        };
+        let coral = crate::affixes_data::PREFIXES
+            .iter()
+            .find(|&&(_, n, l)| n == "Coral" && l == 13)
+            .map_or(0, |&(i, _, _)| i);
+        let shop = crate::shop::Shop {
+            npc_txt: 255,
+            npc: Some("Ormus".to_owned()),
+            items: vec![
+                shop_item(Some("vgl"), 4, 0, coral, 0),
+                shop_item(Some("fhl"), 2, 0, 0, 0),
+                shop_item(Some("bst"), 4, 1, 0, 532),
+                shop_item(Some("bst"), 2, 1, 0, 0),
+                shop_item(Some("hp1"), 2, 3, 0, 0),
+                shop_item(Some("hp1"), 2, 3, 0, 0),
+            ],
+        };
+        let info = LiveInfo {
+            player_name: "Hork",
+            class: 5,
+            char_level: Some(15),
+            difficulty: Some(0),
+            area: "Kurast Docks",
+            blocks: &crate::render::TextBlocks::default(),
+            bis: Some(&bis),
+            build: None,
+            equipped: &[],
+            equipped_items: &[],
+            owned: &[],
+            stash: &[],
+            stash_owned: &[],
+            skills: &EMPTY_SKILLS,
+            stage: None,
+            held_materials: &[],
+            white_bases: &[],
+            quests: &[],
+            shop: Some(&shop),
+            updated_at: 1_700_000_000,
+        };
+        let json = shop_json(&info);
+        assert_eq!(json.get("npc"), Some(&"Ormus".into()));
+        let rows = shop_rows(&json);
+        assert_eq!(
+            rows,
+            [
+                r#""Coral Heavy Gloves"|"gloves"|false|1"#,
+                r#""Full Helm"|"merc helm"|false|1"#,
+                r#""Battle Staff of Teleportation"|"swap"|true|1"#,
+                r#""Battle Staff"|null|false|1"#,
+                r#""Minor Healing Potion"|null|false|2"#,
+            ]
+        );
+        let ups: Vec<_> = upgrades_json(&info)
+            .iter()
+            .filter_map(|u| {
+                Some((
+                    u.get("key")?.as_str()?.to_owned(),
+                    u.get("why")?.as_str()?.to_owned(),
+                ))
+            })
+            .collect();
+        assert_eq!(
+            ups,
+            vec![
+                (
+                    "shop:gloves:Coral Heavy Gloves".to_owned(),
+                    "Ormus sells it · lvl 13".to_owned()
+                ),
+                ("shop:merc helm:Full Helm".to_owned(), "Ormus sells it".to_owned()),
+                (
+                    "shop:swap:Battle Staff of Teleportation".to_owned(),
+                    "Ormus sells it · lvl 24 — above your level".to_owned()
+                ),
+            ]
+        );
+        let closed = LiveInfo { shop: None, ..info };
+        assert_eq!(shop_json(&closed), serde_json::Value::Null);
     }
 
     #[test]

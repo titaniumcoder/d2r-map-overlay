@@ -242,6 +242,39 @@ fn find_table(pid: u32, mem: &ProcMem, cache: Option<&Path>) -> Option<u64> {
     None
 }
 
+/// Publishes one tick's dashboard JSON ([`web::live_json`]) from the snapshot, the dashboard's
+/// text blocks, the guide stage and the quest flags.
+fn publish_dashboard(
+    snap: &game::Snapshot,
+    blocks: &render::TextBlocks,
+    stage: Option<config::Stage<'_>>,
+    quests: &[u16],
+) {
+    web::publish_live(web::live_json(&web::LiveInfo {
+        player_name: &snap.player.name,
+        class: snap.player.class,
+        char_level: snap.player.char_level,
+        difficulty: snap.difficulty,
+        area: &info::level_name(snap.level.id)
+            .map_or_else(|| format!("Level {}", snap.level.id), str::to_owned),
+        blocks,
+        bis: snap.player.bis.as_ref(),
+        build: stage.map(|s| s.build),
+        stage,
+        held_materials: &snap.held_materials,
+        white_bases: &snap.white_bases,
+        quests,
+        equipped: &snap.equipped,
+        equipped_items: &snap.equipped_items,
+        owned: &snap.owned_names,
+        stash: &snap.stash,
+        stash_owned: &snap.stash_names,
+        skills: &snap.skills,
+        shop: snap.shop.as_ref(),
+        updated_at: now_secs(),
+    }));
+}
+
 /// Snapshots at [`TICK`] until the process exits; `Ok(())` then, `Err` if the UI is gone.
 #[allow(
     clippy::too_many_arguments,
@@ -324,28 +357,8 @@ fn follow_game(
                     equipped: snap.equipped.clone(),
                     merc_equipped: snap.merc_equipped.clone(),
                 });
-                web::publish_live(web::live_json(&web::LiveInfo {
-                    player_name: &snap.player.name,
-                    class: snap.player.class,
-                    char_level: snap.player.char_level,
-                    difficulty: snap.difficulty,
-                    area: &info::level_name(snap.level.id)
-                        .map_or_else(|| format!("Level {}", snap.level.id), str::to_owned),
-                    blocks: &blocks,
-                    bis: snap.player.bis.as_ref(),
-                    build: stage.map(|s| s.build),
-                    stage,
-                    held_materials: &snap.held_materials,
-                    white_bases: &snap.white_bases,
-                    quests: quest_flags.read(pid, mem, update.new_game),
-                    equipped: &snap.equipped,
-                    equipped_items: &snap.equipped_items,
-                    owned: &snap.owned_names,
-                    stash: &snap.stash,
-                    stash_owned: &snap.stash_names,
-                    skills: &snap.skills,
-                    updated_at: now_secs(),
-                }));
+                let quests = quest_flags.read(pid, mem, update.new_game);
+                publish_dashboard(&snap, &blocks, stage, quests);
                 if let Some((tabs, items)) = update.stash_captured {
                     eprintln!("shared stash captured: {tabs} tabs, {items} items");
                     journal.stash(true, tabs, items);

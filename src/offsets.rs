@@ -338,18 +338,32 @@ pub mod item_data {
     pub const FLAG_RUNEWORD: u32 = 0x0400_0000;
     /// `FLAGS` bit of an identified item (classic; live: set on an identified quest unique).
     pub const FLAG_IDENTIFIED: u32 = 0x10;
+    /// `FLAGS` bit of an item for sale in a vendor's trade window (classic `ITEMFLAG_INSTORE`).
+    /// Live 2026-11-18 (Ormus, ~60 items): set on every store item and on no other item.
+    pub const FLAG_IN_STORE: u32 = 0x2000;
     /// u32 uniqueitems / setitems row (`*ID`) of a unique / set item. Live-verified 2026-11-15 for
     /// an identified unique (Khalim's Flail: 127 = uniqueitems `KhalimFlail`). Sets verified
     /// live too (2026-11-17: the stash reader resolves Sigon's set pieces via this field),
     /// and whether it is filled in before the item is identified (so only trusted with
     /// [`FLAG_IDENTIFIED`]).
     pub const FILE_INDEX: u64 = 0x34;
+    /// u16 magic prefix id of a magic item (first of three; 0 = none): `PREFIX_BASE` (785) +
+    /// the magicprefix.txt row (`affixes_data::PREFIXES`). Live 2026-11-18 on 14 owned magic
+    /// items checked against their stat lists. The rare name words are the u16 at `+0x42`
+    /// (prefix) and `+0x44` (suffix), not read. Store items assumed to share the layout.
+    pub const MAGIC_PREFIX: u64 = 0x48;
+    /// u16 magic suffix id (first of three, `+0x4E/+0x50/+0x52`; 0 taken as none, unsettled:
+    /// magicsuffix row 0 is "of Health", to check on a live item) = the magicsuffix.txt
+    /// row. Live 2026-11-18: a Battle Staff of Teleportation (Teleport charges) read 532.
+    pub const MAGIC_SUFFIX: u64 = 0x4E;
     /// u8 body slot of an equipped item (0 none; 1 helm, 3 armour, 4 weapon…). Live 2026-11-17:
     /// the local player's equipped items carry their slot here, the mercenary's too.
     pub const BODY: u64 = 0x54;
     /// u8 storage page of a stored item: `PAGE_INVENTORY` 0, stash 4; 255 when equipped (body
     /// slot in the byte at `+0x54`), on the ground or on the cursor. Live-verified 2026-11-15
     /// over 74 items.
+    /// A store item's page is its trade-window tab (live 2026-11-18, Ormus): 0 armor, 1 and 2
+    /// weapons, 3 misc.
     pub const PAGE: u64 = 0x55;
     pub const PAGE_INVENTORY: u8 = 0;
     /// The Horadric Cube (live 2026-11-15, owner = the player's unit id).

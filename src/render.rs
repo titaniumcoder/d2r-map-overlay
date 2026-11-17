@@ -1676,6 +1676,7 @@ mod tests {
             cows: None,
             trail: vec![],
             skills: crate::game::Skills::default(),
+            shop: None,
             warnings: vec![],
         }
     }

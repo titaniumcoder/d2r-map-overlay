@@ -47,6 +47,9 @@ const MAX_STASH_ITEMS_PER_TAB: usize = 100;
 const MAX_STASH_TABS: usize = 16;
 /// Most items one item can hold in its sockets (6 in D2R).
 const MAX_SOCKETS: usize = 6;
+/// Most items walked in a vendor NPC's inventory chain (live: ~60 at Ormus); a runaway
+/// chain means a misread.
+const MAX_SHOP_ITEMS: usize = 300;
 /// Most nodes walked in the player's skill list (live: 19; a class has 30 skills, plus the
 /// basic ones and gear-granted skills of other classes).
 const MAX_SKILLS: usize = 128;
@@ -193,6 +196,10 @@ pub struct Snapshot {
     /// when empty, so older dumps stay loadable.
     #[serde(default, skip_serializing_if = "Skills::is_empty")]
     pub skills: Skills,
+    /// The vendor trade window open right now ([`crate::shop`]); read in towns only. Left
+    /// out of the JSON when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shop: Option<crate::shop::Shop>,
     pub warnings: Vec<String>,
 }
 
@@ -935,6 +942,12 @@ pub fn snapshot(
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
     let terrorized = is_terrorized(&monsters);
     let skills = r.skills(chosen.addr.0, player.class);
+    // Vendors stand in towns only; elsewhere the monsters' inventories aren't walked.
+    let shop = if is_town(player.level_id) {
+        r.shop(monsters.iter().map(|m| m.addr.0), items_table)
+    } else {
+        None
+    };
 
     Ok(Snapshot {
         player,
@@ -967,6 +980,7 @@ pub fn snapshot(
         cows: None,
         trail: Vec::new(),
         skills,
+        shop,
         warnings: r.into_warnings(),
     })
 }
@@ -1922,6 +1936,77 @@ impl<M: ReadMem> Reader<'_, M> {
             file_index: named_index,
             runeword,
         }
+    }
+
+    /// The open trade window: the first of the monster units at `npcs` (a vendor NPC) whose
+    /// inventory chain
+    /// ([`unit::INVENTORY`], [`inventory::FIRST_ITEM`], then [`item_data::NEXT_IN_INVENTORY`])
+    /// holds items flagged [`item_data::FLAG_IN_STORE`]. Live 2026-11-18 (Ormus): the chain is
+    /// only filled while the window is open. Optional data: unreadable links end the walk
+    /// without a warning.
+    fn shop(
+        &self,
+        mut npcs: impl Iterator<Item = u64>,
+        items_table: Option<u64>,
+    ) -> Option<crate::shop::Shop> {
+        npcs.find_map(|npc| {
+            let items = self.store_items(npc, items_table);
+            let npc_txt = self.u32(npc, unit::TXT).ok()?;
+            (!items.is_empty()).then(|| crate::shop::Shop {
+                npc_txt,
+                npc: crate::affixes_data::vendor(npc_txt).map(str::to_owned),
+                items,
+            })
+        })
+    }
+
+    /// The store items in the inventory chain of the monster unit at `npc` (empty for a
+    /// monster without an inventory or with only its own gear).
+    fn store_items(&self, npc: u64, items_table: Option<u64>) -> Vec<crate::shop::ShopItem> {
+        let mut out = Vec::new();
+        let mut cur = self
+            .ptr(npc, unit::INVENTORY)
+            .ok()
+            .flatten()
+            .and_then(|inv| self.ptr(inv, inventory::FIRST_ITEM).ok().flatten());
+        let mut walked = 0;
+        while let Some(item) = cur {
+            walked += 1;
+            let Ok(Some(data)) = self.ptr(item, unit::UNIT_DATA) else {
+                break;
+            };
+            if walked > MAX_SHOP_ITEMS {
+                // A runaway or cyclic chain: a misread, not a shop.
+                return Vec::new();
+            }
+            if let Ok(flags) = self.u32(data, item_data::FLAGS)
+                && flags & item_data::FLAG_IN_STORE != 0
+                && let Some(entry) = self.store_item(item, data, items_table)
+            {
+                out.push(entry);
+            }
+            cur = self.ptr(data, item_data::NEXT_IN_INVENTORY).ok().flatten();
+        }
+        out
+    }
+
+    /// One store item (unit at `item`, `ItemData` at `data`) named by [`crate::shop::shop_item`].
+    fn store_item(&self, item: u64, data: u64, items_table: Option<u64>) -> Option<crate::shop::ShopItem> {
+        let quality = self.u32(data, item_data::QUALITY).ok()?;
+        let page = self.u8(data, item_data::PAGE).ok()?;
+        let prefix = self.u16(data, item_data::MAGIC_PREFIX).ok()?;
+        let suffix = self.u16(data, item_data::MAGIC_SUFFIX).ok()?;
+        let code = items_table
+            .zip(self.u32(item, unit::TXT).ok())
+            .and_then(|(t, txt)| items::read_code(self.mem, t, txt))
+            .map(items::code_text);
+        Some(crate::shop::shop_item(
+            code.as_deref(),
+            quality,
+            page,
+            prefix,
+            suffix,
+        ))
     }
 
     /// The item codes of what is socketed in the item at `addr`, in socket order: the
@@ -4148,6 +4233,56 @@ mod tests {
             suppressed: 0,
         };
         assert_eq!(r.sockets(I1)?, 0, "null stat list");
+        Ok(())
+    }
+
+    /// Store items of the open trade window ([`Reader::shop`]): hung off a monster's
+    /// inventory chain, flagged [`item_data::FLAG_IN_STORE`], read in towns only.
+    #[test]
+    fn the_trade_window_lists_the_vendors_store_items_in_town() -> Result<()> {
+        const S0: u64 = 0xB0_0000;
+        const S1: u64 = 0xB0_1000;
+        const S2: u64 = 0xB0_2000;
+        const NPC_INV: u64 = 0xB8_0000;
+        let store = item_data::FLAG_IN_STORE;
+        let mut m = world()?;
+        base_items_table(&mut m)?;
+        // A magic Crystal Sword of Teleportation (weapons tab), the NPC's own gear (not for
+        // sale), a white Shako (armor tab).
+        stored_item(&mut m, S0, (30, 4, store, 0), (0, 1), &[], 0)?;
+        patch(
+            &mut m,
+            S0 + 0x200,
+            ITEM_DATA_SIZE,
+            item_data::MAGIC_SUFFIX,
+            &532u16.to_le_bytes(),
+        )?;
+        stored_item(&mut m, S1, (30, 2, 0, 0), (0, 255), &[], 0)?;
+        stored_item(&mut m, S2, (40, 2, store, 0), (0, 0), &[], 0)?;
+        let first = chain_items(&mut m, &[S0, S1, S2])?;
+        tab_inventory(&mut m, NPC_INV, 0, first)?;
+        // M1 (monstats 41 here) carries the store; M0 has no inventory.
+        patch(&mut m, M1, UNIT_SIZE, unit::INVENTORY, &NPC_INV.to_le_bytes())?;
+
+        let s = snapshot(&m, TABLE, Some(ITEMS), None, None)?;
+        assert_eq!(s.shop, None, "level 21 is no town: the inventories aren't walked");
+
+        level_struct(&mut m, LEVEL, 40, R0)?; // Lut Gholein
+        let s = snapshot(&m, TABLE, Some(ITEMS), None, None)?;
+        let shop = s.shop.context("a shop in town")?;
+        assert_eq!((shop.npc_txt, shop.npc), (41, None), "not a vendor row");
+        let names: Vec<_> = shop
+            .items
+            .iter()
+            .map(|i| (i.name.as_str(), i.page, i.req_level))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("Crystal Sword of Teleportation", 1, Some(24)),
+                ("Shako", 0, Some(43))
+            ]
+        );
         Ok(())
     }
 

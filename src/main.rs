@@ -2,6 +2,7 @@
 //!
 //! See `PLAN.md` for the architecture and milestones.
 
+mod affixes_data;
 mod breakpoints;
 mod build;
 mod config;
@@ -30,6 +31,7 @@ mod quests;
 mod render;
 mod runewords_data;
 mod session;
+mod shop;
 mod skills_data;
 mod stash;
 #[cfg(test)]

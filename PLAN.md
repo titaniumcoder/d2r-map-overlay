@@ -180,7 +180,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   (Cleglaw's Claw, row 32) read 0 → the index is only filled once identified, so name rules on unidentified items
   stay uncertain). After identifying (Cain or scroll), the index is filled: Darkglow = unique 83, Cleglaw's Claw = set
   *ID 7 (set rows are keyed by `*ID`, not file order) — both verified live 2026-11-15; the inventory keep list relies on this., `+0x54` body slot,
-  `+0x55` page (0 inventory, 4 stash, 255 elsewhere; verified over 74 items). Inventory = mode 0 + page 0.
+  `+0x55` page (0 inventory, 4 stash, 255 elsewhere; verified over 74 items). Store items: `+0x18` bit 0x2000, page = store tab,
+  magic affix ids at `+0x48`/`+0x4E` (see "Vendor trade window"). Inventory = mode 0 + page 0.
 - Item stat list: unit `+0x88` → `+0x30` entries / `+0x38` count, entry {u16 layer, u16 id, u32 value}; sockets = 194.
 - Valuables: research/valuables.json (67 rules, S/A/B, trade/twink) embedded; tiers per category in
   `~/.config/d2r-map-overlay/config.toml` (default S+A both; example: config.example.toml). Ground: ring by tier
@@ -316,6 +317,32 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   and the `BiS` ✓: `bis_lines` ticks a line `owned` (character's own) or `stash` from the two name lists; the
   dashboard gets the structured per-line `tick` and marks ✓(stash) distinctly (no string scraping) — the
   `BiS` lines are dashboard-only since the 2026-11-17 text-stack migration.
+
+## Vendor trade window (added 2026-11-18, user request: "nice to have")
+- **Store items are not in the unit table**: they hang off the vendor NPC, a monster unit (type 1):
+  `unit + 0x90` Inventory → `+0x10` first item → `ItemData + 0xB0` next (the stash-tab/socket chain).
+  Filled only while the trade window is open, empty after closing. Live (python probes, Ormus, ~60 items).
+- Store `ItemData`: `OWNER` = `NO_OWNER`, body 0, page `+0x55` = store tab (0 armor, 1/2 weapons, 3 misc).
+  **`FLAGS` bit `0x2000`** (`item_data::FLAG_IN_STORE`, classic `ITEMFLAG_INSTORE`) is set on every store
+  item and on nothing else: the shop-open signal.
+- **Magic affix ids** (live on 14 owned magic items against their stat lists): u16 at `+0x42` rare prefix,
+  `+0x44` rare suffix, `+0x48/+0x4A/+0x4C` magic prefix[3], `+0x4E/+0x50/+0x52` magic suffix[3]; 0 = none.
+  Suffix id = magicsuffix row (Teleportation = 532), prefix id = 785 (the highest magicsuffix row) +
+  magicprefix row. Names via the English string table; several rows share a name, so builds match by
+  composed name. Required level = max(base, prefix, suffix `levelreq`). Tables: `research/gen_affixes.py`
+  → `src/affixes_data.rs` (affixes, misc bases, vendor names).
+- **Not yet live-verified**: that a STORE item's affix words sit at the same offsets (assumed from owned items).
+- **Open: suffix id 0** is read as "no suffix", but magicsuffix row 0 is a real affix ("of Health"); whether
+  an item of Health reads 0 (and so loses its suffix in the name) is unsettled — check on a live item.
+- Reader (`game::Reader::shop`, towns only): the first monster with `FLAG_IN_STORE` items in its inventory
+  chain (cap 300) → `Snapshot.shop` (`shop::Shop`: vendor name, items with base/prefix/suffix/name/req).
+  Only magic (quality 4) names are decoded; others show the base name.
+- Dashboard: "Vendor" panel (hidden without a shop), one column per store tab; an item is a build piece
+  when the piece names its base plus any subset of its affixes (`shop::matches`: "Coral Heavy Gloves"
+  matches Coral Heavy Gloves of Frost, "Russet Heavy Boots of Haste" needs both) in the current stage's
+  character or merc slots (outgrown pieces skipped) → bold ▲ with the slot, and an upgrade entry of kind
+  `shop` (key `shop:<slot>:<piece>`, so it chimes once per build piece). Required level above clvl → faded.
+- [ ] Vendor panel: implemented 2026-11-18; tick after a live shop shows the decoded names.
 
 ## Build definitions and BiS selection (2026-11-17)
 - **Agent-authored build files**: `~/.config/d2r-map-overlay/builds/<slug>.toml`, one build per file
