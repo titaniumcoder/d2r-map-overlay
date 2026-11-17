@@ -1,5 +1,5 @@
-//! The breakpoint guide (user request, 2026-11-17): one line under the info line with the
-//! character's speed stats and resistances —
+//! The breakpoint guide (user request, 2026-11-17): one dashboard line (shown as chips; no
+//! longer drawn on the overlay) with the character's speed stats and resistances —
 //! - `fcr (frames / current / next)`: the current cast animation in frames, the total FCR, and
 //!   the FCR needed for one frame less (the user's format: "6 fps, 22 current, 28 for 7 fps");
 //! - `fhr (frames / current / next)` the same for hit recovery;

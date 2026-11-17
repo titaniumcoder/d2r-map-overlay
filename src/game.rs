@@ -145,7 +145,7 @@ pub struct Snapshot {
     #[serde(skip)]
     pub inventory_items: u32,
     /// Inventory items worth keeping (S and A tiers, whatever the config; see
-    /// [`valuables::keep_list`]). Shown as green lines below the info line, also in towns.
+    /// [`valuables::keep_list`]). Shown on the dashboard (keep panel).
     /// Left out of the JSON when empty, so older dumps and fixtures stay unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inventory_keep: Vec<valuables::Keep>,

@@ -5,8 +5,8 @@
 //! (owned / in the shared stash) and strike-through where the equipped piece is already
 //! better. The overlay watches the config file and the `builds/` directory and hot-reloads
 //! them (see `live`). The app also serves the live dashboard: the level, keep, sell, give-away
-//! and `BiS` blocks (the overlay itself draws only the breakpoint guide), published by `live`
-//! each tick and read by `GET /api/live`.
+//! and `BiS` blocks and the breakpoint guide (the overlay draws only the map and info line),
+//! published by `live` each tick and read by `GET /api/live`.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};

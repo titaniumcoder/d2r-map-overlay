@@ -524,26 +524,6 @@ pub fn font() -> Option<&'static FontVec> {
     .as_ref()
 }
 
-/// Height in px of one text line with its outline.
-pub fn line_height(font: &FontVec) -> u32 {
-    let scaled = font.as_scaled(PxScale::from(TEXT_PX));
-    // +2: the 1 px outline above and below.
-    ceil_px(scaled.height()) + 2
-}
-
-/// Extra canvas px at the bottom for `lines` text rows below the info line, gap rows included
-/// (0 for none; see [`draw_bands`]).
-pub fn text_band_height(font: &FontVec, lines: usize) -> u32 {
-    u32::try_from(lines).map_or(0, |n| n.saturating_mul(line_height(font)))
-}
-
-/// The canvas height `draw_bands` needs for `lines`: the band plus padding above and below. A
-/// town frame is exactly this tall, so the lines hug the top-right corner (the overlay is
-/// anchored there and sized to its frame).
-pub fn text_frame_height(font: &FontVec, lines: usize) -> u32 {
-    text_band_height(font, lines) + 2 * PAD
-}
-
 /// One sell or give-away entry as text: `Gravenspine (inv)`, `Magefist ×2 (stash)`.
 pub fn spare_entry(s: &Spare) -> String {
     let place = s.place.label();
@@ -637,60 +617,7 @@ fn wrap(
     lines.iter().enumerate().map(|(i, l)| render(i, l)).collect()
 }
 
-/// Draws the text `lines` (each a [`Band`]) bottom-left into `pm` in their colours, the last
-/// one at the bottom. Draws nothing if the canvas is shorter than the lines.
-pub fn draw_bands(pm: &mut Pixmap, font: &FontVec, lines: &[Band]) {
-    let h = pm.height();
-    if h < text_frame_height(font, lines.len()) {
-        return;
-    }
-    let scaled = font.as_scaled(PxScale::from(TEXT_PX));
-    let lh = line_height(font);
-    let x0 = f32_px(PAD + 1);
-    for (from_bottom, band) in (0u32..).zip(lines.iter().rev()) {
-        if band.text.is_empty() {
-            continue; // a gap row
-        }
-        let baseline = f32_px(h - PAD - 1 - from_bottom * lh) + scaled.descent();
-        if band.spans.is_empty() {
-            draw_outlined(pm, font, TEXT_PX, band.colour, &band.text, (x0, baseline), false);
-        } else {
-            // Spanned row: draw each segment in its colour, advancing the pen. A span starts
-            // at its byte offset and runs to the next one (or the end).
-            let mut marks = band.spans.clone();
-            marks.sort_by_key(|&(off, _)| off);
-            marks.dedup();
-            let mut pen = x0;
-            let mut pos = 0usize;
-            for (off, colour) in marks {
-                let off = off.min(band.text.len());
-                if off > pos {
-                    let head = band.text.get(pos..off).unwrap_or_default();
-                    draw_outlined(pm, font, TEXT_PX, band.colour, head, (pen, baseline), false);
-                    pen += text_width(font, head);
-                    pos = off;
-                }
-                let end = band
-                    .spans
-                    .iter()
-                    .map(|&(o, _)| o)
-                    .filter(|&o| o > pos)
-                    .min()
-                    .unwrap_or(band.text.len());
-                let seg = band.text.get(pos..end.max(pos)).unwrap_or_default();
-                draw_outlined(pm, font, TEXT_PX, colour, seg, (pen, baseline), false);
-                pen += text_width(font, seg);
-                pos = end.max(pos);
-            }
-            if pos < band.text.len() {
-                let seg = band.text.get(pos..).unwrap_or_default();
-                draw_outlined(pm, font, TEXT_PX, band.colour, seg, (pen, baseline), false);
-            }
-        }
-    }
-}
-
-/// One text row below the info line: its text, colour, and optional coloured segments
+/// One dashboard text row (the breakpoint guide): its text, colour, and optional coloured segments
 /// (`spans`: byte offset into `text` where a differently coloured part starts — used for the
 /// guide's low-resistance values, user request, 2026-11-17).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -702,17 +629,13 @@ pub struct Band {
 
 impl Band {
     /// A plain row without spans.
+    #[cfg(test)]
     pub fn plain(text: impl Into<String>, colour: [u8; 4]) -> Self {
         Self {
             text: text.into(),
             colour,
             spans: Vec::new(),
         }
-    }
-
-    /// A gap row (empty text).
-    pub fn gap(colour: [u8; 4]) -> Self {
-        Self::plain(String::new(), colour)
     }
 }
 
@@ -765,14 +688,11 @@ pub fn fit_text(font: &FontVec, line: &InfoLine, max_width: f32) -> String {
     }
 }
 
-/// Draws `line` bottom-left into `pm`, `inset` px above the bottom (room for the guide rows):
-/// white text with a dark 1 px outline, a terrorized line's last part in violet. Draws nothing
-/// if the canvas is smaller than the band.
-pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine, inset: u32) {
+/// Draws `line` bottom-left into `pm`: white text with a dark 1 px outline, a terrorized
+/// line's last part in violet. Draws nothing if the canvas is smaller than the band.
+pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine) {
     let w = pm.width();
-    let Some(h) = pm.height().checked_sub(inset) else {
-        return;
-    };
+    let h = pm.height();
     if h < band_height(font) {
         return;
     }
@@ -1454,20 +1374,6 @@ mod tests {
     }
 
     #[test]
-    fn text_band_heights() {
-        let Some(font) = font() else {
-            eprintln!("skipped: no info-line font on this machine");
-            return;
-        };
-        let lh = line_height(font);
-        assert!(lh > 10, "{lh}");
-        assert_eq!(text_band_height(font, 0), 0, "no lines, no band");
-        assert_eq!(text_band_height(font, 1), lh);
-        assert_eq!(text_band_height(font, 3), 3 * lh);
-        assert_eq!(text_band_height(font, 7), 7 * lh, "gap + guide rows");
-    }
-
-    #[test]
     fn terrorized_line_drops_table_levels() {
         // Moo Moo Farm (39).
         let line = info_line(39, Some(0), true, None, &[]);
@@ -1616,7 +1522,7 @@ mod tests {
             let Some(mut pm) = Pixmap::new(600, 40) else {
                 return 0;
             };
-            draw(&mut pm, font, line, 0);
+            draw(&mut pm, font, line);
             pm.pixels()
                 .iter()
                 .filter(|p| {

@@ -11,9 +11,10 @@ the screen. The minimap shows:
 - **Landmarks:** quest spots such as the Summoner, the real Tal Rasha tomb's orifice, the Horadric Cube,
   Radament and the Cairn Stones.
 - **Shrines and wells, and valuable drops.**
-- **Breakpoint guide line** under the map: the character's cast/hit-recovery frames and resistances.
-  The level suggestions and the keep / sell / give-away / BiS lists live on the web dashboard
-  (`/`, served by the overlay's localhost web app; `/api/live`).
+- **Info line** under the map: area, monster level (coloured by the build's damage types), terror.
+  The breakpoint guide (cast/hit-recovery frames, resistances), level suggestions, gear and
+  keep / sell / give-away lists live on the web dashboard (`/`, served by the overlay's localhost
+  web app; `/api/live`). The overlay hides in towns.
 
 ## ⚠️ Use at your own risk: it could get your account banned
 

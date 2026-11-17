@@ -427,24 +427,17 @@ impl ItemsTable {
     }
 }
 
-/// What one snapshot's tick sends, if anything. In a town only the breakpoint guide line is
-/// shown (no map, info line or markers), and the overlay hides when there is none; elsewhere
-/// the map. `None`: the screen is up to date (or rendering failed, logged).
+/// What one snapshot's tick sends, if anything. The overlay hides in towns (the breakpoint
+/// guide line it used to show there overlapped the game's terror-zone list and lives on the
+/// dashboard; user request, 2026-11-17); elsewhere the map. `None`: the screen is up to date
+/// (or rendering failed, logged).
 fn tick_msg(dedup: &mut Dedup, snap: Snapshot, (w, h): (u32, u32), font: Option<&FontVec>) -> Option<Msg> {
-    let town = game::is_town(snap.level.id);
-    if town && crate::breakpoints::guide_band(&snap.player, snap.difficulty).is_none() {
+    if game::is_town(snap.level.id) {
         return dedup.hide(Hidden::Town).then_some(Msg::Hide);
     }
     let snap = dedup.changed(snap)?;
-    let frame = if town {
-        render::render_town(snap, w, h, font)
-    } else {
-        render::render_with(snap, w, h, font).map(Some)
-    };
-    match frame {
-        Ok(Some(frame)) => Some(Msg::Frame(frame)),
-        // No font for the guide line: nothing to show in town.
-        Ok(None) => dedup.hide(Hidden::Town).then_some(Msg::Hide),
+    match render::render_with(snap, w, h, font) {
+        Ok(frame) => Some(Msg::Frame(frame)),
         Err(e) => {
             eprintln!("rendering failed: {e:#}");
             None
@@ -533,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn town_without_a_guide_hides() -> Result<()> {
+    fn a_town_hides_once() -> Result<()> {
         let mut d = Dedup::default();
         let mut town = fixture()?;
         town.level.id = 1;
@@ -553,94 +546,25 @@ mod tests {
     }
 
     #[test]
-    fn town_with_a_guide_shows_only_the_guide_line() -> Result<()> {
-        let Some(font) = info::font() else {
-            eprintln!("skipped: no info-line font on this machine");
-            return Ok(());
-        };
-        let mut dedup = Dedup::default();
+    fn towns_hide_even_with_a_guide_and_the_field_shows_the_map() -> Result<()> {
+        let font = info::font();
+        // The guide line moved to the dashboard (it overlapped the game's terror-zone list):
+        // a town hides even when the breakpoint guide could be shown.
         let mut town = fixture()?;
         town.level.id = 1;
         town.player.speed = Some(speed());
-        let Some(Msg::Frame(pm)) = tick_msg(&mut dedup, town, (200, 200), Some(font)) else {
-            anyhow::bail!("no frame in town with a guide");
-        };
-        let lh = info::line_height(font);
-        // The town frame is only as tall as its lines: it hugs the top-right corner instead of
-        // hovering a map-sized box over the vendor panels.
-        assert!(pm.height() <= 3 * lh + 8, "town frame is {} px tall", pm.height());
-        let mut violet = 0;
-        for (index, px) in pm.pixels().iter().enumerate() {
-            let colour = px.demultiply();
-            if colour.alpha() == 0 {
-                continue;
-            }
-            let row = u32::try_from(index)? / pm.width();
-            assert!(row + lh + 8 >= pm.height(), "ink above the guide at y {row}");
-            // Ink is the guide's violet text, its red low-resistance values or their dark
-            // outline; no map, markers, white info line or (green) keep list.
-            let (red, grn, blue) = (colour.red(), colour.green(), colour.blue());
-            assert!(
-                grn <= red.max(blue),
-                "non-guide pixel {red},{grn},{blue} at y {row}"
-            );
-            if blue > 200 && red > 150 && colour.alpha() == 255 {
-                violet += 1;
-            }
-        }
-        assert!(violet > 20, "only {violet} violet pixels");
-        Ok(())
-    }
-
-    #[test]
-    fn town_without_a_guide_hides_even_with_a_sell_list_or_a_level_suggestion() -> Result<()> {
-        let Some(font) = info::font() else {
-            return Ok(());
-        };
-        // The sell list and the level suggestions live on the dashboard now: a town shows only
-        // the guide, so without one it hides even with them.
-        let mut town = fixture()?;
-        town.level.id = 1;
-        town.sell = vec![crate::valuables::Spare {
-            name: "Gravenspine".into(),
-            place: crate::valuables::Place::Stash,
-            count: 1,
-        }];
         let mut d = Dedup::default();
-        assert!(
-            matches!(tick_msg(&mut d, town, (200, 200), Some(font)), Some(Msg::Hide)),
-            "a sell list alone no longer shows a town frame"
-        );
-        let mut town = fixture()?;
-        town.level.id = 40;
-        town.difficulty = Some(1);
-        town.player.char_level = Some(46);
-        let mut d = Dedup::default();
-        assert!(
-            matches!(tick_msg(&mut d, town, (200, 200), Some(font)), Some(Msg::Hide)),
-            "a level suggestion alone no longer shows a town frame"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn the_guide_shrinks_the_map_outside_towns() -> Result<()> {
-        let Some(font) = info::font() else {
-            return Ok(());
-        };
+        assert!(matches!(
+            tick_msg(&mut d, town, (200, 200), font),
+            Some(Msg::Hide)
+        ));
         let h = 300;
-        let plain = render::map_height(h, Some(font), 0);
-        // The guide occupies two rows: its gap row above it and the band itself.
-        assert_eq!(
-            render::map_height(h, Some(font), 2),
-            plain - 2 * info::line_height(font)
-        );
-        assert_eq!(render::map_height(h, None, 2), h, "no font: no bands");
+        assert_eq!(render::map_height(h, None), h, "no font: no info band");
         let mut snap = fixture()?;
         snap.player.speed = Some(speed());
         let mut d = Dedup::default();
         assert!(matches!(
-            tick_msg(&mut d, snap, (200, h), Some(font)),
+            tick_msg(&mut d, snap, (200, h), font),
             Some(Msg::Frame(_))
         ));
         Ok(())

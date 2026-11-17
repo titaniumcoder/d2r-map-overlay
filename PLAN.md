@@ -164,7 +164,7 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - Item stat list: unit `+0x88` → `+0x30` entries / `+0x38` count, entry {u16 layer, u16 id, u32 value}; sockets = 194.
 - Valuables: research/valuables.json (67 rules, S/A/B, trade/twink) embedded; tiers per category in
   `~/.config/d2r-map-overlay/config.toml` (default S+A both; example: config.example.toml). Ground: ring by tier
-  (S red, A orange, dashed = uncertain). Inventory keep list in green below the info line, also in towns: certain
+  (S red, A orange, dashed = uncertain). Inventory keep list (dashboard; formerly green lines on the overlay): certain
   S/A, uncertain only S — moved to the dashboard with the 2026-11-17 text-stack migration (see Overlay), the
   reader and its tiers unchanged. Unique/set names from src/item_names_data.rs (research/gen_item_names.py).
 
@@ -313,11 +313,10 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - Draw current level only: room footprints (loaded rooms brighter), player dot, waypoint (blue), exits (purple + target name),
   superuniques (gold + name if known), champion/unique packs (red), at ~5 Hz from a reader thread.
 - Text stack (migrated 2026-11-17): the overlay draws only the info line (its monster levels still
-  coloured by build damages) and the breakpoint guide line below it, with a gap row between. The
-  level suggestions (where to go), keep, sell, give-away and `BiS` lines are dashboard-only now:
-  `live` publishes them via `GET /api/live` (`render::text_blocks`); the overlay's draw path
-  (`render::guide_bands`) composes the guide alone. In towns (no map) the overlay shows only the
-  guide line and hides when there is none (`render::render_town`).
+  coloured by build damages). The breakpoint guide, level suggestions (where to go), keep, sell,
+  give-away and `BiS` lines are dashboard-only: `live` publishes them via `GET /api/live`
+  (`render::text_blocks`). The overlay hides in towns (the guide line it showed there overlapped
+  the game's terror-zone list; user request, 2026-11-17).
 - Iso projection `sx = x − y, sy = (x + y)/2`, scaled to fit the level bounds.
 - Visible only while the Hyprland active window class is `steam_app_battlenet` with title `Diablo II: Resurrected`.
 

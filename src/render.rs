@@ -936,20 +936,17 @@ pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
     render_with(snap, width, height, info::font())
 }
 
-/// The canvas height the map is fitted into: all of it, less the info line's band and the
-/// band of `text_rows` rows below it (the breakpoint guide and its gap row; see
-/// [`info::draw_bands`]) if there is a font to draw them with.
-pub fn map_height(height: u32, font: Option<&FontVec>, text_rows: usize) -> u32 {
-    font.map_or(height, |f| {
-        let bands = info::band_height(f) + info::text_band_height(f, text_rows);
-        height.saturating_sub(bands).max(1)
-    })
+/// The canvas height the map is fitted into: all of it, less the info line's band if there is
+/// a font to draw it with.
+pub fn map_height(height: u32, font: Option<&FontVec>) -> u32 {
+    font.map_or(height, |f| height.saturating_sub(info::band_height(f)).max(1))
 }
 
 /// The text blocks below the info line, kept separate: the breakpoint guide bands, the level
 /// suggestions, the inventory keep list, the sell and give-away lists and the `BiS` chase list.
 /// The webapp's live dashboard (`live` publishes from the same tick) consumes all of them; the
-/// overlay draws only the guide ([`guide_bands`]).
+/// overlay draws none of them (only the info line; the guide moved to the dashboard, user
+/// request 2026-11-17).
 #[derive(Debug, Default)]
 pub struct TextBlocks {
     pub guide: Vec<info::Band>,
@@ -1000,43 +997,6 @@ pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextB
     }
 }
 
-/// The overlay's text rows for a `width` px canvas: the breakpoint guide band with a gap row
-/// above it ([`info::Band::gap`]; the level, keep, sell and give-away lists live on the
-/// dashboard now — see [`text_blocks`]); none without a font.
-fn guide_bands(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<info::Band> {
-    let mut bands = text_blocks(snap, width, font).guide;
-    if !bands.is_empty() {
-        // The gap row keeps the guide apart from the info line above it (user request, 2026-11-15).
-        bands.insert(0, info::Band::gap(info::GUIDE_TEXT));
-    }
-    bands
-}
-
-/// A town frame with only the breakpoint guide line (the map is hidden in towns; the level,
-/// keep, sell and give-away lists live on the dashboard now — see [`text_blocks`]); `None` if
-/// there is no guide to show (no font, or no readable speed stats). The frame is exactly as
-/// tall as the guide needs, so the overlay (anchored top-right, sized to its frame) sits in the
-/// screen's top-right corner instead of hovering a map-sized empty box over the vendor panels
-/// (user request, 2026-11-17).
-///
-/// # Errors
-/// Fails if the canvas size is zero or too large for tiny-skia.
-pub fn render_town(
-    snap: &Snapshot,
-    width: u32,
-    _height: u32,
-    font: Option<&FontVec>,
-) -> Result<Option<Pixmap>> {
-    let bands = guide_bands(snap, width, font);
-    let Some(font) = font.filter(|_| !bands.is_empty()) else {
-        return Ok(None);
-    };
-    let h = info::text_frame_height(font, bands.len());
-    let mut pm = Pixmap::new(width, h).with_context(|| format!("invalid canvas size {width}x{h}"))?;
-    info::draw_bands(&mut pm, font, &bands);
-    Ok(Some(pm))
-}
-
 /// [`render`] with an explicit font; `None` draws no info line and gives the map the full canvas.
 ///
 /// # Errors
@@ -1055,8 +1015,7 @@ fn render_rules(
 ) -> Result<Pixmap> {
     let mut pm =
         Pixmap::new(width, height).with_context(|| format!("invalid canvas size {width}x{height}"))?;
-    let guide = guide_bands(snap, width, font);
-    let view = View::fit(level_bounds(snap), width, map_height(height, font, guide.len()));
+    let view = View::fit(level_bounds(snap), width, map_height(height, font));
     fill_rooms(&mut pm, view, snap);
     draw_trail(&mut pm, view, &snap.trail);
 
@@ -1145,14 +1104,13 @@ fn render_rules(
         }
     }
     if let Some(font) = font {
-        draw_text_bands(&mut pm, font, snap, &guide);
+        draw_info_line(&mut pm, font, snap);
     }
     Ok(pm)
 }
 
-/// The info line at the bottom, then the breakpoint guide rows below it.
-fn draw_text_bands(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, guide: &[info::Band]) {
-    let inset = info::text_band_height(font, guide.len());
+/// The info line at the bottom of the frame.
+fn draw_info_line(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot) {
     info::draw(
         pm,
         font,
@@ -1163,9 +1121,7 @@ fn draw_text_bands(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, guide: &[in
             snap.cows,
             &snap.player.build,
         ),
-        inset,
     );
-    info::draw_bands(pm, font, guide);
 }
 
 /// Strokes `trail` (world tiles) as one translucent polyline with round joins, broken where two
@@ -2578,7 +2534,7 @@ mod tests {
         snap.difficulty = Some(0);
         let (w, h) = (400, 400);
         let pm = render_with(&snap, w, h, Some(font))?;
-        let top = map_height(h, Some(font), 0);
+        let top = map_height(h, Some(font));
         assert!(top < h && h - top < 40, "band {top}..{h}");
         let (mut band, mut above) = (0, 0);
         for y in 0..h {
@@ -2603,7 +2559,7 @@ mod tests {
         assert!(dark >= 50, "only {dark} outline pixels");
         // Without a font: no text, and the map gets the whole canvas.
         let plain = render_with(&snap, w, h, None)?;
-        assert_eq!(map_height(h, None, 0), h);
+        assert_eq!(map_height(h, None), h);
         for y in top..h {
             for x in 0..w {
                 assert!(!is_text_white(rgba(&plain, x, y)?), "{x},{y}");
@@ -2623,7 +2579,7 @@ mod tests {
         let violet = |p: Rgba| p[3] >= 200 && p[2] >= 180 && p[0] >= 120 && p[0].saturating_sub(p[1]) >= 40;
         let (w, h) = (400, 400);
         // The info band only: map markers may be violet-ish too.
-        let top = map_height(h, Some(font), 0);
+        let top = map_height(h, Some(font));
         let count = |pm: &Pixmap| -> Result<u32> {
             let mut n = 0;
             for y in top..pm.height() {
@@ -2676,7 +2632,7 @@ mod tests {
         snap.give_away = vec![spare("Magefist", Place::Shared)];
         let blocks = text_blocks(&snap, 400, Some(font));
         // The dashboard's JSON is built from these blocks (crate::web::live_json); the overlay
-        // draws only the guide, so the lists are asserted here, not in a rendered frame.
+        // draws only the map and info line, so the lists are asserted here, not in a rendered frame.
         assert_eq!(blocks.keep, vec!["Keep: Harlequin Crest (S)"]);
         assert_eq!(blocks.sell, vec!["Sell: Gravenspine (inv)"]);
         assert_eq!(blocks.give, vec!["Give away: Magefist (shared)"]);
@@ -2698,7 +2654,7 @@ mod tests {
     }
 
     #[test]
-    fn the_overlay_frame_draws_only_the_guide_band() -> Result<()> {
+    fn the_overlay_frame_draws_no_guide_or_lists() -> Result<()> {
         use crate::valuables::{Category, Keep, Place, Spare, Tier};
         let Some(font) = info::font() else {
             eprintln!("skipped: no info-line font on this machine");
@@ -2735,57 +2691,30 @@ mod tests {
         snap.sell = vec![spare("Gravenspine", Place::Inventory)];
         snap.give_away = vec![spare("Magefist", Place::Shared)];
         let (w, h) = (400, 400);
-        let rows = guide_bands(&snap, w, Some(font));
-        let [gap, guide] = rows.as_slice() else {
-            anyhow::bail!("expected the gap row and the guide, got {rows:?}");
-        };
-        assert!(gap.text.is_empty(), "the gap row first");
-        assert!(guide.text.starts_with("fcr ("), "the guide: {}", guide.text);
-        let lh = info::line_height(font);
-        assert_eq!(
-            map_height(h, Some(font), rows.len()),
-            map_height(h, Some(font), 0) - 2 * lh,
-            "the map shrinks by the guide's two rows only"
-        );
         let pm = render_with(&snap, w, h, Some(font))?;
-        // Row `k` from the bottom spans `(h - 4 - (k + 1) lh, h - 4 - k lh]` (PAD 3 + 1).
-        let count = |k: u32, pred: &dyn Fn(Rgba) -> bool| -> Result<u32> {
-            let (bottom, top) = (h - 4 - k * lh, h - 4 - (k + 1) * lh);
-            let mut n = 0;
-            for y in top + 1..=bottom {
-                for x in 0..w {
-                    n += u32::from(pred(rgba(&pm, x, y)?));
-                }
-            }
-            Ok(n)
-        };
+        // The bottom band holds only the white info line: no guide (violet) and none of the
+        // dashboard's lists in their colours.
         let solid = |p: Rgba| p[3] == 255;
         let violet = |p: Rgba| solid(p) && p[2] > 200 && p[0] > 150 && p[1] < 180;
         let cyan = |p: Rgba| solid(p) && p[2] > 200 && p[1] > 170 && p[0] < 160;
         let yellow = |p: Rgba| solid(p) && p[0] > 200 && p[1] > 170 && p[2] < 120;
-        let grey = |p: Rgba| solid(p) && p[0] > 130 && p[0].abs_diff(p[1]) < 12 && p[0].abs_diff(p[2]) < 12;
         let green = |p: Rgba| solid(p) && p[1] > 180 && p[0] < 140 && p[2] < 140;
         let gold = |p: Rgba| solid(p) && p[0] > 200 && p[1] > 170 && (100..=170).contains(&p[2]);
-        let ink = |p: Rgba| p[3] > 0;
-        assert!(count(0, &violet)? > 20, "the guide at the bottom, violet");
         for (name, pred) in [
-            ("level", &cyan as &dyn Fn(Rgba) -> bool),
+            ("guide", &violet as &dyn Fn(Rgba) -> bool),
+            ("level", &cyan),
             ("keep", &green),
-            ("sell", &grey),
             ("give away", &yellow),
             ("BiS", &gold),
         ] {
-            assert_eq!(count(0, pred)?, 0, "no {name} text in the overlay frame");
-        }
-        // The gap row holds no text; the outline of the guide below may reach in by a pixel.
-        let (bottom, top) = (h - 4 - lh, h - 4 - 2 * lh);
-        let mut n = 0;
-        for y in top + 3..=bottom - 3 {
-            for x in 0..w {
-                n += u32::from(ink(rgba(&pm, x, y)?));
+            let mut n = 0;
+            for y in h - info::band_height(font)..h {
+                for x in 0..w {
+                    n += u32::from(pred(rgba(&pm, x, y)?));
+                }
             }
+            assert_eq!(n, 0, "no {name} text in the overlay frame");
         }
-        assert_eq!(n, 0, "the gap row is empty");
         Ok(())
     }
 
@@ -2797,7 +2726,7 @@ mod tests {
         };
         let snap = fixture()?;
         let (w, h) = (400, 400);
-        let top = map_height(h, Some(font), 0);
+        let top = map_height(h, Some(font));
         let v = View::fit(level_bounds(&snap), w, top);
         for r in &snap.level.rooms {
             for (x, y) in [
@@ -3300,7 +3229,7 @@ mod tests {
             return Ok(());
         };
         let pm = render_rules(&snap, w, h, Some(font), &unconfirmed)?;
-        let v = View::fit(level_bounds(&snap), w, map_height(h, Some(font), 0));
+        let v = View::fit(level_bounds(&snap), w, map_height(h, Some(font)));
         let at = v.to_screen(90.0, 30.0);
         let near = count_near(&pm, at, SUSPECT_DISC_RADIUS, is_suspect_text)?;
         assert!(near >= 15, "only {near} light glyph pixels near the ?");
@@ -3465,7 +3394,7 @@ mod tests {
         snap.level.id = crate::cows::COW_LEVEL;
         snap.level.rooms = vec![room(0, 0, true), room(60, 0, true)];
         let (w, h) = (300, 200);
-        let view = View::fit(level_bounds(&snap), w, map_height(h, None, 0));
+        let view = View::fit(level_bounds(&snap), w, map_height(h, None));
         let at = |pm: &Pixmap, (x, y): (f64, f64)| -> Result<tiny_skia::ColorU8> {
             let (sx, sy) = view.to_screen(x, y);
             #[allow(
