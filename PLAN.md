@@ -247,11 +247,13 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - Confirmed landmarks: sewer stairs W 337, Radament S 343, orifice W 460 (drawn as a mini orifice), fake-tomb
   treasure rooms 472–475 (all drawn as stars at the user's request).
 - Unique/set `index` keys are internal names; in-game names come from `allstrings-eng.json` (`DISPLAY_NAMES`).
-- Player stat 12 = character level (live: 39). Level row suggests up to 5 areas (2 lines) whose monster
-  level is in the band clvl − 5 … clvl + 2 (user-confirmed 2026-11-17: "clvl 10 → monsters 5 to 12 are
-  okay"; −5 is the XP-penalty threshold), ranked own level first (its champions are +2 and its uniques
-  +3 — the efficient XP zone for melee), then downwards, the above-level areas last (user spec,
-  2026-11-17), until clvl 75. The seven same-named Tal Rasha's Tombs dedupe to one (name+mlvl; same-named
+- Player stat 12 = character level (live: 39). Level row suggests the areas whose monster
+  level is in the band clvl − 5 … clvl + 4 (user feedback 2026-11-17, example "clvl 23 →
+  monsters 18–27"; −5 is the XP-penalty threshold), ranked own level first (its champions are +2
+  and its uniques +3 — the efficient XP zone for melee), then downwards, the above-level areas
+  last (user spec, 2026-11-17), until clvl 75. The overlay caps the display at 5 areas in 2 lines
+  ("+N more"); the dashboard gets the whole band, one area per line (user request, 2026-11-17).
+  The seven same-named Tal Rasha's Tombs dedupe to one (name+mlvl; same-named
   areas with different levels stay separate); the cow level is never suggested.
 - Build colouring uses per-area immunity counts from monstats (`ResDm` = physical). Nightmare has almost no
   immunities, so it is mostly green; Hell is where red shows up.

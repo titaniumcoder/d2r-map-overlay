@@ -973,6 +973,9 @@ pub struct TextBlocks {
     /// The `BiS` chase lines with their structural tick ([`info::BisLine::tick`]): the
     /// overlay draws the text (plain ✓ embedded), the dashboard marks ✓(stash) from the tick.
     pub bis: Vec<info::BisLine>,
+    /// The whole level-suggestion band ([`info::level_lines_full`]), for the dashboard: the
+    /// overlay draws the capped short display ([`TextBlocks::level`]) instead.
+    pub level_full: Vec<String>,
 }
 
 /// The overlay's text rows for a `width` px canvas ([`keep_lines`]) and the dashboard's groups
@@ -990,6 +993,7 @@ pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextB
                 .map(|band| info::fit_band(band, f, max_width))
                 .collect(),
         level: info::level_lines(f, snap.player.char_level, snap.difficulty, max_width),
+        level_full: info::level_lines_full(snap.player.char_level, snap.difficulty),
         keep: info::keep_lines(f, &snap.inventory_keep, max_width),
         sell: info::spare_lines(f, info::SELL_PREFIX, &snap.sell, max_width),
         give: info::spare_lines(f, info::GIVE_PREFIX, &snap.give_away, max_width),

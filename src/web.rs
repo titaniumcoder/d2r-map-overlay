@@ -264,11 +264,26 @@ fn respond_no_store(status: &str, content_type: &str, body: &str) -> String {
     response
 }
 
-/// `200 OK` with the current config as JSON for the form: the characters (with their `BiS`
-/// slots and, per slot, the runeword hints for its pieces) and the runeword table the
-/// form's datalist offers.
+/// `200 OK` with the current config as JSON for the form: the characters (with their damage
+/// types, their `BiS` slots and, per slot, the runeword hints for its pieces) and the runeword
+/// table the form's datalist offers.
 fn api_config() -> String {
     let config = crate::config::load_from(&crate::config::default_path().unwrap_or_default());
+    respond("200 OK", "application/json", &config_json(&config).to_string())
+}
+
+/// The config form's JSON ([`api_config`]), pure over the parsed config so tests need no file.
+/// Each character carries its saved damage types (`damages`, lowercased names — the page marks
+/// the saved checkboxes from it) besides its `BiS` entry.
+#[must_use]
+fn config_json(config: &crate::config::Config) -> serde_json::Value {
+    let damages = |name: &str| {
+        config
+            .builds
+            .names
+            .get(&name.to_lowercase())
+            .map_or_else(Vec::new, |ds| ds.iter().map(|d| d.name()).collect())
+    };
     let characters: Vec<_> = config
         .bis
         .iter()
@@ -286,6 +301,7 @@ fn api_config() -> String {
             serde_json::json!({
                 "name": name,
                 "build": bis.build,
+                "damages": damages(name),
                 "slots": bis.slots,
                 "hints": hints,
             })
@@ -295,15 +311,15 @@ fn api_config() -> String {
                 .builds
                 .names
                 .keys()
-                .filter(|n| !config.bis.contains_key(n.as_str()))
-                .map(|name| serde_json::json!({ "name": name, "build": "", "slots": {} })),
+                // Case-insensitive: [`crate::config::parse`] lowercases both `builds` names and
+                // `bis` keys; the filter is also correct for programmatically built `Config`s.
+                .filter(|n| !config.bis.keys().any(|b| b.eq_ignore_ascii_case(n)))
+                .map(|name| {
+                    serde_json::json!({ "name": name, "build": "", "damages": damages(name), "slots": {} })
+                }),
         )
         .collect();
-    respond(
-        "200 OK",
-        "application/json",
-        &serde_json::json!({ "characters": characters, "runewords": runewords_json() }).to_string(),
-    )
+    serde_json::json!({ "characters": characters, "runewords": runewords_json() })
 }
 
 /// The runeword name part of a `BiS` piece string (`"Insight@27"` → `"Insight"`).
@@ -374,8 +390,10 @@ pub struct LiveInfo<'a> {
 /// guide's per-span colours are flattened to the base colour) — except the `bis` lines, which
 /// carry a structured `"tick": "owned" | "stash" | null` (computed in Rust from the owned and
 /// stash name lists, [`info::Tick`]): the page marks ✓(stash) from it instead of scraping the
-/// line text. The give-away lines have no panel of their own, so they ride with `sell` in the
-/// dashboard's Sell panel.
+/// line text, and, for a runeword piece, `"runes"` and `"bases"` for the hint line under the
+/// piece. The `levels` lines are the whole level-suggestion band, one area per line (the
+/// overlay's capped short display stays overlay-only). The give-away lines have no panel of
+/// their own, so they ride with `sell` in the dashboard's Sell panel.
 #[must_use]
 pub fn live_json(info: &LiveInfo) -> String {
     let class = CLASS_NAMES
@@ -393,7 +411,7 @@ pub fn live_json(info: &LiveInfo) -> String {
         },
         "area": info.area,
         "guide": info.blocks.guide.iter().map(band_line).collect::<Vec<_>>(),
-        "levels": text_lines(&info.blocks.level, crate::info::LEVEL_TEXT),
+        "levels": text_lines(&info.blocks.level_full, crate::info::LEVEL_TEXT),
         "keep": text_lines(&info.blocks.keep, crate::info::KEEP_TEXT),
         "sell": text_lines(&info.blocks.sell, crate::info::SELL_TEXT),
         "give": text_lines(&info.blocks.give, crate::info::GIVE_TEXT),
@@ -451,12 +469,21 @@ fn stash_lines(tabs: &[crate::stash::StashTab]) -> Vec<serde_json::Value> {
 
 /// One `BiS` line as `{ "text", "colour", "tick" }`: the tick is the structural ✓ source
 /// ([`info::Tick`]) — `null` when the piece is owned by neither the character nor the stash.
+/// A piece that is a known runeword also carries `"runes"` and `"bases"` (the dashboard renders
+/// them as a dim hint line under the piece).
 fn bis_line(line: &crate::info::BisLine) -> serde_json::Value {
-    serde_json::json!({
+    let mut json = serde_json::json!({
         "text": line.text,
         "colour": hex(crate::info::BIS_TEXT),
         "tick": line.tick.map(crate::info::Tick::as_str),
-    })
+    });
+    if let Some(rw) = &line.runeword
+        && let Some(obj) = json.as_object_mut()
+    {
+        obj.insert("runes".to_owned(), serde_json::json!(rw.runes));
+        obj.insert("bases".to_owned(), serde_json::json!(rw.bases));
+    }
+    json
 }
 
 /// `levels`/`keep`/… lines as `{ "text", "colour" }` objects in the block's colour.
@@ -612,6 +639,11 @@ button { padding: 4px 10px; }
 <script>
 const SLOTS = ["amulet","ring1","ring2","body","helm","gloves","boots","belt","weapon","offhand","swap"];
 const DAMAGES = ["physical","fire","cold","lightning","poison","magic"];
+// Escapes a config-supplied string for interpolation into HTML text and
+// double-quoted attribute values (character names and build names are free text).
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
+}
 async function load() {
   const cfg = await (await fetch("/api/config")).json();
   const chars = cfg.characters;
@@ -623,37 +655,57 @@ async function load() {
   for (const c of chars) {
     const div = document.createElement("div");
     div.className = "char";
-    let html = `<h2>${c.name}</h2><h3>build damages</h3>`;
+    // The character name goes in a data attribute, not in classes/ids: names with spaces would
+    // otherwise break both the `saveBuild` selector (`.dmg-blood boil:checked` matches nothing,
+    // saving empty damages) and the `saveBis` ids (a space is invalid in an HTML id).
+    div.dataset.name = c.name;
+    let html = `<h2>${esc(c.name)}</h2><h3>build damages</h3>`;
+    const saved = c.damages || [];
     for (const d of DAMAGES) {
-      html += `<label style="margin-right:1em"><input type="checkbox" class="dmg-${c.name}" value="${d}"> ${d}</label>`;
+      html += `<label style="margin-right:1em"><input type="checkbox" class="dmg" value="${d}"${saved.includes(d) ? " checked" : ""}> ${d}</label>`;
     }
-    html += `<button onclick="saveBuild('${c.name}')">Save build</button><h3>BiS slots</h3>`;
-    html += `<div>build: <input id="build-${c.name}" value="${c.build}" size="30" placeholder="build name"></div>`;
+    html += `<button class="save-build">Save build</button><h3>BiS slots</h3>`;
+    html += `<div>build: <input class="build-input" value="${esc(c.build)}" size="30" placeholder="build name"></div>`;
     for (const s of SLOTS) {
       const pieces = (c.slots[s] || []).join(", ");
       const hints = (c.hints?.[s] || []).join("<br>");
-      html += `<div class="slot">${s}: <input id="bis-${c.name}-${s}" value="${pieces}" size="50" placeholder="Stealth@17, Enigma@65" list="runewords">`
+      html += `<div class="slot">${s}: <input data-slot="${s}" value="${esc(pieces)}" size="50" placeholder="Stealth@17, Enigma@65" list="runewords">`
         + (hints ? `<div class="hint">${hints}</div>` : "") + `</div>`;
     }
-    html += `<button onclick="saveBis('${c.name}')">Save BiS</button>`;
+    html += `<button class="save-bis">Save BiS</button>`;
     div.innerHTML = html;
+    div.querySelector(".save-build").addEventListener("click", () => saveBuild(c.name));
+    div.querySelector(".save-bis").addEventListener("click", () => saveBis(c.name));
     root.appendChild(div);
   }
+}
+function charDiv(name) {
+  for (const div of document.querySelectorAll(".char")) {
+    if (div.dataset.name === name) return div;
+  }
+  return null;
 }
 function addChar() {
   const name = document.getElementById("newname").value.trim();
   if (name) { fetch("/api/build", {method: "POST", body: JSON.stringify({name, damages: []})}).then(load); }
 }
 async function saveBuild(name) {
-  const damages = [...document.querySelectorAll(`.dmg-${name}:checked`)].map(x => x.value);
+  const div = charDiv(name);
+  if (!div) return;
+  const damages = [...div.querySelectorAll(".dmg:checked")].map(x => x.value);
   await fetch("/api/build", {method: "POST", body: JSON.stringify({name, damages})});
   load();
 }
 async function saveBis(name) {
-  const build = document.getElementById(`build-${name}`).value;
+  const div = charDiv(name);
+  if (!div) return;
+  const buildInput = div.querySelector(".build-input");
+  if (!buildInput) return;
+  const build = buildInput.value;
   const slots = {};
   for (const s of SLOTS) {
-    const v = document.getElementById(`bis-${name}-${s}`).value;
+    const input = div.querySelector(`input[data-slot="${s}"]`);
+    const v = input ? input.value : "";
     slots[s] = v.split(",").map(x => x.trim()).filter(Boolean);
   }
   await fetch("/api/bis", {method: "POST", body: JSON.stringify({name, build, slots})});
@@ -679,6 +731,7 @@ h2 { font-size: 1.05em; border-bottom: 1px solid #444; padding-bottom: 4px; }
 .line { white-space: pre-wrap; font-size: 0.95em; }
 .waiting { color: #999; font-style: italic; }
 .note { color: #888; font-size: 0.72em; margin-bottom: 4px; }
+.hint { color: #888; font-size: 0.75em; margin-left: 1.5em; }
 </style></head><body>
 <h1>d2r-map-overlay live &nbsp; <a style="font-size:0.6em" href="/">config →</a></h1>
 <h2 id="header"><span class="waiting">waiting for game…</span></h2>
@@ -693,8 +746,13 @@ function esc(s) {
   return s.replace(/[&<>"']/g, c => "&#" + c.charCodeAt(0) + ";");
 }
 function lines(el, entries) {
-  el.innerHTML = (entries || []).map(e =>
-    `<div class="line" style="color:${e.colour || "#ddd"}">${esc(e.text)}</div>`).join("");
+  el.innerHTML = (entries || []).map(e => {
+    // A BiS line that is a runeword carries its runes and bases: a dim hint under the piece.
+    const hint = e.runes
+      ? `<div class="hint">${esc(e.runes.join(" + "))} · ${esc((e.bases || []).join(", "))}</div>`
+      : "";
+    return `<div class="line" style="color:${e.colour || "#ddd"}">${esc(e.text)}</div>` + hint;
+  }).join("");
 }
 async function poll() {
   try {
@@ -713,10 +771,11 @@ async function poll() {
       // "stash" (the ✓ comes from the shared stash) is marked ✓(stash); the tick comes
       // structured per line ("owned" | "stash" | null), not scraped from the line text.
       const bis = (r.bis || []).map(l => {
+        let text = l.text;
         if (l.tick === "stash" && typeof l.text === "string" && l.text.includes("\u2713")) {
-          return { text: l.text.replace("\u2713", "\u2713(stash)"), colour: l.colour };
+          text = l.text.replace("\u2713", "\u2713(stash)");
         }
-        return l;
+        return { text, colour: l.colour, runes: l.runes, bases: l.bases };
       });
       lines(document.getElementById("gear"), (r.guide || []).concat(bis).concat(r.equipped || []));
       lines(document.getElementById("stash"), r.stash || []);
@@ -760,6 +819,65 @@ mod tests {
         let (config, _) = config::parse(&out)?;
         assert_eq!(config.builds.for_player("Sorc", 1), [Damage::Cold]);
         Ok(())
+    }
+
+    #[test]
+    fn build_save_round_trips_through_the_config_json() -> Result<()> {
+        // The user report: selecting damage types (e.g. Blood Boil = physical + fire) in the
+        // config page didn't stick. The write path was fine; the read path never returned the
+        // damages ([`api_config`] had no `damages` field) and the page never marked the saved
+        // checkboxes — both fixed; this drives both ends of the round trip.
+        let out =
+            set_build("[builds]\n", "Blood Boil", &["physical", "fire"]).ok_or_else(|| anyhow!("no edit"))?;
+        let (config, _) = config::parse(&out)?;
+        assert_eq!(
+            config.builds.for_player("Blood Boil", 7),
+            [Damage::Physical, Damage::Fire]
+        );
+        let json = config_json(&config);
+        let chars = json
+            .get("characters")
+            .and_then(|v| v.as_array())
+            .map_or_else(Vec::new, Vec::clone);
+        assert_eq!(chars.len(), 1, "one builds-only character: {chars:?}");
+        let char = chars.first().map_or(serde_json::Value::Null, Clone::clone);
+        assert_eq!(char.get("name"), Some(&serde_json::json!("blood boil")));
+        assert_eq!(
+            char.get("damages"),
+            Some(&serde_json::json!(["physical", "fire"])),
+            "the saved damages must come back so the page can mark the checkboxes"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn config_json_reports_damages_for_bis_characters_too() {
+        // A character with a `BiS` entry and a saved build: its damages ride with the same
+        // character object (lowercase lookup over the case-preserved name).
+        let mut config = crate::config::Config::default();
+        config
+            .builds
+            .names
+            .insert("blood boil".to_owned(), vec![Damage::Physical, Damage::Fire]);
+        config.bis.insert(
+            "Blood Boil".to_owned(),
+            crate::config::Bis {
+                build: "Blood Boil".to_owned(),
+                slots: BTreeMap::default(),
+                merc_slots: BTreeMap::default(),
+            },
+        );
+        let json = config_json(&config);
+        let chars = json
+            .get("characters")
+            .and_then(|v| v.as_array())
+            .map_or_else(Vec::new, Vec::clone);
+        assert_eq!(chars.len(), 1, "one character, not two: {chars:?}");
+        let char = chars.first().map_or(serde_json::Value::Null, Clone::clone);
+        assert_eq!(
+            char.get("damages"),
+            Some(&serde_json::json!(["physical", "fire"]))
+        );
     }
 
     #[test]
@@ -935,14 +1053,16 @@ mod tests {
     fn live_json_has_the_documented_shape() -> Result<()> {
         let blocks = crate::render::TextBlocks {
             guide: vec![crate::info::Band::plain("fcr (7 / 105)", crate::info::GUIDE_TEXT)],
-            level: vec!["Level 3 → a (5)".to_owned()],
+            level_full: vec!["Level 3 → a (5)".to_owned()],
             keep: vec!["Keep: Harlequin Crest (S)".to_owned()],
             sell: vec!["Sell: Gravenspine (inv)".to_owned()],
             give: vec!["Give away: Lem Rune (stash)".to_owned()],
             bis: vec![crate::info::BisLine {
                 text: "helm: Harlequin Crest (82)".to_owned(),
                 tick: None,
+                runeword: None,
             }],
+            ..crate::render::TextBlocks::default()
         };
         let equipped = [(1, 7)];
         let stash = test_stash();
@@ -1041,14 +1161,17 @@ mod tests {
                 crate::info::BisLine {
                     text: "helm: Harlequin Crest (82)".to_owned(),
                     tick: Some(crate::info::Tick::Owned),
+                    runeword: None,
                 },
                 crate::info::BisLine {
                     text: "merc body: ✓ Treachery (23)".to_owned(),
                     tick: Some(crate::info::Tick::Stash),
+                    runeword: None,
                 },
                 crate::info::BisLine {
                     text: "weapon: Mang Song's Lesson (82)".to_owned(),
                     tick: None,
+                    runeword: None,
                 },
             ],
             ..crate::render::TextBlocks::default()
@@ -1077,6 +1200,46 @@ mod tests {
                     .collect()
             });
         assert_eq!(ticks, ["owned", "stash", ""]);
+        Ok(())
+    }
+
+    #[test]
+    fn live_json_bis_lines_carry_runeword_runes_and_bases() -> Result<()> {
+        // A runeword piece carries its runes and bases for the dashboard's hint line; a
+        // non-runeword piece carries neither field.
+        let treachery = crate::runewords_data::lookup("Treachery").copied();
+        let blocks = crate::render::TextBlocks {
+            bis: vec![
+                crate::info::BisLine {
+                    text: "merc body: Treachery (43)".to_owned(),
+                    tick: None,
+                    runeword: treachery,
+                },
+                crate::info::BisLine {
+                    text: "helm: Harlequin Crest (82)".to_owned(),
+                    tick: None,
+                    runeword: None,
+                },
+            ],
+            ..crate::render::TextBlocks::default()
+        };
+        let json =
+            serde_json::from_str::<serde_json::Value>(&live_json(&live_info(7, &blocks, &[], &[], &[])))
+                .map_err(|e| anyhow!("valid json: {e}"))?;
+        let bis = json
+            .get("bis")
+            .and_then(|v| v.as_array())
+            .map_or_else(Vec::new, Vec::clone);
+        assert_eq!(bis.len(), 2, "{bis:?}");
+        let first = bis.first().map_or(serde_json::Value::Null, Clone::clone);
+        assert_eq!(
+            first.get("runes"),
+            Some(&serde_json::json!(["Shael", "Thul", "Lem"]))
+        );
+        assert_eq!(first.get("bases"), Some(&serde_json::json!(["armor"])));
+        let second = bis.get(1).map_or(serde_json::Value::Null, Clone::clone);
+        assert!(second.get("runes").is_none(), "no runes for uniques: {second:?}");
+        assert!(second.get("bases").is_none(), "no bases for uniques: {second:?}");
         Ok(())
     }
 

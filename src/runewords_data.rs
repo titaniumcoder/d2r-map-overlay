@@ -3,7 +3,8 @@
 
 /// A runeword: its in-game name, its runes in socket order, and the readable item
 /// types (from itemtypes.json) whose base items can hold it.
-#[derive(Debug)]
+// The extra derives let a `BisLine` (which is compared and cloned in tests) carry one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Runeword {
     pub name: &'static str,
     pub runes: &'static [&'static str],
