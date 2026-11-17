@@ -12,7 +12,6 @@
 //! From Nightmare on, the monster-level part (or the cow counter) is coloured by how the
 //! character's build suits the area ([`crate::build::rate`]): red when bad, green when good.
 
-use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
@@ -58,17 +57,18 @@ pub const GIVE_PREFIX: &str = "Give away: ";
 /// The level-suggestion line(s) between the info line and the keep lines: light blue.
 const LEVEL_TEXT: [u8; 4] = [120, 210, 255, 255];
 /// Most level-suggestion lines.
-const MAX_LEVEL_LINES: usize = 4;
+const MAX_LEVEL_LINES: usize = 2;
 /// From this character level on no areas are suggested (everywhere is fine).
 pub const SUGGEST_UNTIL: u8 = 75;
 /// The suggested areas' monster level is at most this many above the character level (the top of
-/// the band, and what the suggestions are ranked towards).
+/// the band; such areas rank last — a same-level area's champions are already +2 and its uniques
+/// +3, which is the efficient XP zone for melee).
 const SUGGEST_BONUS: u8 = 2;
 /// The suggested areas' monster level is at least this many below the character level (monsters
 /// more than this many levels below give heavily penalized experience).
 const SUGGEST_FLOOR: u8 = 5;
 /// Most suggested areas.
-const MAX_SUGGESTIONS: usize = 2;
+const MAX_SUGGESTIONS: usize = 5;
 /// Town level ids: never suggested.
 pub const TOWNS: [u32; 5] = [1, 40, 75, 103, 109];
 /// Level ids from here on are special or uber levels (Pandemonium, Uber Tristram, …): never
@@ -172,13 +172,14 @@ pub fn info_line(
     }
 }
 
-/// Areas to level in for a character of `char_level` in `difficulty`: all areas (name, monster
-/// level) whose monster level is in the realistic range — at most [`SUGGEST_BONUS`] above and at
-/// most [`SUGGEST_FLOOR`] below the character level — highest monster level first (the most
-/// experience), ties in level-id order; if none is in the range, up to [`MAX_SUGGESTIONS`]
-/// nearest ones (a monster level above the target wins a tie). Towns, the cow level, special
-/// levels and areas without monster levels are never suggested. Empty for an unknown level or
-/// difficulty, and from level [`SUGGEST_UNTIL`] on.
+/// Areas to level in for a character of `char_level` in `difficulty`: up to [`MAX_SUGGESTIONS`]
+/// areas (name, monster level) whose monster level is in the realistic range — at most
+/// [`SUGGEST_BONUS`] above and at most [`SUGGEST_FLOOR`] below the character level — ranked by
+/// efficiency: the character level itself first (its champions are +2 and its uniques +3), then
+/// downwards to [`SUGGEST_FLOOR`] below, the above-level areas last and mildest first, ties in
+/// level-id order; if none is in the range, the nearest ones (a monster level above the target
+/// wins a tie). Towns, the cow level, special levels and areas without monster levels are never
+/// suggested. Empty for an unknown level or difficulty, and from level [`SUGGEST_UNTIL`] on.
 pub fn level_suggestions(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<(&'static str, u8)> {
     let (Some(lvl), Some(d)) = (char_level.filter(|&l| l < SUGGEST_UNTIL), difficulty) else {
         return Vec::new();
@@ -201,8 +202,10 @@ pub fn level_suggestions(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<
         .filter(|&(_, mlvl)| floor <= mlvl && mlvl <= target)
         .collect();
     if !in_range.is_empty() {
-        // Stable sort: equally high areas stay in level-id order.
-        in_range.sort_by_key(|&(_, mlvl)| Reverse(mlvl));
+        // Stable sort: equal ranks keep level-id order. Below the character level, the closest
+        // first; above it, the mildest first.
+        in_range.sort_by_key(|&(_, mlvl)| (mlvl > lvl, mlvl.abs_diff(lvl)));
+        in_range.truncate(MAX_SUGGESTIONS);
         return in_range;
     }
     // Stable sort: equally near areas stay in level-id order.
@@ -212,7 +215,7 @@ pub fn level_suggestions(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<
 }
 
 /// The level suggestions as lines of at most `max_width` px in `font`:
-/// `Level 34 → Halls of Vaught (36), Halls of Death's Calling (34)`, at most
+/// `Level 34 → Halls of Death's Calling (34), Halls of Anguish (33)`, at most
 /// [`MAX_LEVEL_LINES`] (the last then ends in `+N more`). Empty without suggestions.
 pub fn level_lines(
     font: &FontVec,
@@ -873,104 +876,104 @@ mod tests {
     }
 
     #[test]
-    fn level_suggestions_band_highest_first() {
-        // Normal 1: the whole band 1–3, highest monster level first, ties in level-id order.
+    fn level_suggestions_prefer_own_level_and_below() {
+        // Normal 1: the character level itself first (its champions are +2, its uniques +3 —
+        // the efficient XP zone for melee), then downwards; the above-level areas (mlvl 3)
+        // would only fill leftover slots, and at most `MAX_SUGGESTIONS` areas are returned.
         assert_eq!(
             level_suggestions(Some(1), Some(0)),
             vec![
-                ("Burial Grounds", 3),
-                ("Crypt", 3),
-                ("Mausoleum", 3),
+                ("Blood Moor", 1),
+                ("Den of Evil", 1),
                 ("Cold Plains", 2),
                 ("Cave Level 1", 2),
-                ("Cave Level 2", 2),
-                ("Blood Moor", 1),
-                ("Den of Evil", 1)
+                ("Cave Level 2", 2)
             ]
         );
-        // Normal 34: the band is 29–36; mlvl 36 first, then the highest ones below (no mlvl 35
-        // areas), down to the mlvl 29 areas.
-        let areas = level_suggestions(Some(34), Some(0));
-        let tops: Vec<_> = areas.iter().take(4).copied().collect();
+        // Normal 34: mlvl 34 first, then 33, 32, and the mlvl 29 areas in id order; the mlvl 36
+        // Halls of Vaught is 2 above and ranks last (cut here by the cap).
         assert_eq!(
-            tops,
+            level_suggestions(Some(34), Some(0)),
             vec![
-                ("Halls of Vaught", 36),
                 ("Halls of Death's Calling", 34),
                 ("Halls of Anguish", 33),
-                ("Nihlathaks Temple", 32)
+                ("Nihlathaks Temple", 32),
+                ("Crystalized Cavern Level 1", 29),
+                ("Cellar of Pity", 29)
             ]
         );
-        assert_eq!(areas.len(), 10, "the mlvl 28 pair is out of band");
-        assert_eq!(areas.last(), Some(&("Glacial Caves Level 2", 29)));
     }
 
     #[test]
     fn level_suggestions_band_caps_above_and_skips_the_cow_level() {
-        // Normal 33: the band is 28–35; the mlvl 36 areas are 3 above and no longer suggested.
-        let areas = level_suggestions(Some(33), Some(0));
-        let tops: Vec<_> = areas.iter().take(2).copied().collect();
+        // Normal 33: the band is 28–35; nothing is at mlvl 33 except Halls of Anguish, then 32,
+        // then the mlvl 29 areas; the mlvl 34 Halls of Death's Calling is above the character
+        // level and the mlvl 36 Vaught is out of band, so neither shows.
         assert_eq!(
-            tops,
-            vec![("Halls of Death's Calling", 34), ("Halls of Anguish", 33)]
+            level_suggestions(Some(33), Some(0)),
+            vec![
+                ("Halls of Anguish", 33),
+                ("Nihlathaks Temple", 32),
+                ("Crystalized Cavern Level 1", 29),
+                ("Cellar of Pity", 29),
+                ("Crystalized Cavern Level 2", 29)
+            ]
         );
-        assert_eq!(areas.last(), Some(&("Chaos Sanctum", 28)));
+        let areas = level_suggestions(Some(33), Some(0));
         assert!(!areas.iter().any(|&(name, _)| name == "Moo Moo Farm"));
-        // Normal 18: the band is 13–20; the mlvl 21 areas are 3 above and no longer suggested;
-        // mlvl 19 and 20 have no areas, so it starts at 18 and runs down to the mlvl 13 areas
-        // (the seven Tal Rasha's Tombs deduplicated to one).
-        let areas = level_suggestions(Some(18), Some(0));
-        let tops: Vec<_> = areas.iter().take(3).copied().collect();
+        // Normal 18: the band is 13–20; nothing at mlvl 19/20, so 18 first, then the mlvl 17
+        // areas in id order (the seven Tal Rasha's Tombs deduplicated to one entry).
         assert_eq!(
-            tops,
+            level_suggestions(Some(18), Some(0)),
             vec![
                 ("Valley of Snakes", 18),
                 ("Lost City", 17),
-                ("Maggot Lair Level 1", 17)
+                ("Maggot Lair Level 1", 17),
+                ("Maggot Lair Level 2", 17),
+                ("Maggot Lair Level 3", 17)
             ]
         );
-        assert_eq!(areas.last(), Some(&("Halls of the Dead Level 3", 13)));
-        assert_eq!(areas.len(), 24);
+        // Same-named areas with different levels are not collapsed: the Sewers Level 1 at
+        // Normal clvl 23 is Act 3's (mlvl 23) — under a name-only dedupe the Act 2 entry
+        // (mlvl 13, out of band) would have survived and the area would never be suggested.
         assert_eq!(
-            areas
-                .iter()
-                .filter(|&&(name, _)| name == "Tal Rasha's Tomb")
-                .count(),
-            1,
-            "the seven tombs share a name"
-        );
-        // Same-named areas with different levels are not collapsed: Act 3's Sewers stay
-        // suggested at Normal clvl 23 even though Act 2 has Sewers of the same names.
-        let areas = level_suggestions(Some(23), Some(0));
-        assert!(
-            areas.contains(&("Sewers Level 1", 23)) && areas.contains(&("Sewers Level 2", 24)),
-            "{areas:?}"
+            level_suggestions(Some(23), Some(0)),
+            vec![
+                ("Upper Kurast", 23),
+                ("Sewers Level 1", 23),
+                ("Ruined Temple", 23),
+                ("Disused Fane", 23),
+                ("Forgotten Reliquary", 23)
+            ]
         );
     }
 
     #[test]
     fn level_suggestions_use_the_difficulty_and_stop_at_75() {
-        // Nightmare 46: the whole band 41–48, the mlvl 48 areas first.
-        let areas = level_suggestions(Some(46), Some(1));
-        let tops: Vec<_> = areas.iter().take(3).copied().collect();
+        // Nightmare 46: the mlvl 46 areas first (own level), then 45; the mlvl 48 areas are 2
+        // above and rank last (cut here by the cap).
         assert_eq!(
-            tops,
+            level_suggestions(Some(46), Some(1)),
             vec![
-                ("Canyon of the Magi", 48),
-                ("Palace Cellar Level 3", 48),
-                ("Arcane Sanctuary", 48)
+                ("Lost City", 46),
+                ("Valley of Snakes", 46),
+                ("Maggot Lair Level 3", 46),
+                ("Ancient Tunnels", 46),
+                ("Far Oasis", 45)
             ]
         );
-        assert_eq!(areas.first(), Some(&("Canyon of the Magi", 48)));
-        assert_eq!(areas.last(), Some(&("Inner Cloister", 41)));
-        assert_eq!(areas.len(), 36);
-        // Hell 74 → 76: the last level with suggestions; the band is 69–76.
-        let tops: Vec<_> = level_suggestions(Some(74), Some(2))
-            .iter()
-            .take(2)
-            .copied()
-            .collect();
-        assert_eq!(tops, vec![("Tower Cellar Level 2", 76), ("Tristram", 76)]);
+        // Hell 74 → 76: the last level with suggestions; the band is 69–76 and the mlvl 74
+        // areas come first (the Act 2 and Act 3 Sewers share name and level, so one entry).
+        assert_eq!(
+            level_suggestions(Some(74), Some(2)),
+            vec![
+                ("Sewers Level 1", 74),
+                ("Sewers Level 2", 74),
+                ("Catacombs Level 2", 73),
+                ("Catacombs Level 3", 73),
+                ("Catacombs Level 4", 73)
+            ]
+        );
         assert!(
             level_suggestions(Some(75), Some(2)).is_empty(),
             "75: everywhere is fine"
@@ -1020,19 +1023,14 @@ mod tests {
         assert_eq!(
             level_lines(font, Some(1), Some(0), 1000.0),
             vec![
-                "Level 1 → Burial Grounds (3), Crypt (3), Mausoleum (3), Cold Plains (2), Cave Level 1 (2), Cave Level 2 (2), Blood Moor (1), Den of Evil (1)"
+                "Level 1 → Blood Moor (1), Den of Evil (1), Cold Plains (2), Cave Level 1 (2), Cave Level 2 (2)"
             ]
         );
         // At a tiny width every area gets its own line and the cap cuts the rest, marked with
         // a +N more tail.
         assert_eq!(
             level_lines(font, Some(1), Some(0), 10.0),
-            vec![
-                "Level 1 → Burial Grounds (3)",
-                "Crypt (3)",
-                "Mausoleum (3)",
-                "+5 more"
-            ],
+            vec!["Level 1 → Blood Moor (1)", "+4 more"],
             "wraps and marks the cut with +N more"
         );
         assert_eq!(level_lines(font, Some(80), Some(0), 1000.0), Vec::<String>::new());
