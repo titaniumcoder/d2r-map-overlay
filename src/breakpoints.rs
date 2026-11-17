@@ -3,8 +3,6 @@
 //! - `fcr (frames / current / next)`: the current cast animation in frames, the total FCR, and
 //!   the FCR needed for one frame less (the user's format: "6 fps, 22 current, 28 for 7 fps");
 //! - `fhr (frames / current / next)` the same for hit recovery;
-//! - `ias current`: the value only — IAS frames depend on the weapon's base speed (and on druid
-//!   shapeshifting), so no target is shown without a weapon read;
 //! - `res f/c/l/p (difficulty penalty)`: the four resistances from gear with the difficulty
 //!   penalty applied.
 //!
@@ -121,17 +119,20 @@ fn res_part(speed: &SpeedStats, difficulty: Option<u8>) -> String {
     )
 }
 
-/// The guide line: `fcr (…) · fhr (…) · ias … · res …`. `None` without readable speed stats.
+/// The guide line: `fcr (…) · fhr (…) · res …`. `None` without readable speed stats.
+///
+/// No IAS on purpose (user question, 2026-11-17): IAS frames depend on the weapon's base speed
+/// AND the attack skill used, neither of which the reader knows — and for casters (Blood Boil
+/// is a cast) the relevant attack-speed stat is FCR anyway.
 #[must_use]
 pub fn guide_line(player: &Player, difficulty: Option<u8>) -> Option<String> {
     let speed = player.speed.as_ref()?;
     let (cast_base, cast_speed) = class_data(&CAST, player.class)?;
     let (hit_base, hit_speed) = class_data(&HIT, player.class)?;
     Some(format!(
-        "{} · {} · ias {} · {}",
+        "{} · {} · {}",
         stat_part("fcr", cast_base, cast_speed, speed.fcr, 200, cast_frames),
         stat_part("fhr", hit_base, hit_speed, speed.fhr, 480, hit_frames),
-        speed.ias,
         res_part(speed, difficulty),
     ))
 }
@@ -250,10 +251,10 @@ mod tests {
         // Nightmare applies −40.
         let line = guide_line(&p, Some(1)).unwrap_or_default();
         assert!(line.contains("res -15/-25/-15/-35 (nm −40)"), "{line}");
-        // IAS shows as a plain value.
+        // No IAS in the line (weapon-dependent; FCR is the caster's attack-speed stat).
         let p = player(7, 20, 0, 30);
         let line = guide_line(&p, None).unwrap_or_default();
-        assert!(line.contains("ias 30"), "{line}");
+        assert!(!line.contains("ias"), "{line}");
     }
 
     #[test]
