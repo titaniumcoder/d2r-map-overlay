@@ -119,6 +119,15 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - **601 = waypoint area** (player and waypoint object 237 inside it). **602 = Gidbinn altar candidate** (only other
   outlier id) — **confirmed**: the Gidbinn altar (object 252) is in 602; landmark rule added.
 
+## The Warlock class (2026-11-17)
+- The user's "Demonmaster" reads **class id 7** — outside the classic 0–6. The Basin wiki documents a
+  **Warlock**, a D2R patch class (skill trees Chaos/Eldritch/Demon: Miasma Bolt, Apocalypse, Abyss,
+  Summon Goatman…), and d2runewizard.com lists its breakpoints: FCR 9/18/30/48/75/125 (as necro/pala),
+  FHR 5/10/16/26/39/56/86/152/377, FBR as druid/necro. The config class tables now accept 8 classes.
+- The player's stat list (unit +0x88) reads level fine but showed FCR/IAS/FHR/resists as 0 while the
+  user was wearing resist gear — the combined item stats are NOT in that list (or the ids differ in D2R).
+  The breakpoint guide therefore shows zeros until this is re-verified with research probes.
+
 ## ActMisc, difficulty and seed lead (2026-11-15)
 - Player unit `+0x20` → act; **act `+0x70` → ActMisc** (older builds: +0x78, which now points into code).
 - ActMisc `+0x830` u16 = **difficulty**: 0 Normal and 1 Nightmare confirmed live (2026-11-15); Hell (2) still to see.

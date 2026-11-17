@@ -42,7 +42,7 @@ pub const SHRINE_NAMES: [&str; 23] = [
 ];
 
 /// Class names by class id (charstats row), for `[builds.class]`.
-pub const CLASS_NAMES: [&str; 7] = [
+pub const CLASS_NAMES: [&str; 8] = [
     "amazon",
     "sorceress",
     "necromancer",
@@ -50,6 +50,8 @@ pub const CLASS_NAMES: [&str; 7] = [
     "barbarian",
     "druid",
     "assassin",
+    // D2R patch class (user's "Demonmaster" read id 7 live, 2026-11-17).
+    "warlock",
 ];
 
 /// Shrines shown when the config doesn't say.
@@ -220,14 +222,14 @@ fn damages(names: &[String], whose: &str, warnings: &mut Vec<String>) -> Vec<Dam
     out
 }
 
-/// The class id of `key`: a number 0..=6 or a class name (any case).
+/// The class id of `key`: a number 0..=7 or a class name (any case).
 fn class_id(key: &str) -> Option<u32> {
     let key = key.trim().to_lowercase();
     let by_name = (0u32..)
         .zip(CLASS_NAMES)
         .find(|&(_, n)| n == key)
         .map(|(id, _)| id);
-    by_name.or_else(|| key.parse().ok().filter(|&id: &u32| id < 7))
+    by_name.or_else(|| key.parse().ok().filter(|&id: &u32| id < 8))
 }
 
 fn builds(raw: RawBuilds, warnings: &mut Vec<String>) -> Builds {
@@ -243,7 +245,7 @@ fn builds(raw: RawBuilds, warnings: &mut Vec<String>) -> Builds {
                 builds.classes.insert(id, list);
             }
             None => warnings.push(format!(
-                "build: unknown class {key:?} ignored (known: 0..6 or {})",
+                "build: unknown class {key:?} ignored (known: 0..7 or {})",
                 CLASS_NAMES.join(", ")
             )),
         }
@@ -412,7 +414,9 @@ mod tests {
     fn class_ids() {
         assert_eq!(class_id("Assassin"), Some(6));
         assert_eq!(class_id("0"), Some(0));
-        assert_eq!(class_id("7"), None);
+        // The D2R patch class.
+        assert_eq!(class_id("Warlock"), Some(7));
+        assert_eq!(class_id("8"), None);
         assert_eq!(class_id("monk"), None);
     }
 

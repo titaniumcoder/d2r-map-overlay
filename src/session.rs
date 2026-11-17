@@ -577,6 +577,8 @@ mod tests {
             y,
             flags,
             name_seed: 0,
+            owner_id: 0,
+            owner_type: 0,
             desecrated: false,
         }
     }
@@ -603,6 +605,7 @@ mod tests {
                 level_id: level,
                 act: Some(Addr(act)),
                 char_level: None,
+                speed: None,
                 build: vec![],
             },
             party: vec![],

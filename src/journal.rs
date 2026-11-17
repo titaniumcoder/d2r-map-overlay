@@ -139,6 +139,18 @@ pub enum Event {
     Well { level: u32, txt: u32, x: u32, y: u32 },
     /// The level was first seen terrorized (Terror Zone) in this game.
     Terror { level: u32, terrorized: bool },
+    /// A monster whose `MonsterData` owner id matches the local player (merc/pet hypothesis,
+    /// NOT yet live-verified — the raw owner fields decide whether the offset is right).
+    Merc {
+        level: u32,
+        id: u32,
+        txt: u32,
+        owner_type: u32,
+        owner_id: u32,
+        x: u16,
+        y: u16,
+        mode: u32,
+    },
 }
 
 /// Rooms sharing a preset id: how many and their bounding box (world tiles, max exclusive).
@@ -200,6 +212,8 @@ pub struct Recorder {
     /// Elite unit id → seen dead.
     monsters: HashMap<u32, bool>,
     drops: HashSet<u32>,
+    /// Unit ids seen as the local player's merc/pet.
+    mercs: HashSet<u32>,
     /// (level id, x, y) of shrines and of wells.
     shrines: HashSet<(u32, u32, u32)>,
     wells: HashSet<(u32, u32, u32)>,
@@ -290,6 +304,7 @@ impl Recorder {
                 });
             }
         }
+        self.mercs_seen(snap, level, &mut out);
         for d in &snap.drops {
             if self.drops.insert(d.id) {
                 let h = d.highlight.as_ref();
@@ -354,6 +369,25 @@ impl Recorder {
                     txt: w.txt,
                     x: w.x,
                     y: w.y,
+                });
+            }
+        }
+    }
+
+    /// First sight of the local player's merc/pet (`MonsterData` owner id, unverified
+    /// hypothesis): emits the raw owner fields so the offset can be verified live.
+    fn mercs_seen(&mut self, snap: &Snapshot, level: u32, out: &mut Vec<Event>) {
+        for m in snap.monsters.iter().filter(|m| m.owner_id == snap.player.id) {
+            if !m.is_dead() && self.mercs.insert(m.id) {
+                out.push(Event::Merc {
+                    level,
+                    id: m.id,
+                    txt: m.txt,
+                    owner_type: m.owner_type,
+                    owner_id: m.owner_id,
+                    x: m.x,
+                    y: m.y,
+                    mode: m.mode,
                 });
             }
         }
@@ -574,6 +608,7 @@ mod tests {
                 level_id: level,
                 act: Some(Addr(0xa000)),
                 char_level: None,
+                speed: None,
                 build: vec![],
             },
             party: vec![],
@@ -625,6 +660,8 @@ mod tests {
             y: 5,
             flags: 0x02,
             name_seed: 0,
+            owner_id: 0,
+            owner_type: 0,
             desecrated: false,
         }
     }
@@ -643,6 +680,7 @@ mod tests {
                 Event::Shrine { .. } => "shrine",
                 Event::Well { .. } => "well",
                 Event::Terror { .. } => "terror",
+                Event::Merc { .. } => "merc",
             })
             .collect()
     }

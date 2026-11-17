@@ -160,6 +160,11 @@ pub mod player_data {
 
 /// `MonsterData` (unit data of a monster).
 pub mod monster_data {
+    /// u32 owner type (pet chain hypothesis: classic layouts carry owner type/id in the first
+    /// two dwords; NOT yet live-verified — journal logs both for the merc check).
+    pub const OWNER_TYPE: u64 = 0x00;
+    /// u32 owner unit id: the local player's id on their merc/pets (hypothesis, see above).
+    pub const OWNER_ID: u64 = 0x04;
     /// u16 name seed (unique/superunique names).
     pub const NAME_SEED: u64 = 0x18;
     /// u8 flag byte (observed 0x08, 0x0C on elites; bits to confirm).
@@ -263,6 +268,18 @@ pub mod stat_list {
     /// Stat id `level` (itemstatcost.txt): the character level on a player unit. Not yet
     /// live-verified; the reader also accepts the value shifted left by 8.
     pub const LEVEL: u16 = 12;
+    /// Stat ids of the four elemental resistances as granted by gear (itemstatcost.txt; the txt
+    /// interleaves fire/light/cold/poison with their max counterparts, so light is 41, cold 43).
+    pub const RESIST_FIRE: u16 = 39;
+    pub const RESIST_LIGHTNING: u16 = 41;
+    pub const RESIST_COLD: u16 = 43;
+    pub const RESIST_POISON: u16 = 45;
+    /// Stat id `item_fasterattackrate` (IAS, %).
+    pub const IAS: u16 = 93;
+    /// Stat id `item_fastergethitrate` (FHR, %).
+    pub const FHR: u16 = 99;
+    /// Stat id `item_fastercastrate` (FCR, %).
+    pub const FCR: u16 = 105;
     /// The unit's state bitfield: [`STATE_FLAG_DWORDS`] little-endian u32, state `n` is bit
     /// `n % 32` of dword `n / 32` (states.txt rows). Live 2026-11-15 on monsters (Moo Moo Farm,
     /// terrorized): all 24 cows had [`super::state::DESECRATED`] set here, the player and the

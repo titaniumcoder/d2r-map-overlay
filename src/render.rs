@@ -521,6 +521,9 @@ pub enum Marker {
     /// Another live player of the level (online game, see [`PartyMember`](crate::game::PartyMember)):
     /// a yellow dot, drawn below the player so the local player stays on top.
     Party,
+    /// The local player's mercenary (`MonsterData` owner id, unverified hypothesis): a pale
+    /// green dot, next to the party members.
+    Merc,
     /// The player. Drawn below drops and rings: on big levels a fresh drop lies within a pixel or
     /// two of the player and would otherwise be hidden (live, Bloody Foothills, a large charm 3.6
     /// tiles away).
@@ -579,6 +582,7 @@ impl Marker {
                 (tier_colour(tier), radius, Shape::Circle)
             }
             Self::Party => ([255, 230, 90, 255], 2.5, Shape::Circle),
+            Self::Merc => ([150, 255, 190, 255], 2.5, Shape::Circle),
             Self::Player => ([40, 255, 60, 255], 2.5, Shape::Circle),
         }
     }
@@ -923,6 +927,12 @@ fn markers_with(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f6
             .iter()
             .map(|p| (Marker::Party, f64::from(p.x), f64::from(p.y))),
     );
+    out.extend(
+        snap.monsters
+            .iter()
+            .filter(|m| !m.is_dead() && m.owner_id == snap.player.id)
+            .map(|m| (Marker::Merc, f64::from(m.x), f64::from(m.y))),
+    );
     out.push((Marker::Player, f64::from(snap.player.x), f64::from(snap.player.y)));
     // Stable sort: keeps snapshot order within one kind.
     out.sort_by_key(|&(m, _, _)| m);
@@ -949,15 +959,22 @@ pub fn map_height(height: u32, font: Option<&FontVec>, keep_lines: usize) -> u32
     })
 }
 
-/// The text rows below the info line for a `width` px canvas: the level suggestions, the
-/// inventory keep list, then the sell and give-away lists, with gap rows ([`info::stack`]); none
-/// without a font.
+/// The text rows below the info line for a `width` px canvas: the guide lines, the level
+/// suggestions, the inventory keep list, then the sell and give-away lists, with gap rows
+/// ([`info::stack`]); none without a font.
 fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<(String, Rgba)> {
     let Some(f) = font else {
         return Vec::new();
     };
     let max_width = f32::from(u16::try_from(width).unwrap_or(u16::MAX)) - 8.0;
     info::stack(
+        // The breakpoint/gear/runeword guide first (user request, 2026-11-17), width-fitted
+        // like the other blocks.
+        crate::breakpoints::guide_line(&snap.player)
+            .into_iter()
+            .chain(crate::breakpoints::runeword_lines(&snap.player))
+            .map(|line| info::fit_plain(f, &line, max_width))
+            .collect(),
         info::level_lines(f, snap.player.char_level, snap.difficulty, max_width),
         info::keep_lines(f, &snap.inventory_keep, max_width),
         info::spare_lines(f, info::SELL_PREFIX, &snap.sell, max_width),
@@ -1623,6 +1640,8 @@ mod tests {
             y: 0,
             flags,
             name_seed: 0,
+            owner_id: 0,
+            owner_type: 0,
             desecrated: false,
         }
     }
@@ -1649,6 +1668,7 @@ mod tests {
                 level_id: 1,
                 act: None,
                 char_level: None,
+                speed: None,
                 build: vec![],
             },
             party: vec![],

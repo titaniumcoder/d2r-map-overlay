@@ -2,6 +2,7 @@
 //!
 //! See `PLAN.md` for the architecture and milestones.
 
+mod breakpoints;
 mod build;
 mod config;
 mod cows;

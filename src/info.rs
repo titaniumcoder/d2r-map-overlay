@@ -58,6 +58,8 @@ pub const GIVE_TEXT: [u8; 4] = [255, 225, 60, 255];
 pub const GIVE_PREFIX: &str = "Give away: ";
 /// The level-suggestion line(s) between the info line and the keep lines: light blue.
 const LEVEL_TEXT: [u8; 4] = [120, 210, 255, 255];
+/// The breakpoint/gear/runeword guide lines (user request, 2026-11-17): light violet.
+const GUIDE_TEXT: [u8; 4] = [200, 130, 255, 255];
 /// Most level-suggestion lines.
 const MAX_LEVEL_LINES: usize = 2;
 /// From this character level on no areas are suggested (everywhere is fine).
@@ -302,6 +304,7 @@ pub fn spare_lines(font: &FontVec, prefix: &str, spares: &[Spare], max_width: f3
 /// (yellow), with an empty gap row before each non-empty block (so also between the info line
 /// and the first block).
 pub fn stack(
+    guide: Vec<String>,
     level: Vec<String>,
     keep: Vec<String>,
     sell: Vec<String>,
@@ -309,6 +312,7 @@ pub fn stack(
 ) -> Vec<(String, [u8; 4])> {
     let mut rows = Vec::new();
     for (lines, colour) in [
+        (guide, GUIDE_TEXT),
         (level, LEVEL_TEXT),
         (keep, KEEP_TEXT),
         (sell, SELL_TEXT),
@@ -546,6 +550,24 @@ fn spans<'a>(line: &InfoLine, text: &'a str) -> Vec<(&'a str, [u8; 4])> {
         .into_iter()
         .filter(|(part, _)| !part.is_empty())
         .collect()
+}
+
+/// Truncates `text` to `max_width` px in `font`, appending `…` when it doesn't fit. For plain
+/// one-line texts (the guide lines); the info line has its own span-aware fitting.
+pub fn fit_plain(font: &FontVec, text: &str, max_width: f32) -> String {
+    if text_width(font, text) <= max_width {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    for keep in (1..chars.len()).rev() {
+        let cut: String = chars.get(..keep).unwrap_or_default().iter().collect();
+        let cut = cut.trim_end();
+        let cut = format!("{cut}…");
+        if text_width(font, &cut) <= max_width {
+            return cut;
+        }
+    }
+    text.to_owned()
 }
 
 /// Draws `c` at `size` px in `colour` with the info line's dark 1 px outline, its ink box centred
@@ -883,6 +905,7 @@ mod tests {
     fn stack_orders_colours_and_gaps() {
         let l = |s: &str| vec![s.to_owned()];
         let rows = stack(
+            vec![],
             l("Level 3 → a (5)"),
             l("Keep: k"),
             l("Sell: s"),
@@ -901,11 +924,11 @@ mod tests {
         ];
         assert_eq!(rows, want);
         assert_eq!(
-            stack(vec![], vec![], vec![], l("Give away: g")),
+            stack(vec![], vec![], vec![], vec![], l("Give away: g")),
             vec![(String::new(), GIVE_TEXT), ("Give away: g".to_owned(), GIVE_TEXT)],
             "a gap below the info line even for the only block"
         );
-        assert_eq!(stack(vec![], vec![], vec![], vec![]), vec![]);
+        assert_eq!(stack(vec![], vec![], vec![], vec![], vec![]), vec![]);
     }
 
     #[test]

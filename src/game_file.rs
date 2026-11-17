@@ -113,6 +113,7 @@ mod tests {
                 level_id: level,
                 act: Some(Addr(0xa000)),
                 char_level: None,
+                speed: None,
                 build: vec![],
             },
             party: vec![],

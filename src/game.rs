@@ -191,11 +191,32 @@ pub struct Player {
     /// unreadable (and in old fixtures, where it is left out of the JSON).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub char_level: Option<u8>,
+    /// Speed stats and elemental resistances from the player's stat list, for the
+    /// breakpoint/gear guide (user request, 2026-11-17). `None` if the stat list is unreadable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<SpeedStats>,
     /// The character's build from the config ([`crate::config::Builds::for_player`]), primary
     /// damage first; colours the info line's monster levels ([`crate::build::rate`]). Not read
     /// from the game nor kept in the JSON: set from the config after reading or loading.
     #[serde(skip)]
     pub build: Vec<crate::build::Damage>,
+}
+
+/// The player's speed stats and elemental resistances as granted by gear (stat ids from
+/// itemstatcost.txt; difficulty penalties are NOT included — the stat list holds gear values).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpeedStats {
+    /// `item_fastercastrate` (FCR, %).
+    pub fcr: u32,
+    /// `item_fasterattackrate` (IAS, %).
+    pub ias: u32,
+    /// `item_fasterhitrecovery` (FHR, %).
+    pub fhr: u32,
+    /// The four elemental resistances as granted by gear (fire, cold, lightning, poison).
+    pub res_fire: u32,
+    pub res_cold: u32,
+    pub res_lightning: u32,
+    pub res_poison: u32,
 }
 
 /// Another player in the same level, live (online games; user request, 2026-11-17). Read from a
@@ -225,6 +246,17 @@ pub fn char_level_from_raw(raw: u32) -> Option<u8> {
         raw
     };
     u8::try_from(level).ok().filter(|l| (1..=99).contains(l))
+}
+
+/// The plain value of a raw stat: most D2 stats are stored as-is, but some (life, mana, level…)
+/// in 1/256 units — a value far above the stat's realistic maximum with 8 trailing zeros is such
+/// an encoding. Good enough for the guide stats (FCR/IAS/FHR/resists, all ≤ 255 in practice).
+const fn plain_stat_from_raw(raw: u32) -> u32 {
+    if raw > 255 && raw.trailing_zeros() >= 8 {
+        raw >> 8
+    } else {
+        raw
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -509,6 +541,14 @@ pub struct Monster {
     pub y: u16,
     pub flags: u8,
     pub name_seed: u16,
+    /// Owner type/id from the `MonsterData` head (pets/mercs hypothesis, NOT yet verified):
+    /// the local player's id here makes the unit their merc. Journal-logged once per unit id and
+    /// game so the
+    /// offset can be verified live; left out of the JSON when both are zero.
+    #[serde(default, skip_serializing_if = "is_zero", alias = "owner")]
+    pub owner_id: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub owner_type: u32,
     /// Carries [`state::DESECRATED`] (a Terror Zone monster). Left out of the JSON when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub desecrated: bool,
@@ -1015,14 +1055,42 @@ impl<M: ReadMem> Reader<'_, M> {
             level_id: self.u32(level, level::ID)?,
             act: head.act.map(Addr),
             // Optional data like `room_preset`: an unreadable stat list is no level, not an error.
+            // Speed stats and resistances ride on the same list: none without the level.
             char_level: self
                 .stat(addr, stat_list::LEVEL)
                 .ok()
                 .flatten()
                 .and_then(char_level_from_raw),
+            speed: self.speed_stats(addr),
             build: Vec::new(),
         };
         Ok((player, level))
+    }
+
+    /// The player's gear speed/resist stats for the breakpoint guide: `None` without a readable
+    /// stat list (no character level either). A stat that fails to read counts as 0.
+    fn speed_stats(&self, addr: u64) -> Option<SpeedStats> {
+        let read = |id: u16| self.stat(addr, id).ok().flatten().map_or(0, plain_stat_from_raw);
+        let fcr = read(stat_list::FCR);
+        let ias = read(stat_list::IAS);
+        let fhr = read(stat_list::FHR);
+        let speed = SpeedStats {
+            fcr,
+            ias,
+            fhr,
+            res_fire: read(stat_list::RESIST_FIRE),
+            res_cold: read(stat_list::RESIST_COLD),
+            res_lightning: read(stat_list::RESIST_LIGHTNING),
+            res_poison: read(stat_list::RESIST_POISON),
+        };
+        // No level on the unit means the stat list is unreadable: don't trust the zeros.
+        (self
+            .stat(addr, stat_list::LEVEL)
+            .ok()
+            .flatten()
+            .and_then(char_level_from_raw)
+            .is_some())
+        .then_some(speed)
     }
 
     /// World-tile origin of a `Room2`.
@@ -1185,6 +1253,8 @@ impl<M: ReadMem> Reader<'_, M> {
             y,
             flags: self.u8(md, monster_data::FLAGS)?,
             name_seed: self.u16(md, monster_data::NAME_SEED)?,
+            owner_id: self.u32(md, monster_data::OWNER_ID).unwrap_or(0),
+            owner_type: self.u32(md, monster_data::OWNER_TYPE).unwrap_or(0),
             desecrated: self.has_state(addr, state::DESECRATED),
         })
     }
@@ -2287,6 +2357,8 @@ mod tests {
             y,
             flags,
             name_seed,
+            owner_id: 0,
+            owner_type: 0,
             desecrated: false,
         };
         assert_eq!(
@@ -2399,6 +2471,8 @@ mod tests {
             y: 0,
             flags: 0,
             name_seed: 0,
+            owner_id: 0,
+            owner_type: 0,
             desecrated,
         };
         assert!(!is_terrorized(&[]));
