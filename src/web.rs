@@ -1387,18 +1387,26 @@ function piece(p) {
 }
 // A slot's pieces: the guide's own picks (starter / standard, and pieces without a setup)
 // stay visible; the alternatives fold into a <details> so a 14-weapon list stays readable.
-function pieceList(pieces) {
+// Slot titles whose "alternatives" fold the viewer opened: every SSE event re-renders the
+// cards, so the open state is kept here and written back as the `open` attribute.
+const openAlts = new Set();
+document.addEventListener("toggle", e => {
+  const d = e.target;
+  if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("alts")) return;
+  if (d.open) openAlts.add(d.dataset.slot); else openAlts.delete(d.dataset.slot);
+}, true);
+function pieceList(pieces, title) {
   const main = pieces.filter(p => p.setup !== "alternative");
   const alt = pieces.filter(p => p.setup === "alternative");
   const shown = main.map(piece).join("");
   const folded = alt.length
-    ? `<details class="alts"><summary>${alt.length} alternative${alt.length > 1 ? "s" : ""}</summary>${alt.map(piece).join("")}</details>`
+    ? `<details class="alts" data-slot="${esc(title)}"${openAlts.has(title) ? " open" : ""}><summary>${alt.length} alternative${alt.length > 1 ? "s" : ""}</summary>${alt.map(piece).join("")}</details>`
     : "";
   return (shown + folded) || '<div class="empty">no build piece for this slot</div>';
 }
 function slotCard(title, eqHtml, pieces) {
   const eq = eqHtml == null ? "" : `<div class="eq"><span class="lbl">equipped</span>${eqHtml}</div>`;
-  return `<div class="slot"><div class="slot-h"><span>${esc(title)}</span></div>${eq}<div class="pieces">${pieceList(pieces || [])}</div></div>`;
+  return `<div class="slot"><div class="slot-h"><span>${esc(title)}</span></div>${eq}<div class="pieces">${pieceList(pieces || [], title)}</div></div>`;
 }
 function gear(g) {
   g = g || {};
