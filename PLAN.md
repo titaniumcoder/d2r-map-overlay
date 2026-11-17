@@ -229,9 +229,12 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - Confirmed landmarks: sewer stairs W 337, Radament S 343, orifice W 460 (drawn as a mini orifice), fake-tomb
   treasure rooms 472–475 (all drawn as stars at the user's request).
 - Unique/set `index` keys are internal names; in-game names come from `allstrings-eng.json` (`DISPLAY_NAMES`).
-- Player stat 12 = character level (live: 39). Level row suggests areas whose monster level is in the
-  realistic band clvl − 5 … clvl + 2 (user-confirmed 2026-11-17: "clvl 10 → monsters 5 to 12 are okay";
-  −5 is the XP-penalty threshold, +2 the old target), ranked closest to clvl + 2 first, until clvl 75.
+- Player stat 12 = character level (live: 39). Level row suggests up to 5 areas (2 lines) whose monster
+  level is in the band clvl − 5 … clvl + 2 (user-confirmed 2026-11-17: "clvl 10 → monsters 5 to 12 are
+  okay"; −5 is the XP-penalty threshold), ranked own level first (its champions are +2 and its uniques
+  +3 — the efficient XP zone for melee), then downwards, the above-level areas last (user spec,
+  2026-11-17), until clvl 75. The seven same-named Tal Rasha's Tombs dedupe to one (name+mlvl; same-named
+  areas with different levels stay separate); the cow level is never suggested.
 - Build colouring uses per-area immunity counts from monstats (`ResDm` = physical). Nightmare has almost no
   immunities, so it is mostly green; Hell is where red shows up.
 - Trail is kept per level and game; cow counter in level 39 (cows.json for lifetime stats).
