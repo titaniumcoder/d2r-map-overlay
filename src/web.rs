@@ -591,6 +591,8 @@ pub struct LiveInfo<'a> {
     /// `stash_owned` for reference; the per-`BiS`-line `tick` ([`info::Tick`]) is what the
     /// page marks ✓(stash) from.
     pub stash_owned: &'a [String],
+    /// The character's skill allocation, shown as the class's three skill trees.
+    pub skills: &'a crate::game::Skills,
     /// Unix seconds of the tick that produced this data.
     pub updated_at: u64,
 }
@@ -600,7 +602,7 @@ pub struct LiveInfo<'a> {
 /// `{ "live": true, "updated_at": <unix secs>, "player": {"name", "class", "level",
 /// "difficulty"}, "area": …, "guide": […], "levels": […], "keep": […], "sell": […],
 /// "give": […], "bis": […], "equipped": […], "stash_pages": […], "stash_materials": {…},
-/// "stash_owned": […] }`, where
+/// "stash_owned": […], "skills": {…} | null }`, where
 /// each line is `{ "text": …, "colour": "#rrggbb" }` (the overlay line's colour as hex; the
 /// guide's per-span colours are flattened to the base colour) — except the `bis` lines, which
 /// carry a structured `"tick": "owned" | "stash" | null` (computed in Rust from the owned and
@@ -615,7 +617,8 @@ pub struct LiveInfo<'a> {
 /// gear slot ([`gear_json`]), each with the equipped piece in that slot and the build's
 /// pieces ordered best→worst, their `state` computed here (see [`grid_pieces`]). The shared
 /// stash comes as `stash_pages` (the normal tabs in the game's UI order, [`stash_pages`]) and
-/// `stash_materials` (the gems/runes/materials tab's stacks, [`stash_materials`]).
+/// `stash_materials` (the gems/runes/materials tab's stacks, [`stash_materials`]). The
+/// `skills` section is the class's three skill trees ([`skills_json`]).
 #[must_use]
 pub fn live_json(info: &LiveInfo) -> String {
     let class = CLASS_NAMES
@@ -643,8 +646,73 @@ pub fn live_json(info: &LiveInfo) -> String {
         "stash_pages": stash_pages(info.stash),
         "stash_materials": stash_materials(info.stash),
         "stash_owned": info.stash_owned,
+        "skills": skills_json(info.class, info.char_level, info.skills),
     })
     .to_string()
+}
+
+/// The skill trees (`live_json`'s `skills` section): `{ "total", "left", "right", "trees":
+/// [...] }`, `null` when the allocation is empty (unread) or the class unknown. `total` is
+/// the hard points spent; `left` / `right` are the mouse-button skills as `{ "id", "name" }`
+/// (or `null`). Each of the three trees (pages 1–3, the game's tab order) is `{ "name",
+/// "points", "skills": [...] }` with every class skill on that page as `{ "id", "name",
+/// "row", "col", "req", "points", "locked", "left", "right" }`: its grid place, required level,
+/// hard points, whether the required level is above the character's, and whether it is on a
+/// mouse button.
+fn skills_json(class: u32, char_level: Option<u8>, skills: &crate::game::Skills) -> serde_json::Value {
+    use crate::skills_data;
+    let trees = usize::try_from(class)
+        .ok()
+        .and_then(|c| skills_data::TREES.get(c));
+    let (Some(trees), false) = (trees, skills.is_empty()) else {
+        return serde_json::Value::Null;
+    };
+    let points = |id: u16| {
+        skills
+            .points
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map_or(0, |(_, p)| *p)
+    };
+    let button = |id: Option<u16>| {
+        id.map(|id| {
+            let name = skills_data::name(id).map_or_else(|| format!("skill {id}"), str::to_owned);
+            serde_json::json!({ "id": id, "name": name })
+        })
+    };
+    let trees: Vec<serde_json::Value> = trees
+        .iter()
+        .zip(1u8..)
+        .map(|(name, page)| {
+            let on_page = skills_data::SKILLS
+                .iter()
+                .filter(|s| u32::from(s.class) == class && s.page == page);
+            let spent: u32 = on_page.clone().map(|s| u32::from(points(s.id))).sum();
+            let list: Vec<serde_json::Value> = on_page
+                .map(|s| {
+                    serde_json::json!({
+                        "id": s.id,
+                        "name": s.name,
+                        "row": s.row,
+                        "col": s.col,
+                        "req": s.req_level,
+                        "points": points(s.id),
+                        "locked": char_level.is_some_and(|l| s.req_level > l),
+                        "left": skills.left == Some(s.id),
+                        "right": skills.right == Some(s.id),
+                    })
+                })
+                .collect();
+            serde_json::json!({ "name": name, "points": spent, "skills": list })
+        })
+        .collect();
+    let total: u32 = skills.points.iter().map(|(_, p)| u32::from(*p)).sum();
+    serde_json::json!({
+        "total": total,
+        "left": button(skills.left),
+        "right": button(skills.right),
+        "trees": trees,
+    })
 }
 
 /// The normal shared-stash pages as `[{ "page": n, "items": [{ "text", "colour" }] }]`, UI
@@ -1301,11 +1369,32 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .stk.rune .nm { color: var(--rune); }
 .lines .line { white-space: pre-wrap; font-size: 13px; }
 
+/* Skills */
+.skbtns { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.trees { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.tree { background: var(--panel2); border: 1px solid var(--line2); border-radius: var(--radius); padding: 8px 10px 12px; min-width: 0; }
+.tree h3 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
+  display: flex; justify-content: space-between; }
+.tree h3 .pts { color: var(--gold); font-variant-numeric: tabular-nums; font-weight: 650; }
+.tgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: minmax(44px, auto); gap: 8px; }
+.sk { position: relative; border: 1px solid var(--line2); border-radius: 6px; padding: 5px 8px; background: #12110f;
+  font-size: 12px; line-height: 1.25; min-width: 0; opacity: .5; }
+.sk .nm { display: block; overflow-wrap: anywhere; }
+.sk .rq { display: block; font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.sk.on { opacity: 1; border-color: rgba(200,168,90,.6); background: rgba(200,168,90,.09); }
+.sk.on .nm { color: var(--gold); font-weight: 600; }
+.sk.locked { opacity: .25; }
+.sk.btn { opacity: 1; box-shadow: inset 0 0 0 1px var(--accent); }
+.sk .pt { position: absolute; top: -8px; right: -6px; min-width: 20px; padding: 0 5px; border-radius: 999px;
+  background: var(--gold); color: #1a1508; font-weight: 700; font-size: 11px; line-height: 17px; text-align: center;
+  font-variant-numeric: tabular-nums; }
+.sk .mb { position: absolute; bottom: 3px; right: 5px; font-size: 10px; font-weight: 700; color: var(--accent); letter-spacing: .06em; }
+
 @media (max-width: 1200px) { .gear { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 900px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
   .gear, .pages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .lv3 { grid-template-columns: minmax(0, 1fr); }
+  .lv3, .trees { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 520px) { .gear, .pages { grid-template-columns: minmax(0, 1fr); } .bar { position: static; } }
 </style></head><body>
@@ -1325,6 +1414,8 @@ Each card is a slot. The dashed box shows what is equipped (name and required le
 <div class="gear" id="gear"></div>
 <div id="mercbox"><h3 class="row-h">Mercenary · charms · sockets</h3>
 <div class="gear" id="merc"></div><div class="gear extras" id="extras"></div></div></section>
+<section class="panel full" id="skillpanel"><h2>Skills <span class="sub" id="skillsum"></span></h2>
+<div id="skills"></div></section>
 <div class="grid">
 <section class="panel"><h2>Where to go <span class="sub">monster level around yours</span></h2><div id="levels"></div></section>
 <section class="panel"><h2>Shared stash</h2><div id="stash"></div></section>
@@ -1443,6 +1534,27 @@ function stash(r) {
   el.innerHTML = (loaded ? "" : '<div class="empty">open the stash in game once to load it</div>')
     + `<div class="pages">${pages}</div><div class="mats">${mats}</div>`;
 }
+// The skill trees: the class's three pages side by side, each laid out on the game's
+// row/column grid. Allocated skills are gold with their hard points as a badge, the mouse-button
+// skills carry an L / R mark, unspent ones are dim and the ones above the character level dimmer.
+function skillTrees(s) {
+  $("skillsum").textContent = s ? `${s.total} point${s.total === 1 ? "" : "s"} spent · without +skills from gear` : "";
+  if (!s) { $("skills").innerHTML = '<div class="empty">skill list not read yet</div>'; return; }
+  const btn = (b, label) => b ? `<span class="chip"><b>${label}</b>${esc(b.name)}</span>` : "";
+  const buttons = btn(s.left, "left") + btn(s.right, "right");
+  const trees = (s.trees || []).map(t => {
+    const cells = (t.skills || []).map(k => {
+      const cls = ["sk", k.points ? "on" : k.locked ? "locked" : "", k.left || k.right ? "btn" : ""].join(" ");
+      const badge = k.points ? `<span class="pt">${esc(k.points)}</span>` : "";
+      const mark = (k.left ? "L" : "") + (k.right ? "R" : "");
+      const place = `grid-row:${Number(k.row) || "auto"};grid-column:${Number(k.col) || "auto"}`;
+      return `<div class="${cls}" style="${place}" title="${esc(k.name)}">${badge}<span class="nm">${esc(k.name)}</span>`
+        + `<span class="rq">lvl ${esc(k.req)}</span>${mark ? `<span class="mb">${mark}</span>` : ""}</div>`;
+    }).join("");
+    return `<div class="tree"><h3><span>${esc(t.name)}</span><span class="pts">${esc(t.points)}</span></h3><div class="tgrid">${cells}</div></div>`;
+  }).join("");
+  $("skills").innerHTML = (buttons ? `<div class="skbtns">${buttons}</div>` : "") + `<div class="trees">${trees}</div>`;
+}
 function sell(r) {
   const all = (r.sell || []).concat(r.keep || []).concat(r.give || []);
   $("sell").innerHTML = all.map(e => `<div class="line" style="color:${col(e.colour)}">${esc(e.text)}</div>`).join("")
@@ -1452,7 +1564,8 @@ function sell(r) {
 function render(r) {
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
-    for (const id of ["guide", "levels", "gear", "merc", "extras", "targets", "stash", "sell"]) $(id).innerHTML = "";
+    for (const id of ["guide", "levels", "gear", "merc", "extras", "targets", "stash", "sell", "skills"]) $(id).innerHTML = "";
+    $("skillsum").textContent = "";
     $("updated").textContent = "";
     document.title = "D2R Dashboard (waiting for game)";
     $("mercbox").hidden = true;
@@ -1465,6 +1578,7 @@ function render(r) {
   guide(r.guide);
   levels(r.levels);
   gear(r.gear);
+  skillTrees(r.skills);
   stash(r);
   sell(r);
 }
@@ -1487,7 +1601,14 @@ fn dashboard_page() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::{Result, anyhow};
+    use anyhow::{Context, Result, anyhow};
+
+    /// No skills read: the `skills` section is `null`.
+    static EMPTY_SKILLS: crate::game::Skills = crate::game::Skills {
+        points: Vec::new(),
+        left: None,
+        right: None,
+    };
     use std::io::{Cursor, Read};
 
     use crate::build::Damage;
@@ -1998,6 +2119,7 @@ mod tests {
             owned: &[],
             stash,
             stash_owned,
+            skills: &EMPTY_SKILLS,
             updated_at: 1_700_000_000,
         }
     }
@@ -2031,6 +2153,7 @@ mod tests {
             owned,
             stash: &[],
             stash_owned: &[],
+            skills: &EMPTY_SKILLS,
             updated_at: 1_700_000_000,
         };
         gear_json(&info)
@@ -2163,6 +2286,68 @@ mod tests {
             json.get("stash_owned"),
             Some(&serde_json::json!(["Harlequin Crest"]))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn live_json_has_the_skill_trees() -> Result<()> {
+        let blocks = crate::render::TextBlocks::default();
+        // A level 20 Warlock (class 7): Summon Goatman 16, Blood Boil 1, Miasma Bolt 2; Attack
+        // on the left button, Blood Boil on the right.
+        let skills = crate::game::Skills {
+            points: vec![(373, 16), (380, 1), (395, 2)],
+            left: Some(0),
+            right: Some(380),
+        };
+        let mut info = live_info(7, &blocks, &[], &[], &[]);
+        info.char_level = Some(20);
+        info.skills = &skills;
+        let json = serde_json::from_str::<serde_json::Value>(&live_json(&info))?;
+        let at = |path: &str| json.pointer(path).cloned().unwrap_or_default();
+        assert_eq!(at("/skills/total"), 19);
+        assert_eq!(at("/skills/left/name"), "Attack", "a basic skill has a name too");
+        assert_eq!(at("/skills/right/name"), "Blood Boil");
+        let names: Vec<_> = (0..3).map(|t| at(&format!("/skills/trees/{t}/name"))).collect();
+        assert_eq!(names, ["Demon", "Eldritch", "Chaos"], "the game's tab order");
+        let points: Vec<_> = (0..3).map(|t| at(&format!("/skills/trees/{t}/points"))).collect();
+        assert_eq!(points, [17, 0, 2]);
+        let demon = at("/skills/trees/0/skills");
+        let demon = demon.as_array().context("demon skills")?;
+        assert_eq!(demon.len(), 10, "every skill of the page, spent or not");
+        // `(field, value)` pairs of the Demon tree's skill `id`.
+        let fields = |id: u16, keys: &[&str]| -> Vec<serde_json::Value> {
+            let skill = demon.iter().find(|k| k.get("id") == Some(&id.into()));
+            keys.iter()
+                .map(|k| skill.and_then(|s| s.get(k)).cloned().unwrap_or_default())
+                .collect()
+        };
+        let keys = ["name", "row", "col", "req", "points", "left", "right", "locked"];
+        assert_eq!(
+            fields(380, &keys),
+            serde_json::json!(["Blood Boil", 4, 2, 18, 1, false, true, false])
+                .as_array()
+                .context("expected")?
+                .clone(),
+        );
+        assert_eq!(
+            fields(376, &["points", "locked"]),
+            [serde_json::json!(0), serde_json::json!(false)],
+            "unspent, level 12 <= 20"
+        );
+        assert_eq!(
+            fields(381, &["points", "locked"]),
+            [serde_json::json!(0), serde_json::json!(true)],
+            "Consume requires level 30, above 20"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn live_json_skills_are_null_when_unread() -> Result<()> {
+        let blocks = crate::render::TextBlocks::default();
+        let json =
+            serde_json::from_str::<serde_json::Value>(&live_json(&live_info(7, &blocks, &[], &[], &[])))?;
+        assert_eq!(json.get("skills"), Some(&serde_json::Value::Null));
         Ok(())
     }
 

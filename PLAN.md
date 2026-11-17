@@ -94,6 +94,12 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   walk-through border exits (`Snapshot::border_links`, drawn as a triangle on the shared edge). Earlier note: only
   filled for loaded rooms, and no walkable-connection info for unexplored rooms (openings need the seed).
 
+- **Skills** (live 2026-11-17, Warlock clvl 38, probe `skillprobe.py`): unit `+0x100` → skill list header
+  (`+0x00` first skill, `+0x08` left-button skill, `+0x10` right-button skill). Skill node: `+0x00` → skills.txt
+  record (u16 id at +0), `+0x08` next, **`+0x38` u32 hard points** (class skills summed to 41 = 37 + 4 quest
+  points, no unspent `newskills` stat). Gear-granted skills sit in the list with 0 hard points; no bonus-level
+  field in the node's first 0x100 bytes. Tree layout from `research/gen_skills.py` → `src/skills_data.rs`.
+
 ## Markers
 - **Waypoint**: object ids table (119, 157 seen; full list from objects.txt waypoint rows).
 - **Exits**: type-5 presets + room-tile links (link target level id → label "→ Jail Level 2").

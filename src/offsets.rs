@@ -35,11 +35,52 @@ pub mod unit {
     pub const STATS: u64 = 0x88;
     /// ptr to the unit's `Inventory` (see [`super::inventory`]); live 2026-11-15 on player units.
     pub const INVENTORY: u64 = 0x90;
+    /// ptr to the player's [`super::skills`] header. Live-verified 2026-11-17 (Warlock, clvl 38,
+    /// python probe `skillprobe.py`): the header's first-skill chain held 19 skills — Attack,
+    /// Kick, Throw, Unsummon, the two scrolls and tomes, and the Warlock's skills with points
+    /// plus the two granted only by gear.
+    pub const SKILLS: u64 = 0x100;
     /// ptr to the next unit in the hash chain (same slot = same `id & 127`). Verified live
     /// 2026-11-15 for items (43 chained units), monsters (24) and objects (1): every chained unit
     /// had the slot's type and `id & 127 == slot`. The earlier 0x150 only ever reached slot heads,
     /// so a unit sharing a slot was invisible (a dropped sapphire never showed).
     pub const NEXT: u64 = 0x158;
+}
+
+/// The player's skill list header ([`unit::SKILLS`]). Live-verified 2026-11-17.
+pub mod skills {
+    /// ptr to the first [`super::skill`] node; the rest follow [`super::skill::NEXT`].
+    pub const FIRST: u64 = 0x00;
+    /// ptr to the skill node on the left mouse button. Live: pointed at the list's Attack node.
+    pub const LEFT: u64 = 0x08;
+    /// ptr to the skill node on the right mouse button. Live: pointed at the Death Mark (375)
+    /// node of the same list. Left/right follow the community layout; not yet seen changing.
+    pub const RIGHT: u64 = 0x10;
+}
+
+/// One node of the player's skill list (`Skill`). Live-verified 2026-11-17 on a level 38
+/// Warlock: the class skills' [`HARD_POINTS`] were Summon Goatman 16, Demonic Mastery 10,
+/// Death Mark 1, Summon Tainted 1, Summon Defiler 3, Blood Oath 1, Engorge 1, Blood Boil 1,
+/// Bind Demon 7 = 41 = clvl 38 − 1 + 4 Normal quest points, with no unspent points (no
+/// `newskills` stat on the player). Miasma Bolt and Enhanced Entropy were in the list with 0:
+/// the gear grants them (+1 each, item stat 107 `item_singleskill` on weapon and off-hand).
+/// No field in the first 0x100 bytes carried that +1 bonus (Summon Goatman, +1 from the
+/// weapon, differs from Demonic Mastery only in the hard points and flags), so the node holds
+/// base points only; the bonus is item stats, not read.
+pub mod skill {
+    /// ptr to the skill's skills.txt record ([`super::skill_txt`]).
+    pub const TXT: u64 = 0x00;
+    /// ptr to the next node; null ends the list.
+    pub const NEXT: u64 = 0x08;
+    /// u32 hard (allocated) points; 1 on Attack/Kick/Throw and the scrolls/tomes. (The u32 at
+    /// `+0x40` is a tome's charge count, live 15 identify / 17 town portal; not read.)
+    pub const HARD_POINTS: u64 = 0x38;
+}
+
+/// The game's skills.txt record a [`skill::TXT`] points to.
+pub mod skill_txt {
+    /// u16 skills.txt row (`*Id`). Live: 0 Attack, 217–220 scrolls/tomes, 373–402 Warlock.
+    pub const ID: u64 = 0x00;
 }
 
 /// `Inventory` of a unit.

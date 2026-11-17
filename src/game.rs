@@ -14,11 +14,12 @@ use crate::items::{self, DropKind};
 use crate::objects_data::{SHRINE_OBJECTS, WELL_OBJECTS};
 use crate::offsets::{
     ROOM_TILE_SCALE, act, act_misc, inventory, item_data, item_mode, level, level_preset, monster_data,
-    object_data, object_mode, path, player_data, preset, room_tile, room1, room2, stash_tab_node, stat_list,
-    state, static_path, unit, unit_table,
+    object_data, object_mode, path, player_data, preset, room_tile, room1, room2, skill, skill_txt, skills,
+    stash_tab_node, stat_list, state, static_path, unit, unit_table,
 };
 use crate::process::ReadMem;
 use crate::render::is_consumable_quest_object;
+use crate::skills_data;
 use crate::stash::{self, StashTab};
 use crate::valuables;
 
@@ -44,6 +45,9 @@ pub const TERROR_MIN_MONSTERS: usize = 2;
 const MAX_STASH_ITEMS_PER_TAB: usize = 100;
 /// Most nodes walked in the player's shared-stash tab list (live: 6).
 const MAX_STASH_TABS: usize = 16;
+/// Most nodes walked in the player's skill list (live: 19; a class has 30 skills, plus the
+/// basic ones and gear-granted skills of other classes).
+const MAX_SKILLS: usize = 128;
 
 /// Agreeing owner ids (`item_data::OWNER`) after which a storage page stops voting.
 const OWNER_VOTES: u32 = 8;
@@ -174,7 +178,34 @@ pub struct Snapshot {
     /// JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trail: Vec<(u16, u16)>,
+    /// The player's skill allocation ([`Skills`]); empty when unreadable. Left out of the JSON
+    /// when empty, so older dumps stay loadable.
+    #[serde(default, skip_serializing_if = "Skills::is_empty")]
+    pub skills: Skills,
     pub warnings: Vec<String>,
+}
+
+/// The player's skill allocation, read from the skill list ([`skill`]): the class skills with
+/// hard (allocated) points and the skills on the two mouse buttons. Bonus levels from gear
+/// are not included (the skill nodes don't carry them).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Skills {
+    /// `(skills.txt id, hard points)` of the player's own class skills with points, in list
+    /// order ([`skills_data::SKILLS`] has their tree places).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<(u16, u8)>,
+    /// The skill id on the left mouse button.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<u16>,
+    /// The skill id on the right mouse button.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<u16>,
+}
+
+impl Skills {
+    pub const fn is_empty(&self) -> bool {
+        self.points.is_empty() && self.left.is_none() && self.right.is_none()
+    }
 }
 
 /// True if at least [`TERROR_MIN_MONSTERS`] living monsters carry the desecrated state.
@@ -880,6 +911,7 @@ pub fn snapshot(
     let (sell, give_away) = valuables::spare_lists(&mine);
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
     let terrorized = is_terrorized(&monsters);
+    let skills = r.skills(chosen.addr.0, player.class);
 
     Ok(Snapshot {
         player,
@@ -909,6 +941,7 @@ pub fn snapshot(
         terrorized,
         cows: None,
         trail: Vec::new(),
+        skills,
         warnings: r.into_warnings(),
     })
 }
@@ -1351,6 +1384,68 @@ impl<M: ReadMem> Reader<'_, M> {
             wsm: None,
         };
         Ok((player, level))
+    }
+
+    /// The player's skill allocation ([`Skills`]). A read error is a warning: an unreadable list
+    /// leaves the allocation empty, an unreadable entry is skipped, so a bad skill list never
+    /// fails the snapshot.
+    fn skills(&mut self, player_addr: u64, class: u32) -> Skills {
+        let header = match self.ptr(player_addr, unit::SKILLS) {
+            Ok(Some(header)) => header,
+            Ok(None) => return Skills::default(),
+            Err(e) => {
+                self.warn(format!("skill list: {e:#}"));
+                return Skills::default();
+            }
+        };
+        let first = match self.ptr(header, skills::FIRST) {
+            Ok(first) => first,
+            Err(e) => {
+                self.warn(format!("skill list: {e:#}"));
+                return Skills::default();
+            }
+        };
+        let mut points = Vec::new();
+        for node in self.walk(first, skill::NEXT, MAX_SKILLS, "skill") {
+            match self.skill_points(node) {
+                // Basic skills (Attack, scrolls) and gear-granted skills of other classes are
+                // in the list too; only the class's own allocated skills count.
+                Ok((id, hard)) => {
+                    let own = skills_data::skill(id).is_some_and(|s| u32::from(s.class) == class);
+                    if hard > 0 && own {
+                        points.push((id, hard));
+                    }
+                }
+                // One unreadable entry is skipped; the rest of the allocation still shows.
+                Err(e) => self.warn(format!("skill {node:#x}: {e:#}")),
+            }
+        }
+        // The buttons are a nice-to-have: an unreadable one is just not marked.
+        let button = |off| {
+            self.ptr(header, off)
+                .ok()
+                .flatten()
+                .and_then(|node| self.skill_id(node).ok())
+        };
+        Skills {
+            points,
+            left: button(skills::LEFT),
+            right: button(skills::RIGHT),
+        }
+    }
+
+    /// The skills.txt id of a skill node.
+    fn skill_id(&self, node: u64) -> Result<u16> {
+        let txt = self.ptr_req(node, skill::TXT, "skill txt")?;
+        self.u16(txt, skill_txt::ID)
+    }
+
+    /// `(id, hard points)` of a skill node; more than 255 points is a misread.
+    fn skill_points(&self, node: u64) -> Result<(u16, u8)> {
+        let id = self.skill_id(node)?;
+        let hard = self.u32(node, skill::HARD_POINTS)?;
+        let hard = u8::try_from(hard).with_context(|| format!("skill {id}: {hard} hard points"))?;
+        Ok((id, hard))
     }
 
     /// World-tile origin of a `Room2`.
@@ -2111,21 +2206,36 @@ mod tests {
         path: u64,
         next: u64,
     ) -> Result<()> {
-        put(
-            mem,
-            addr,
-            UNIT_SIZE,
-            &[
-                (unit::TYPE, &ty.to_le_bytes()),
-                (unit::TXT, &txt.to_le_bytes()),
-                (unit::ID, &(u32::try_from(addr >> 12)?).to_le_bytes()),
-                (unit::MODE, &1u32.to_le_bytes()),
-                (unit::UNIT_DATA, &data.to_le_bytes()),
-                (unit::ACT, &act.to_le_bytes()),
-                (unit::PATH, &path.to_le_bytes()),
-                (unit::NEXT, &next.to_le_bytes()),
-            ],
-        )
+        unit_ext(mem, addr, (ty, txt, data, act, path, next), &[])
+    }
+
+    /// Like [`unit`] (fields `(ty, txt, data, act, path, next)`), plus `extra` fields.
+    fn unit_ext(
+        mem: &mut FakeMem,
+        addr: u64,
+        (ty, txt, data, act, path, next): (u32, u32, u64, u64, u64, u64),
+        extra: &[(u64, &[u8])],
+    ) -> Result<()> {
+        let id = u32::try_from(addr >> 12)?.to_le_bytes();
+        let (ty, txt, mode) = (ty.to_le_bytes(), txt.to_le_bytes(), 1u32.to_le_bytes());
+        let (data, act, path, next) = (
+            data.to_le_bytes(),
+            act.to_le_bytes(),
+            path.to_le_bytes(),
+            next.to_le_bytes(),
+        );
+        let mut fields: Vec<(u64, &[u8])> = vec![
+            (unit::TYPE, &ty),
+            (unit::TXT, &txt),
+            (unit::ID, &id),
+            (unit::MODE, &mode),
+            (unit::UNIT_DATA, &data),
+            (unit::ACT, &act),
+            (unit::PATH, &path),
+            (unit::NEXT, &next),
+        ];
+        fields.extend_from_slice(extra);
+        put(mem, addr, UNIT_SIZE, &fields)
     }
 
     fn unit_path(mem: &mut FakeMem, addr: u64, x: u16, y: u16, room1: u64) -> Result<()> {
@@ -2574,6 +2684,97 @@ mod tests {
             .context("body in ItemData")?
             .copy_from_slice(&[body]);
         mem.add(data, b);
+        Ok(())
+    }
+
+    const SK_HEADER: u64 = 0x90_0000;
+    const SK_NODES: u64 = 0x91_0000;
+    const SK_TXT: u64 = 0x92_0000;
+
+    /// Gives Alice (a paladin, class 3) a skill list of `(skills.txt id, hard points)` nodes
+    /// in that order; `left` / `right` index the node on each mouse button.
+    fn alice_skills(m: &mut FakeMem, nodes: &[(u16, u32)], left: usize, right: usize) -> Result<()> {
+        unit_ext(
+            m,
+            P_ALICE,
+            (0, 3, PD_ALICE, ACT, PATH_ALICE, 0),
+            &[(unit::SKILLS, &SK_HEADER.to_le_bytes())],
+        )?;
+        let node = |i: usize| SK_NODES + u64::try_from(i).unwrap_or(0) * 0x1000;
+        for (i, &(id, hard)) in nodes.iter().enumerate() {
+            let txt = SK_TXT + u64::try_from(i)? * 0x1000;
+            put(m, txt, 0x10, &[(skill_txt::ID, &id.to_le_bytes())])?;
+            let next = if i + 1 < nodes.len() { node(i + 1) } else { 0 };
+            put(
+                m,
+                node(i),
+                0x60,
+                &[
+                    (skill::TXT, &txt.to_le_bytes()),
+                    (skill::NEXT, &next.to_le_bytes()),
+                    (skill::HARD_POINTS, &hard.to_le_bytes()),
+                ],
+            )?;
+        }
+        put(
+            m,
+            SK_HEADER,
+            0x30,
+            &[
+                (skills::FIRST, &node(0).to_le_bytes()),
+                (skills::LEFT, &node(left).to_le_bytes()),
+                (skills::RIGHT, &node(right).to_le_bytes()),
+            ],
+        )
+    }
+
+    #[test]
+    fn skills_keep_the_class_skills_with_points() -> Result<()> {
+        let mut m = world()?;
+        // Attack and a scroll (basic, 1 point each), Sacrifice 5, Might 3, Prayer 0 (a +skill
+        // from gear), Fire Bolt 2 (another class's skill), Blessed Hammer 20.
+        let nodes = [(0, 1), (219, 1), (96, 5), (98, 3), (99, 0), (36, 2), (112, 20)];
+        alice_skills(&mut m, &nodes, 0, 3)?;
+        let s = snapshot(&m, TABLE, None, Some("Alice"), None)?;
+        assert_eq!(s.skills.points, vec![(96, 5), (98, 3), (112, 20)]);
+        assert_eq!(
+            (s.skills.left, s.skills.right),
+            (Some(0), Some(98)),
+            "Attack / Might"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_broken_skill_entry_is_a_warning_and_skipped() -> Result<()> {
+        let mut m = world()?;
+        alice_skills(&mut m, &[(96, 5), (98, 3)], 0, 1)?;
+        // The second node's skills.txt record is unmapped.
+        put(
+            &mut m,
+            SK_NODES + 0x1000,
+            0x60,
+            &[(skill::TXT, &UNMAPPED.to_le_bytes())],
+        )?;
+        let s = snapshot(&m, TABLE, None, Some("Alice"), None)?;
+        assert_eq!(s.skills.points, vec![(96, 5)], "the readable entry stays");
+        assert!(
+            s.warnings.iter().any(|w| w.starts_with("skill ")),
+            "{:?}",
+            s.warnings
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn no_skill_list_is_empty_skills_without_a_warning() -> Result<()> {
+        let s = snapshot(&world()?, TABLE, None, Some("Alice"), None)?;
+        assert!(s.skills.is_empty());
+        assert!(
+            !s.warnings.iter().any(|w| w.contains("skill")),
+            "{:?}",
+            s.warnings
+        );
         Ok(())
     }
 

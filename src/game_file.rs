@@ -148,6 +148,7 @@ mod tests {
             terrorized: false,
             cows: None,
             trail: vec![],
+            skills: crate::game::Skills::default(),
             warnings: vec![],
         }
     }

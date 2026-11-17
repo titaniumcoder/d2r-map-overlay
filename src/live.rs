@@ -336,6 +336,7 @@ fn follow_game(
                     owned: &snap.owned_names,
                     stash: &snap.stash,
                     stash_owned: &snap.stash_names,
+                    skills: &snap.skills,
                     updated_at: now_secs(),
                 }));
                 if let Some((tabs, items)) = update.stash_captured {
