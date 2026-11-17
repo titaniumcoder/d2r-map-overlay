@@ -3,6 +3,10 @@
 //!
 //! Loaded once at start. A missing file means the defaults; an unreadable or invalid one is
 //! reported once on stderr and the defaults are used, so a typo never stops the overlay.
+//!
+//! Build definitions live in `builds/<slug>.toml` next to `config.toml`, one build per file,
+//! authored by the agent (not edited in the webapp); the config only *selects* one per
+//! character via `[bis.<name>] build = "<slug>"` (user decision, 2026-11-17).
 
 use std::collections::BTreeMap;
 use std::io;
@@ -65,22 +69,43 @@ const DEFAULT_SHRINES: [&str; 5] = ["refilling", "skill", "stamina", "gem", "mon
 /// Shrine types shown in Normal only by default: stamina is useless later (user, 2026-11-15).
 const DEFAULT_NORMAL_ONLY: [&str; 1] = ["stamina"];
 
+/// An agent-authored build definition from `builds/<slug>.toml` (see [`load_builds`]): display
+/// name, damage types, optional free-text notes and the per-slot piece lists in the same
+/// `"Piece@<required level>"` format as the old inline `[bis]` slots.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Build {
+    /// The display name (e.g. "Blood Boil"); the map key is its lowercase form.
+    pub name: String,
+    /// The build's damage types, primary first.
+    pub damages: Vec<Damage>,
+    /// Free text (e.g. the guide the build was authored from); `None` when empty.
+    pub notes: Option<String>,
+    /// Slot name → pieces, best (highest required level) first.
+    pub slots: BTreeMap<String, Vec<String>>,
+    /// The mercenary's slot name → pieces.
+    pub merc_slots: BTreeMap<String, Vec<String>>,
+}
+
 /// The whole configuration.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
     pub valuables: Valuables,
     pub shrines: Shrines,
     pub builds: Builds,
-    /// Per-character `BiS` build and gear list (`[bis.<name>]`).
+    /// Per-character `BiS` selection and optional legacy inline gear list (`[bis.<name]`).
     pub bis: BTreeMap<String, Bis>,
+    /// The agent-authored build definitions from `builds/*.toml`, keyed by lowercased build
+    /// name — the `slug` a `[bis.<name>]` `build` selection refers to (see [`load_builds`]).
+    pub build_defs: BTreeMap<String, Build>,
 }
 
-/// A character's `BiS` build and per-slot gear: `[bis.<name>]` (user request, 2026-11-17:
-/// the Blood Boil Warlock guide's gear as the first entry, shown per slot, only pieces relevant
-/// for the character's level, and only when the equipped piece isn't already better).
+/// A character's `BiS` selection and (legacy) inline gear list: `[bis.<name>]` (user request,
+/// 2026-11-17). Since the build files exist, the webapp writes only `build` here; the inline
+/// `slots`/`merc_slots` stay for hand-written configs and win over the selected build's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bis {
-    /// The build's display name (e.g. "Blood Boil").
+    /// The selected build's slug (lowercased build name from `builds/*.toml`, e.g.
+    /// "blood boil"); empty when the entry is inline-only or nothing is selected.
     pub build: String,
     /// Slot name → pieces in chase order (`"Name@<required level>"`; the guide shows the
     /// highest-level one the character can currently use, so a slot can graduate from Spirit
@@ -165,20 +190,46 @@ pub struct Builds {
 }
 
 impl Config {
-    /// The `BiS` entry of the character `name` (any case), or `None`.
+    /// The build definition the character's `[bis]` entry selects, if it names one that exists.
     #[must_use]
-    pub fn bis_for_player(&self, name: &str) -> Option<&Bis> {
-        self.bis.get(&name.to_lowercase())
+    pub fn selected_build(&self, name: &str) -> Option<&Build> {
+        let slug = self.bis.get(&name.to_lowercase())?.build.trim().to_lowercase();
+        if slug.is_empty() {
+            None
+        } else {
+            self.build_defs.get(&slug)
+        }
     }
-}
 
-impl Builds {
-    /// The build of the character `name` (any case) of `class`: its own entry, else its class's,
-    /// else none.
-    pub fn for_player(&self, name: &str, class: u32) -> &[Damage] {
-        self.names
-            .get(&name.to_lowercase())
-            .or_else(|| self.classes.get(&class))
+    /// The character's `BiS` resolved over the build files: its inline slots when it has any,
+    /// else the selected build's slots (else none — a build file may omit slots).
+    #[must_use]
+    pub fn resolved_bis(&self, name: &str) -> Option<Bis> {
+        let bis = self.bis.get(&name.to_lowercase())?;
+        if !bis.slots.is_empty() || !bis.merc_slots.is_empty() {
+            return Some(bis.clone());
+        }
+        let def = self.selected_build(name)?;
+        Some(Bis {
+            build: def.name.clone(),
+            slots: def.slots.clone(),
+            merc_slots: def.merc_slots.clone(),
+        })
+    }
+
+    /// The character's damage types, primary first: its own `[builds]` entry, else the selected
+    /// build's damages, else its class's (`class` as charstats row id; `None` where the caller
+    /// doesn't know a class, e.g. the config page).
+    #[must_use]
+    pub fn damages_for_player(&self, name: &str, class: Option<u32>) -> &[Damage] {
+        if let Some(damages) = self.builds.names.get(&name.to_lowercase()) {
+            return damages;
+        }
+        if let Some(def) = self.selected_build(name) {
+            return &def.damages;
+        }
+        class
+            .and_then(|c| self.builds.classes.get(&c))
             .map_or(&[], Vec::as_slice)
     }
 }
@@ -191,17 +242,6 @@ struct RawConfig {
     shrines: RawShrines,
     builds: RawBuilds,
     bis: BTreeMap<String, RawBis>,
-}
-
-/// `[bis.<name>]` as written: `build` and the per-slot pieces
-/// (`slots` for the character, `merc_slots` for the mercenary). A piece is `"Name"` or
-/// `"Name@<required level>"` (the level makes the piece filterable by character level).
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct RawBis {
-    build: String,
-    slots: BTreeMap<String, Vec<String>>,
-    merc_slots: BTreeMap<String, Vec<String>>,
 }
 
 /// `[builds]` as written: character name = damage names, plus the `class` table (class id or name
@@ -275,6 +315,135 @@ fn class_id(key: &str) -> Option<u32> {
     by_name.or_else(|| key.parse().ok().filter(|&id: &u32| id < 8))
 }
 
+/// Trims a piece list and drops the blanks (`" "` entries are never meaningful).
+fn clean_pieces(pieces: &[String]) -> Vec<String> {
+    pieces
+        .iter()
+        .map(|p| p.trim().to_owned())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Parses a `slots`/`merc_slots` piece table (`"Piece"` or `"Piece@<required level>"` per
+/// slot): blanks dropped, empty lists dropped, unknown slot names warned about and ignored.
+/// `label` names the entry in the warnings (e.g. `bis Demonmaster`).
+fn parse_slot_tables(
+    raw: BTreeMap<String, Vec<String>>,
+    label: &str,
+    warnings: &mut Vec<String>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut out = BTreeMap::new();
+    for (slot, pieces) in raw {
+        let cleaned = clean_pieces(&pieces);
+        if cleaned.is_empty() {
+            continue;
+        }
+        if SLOT_NAMES.contains(&slot.as_str()) {
+            out.insert(slot, cleaned);
+        } else {
+            warnings.push(format!(
+                "{label}: unknown slot {slot:?} ignored (known: {})",
+                SLOT_NAMES.join(", ")
+            ));
+        }
+    }
+    out
+}
+
+/// `[bis.<name>]` as written: the selected build's `slug` and the per-slot pieces
+/// (`slots` for the character, `merc_slots` for the mercenary — legacy inline lists the webapp
+/// no longer edits; they win over the selected build's slots).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawBis {
+    build: String,
+    slots: BTreeMap<String, Vec<String>>,
+    merc_slots: BTreeMap<String, Vec<String>>,
+}
+
+/// `builds/<slug>.toml` as written (agent-authored; see the module docs).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawBuild {
+    name: String,
+    damages: Vec<String>,
+    notes: String,
+    slots: BTreeMap<String, Vec<String>>,
+    merc_slots: BTreeMap<String, Vec<String>>,
+}
+
+/// Parses one build file's text: the lowercased build name (the slug a `[bis.<name>]` `build`
+/// selection refers to), the [`Build`], and warnings about ignored entries.
+/// # Errors
+/// Fails on invalid TOML, unknown keys or wrongly typed values.
+fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de::Error> {
+    let raw: RawBuild = toml::from_str(text)?;
+    let mut warnings = Vec::new();
+    let name = raw.name.trim().to_owned();
+    let damages = damages(&raw.damages, &name, &mut warnings);
+    let label = format!("build {name}");
+    let slots = parse_slot_tables(raw.slots, &label, &mut warnings);
+    let merc_slots = parse_slot_tables(raw.merc_slots, &label, &mut warnings);
+    let notes = raw.notes.trim().to_owned();
+    Ok((
+        name.to_lowercase(),
+        Build {
+            name,
+            damages,
+            notes: (!notes.is_empty()).then_some(notes),
+            slots,
+            merc_slots,
+        },
+        warnings,
+    ))
+}
+
+/// Loads every `*.toml` build definition from `dir` (one build per file, agent-authored), keyed
+/// by lowercased build name. A missing directory means no builds and no error; an unreadable,
+/// invalid or nameless file is reported on stderr and skipped.
+pub fn load_builds(dir: &Path) -> BTreeMap<String, Build> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return BTreeMap::new();
+    };
+    let mut builds = BTreeMap::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e != "toml") {
+            continue;
+        }
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) => {
+                eprintln!("build {}: {e}; skipped", path.display());
+                continue;
+            }
+        };
+        match parse_build(&text) {
+            Ok((slug, build, warnings)) => {
+                for w in warnings {
+                    eprintln!("build {}: {w}", path.display());
+                }
+                if slug.is_empty() {
+                    eprintln!("build {}: no name; skipped", path.display());
+                } else {
+                    builds.insert(slug, build);
+                }
+            }
+            Err(e) => eprintln!("build {}: invalid, skipped:\n{e}", path.display()),
+        }
+    }
+    builds
+}
+
+/// The `builds/` directory next to the config file at `config_path` (the agent-authored build
+/// definitions; see [`load_builds`]).
+#[must_use]
+pub fn builds_dir_for(config_path: &Path) -> PathBuf {
+    config_path
+        .parent()
+        .map_or_else(|| PathBuf::from("builds"), |p| p.join("builds"))
+}
+
 fn builds(raw: RawBuilds, warnings: &mut Vec<String>) -> Builds {
     let mut builds = Builds::default();
     for (name, list) in raw.names {
@@ -318,46 +487,22 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), toml::de::Error> {
     let builds = builds(raw.builds, &mut warnings);
     let mut bis = BTreeMap::new();
     for (name, raw) in raw.bis {
-        let mut slots = BTreeMap::new();
-        for (slot, pieces) in raw.slots {
-            let trimmed: Vec<String> = pieces
-                .iter()
-                .map(|p| p.trim().to_owned())
-                .filter(|p| !p.is_empty())
-                .collect();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if SLOT_NAMES.contains(&slot.as_str()) {
-                slots.insert(slot, trimmed);
-            } else {
-                warnings.push(format!(
-                    "bis {name}: unknown slot {slot:?} ignored (known: {})",
-                    SLOT_NAMES.join(", ")
-                ));
-            }
-        }
-        let mut merc_slots = BTreeMap::new();
-        for (slot, pieces) in raw.merc_slots {
-            let trimmed: Vec<String> = pieces
-                .iter()
-                .map(|p| p.trim().to_owned())
-                .filter(|p| !p.is_empty())
-                .collect();
-            if !trimmed.is_empty() {
-                merc_slots.insert(slot, trimmed);
-            }
-        }
-        if raw.build.trim().is_empty() || (slots.is_empty() && merc_slots.is_empty()) {
+        let label = format!("bis {name}");
+        let slots = parse_slot_tables(raw.slots, &label, &mut warnings);
+        let merc_slots = parse_slot_tables(raw.merc_slots, &label, &mut warnings);
+        // Selection-only entries (`build` without any slots) are the webapp's normal output;
+        // an entry with neither a build nor slots does nothing and is ignored with a warning.
+        let build = raw.build.trim().to_owned();
+        if build.is_empty() && slots.is_empty() && merc_slots.is_empty() {
             warnings.push(format!(
-                "bis {name}: needs a build name and at least one slot piece; ignored"
+                "bis {name}: needs a build selection or at least one slot piece; ignored"
             ));
             continue;
         }
         bis.insert(
             name.to_lowercase(),
             Bis {
-                build: raw.build.trim().to_owned(),
+                build,
                 slots,
                 merc_slots,
             },
@@ -369,6 +514,7 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), toml::de::Error> {
             shrines: Shrines { show, normal_only },
             builds,
             bis,
+            build_defs: BTreeMap::new(),
         },
         warnings,
     ))
@@ -396,23 +542,38 @@ pub fn load() -> Config {
 pub fn load_from(path: &Path) -> Config {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Config::default(),
+        // The build files stand on their own (see the invalid branch below): a missing or
+        // unreadable config.toml must not lose the builds dir either.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Config {
+                build_defs: load_builds(&builds_dir_for(path)),
+                ..Config::default()
+            };
+        }
         Err(e) => {
             eprintln!("config {}: {e}; using the defaults", path.display());
-            return Config::default();
+            return Config {
+                build_defs: load_builds(&builds_dir_for(path)),
+                ..Config::default()
+            };
         }
     };
     match parse(&text) {
-        Ok((config, warnings)) => {
+        Ok((mut config, warnings)) => {
             for w in warnings {
                 eprintln!("config {}: {w}", path.display());
             }
             eprintln!("config: {}", path.display());
+            config.build_defs = load_builds(&builds_dir_for(path));
             config
         }
         Err(e) => {
             eprintln!("config {}: invalid, using the defaults:\n{e}", path.display());
-            Config::default()
+            // The build files stand on their own: a broken config.toml must not lose them.
+            Config {
+                build_defs: load_builds(&builds_dir_for(path)),
+                ..Config::default()
+            }
         }
     }
 }
@@ -470,26 +631,31 @@ mod tests {
              [builds.class]\ndruid = [\"physical\"]\n4 = [\"physical\"]\nbard = [\"fire\"]\n",
         )?;
         assert_eq!(
-            c.builds.for_player("Vex", 6),
+            c.damages_for_player("Vex", Some(6)),
             [Lightning, Fire, Physical],
             "deduped, in order"
         );
         assert_eq!(
-            c.builds.for_player("vex", 1),
+            c.damages_for_player("vex", Some(1)),
             [Lightning, Fire, Physical],
             "name in any case"
         );
         assert_eq!(
-            c.builds.for_player("Other", 5),
+            c.damages_for_player("Other", Some(5)),
             [Cold],
             "own entry beats the class"
         );
-        assert_eq!(c.builds.for_player("Bear", 5), [Physical], "class by name");
-        assert_eq!(c.builds.for_player("Barb", 4), [Physical], "class by id");
+        assert_eq!(c.damages_for_player("Bear", Some(5)), [Physical], "class by name");
+        assert_eq!(c.damages_for_player("Barb", Some(4)), [Physical], "class by id");
         assert_eq!(
-            c.builds.for_player("Sorc", 1),
+            c.damages_for_player("Sorc", Some(1)),
             [] as [Damage; 0],
             "nothing configured"
+        );
+        assert_eq!(
+            c.damages_for_player("Sorc", None),
+            [] as [Damage; 0],
+            "no class known: still no damages"
         );
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert!(warnings.iter().any(|w| w.contains("\"holy\"")), "{warnings:?}");
@@ -504,12 +670,12 @@ mod tests {
     #[test]
     fn bis_entries() -> Result<()> {
         let (config, warnings) = parse(
-            "[bis.Demonmaster]\nbuild = \"Blood Boil\"\n\
+            "[bis.Demonmaster]\nbuild = \"blood boil\"\n\
              [bis.Demonmaster.slots]\nweapon = [\"Heart of the Oak@55\"]\nbody = [\"Stealth@17\", \"Enigma@65\"]\nring1 = [\" \"]\n\
              unknown = [\"x\"]\n\
              [bis.Demonmaster.merc_slots]\nweapon = [\"Insight@27\"]",
         )?;
-        // Blank pieces are dropped silently; unknown slots warn.
+        // Blank pieces are dropped silently; unknown slots (in both tables) warn.
         assert_eq!(
             warnings,
             vec![
@@ -517,10 +683,10 @@ mod tests {
             ],
             "{warnings:?}"
         );
-        let Some(bis) = config.bis_for_player("DEMONmaster") else {
+        let Some(bis) = config.bis.get("demonmaster") else {
             return Err(anyhow!("no bis entry"));
         };
-        assert_eq!(bis.build, "Blood Boil");
+        assert_eq!(bis.build, "blood boil");
         assert_eq!(
             bis.slots.get("weapon").map(Vec::as_slice),
             Some(&["Heart of the Oak@55".to_owned()][..])
@@ -530,10 +696,125 @@ mod tests {
             bis.merc_slots.get("weapon").map(Vec::as_slice),
             Some(&["Insight@27".to_owned()][..])
         );
-        assert!(config.bis_for_player("other").is_none());
-        // No build name or no slots at all: ignored with a warning.
-        let (_, warnings) = parse("[bis.X]\nbuild = \"b\"\n[bis.X.slots]\nhelm = [\" \"]")?;
+        assert!(!config.bis.contains_key("other"));
+        // A selection without any slots is the webapp's normal output: valid.
+        let (config, warnings) = parse("[bis.X]\nbuild = \"b\"\n")?;
+        assert_eq!(config.bis.get("x").map(|b| b.build.as_str()), Some("b"));
+        assert_eq!(warnings, Vec::<String>::new());
+        // Neither a build nor slots: ignored with a warning.
+        let (_, warnings) = parse("[bis.X]\nbuild = \"\"\n[bis.X.slots]\nhelm = [\" \"]")?;
         assert_eq!(warnings.len(), 1, "{warnings:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn build_files() -> Result<()> {
+        let dir = temp_dir("builds")?;
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(
+            dir.join("blood-boil.toml"),
+            "# comment preserved on the way in\nname = \"Blood Boil\"\ndamages = [\"physical\", \"fire\"]\nnotes = \"guide\"\n\
+             [slots]\nweapon = [\"Heart of the Oak@55\", \" \"]\n\
+             [merc_slots]\nweapon = [\"Insight@27\"]",
+        )?;
+        std::fs::write(dir.join("broken.toml"), "name = [\n")?;
+        std::fs::write(dir.join("nameless.toml"), "damages = [\"fire\"]\n")?;
+        std::fs::write(dir.join("ignored.txt"), "name = \"Nope\"\n")?;
+        let builds = load_builds(&dir);
+        assert_eq!(builds.keys().collect::<Vec<_>>(), ["blood boil"], "{builds:?}");
+        let Some(def) = builds.get("blood boil") else {
+            return Err(anyhow!("no blood boil"));
+        };
+        assert_eq!(def.name, "Blood Boil");
+        assert_eq!(def.damages, [Damage::Physical, Damage::Fire]);
+        assert_eq!(def.notes.as_deref(), Some("guide"));
+        assert_eq!(
+            def.slots.get("weapon").map(Vec::as_slice),
+            Some(&["Heart of the Oak@55".to_owned()][..]),
+            "blank pieces dropped"
+        );
+        assert_eq!(
+            def.merc_slots.get("weapon").map(Vec::as_slice),
+            Some(&["Insight@27".to_owned()][..])
+        );
+        // A missing directory is no builds and no error.
+        assert!(load_builds(&dir.join("missing")).is_empty());
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn resolution_inline_beats_build_beats_none() -> Result<()> {
+        let mut config = Config::default();
+        config.build_defs.insert(
+            "blood boil".to_owned(),
+            Build {
+                name: "Blood Boil".to_owned(),
+                damages: vec![Damage::Physical, Damage::Fire],
+                notes: None,
+                slots: [("weapon".to_owned(), vec!["Heart of the Oak@55".to_owned()])].into(),
+                merc_slots: BTreeMap::new(),
+            },
+        );
+        config.bis.insert(
+            "demonmaster".to_owned(),
+            Bis {
+                build: "blood boil".to_owned(),
+                slots: BTreeMap::new(),
+                merc_slots: BTreeMap::new(),
+            },
+        );
+        // Selection-only: the build's slots and damages come through.
+        let resolved = config
+            .resolved_bis("DEMONmaster")
+            .ok_or_else(|| anyhow!("unresolved"))?;
+        assert_eq!(resolved.build, "Blood Boil", "the display name, not the slug");
+        assert_eq!(
+            resolved.slots.get("weapon").map(Vec::as_slice),
+            Some(&["Heart of the Oak@55".to_owned()][..])
+        );
+        assert_eq!(
+            config.damages_for_player("DEMONmaster", None),
+            [Damage::Physical, Damage::Fire],
+            "the build's damages"
+        );
+        // Inline slots win over the build's, and a character-level `[builds]` entry beats the
+        // build's damages.
+        let inline = [("body".to_owned(), vec!["Stealth@17".to_owned()])].into();
+        if let Some(b) = config.bis.get_mut("demonmaster") {
+            b.slots = inline;
+        }
+        config
+            .builds
+            .names
+            .insert("demonmaster".to_owned(), vec![Damage::Fire]);
+        let resolved = config
+            .resolved_bis("demonmaster")
+            .ok_or_else(|| anyhow!("unresolved"))?;
+        assert!(
+            !resolved.slots.contains_key("weapon"),
+            "inline slots replace the build's"
+        );
+        assert_eq!(
+            resolved.slots.get("body").map(Vec::as_slice),
+            Some(&["Stealth@17".to_owned()][..])
+        );
+        assert_eq!(config.damages_for_player("demonmaster", Some(7)), [Damage::Fire]);
+        // No bis entry at all: no resolved BiS, only the class fallback for damages.
+        assert!(config.resolved_bis("other").is_none());
+        config.builds.classes.insert(7, vec![Damage::Lightning]);
+        assert_eq!(config.damages_for_player("other", Some(7)), [Damage::Lightning]);
+        // A selected build that doesn't exist resolves to nothing.
+        config.bis.insert(
+            "ghost".to_owned(),
+            Bis {
+                build: "nope".to_owned(),
+                slots: BTreeMap::new(),
+                merc_slots: BTreeMap::new(),
+            },
+        );
+        assert!(config.resolved_bis("ghost").is_none());
+        assert_eq!(config.damages_for_player("ghost", None), [] as [Damage; 0]);
         Ok(())
     }
 

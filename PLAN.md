@@ -281,6 +281,24 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   overlay embeds the plain ✓ for both, the dashboard gets the structured per-line `tick` and marks ✓(stash)
   distinctly (no string scraping).
 
+## Build definitions and BiS selection (2026-11-17)
+- **Agent-authored build files**: `~/.config/d2r-map-overlay/builds/<slug>.toml`, one build per file
+  (schema: `name`, `damages`, `notes`, `[slots]`, `[merc_slots]` — pieces as `"Name@<required level>"`,
+  ordered best→worst). Loaded by `config::load_builds(dir)` (missing dir = no builds, no error), keyed by
+  lowercased build name — the slug a selection refers to. The webapp does NOT edit them.
+- **Selection-only config**: the webapp writes ONLY `build = "<slug>"` into `[bis."<char>"]` (toml_edit,
+  comment-preserving; the tables are created if missing). Resolution order for a character's BiS:
+  inline slots (legacy, hand-edited) if present, else the selected build's slots, else none. Same for
+  damages: character-level `[builds]` entry if present, else the build's damages. The old
+  `POST /api/build` (damages) and slot-editing `POST /api/bis` UI are gone; `POST /api/bis` now writes
+  the selection only, `GET /api/builds` lists the available builds, and `GET /api/config` returns the
+  resolved view (per character: build slug/name, resolved damages, per-piece annotated slots).
+- **Hot reload**: the mtime watcher watches `config.toml` AND the `builds/` directory (a cheap
+  `read_dir` per tick — a directory's own mtime would miss in-place edits of a build file).
+- **Dashboard "Where to go"**: the level-suggestion band is structured (`mlvl` + `bucket`:
+  `below`/`equal`/`above` clvl, `info::LevelEntry` at the `live_json` layer, `level_lines_full` the
+  source) and the panel lays it out in three labelled columns (user request, 2026-11-17).
+
 ## Overlay
 - Layer-shell surface, layer `overlay`, anchored top-right, default 400×400 (config), **empty input region** (click-through), no keyboard.
 - Draw current level only: room footprints (loaded rooms brighter), player dot, waypoint (blue), exits (purple + target name),

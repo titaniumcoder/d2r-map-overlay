@@ -1,9 +1,12 @@
-//! The companion web app: a small HTTP server on `localhost` that lets the user edit the
-//! config (per-character builds and `BiS` gear lists) in a browser form, writing back to
-//! `config.toml` with comments preserved (user request, 2026-11-17). The overlay watches the
-//! config file and hot-reloads it (see `live`). It also serves the live dashboard: the same
-//! text blocks the overlay draws (where to go, gear, keep/sell), published by `live` each tick
-//! and read by `GET /api/live`.
+//! The companion web app: a small HTTP server on `localhost` that lets the user select each
+//! character's build in a browser form, writing ONLY the `[bis.<name>]` `build` selection back
+//! to `config.toml` with comments preserved (user decision, 2026-11-17). The gear itself is
+//! authored by the agent in `builds/*.toml` and shown read-only, annotated with the live ✓
+//! (owned / in the shared stash) and strike-through where the equipped piece is already
+//! better. The overlay watches the config file and the `builds/` directory and hot-reloads
+//! them (see `live`). The app also serves the live dashboard: the same text blocks the overlay
+//! draws (where to go, gear, keep/sell), published by `live` each tick and read by
+//! `GET /api/live`.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -33,6 +36,41 @@ static CONFIG_WRITE: Mutex<()> = Mutex::new(());
 /// [`NO_LIVE_JSON`]. A [`RwLock`] in a [`OnceLock`]: written ~5 Hz by the live loop, read on
 /// request; both hold it only for the swap/clone.
 static LIVE: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+
+/// The live gear state the config page's resolved `BiS` view is annotated from (published by
+/// `live` each tick, [`publish_gear`]): the names the character owns, the shared-stash names,
+/// and the equipped `(body slot, quality)` pairs of the character and its mercenary. Stays at
+/// the last game's values after the game exits (ownership changes slowly); empty before the
+/// first game, so nothing is ticked or struck through then.
+#[derive(Debug, Clone, Default)]
+pub struct GearInfo {
+    pub owned: Vec<String>,
+    pub stash: Vec<String>,
+    pub equipped: Vec<(u8, u32)>,
+    pub merc_equipped: Vec<(u8, u32)>,
+}
+
+/// The shared cell behind [`current_gear`]/[`publish_gear`].
+static GEAR: OnceLock<RwLock<GearInfo>> = OnceLock::new();
+
+/// Replaces the gear state the config page annotates its resolved `BiS` view from. Called by
+/// `live` every tick; a brief write lock over a few short strings.
+pub fn publish_gear(gear: GearInfo) {
+    // A poisoned lock still holds a working cell; a poisoned writer can only mean a panic
+    // elsewhere while writing, and the next tick overwrites the value anyway.
+    *gear_cell().write().unwrap_or_else(PoisonError::into_inner) = gear;
+}
+
+/// The shared cell behind [`GEAR`].
+fn gear_cell() -> &'static RwLock<GearInfo> {
+    GEAR.get_or_init(|| RwLock::new(GearInfo::default()))
+}
+
+/// A snapshot of [`GearInfo`] (cloned out under a brief read lock).
+fn current_gear() -> GearInfo {
+    // See [`publish_gear`] for the poison handling.
+    gear_cell().read().unwrap_or_else(PoisonError::into_inner).clone()
+}
 
 /// The answer of `GET /api/live` while no game is attached (or between games).
 const NO_LIVE_JSON: &str = "{\"live\": false}";
@@ -69,61 +107,36 @@ pub fn clear_live() {
     *live_cell().write().unwrap_or_else(PoisonError::into_inner) = None;
 }
 
-/// Edits the `[builds]` entry of `name` in `text` to `damages` (comment-preserving).
-/// `None` when `text` is not valid TOML: the caller answers the browser with an error.
+/// Writes the `[bis.<name>]` build selection into `text` (comment-preserving): `Some(slug)`
+/// sets `build = "<slug>"` and creates the `[bis]`/`[bis.<name>]` tables when missing;
+/// `None` removes the selection again — the `build` key, and the whole entry when that leaves
+/// it empty. `None` (the return) when `text` is not valid TOML or the `bis` entry is not a
+/// table: the save would silently do nothing, so the caller must answer the browser with an
+/// error instead.
 #[must_use]
-pub fn set_build(text: &str, name: &str, damages: &[&str]) -> Option<String> {
+pub fn set_bis_selection(text: &str, name: &str, build: Option<&str>) -> Option<String> {
     let mut doc = text.parse::<DocumentMut>().ok()?;
-    let values = damages
-        .iter()
-        .map(|d| toml_edit::Value::from(d.to_owned()))
-        .collect::<Vec<_>>();
-    if let Some(builds) = doc.get_mut("builds").and_then(|b| b.as_table_mut()) {
-        // In-place assignment (not `insert`): the value's leading comment is kept.
-        builds[name] = toml_edit::Item::Value(toml_edit::Value::Array(toml_edit::Array::from_iter(values)));
-    } else {
-        doc.insert("builds", {
-            let mut t = toml_edit::Table::new();
-            t.insert(
-                name,
-                toml_edit::Item::Value(toml_edit::Value::Array(toml_edit::Array::from_iter(values))),
-            );
-            toml_edit::Item::Table(t)
-        });
+    if let Some(slug) = build {
+        if doc.get("bis").is_none() {
+            doc.insert("bis", toml_edit::Item::Table(toml_edit::Table::new()));
+        }
+        let bis = doc.get_mut("bis").and_then(|b| b.as_table_mut())?;
+        if !bis.contains_key(name) {
+            bis.insert(name, toml_edit::Item::Table(toml_edit::Table::new()));
+        }
+        let entry = bis.get_mut(name).and_then(|e| e.as_table_mut())?;
+        entry["build"] = toml_edit::value(slug);
+    } else if let Some(bis) = doc.get_mut("bis").and_then(|b| b.as_table_mut()) {
+        let Some(entry) = bis.get_mut(name).and_then(|e| e.as_table_mut()) else {
+            // Same contract as the set path: a non-table `[bis.<name>]` would silently no-op,
+            // so the caller must answer the browser with an error instead.
+            return None;
+        };
+        entry.remove("build");
+        if entry.is_empty() {
+            bis.remove(name);
+        }
     }
-    Some(doc.to_string())
-}
-
-/// Edits the `[bis.<name>]` entry in `text` to `build` and the per-slot pieces
-/// (comment-preserving). `None` when `text` is not valid TOML or when `bis` (or the entry
-/// itself) is not a table: in that case the save would silently do nothing, so the caller
-/// must answer the browser with an error instead.
-#[must_use]
-pub fn set_bis(text: &str, name: &str, build: &str, slots: &[(&str, Vec<String>)]) -> Option<String> {
-    let mut doc = text.parse::<DocumentMut>().ok()?;
-    if doc.get("bis").is_none() {
-        doc.insert("bis", toml_edit::Item::Table(toml_edit::Table::new()));
-    }
-    let bis = doc.get_mut("bis").and_then(|b| b.as_table_mut())?;
-    if !bis.contains_key(name) {
-        bis.insert(name, toml_edit::Item::Table(toml_edit::Table::new()));
-    }
-    let entry = bis.get_mut(name).and_then(|e| e.as_table_mut())?;
-    entry["build"] = toml_edit::value(build);
-    // Replace the slots sub-table wholesale: the pieces change as a set.
-    entry.remove("slots");
-    let mut t = toml_edit::Table::new();
-    for (slot, pieces) in slots {
-        let values = pieces
-            .iter()
-            .map(|p| toml_edit::Value::from(p.clone()))
-            .collect::<Vec<_>>();
-        t.insert(
-            slot,
-            toml_edit::Item::Value(toml_edit::Value::Array(toml_edit::Array::from_iter(values))),
-        );
-    }
-    entry.insert("slots", toml_edit::Item::Table(t));
     Some(doc.to_string())
 }
 
@@ -211,8 +224,8 @@ fn handle(stream: TcpStream) {
             ("GET", "/" | "/index.html") => page(),
             ("GET", "/dashboard") => respond("200 OK", "text/html", dashboard_page()),
             ("GET", "/api/config") => api_config(),
+            ("GET", "/api/builds") => api_builds(),
             ("GET", "/api/live") => api_live(),
-            ("POST", "/api/build") => api_build(&String::from_utf8_lossy(&body)),
             ("POST", "/api/bis") => api_bis(&String::from_utf8_lossy(&body)),
             _ => respond("404 Not Found", "text/plain", "not found\n"),
         },
@@ -264,48 +277,68 @@ fn respond_no_store(status: &str, content_type: &str, body: &str) -> String {
     response
 }
 
-/// `200 OK` with the current config as JSON for the form: the characters (with their damage
-/// types, their `BiS` slots and, per slot, the runeword hints for its pieces) and the runeword
-/// table the form's datalist offers.
+/// `200 OK` with the current config as JSON for the page: each character with its resolved
+/// `BiS` view (selected build, resolved damages and per-piece annotated slots) and, for
+/// characters only known from `[builds]`, their saved damage types ([`config_json`]).
 fn api_config() -> String {
     let config = crate::config::load_from(&crate::config::default_path().unwrap_or_default());
-    respond("200 OK", "application/json", &config_json(&config).to_string())
+    let gear = current_gear();
+    respond(
+        "200 OK",
+        "application/json",
+        &config_json(&config, &gear).to_string(),
+    )
 }
 
-/// The config form's JSON ([`api_config`]), pure over the parsed config so tests need no file.
-/// Each character carries its saved damage types (`damages`, lowercased names — the page marks
-/// the saved checkboxes from it) besides its `BiS` entry.
+/// `200 OK` with the available build definitions as JSON for the page's selects
+/// ([`builds_json`]).
+fn api_builds() -> String {
+    let config = crate::config::load_from(&crate::config::default_path().unwrap_or_default());
+    respond("200 OK", "application/json", &builds_json(&config).to_string())
+}
+
+/// The config page's JSON ([`api_config`]), pure over the parsed config and the live gear
+/// state so tests need no file and no game.
+///
+/// Each character carries:
+/// - `name`, and `build`: the selected build's slug as written in `[bis.<name>]` (`""` when
+///   none),
+/// - `build_name`: the selected build's display name (`null` when none or unknown),
+/// - `damages`: the resolved damage types (character-level `[builds]` entry, else the
+///   selected build's), as lowercased names,
+/// - `slots`/`merc_slots`: the resolved per-slot piece lists — inline slots when the config
+///   has any, else the selected build's ([`crate::config::Config::resolved_bis`]) — each piece
+///   annotated with its required level, its ✓ (`tick`: `"owned"`/`"stash"`/`null`,
+///   [`crate::info::piece_tick`]), whether the equipped piece is already better (`better`,
+///   [`crate::info::slot_equipped_better`]) and, for a runeword piece, its `runes` and
+///   `bases`.
 #[must_use]
-fn config_json(config: &crate::config::Config) -> serde_json::Value {
+fn config_json(config: &crate::config::Config, gear: &GearInfo) -> serde_json::Value {
     let damages = |name: &str| {
         config
-            .builds
-            .names
-            .get(&name.to_lowercase())
-            .map_or_else(Vec::new, |ds| ds.iter().map(|d| d.name()).collect())
+            .damages_for_player(name, None)
+            .iter()
+            .map(|d| d.name())
+            .collect::<Vec<_>>()
+    };
+    // The resolved `BiS` view plus the selection as written (the slug the page's select
+    // sets back; `resolved_bis` reports the display name, not the slug).
+    let bis_named = |name: &str| {
+        let resolved = config.resolved_bis(name).unwrap_or_else(|| crate::config::Bis {
+            build: String::new(),
+            slots: BTreeMap::new(),
+            merc_slots: BTreeMap::new(),
+        });
+        let build = config.bis.get(name).map_or(String::new(), |b| b.build.clone());
+        Some((
+            build,
+            slot_tables_json(&resolved.slots, &gear.equipped, gear),
+            slot_tables_json(&resolved.merc_slots, &gear.merc_equipped, gear),
+        ))
     };
     let characters: Vec<_> = config
         .bis
-        .iter()
-        .map(|(name, bis)| {
-            let hints: BTreeMap<&str, Vec<String>> = bis
-                .slots
-                .iter()
-                .map(|(slot, pieces)| {
-                    (
-                        slot.as_str(),
-                        pieces.iter().filter_map(|p| runeword_hint(p)).collect(),
-                    )
-                })
-                .collect();
-            serde_json::json!({
-                "name": name,
-                "build": bis.build,
-                "damages": damages(name),
-                "slots": bis.slots,
-                "hints": hints,
-            })
-        })
+        .keys()
         .chain(
             config
                 .builds
@@ -313,46 +346,96 @@ fn config_json(config: &crate::config::Config) -> serde_json::Value {
                 .keys()
                 // Case-insensitive: [`crate::config::parse`] lowercases both `builds` names and
                 // `bis` keys; the filter is also correct for programmatically built `Config`s.
-                .filter(|n| !config.bis.keys().any(|b| b.eq_ignore_ascii_case(n)))
-                .map(|name| {
-                    serde_json::json!({ "name": name, "build": "", "damages": damages(name), "slots": {} })
-                }),
+                .filter(|n| !config.bis.keys().any(|b| b.eq_ignore_ascii_case(n))),
         )
+        .map(|name| {
+            let (build, slots, merc_slots) = bis_named(name)
+                .unwrap_or_else(|| (String::new(), serde_json::json!({}), serde_json::json!({})));
+            let build_name = config
+                .selected_build(name)
+                .map_or(serde_json::Value::Null, |def| serde_json::json!(def.name));
+            serde_json::json!({
+                "name": name,
+                "build": build,
+                "build_name": build_name,
+                "damages": damages(name),
+                "slots": slots,
+                "merc_slots": merc_slots,
+            })
+        })
         .collect();
-    serde_json::json!({ "characters": characters, "runewords": runewords_json() })
+    serde_json::json!({ "characters": characters })
 }
 
-/// The runeword name part of a `BiS` piece string (`"Insight@27"` → `"Insight"`).
-fn piece_name(piece: &str) -> &str {
-    piece.split_once('@').map_or(piece, |(name, _)| name).trim()
-}
-
-/// The runeword hint for a `BiS` piece string (`"Insight@27"` → `"Insight: Ral+Tir+Tal+Sol ·
-/// polearms, staves, missile weapons"`), or `None` when it is not a runeword name.
-#[must_use]
-fn runeword_hint(piece: &str) -> Option<String> {
-    let rw = crate::runewords_data::lookup(piece_name(piece))?;
-    Some(format!(
-        "{}: {} · {}",
-        rw.name,
-        rw.runes.join("+"),
-        rw.bases.join(", ")
-    ))
-}
-
-/// The runeword table as a JSON object keyed by lowercase name (`{"steel": {"name":
-/// "Steel", …}, …}`), for the form's runeword datalist.
-fn runewords_json() -> serde_json::Value {
-    crate::runewords_data::RUNEWORDS
+/// A resolved slot table as JSON: slot name → annotated pieces ([`piece_json`]).
+fn slot_tables_json(
+    slots: &BTreeMap<String, Vec<String>>,
+    equipped: &[(u8, u32)],
+    gear: &GearInfo,
+) -> serde_json::Value {
+    slots
         .iter()
-        .map(|rw| {
+        .map(|(slot, pieces)| {
             (
-                rw.name.to_lowercase(),
-                serde_json::json!({ "name": rw.name, "runes": rw.runes, "bases": rw.bases }),
+                slot.clone(),
+                serde_json::json!(
+                    pieces
+                        .iter()
+                        .map(|piece| piece_json(piece, slot, equipped, gear))
+                        .collect::<Vec<_>>()
+                ),
             )
         })
         .collect::<serde_json::Map<String, serde_json::Value>>()
         .into()
+}
+
+/// One resolved `BiS` piece as JSON (see [`config_json`] for the fields).
+fn piece_json(piece: &str, slot: &str, equipped: &[(u8, u32)], gear: &GearInfo) -> serde_json::Value {
+    let name = crate::info::piece_name(piece);
+    let mut json = serde_json::json!({
+        "piece": piece,
+        "name": name,
+        "level": crate::info::piece_level(piece),
+        "tick": crate::info::piece_tick(piece, &gear.owned, &gear.stash)
+            .map(crate::info::Tick::as_str),
+        "better": crate::info::slot_equipped_better(slot, equipped),
+    });
+    if let Some(rw) = crate::runewords_data::lookup(name)
+        && let Some(obj) = json.as_object_mut()
+    {
+        obj.insert("runes".to_owned(), serde_json::json!(rw.runes));
+        obj.insert("bases".to_owned(), serde_json::json!(rw.bases));
+    }
+    json
+}
+
+/// The `/api/builds` JSON ([`api_builds`]), pure over the parsed config: every build
+/// definition with its slug, display name, damages, notes and per-slot piece counts, sorted by
+/// slug.
+#[must_use]
+fn builds_json(config: &crate::config::Config) -> serde_json::Value {
+    let counts = |slots: &BTreeMap<String, Vec<String>>| {
+        slots
+            .iter()
+            .map(|(slot, pieces)| (slot.clone(), serde_json::json!(pieces.len())))
+            .collect::<serde_json::Map<String, serde_json::Value>>()
+    };
+    let builds: Vec<_> = config
+        .build_defs
+        .iter()
+        .map(|(slug, def)| {
+            serde_json::json!({
+                "slug": slug,
+                "name": def.name,
+                "damages": def.damages.iter().map(|d| d.name()).collect::<Vec<_>>(),
+                "notes": def.notes,
+                "slots": counts(&def.slots),
+                "merc_slots": counts(&def.merc_slots),
+            })
+        })
+        .collect();
+    serde_json::json!({ "builds": builds })
 }
 
 /// One tick's dashboard data, gathered by `live` from the snapshot and the same text blocks
@@ -391,9 +474,12 @@ pub struct LiveInfo<'a> {
 /// carry a structured `"tick": "owned" | "stash" | null` (computed in Rust from the owned and
 /// stash name lists, [`info::Tick`]): the page marks ✓(stash) from it instead of scraping the
 /// line text, and, for a runeword piece, `"runes"` and `"bases"` for the hint line under the
-/// piece. The `levels` lines are the whole level-suggestion band, one area per line (the
-/// overlay's capped short display stays overlay-only). The give-away lines have no panel of
-/// their own, so they ride with `sell` in the dashboard's Sell panel.
+/// piece. The `levels` lines are the whole level-suggestion band, one area per line, each as
+/// `{ "text", "colour", "mlvl", "bucket" }` ([`crate::info::LevelEntry`]: the own-level-first
+/// order in `text`, and the `below`/`equal`/`above` bucket the dashboard lays its "Where to
+/// go" panel out in three columns from) (the overlay's capped short display stays
+/// overlay-only). The give-away lines have no panel of their own, so they ride with `sell` in
+/// the dashboard's Sell panel.
 #[must_use]
 pub fn live_json(info: &LiveInfo) -> String {
     let class = CLASS_NAMES
@@ -411,7 +497,7 @@ pub fn live_json(info: &LiveInfo) -> String {
         },
         "area": info.area,
         "guide": info.blocks.guide.iter().map(band_line).collect::<Vec<_>>(),
-        "levels": text_lines(&info.blocks.level_full, crate::info::LEVEL_TEXT),
+        "levels": level_lines_full(&info.blocks.level_full, crate::info::LEVEL_TEXT),
         "keep": text_lines(&info.blocks.keep, crate::info::KEEP_TEXT),
         "sell": text_lines(&info.blocks.sell, crate::info::SELL_TEXT),
         "give": text_lines(&info.blocks.give, crate::info::GIVE_TEXT),
@@ -495,6 +581,18 @@ fn text_lines(lines: &[String], colour: [u8; 4]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// The whole level-suggestion band as `{ "text", "colour", "mlvl", "bucket" }` objects
+/// ([`crate::info::LevelEntry`]): the own-level-first reading order in `text`, and the
+/// structured `mlvl` + `below`/`equal`/`above` bucket the dashboard re-groups its "Where to
+/// go" panel's three columns from.
+fn level_lines_full(entries: &[crate::info::LevelEntry], colour: [u8; 4]) -> Vec<serde_json::Value> {
+    let hex = hex(colour);
+    entries
+        .iter()
+        .map(|e| serde_json::json!({ "text": e.text, "colour": hex, "mlvl": e.mlvl, "bucket": e.bucket }))
+        .collect()
+}
+
 /// A guide band as a `{ "text", "colour" }` object: the band's base colour as hex, spans
 /// flattened away (the dashboard keeps the values readable, not the per-span red).
 fn band_line(band: &crate::info::Band) -> serde_json::Value {
@@ -575,141 +673,119 @@ fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     })
 }
 
-/// `POST /api/build` with `{"name": …, "damages": [...]}`: applies to `config.toml`.
-fn api_build(body: &str) -> String {
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
-        return respond("400 Bad Request", "text/plain", "bad json\n");
-    };
-    let damages = json
-        .get("damages")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>());
-    let (Some(name), Some(damages)) = (json.get("name").and_then(|v| v.as_str()), damages) else {
-        return respond("400 Bad Request", "text/plain", "name and damages required\n");
-    };
-    save_config(|text| set_build(text, name, &damages))
-}
-
-/// `POST /api/bis` with `{"name": …, "build": …, "slots": {slot: [...]}}`.
+/// `POST /api/bis` with `{"name": …, "build": "<slug>"}` — `"build": null`, `""` or omitted
+/// clears the selection: writes ONLY the `[bis.<name>]` `build` value into `config.toml` (the
+/// gear itself lives in the agent-authored `builds/*.toml`; the webapp doesn't edit it).
 fn api_bis(body: &str) -> String {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
         return respond("400 Bad Request", "text/plain", "bad json\n");
     };
-    let (Some(name), Some(build)) = (
-        json.get("name").and_then(|v| v.as_str()),
-        json.get("build").and_then(|v| v.as_str()),
-    ) else {
-        return respond("400 Bad Request", "text/plain", "name and build required\n");
+    let Some(name) = json.get("name").and_then(|v| v.as_str()) else {
+        return respond("400 Bad Request", "text/plain", "name required\n");
     };
-    let Some(slots) = json.get("slots").and_then(|v| v.as_object()) else {
-        return respond("400 Bad Request", "text/plain", "slots required\n");
+    // `build` must be a string (the selection) or null/absent (clear it); any other JSON
+    // type is a client error, not a silent clear.
+    let build = match json.get("build") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s.trim()).filter(|slug| !slug.is_empty()),
+        Some(_) => {
+            return respond(
+                "400 Bad Request",
+                "text/plain",
+                "build must be a string or null\n",
+            );
+        }
     };
-    let slot_list: Vec<(String, Vec<String>)> = slots
-        .iter()
-        .map(|(slot, v)| {
-            (
-                slot.clone(),
-                v.as_array()
-                    .map_or_default(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()),
-            )
-        })
-        .collect();
-    let slot_refs: Vec<(&str, Vec<String>)> =
-        slot_list.iter().map(|(s, p)| (s.as_str(), p.clone())).collect();
-    save_config(|text| set_bis(text, name, build, &slot_refs))
+    save_config(|text| set_bis_selection(text, name, build))
 }
 
-/// The form page's HTML (a single string: no assets, no framework).
+/// The config page's HTML (a single string: no assets, no framework). The user picks a build
+/// per character (selection-only config); the gear itself is agent-authored and shown
+/// read-only, annotated with the live ✓ and strike-through.
 const fn config_page() -> &'static str {
     r#"<!doctype html>
 <html><head><meta charset="utf-8"><title>d2r-map-overlay config</title>
 <style>
 body { font-family: sans-serif; background: #1a1a1a; color: #ddd; margin: 2em; }
-input { background: #2a2a2a; color: #eee; border: 1px solid #555; padding: 4px; }
+input, select { background: #2a2a2a; color: #eee; border: 1px solid #555; padding: 4px; }
 button { padding: 4px 10px; }
 .char { border: 1px solid #444; padding: 1em; margin-bottom: 1em; }
-.slot { margin: 4px 0; }
-.hint { color: #9c9; font-size: 0.85em; margin-left: 5.5em; }
+.piece { margin: 2px 0; }
+.hint { color: #9c9; font-size: 0.85em; }
+.rwhint { color: #888; font-size: 0.8em; margin-left: 1.5em; }
+.owned { color: #6f6; }
+.stash { color: #6f6; }
+.better { text-decoration: line-through; color: #777; }
 </style></head><body>
 <h1>d2r-map-overlay config &nbsp; <a style="font-size:0.6em" href="/dashboard">live dashboard →</a></h1>
+<p class="hint">Pick a build per character. The gear lists live in
+<code>~/.config/d2r-map-overlay/builds/*.toml</code> (agent-authored) and are shown read-only:
+✓ = owned (identified set/unique pieces), ✓(stash) = in the shared stash, struck through =
+the equipped piece is already better.</p>
 <div id="chars"></div>
-<datalist id="runewords"></datalist>
 <h2>Add character</h2>
-<input id="newname" placeholder="character name"> <button onclick="addChar()">Add</button>
+<input id="newname" placeholder="character name"> <select id="newbuild"></select>
+<button onclick="addChar()">Add</button>
 <script>
 const SLOTS = ["amulet","ring1","ring2","body","helm","gloves","boots","belt","weapon","offhand","swap"];
-const DAMAGES = ["physical","fire","cold","lightning","poison","magic"];
 // Escapes a config-supplied string for interpolation into HTML text and
 // double-quoted attribute values (character names and build names are free text).
 function esc(s) {
   return String(s).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
 }
+// One piece line: name (level), tick, strike-through, runeword hint.
+function pieceHtml(p) {
+  const level = p.level != null ? ` (${p.level})` : "";
+  const tick = p.tick === "owned" ? ` <span class="owned">\u2713</span>`
+    : p.tick === "stash" ? ` <span class="owned">\u2713</span><span class="hint">(stash)</span>` : "";
+  const strike = p.better ? " better" : "";
+  const hint = p.runes
+    ? `<div class="rwhint">${esc(p.runes.join(" + "))} · ${esc((p.bases || []).join(", "))}</div>` : "";
+  return `<div class="piece${strike}">${esc(p.name)}${esc(level)}${tick}</div>` + hint;
+}
+// One slot table (slots or merc_slots) as an ordered read-only list.
+function slotsHtml(slots) {
+  return SLOTS.filter(s => slots && slots[s] && slots[s].length)
+    .map(s => `<div class="slot"><b>${s}</b>:</div>` + slots[s].map(pieceHtml).join(""))
+    .join("") || '<div class="hint">none</div>';
+}
 async function load() {
-  const cfg = await (await fetch("/api/config")).json();
-  const chars = cfg.characters;
-  const runewords = cfg.runewords || {};
-  document.getElementById("runewords").innerHTML =
-    Object.values(runewords).map(rw => `<option value="${rw.name}">`).join("");
+  const [cfg, buildsResp] = await Promise.all([fetch("/api/config"), fetch("/api/builds")].map(r => r.then(x => x.json())));
+  const builds = buildsResp.builds || [];
+  const options = () => ['<option value="">none</option>']
+    .concat(builds.map(b => `<option value="${esc(b.slug)}">${esc(b.name)}</option>`))
+    .join("");
   const root = document.getElementById("chars");
   root.innerHTML = "";
-  for (const c of chars) {
+  document.getElementById("newbuild").innerHTML = options();
+  for (const c of cfg.characters || []) {
     const div = document.createElement("div");
     div.className = "char";
     // The character name goes in a data attribute, not in classes/ids: names with spaces would
-    // otherwise break both the `saveBuild` selector (`.dmg-blood boil:checked` matches nothing,
-    // saving empty damages) and the `saveBis` ids (a space is invalid in an HTML id).
+    // otherwise break the selectors.
     div.dataset.name = c.name;
-    let html = `<h2>${esc(c.name)}</h2><h3>build damages</h3>`;
-    const saved = c.damages || [];
-    for (const d of DAMAGES) {
-      html += `<label style="margin-right:1em"><input type="checkbox" class="dmg" value="${d}"${saved.includes(d) ? " checked" : ""}> ${d}</label>`;
-    }
-    html += `<button class="save-build">Save build</button><h3>BiS slots</h3>`;
-    html += `<div>build: <input class="build-input" value="${esc(c.build)}" size="30" placeholder="build name"></div>`;
-    for (const s of SLOTS) {
-      const pieces = (c.slots[s] || []).join(", ");
-      const hints = (c.hints?.[s] || []).join("<br>");
-      html += `<div class="slot">${s}: <input data-slot="${s}" value="${esc(pieces)}" size="50" placeholder="Stealth@17, Enigma@65" list="runewords">`
-        + (hints ? `<div class="hint">${hints}</div>` : "") + `</div>`;
-    }
-    html += `<button class="save-bis">Save BiS</button>`;
-    div.innerHTML = html;
-    div.querySelector(".save-build").addEventListener("click", () => saveBuild(c.name));
-    div.querySelector(".save-bis").addEventListener("click", () => saveBis(c.name));
+    const sel = `<select class="build-select">${options()}</select>`;
+    const buildName = c.build_name ? `<div class="hint">build: ${esc(c.build_name)}</div>` : "";
+    const damages = (c.damages || []).length ? `<div class="hint">damages: ${esc(c.damages.join(", "))}</div>` : "";
+    div.innerHTML = `<h2>${esc(c.name)}</h2>`
+      + `build: ${sel} <button class="save">Save</button>${buildName}${damages}`
+      + `<h3>BiS</h3>` + slotsHtml(c.slots)
+      + `<h3>Mercenary</h3>` + slotsHtml(c.merc_slots);
+    const select = div.querySelector(".build-select");
+    select.value = c.build || "";
+    div.querySelector(".save").addEventListener("click", () => saveBis(c.name, select.value));
     root.appendChild(div);
   }
 }
-function charDiv(name) {
-  for (const div of document.querySelectorAll(".char")) {
-    if (div.dataset.name === name) return div;
-  }
-  return null;
+// Posts ONLY the `[bis.<name>]` build selection; an empty value clears it.
+async function saveBis(name, build) {
+  await fetch("/api/bis", {method: "POST", body: JSON.stringify({name, build: build || null})});
+  load();
 }
-function addChar() {
+async function addChar() {
   const name = document.getElementById("newname").value.trim();
-  if (name) { fetch("/api/build", {method: "POST", body: JSON.stringify({name, damages: []})}).then(load); }
-}
-async function saveBuild(name) {
-  const div = charDiv(name);
-  if (!div) return;
-  const damages = [...div.querySelectorAll(".dmg:checked")].map(x => x.value);
-  await fetch("/api/build", {method: "POST", body: JSON.stringify({name, damages})});
-  load();
-}
-async function saveBis(name) {
-  const div = charDiv(name);
-  if (!div) return;
-  const buildInput = div.querySelector(".build-input");
-  if (!buildInput) return;
-  const build = buildInput.value;
-  const slots = {};
-  for (const s of SLOTS) {
-    const input = div.querySelector(`input[data-slot="${s}"]`);
-    const v = input ? input.value : "";
-    slots[s] = v.split(",").map(x => x.trim()).filter(Boolean);
-  }
-  await fetch("/api/bis", {method: "POST", body: JSON.stringify({name, build, slots})});
-  load();
+  const build = document.getElementById("newbuild").value;
+  if (name && build) { await saveBis(name, build); }
 }
 load();
 </script></body></html>
@@ -728,6 +804,9 @@ a { color: #7cf; }
 h1 { font-size: 1.3em; }
 h2 { font-size: 1.05em; border-bottom: 1px solid #444; padding-bottom: 4px; }
 .panel { border: 1px solid #444; padding: 1em; margin-bottom: 1em; }
+.cols { display: flex; gap: 1.5em; flex-wrap: wrap; }
+.col { min-width: 12em; }
+.col h3 { font-size: 0.85em; color: #888; margin: 0 0 4px; }
 .line { white-space: pre-wrap; font-size: 0.95em; }
 .waiting { color: #999; font-style: italic; }
 .note { color: #888; font-size: 0.72em; margin-bottom: 4px; }
@@ -754,6 +833,20 @@ function lines(el, entries) {
     return `<div class="line" style="color:${e.colour || "#ddd"}">${esc(e.text)}</div>` + hint;
   }).join("");
 }
+// The "Where to go" band in three columns: below / equal / above the character level. The
+// server sends the level entries structured ("mlvl" + "bucket"), so the grouping is a filter,
+// not a parse of the "Level N → Area (M)" text; each column keeps the band's own order.
+function levelColumns(el, entries) {
+  const groups = ["below", "equal", "above"].map(bucket => ({
+    bucket,
+    lines: (entries || []).filter(e => e.bucket === bucket),
+  }));
+  el.innerHTML = `<div class="cols">` + groups.map(g =>
+    `<div class="col"><h3>${g.bucket}</h3>`
+    + g.lines.map(e => `<div class="line" style="color:${e.colour || "#ddd"}">${esc(e.text)}</div>`).join("")
+    + `</div>`
+  ).join("") + `</div>`;
+}
 async function poll() {
   try {
     const r = await (await fetch("/api/live")).json();
@@ -766,7 +859,7 @@ async function poll() {
       header.textContent = [p.name, p.class, p.level != null ? "level " + p.level : null,
         p.difficulty, r.area].filter(Boolean).join(" · ")
         + "  (updated " + new Date(r.updated_at * 1000).toLocaleTimeString() + ")";
-      lines(document.getElementById("levels"), r.levels);
+      levelColumns(document.getElementById("levels"), r.levels);
       // The breakpoint guide belongs with the gear it describes. A BiS line whose tick is
       // "stash" (the ✓ comes from the shared stash) is marked ✓(stash); the tick comes
       // structured per line ("owned" | "stash" | null), not scraped from the line text.
@@ -799,157 +892,182 @@ mod tests {
     use crate::config;
 
     #[test]
-    fn set_build_preserves_comments_and_parses_back() -> Result<()> {
-        let text = "# top\n[builds]\n# inner\nSorc = [\"cold\"]\n";
-        let out = set_build(text, "Sorc", &["fire", "lightning"]).ok_or_else(|| anyhow!("no edit"))?;
-        assert!(out.contains("# top") && out.contains("# inner"), "{out}");
-        let (config, _) = config::parse(&out)?;
-        assert_eq!(
-            config.builds.for_player("sorc", 1),
-            [Damage::Fire, Damage::Lightning]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn set_build_creates_a_missing_builds_table() -> Result<()> {
-        let text = "# top\n";
-        let out = set_build(text, "Sorc", &["cold"]).ok_or_else(|| anyhow!("no edit"))?;
-        assert!(out.contains("# top"), "{out}");
-        let (config, _) = config::parse(&out)?;
-        assert_eq!(config.builds.for_player("Sorc", 1), [Damage::Cold]);
-        Ok(())
-    }
-
-    #[test]
-    fn build_save_round_trips_through_the_config_json() -> Result<()> {
-        // The user report: selecting damage types (e.g. Blood Boil = physical + fire) in the
-        // config page didn't stick. The write path was fine; the read path never returned the
-        // damages ([`api_config`] had no `damages` field) and the page never marked the saved
-        // checkboxes — both fixed; this drives both ends of the round trip.
-        let out =
-            set_build("[builds]\n", "Blood Boil", &["physical", "fire"]).ok_or_else(|| anyhow!("no edit"))?;
-        let (config, _) = config::parse(&out)?;
-        assert_eq!(
-            config.builds.for_player("Blood Boil", 7),
-            [Damage::Physical, Damage::Fire]
-        );
-        let json = config_json(&config);
-        let chars = json
-            .get("characters")
-            .and_then(|v| v.as_array())
-            .map_or_else(Vec::new, Vec::clone);
-        assert_eq!(chars.len(), 1, "one builds-only character: {chars:?}");
-        let char = chars.first().map_or(serde_json::Value::Null, Clone::clone);
-        assert_eq!(char.get("name"), Some(&serde_json::json!("blood boil")));
-        assert_eq!(
-            char.get("damages"),
-            Some(&serde_json::json!(["physical", "fire"])),
-            "the saved damages must come back so the page can mark the checkboxes"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn config_json_reports_damages_for_bis_characters_too() {
-        // A character with a `BiS` entry and a saved build: its damages ride with the same
-        // character object (lowercase lookup over the case-preserved name).
-        let mut config = crate::config::Config::default();
-        config
-            .builds
-            .names
-            .insert("blood boil".to_owned(), vec![Damage::Physical, Damage::Fire]);
-        config.bis.insert(
-            "Blood Boil".to_owned(),
-            crate::config::Bis {
-                build: "Blood Boil".to_owned(),
-                slots: BTreeMap::default(),
-                merc_slots: BTreeMap::default(),
-            },
-        );
-        let json = config_json(&config);
-        let chars = json
-            .get("characters")
-            .and_then(|v| v.as_array())
-            .map_or_else(Vec::new, Vec::clone);
-        assert_eq!(chars.len(), 1, "one character, not two: {chars:?}");
-        let char = chars.first().map_or(serde_json::Value::Null, Clone::clone);
-        assert_eq!(
-            char.get("damages"),
-            Some(&serde_json::json!(["physical", "fire"]))
-        );
-    }
-
-    #[test]
-    fn set_bis_preserves_comments_and_parses_back() -> Result<()> {
-        let text = "# top\n[bis.Hork]\n# build line\nbuild = \"Blood Boil\"\n\
-                   [bis.Hork.slots]\nweapon = [\"Insight@27\"]\n";
-        let out = set_bis(
-            text,
-            "Hork",
-            "Blood Boil",
-            &[
-                ("weapon", vec!["Insight@27".to_owned()]),
-                ("body", vec!["Stealth@17".to_owned()]),
-            ],
-        )
-        .ok_or_else(|| anyhow!("no edit"))?;
+    fn set_bis_selection_preserves_comments_and_round_trips() -> Result<()> {
+        let text = "# top\n[bis.Hork]\n# build line\nbuild = \"Blood Boil\"\n";
+        let out = set_bis_selection(text, "Hork", Some("blood boil")).ok_or_else(|| anyhow!("no edit"))?;
         assert!(out.contains("# top") && out.contains("# build line"), "{out}");
         let (config, _) = config::parse(&out)?;
-        let bis = config
-            .bis_for_player("HORK")
-            .ok_or_else(|| anyhow!("no bis entry"))?;
-        assert_eq!(bis.build, "Blood Boil");
+        assert_eq!(
+            config.bis.get("hork").map(|b| b.build.as_str()),
+            Some("blood boil")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn set_bis_selection_creates_missing_tables_and_names_with_spaces() -> Result<()> {
+        let out =
+            set_bis_selection("", "Demon Master", Some("blood boil")).ok_or_else(|| anyhow!("no edit"))?;
+        let (config, warnings) = config::parse(&out)?;
+        assert_eq!(
+            config.bis.get("demon master").map(|b| b.build.as_str()),
+            Some("blood boil")
+        );
+        assert_eq!(warnings, Vec::<String>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn clearing_a_selection_removes_the_build_and_empty_entries() -> Result<()> {
+        // A selection-only entry vanishes entirely; an inline one only loses its build.
+        let out = set_bis_selection("[bis.Hork]\nbuild = \"b\"\n", "Hork", None)
+            .ok_or_else(|| anyhow!("no edit"))?;
+        assert_eq!(out, "", "the emptied entry is removed: {out}");
+        let inline = "[bis.Hork]\nbuild = \"b\"\n[bis.Hork.slots]\nweapon = [\"Insight@27\"]\n";
+        let out = set_bis_selection(inline, "Hork", None).ok_or_else(|| anyhow!("no edit"))?;
+        let (config, _) = config::parse(&out)?;
+        let bis = config.bis.get("hork").ok_or_else(|| anyhow!("gone"))?;
+        assert_eq!(bis.build, "");
         assert_eq!(
             bis.slots.get("weapon").map(Vec::as_slice),
             Some(&["Insight@27".to_owned()][..])
         );
-        assert_eq!(
-            bis.slots.get("body").map(Vec::as_slice),
-            Some(&["Stealth@17".to_owned()][..])
-        );
         Ok(())
     }
 
     #[test]
-    fn set_bis_creates_a_missing_bis_table() -> Result<()> {
-        let text = "";
-        let out = set_bis(
-            text,
-            "Hork",
-            "Blood Boil",
-            &[("weapon", vec!["Insight@27".to_owned()])],
-        )
-        .ok_or_else(|| anyhow!("no edit"))?;
-        let (config, _) = config::parse(&out)?;
-        let bis = config
-            .bis_for_player("hork")
-            .ok_or_else(|| anyhow!("no bis entry"))?;
-        assert_eq!(bis.build, "Blood Boil");
-        Ok(())
-    }
-
-    #[test]
-    fn set_bis_rejects_non_table_bis() {
+    fn set_bis_selection_rejects_non_table_bis() {
         // A bare value, and a non-table entry: the save would silently do nothing, so the
         // caller must get `None` and answer the browser with an error instead.
+        assert_eq!(set_bis_selection("bis = \"oops\"\n", "Hork", Some("b")), None);
+        assert_eq!(set_bis_selection("[bis]\nHork = 5\n", "Hork", Some("b")), None);
+    }
+
+    /// A config with one build definition and a selection-only character, plus a builds-only
+    /// character, for the resolved-view tests.
+    fn resolved_config() -> crate::config::Config {
+        let mut config = crate::config::Config::default();
+        config.build_defs.insert(
+            "blood boil".to_owned(),
+            crate::config::Build {
+                name: "Blood Boil".to_owned(),
+                damages: vec![Damage::Physical, Damage::Fire],
+                notes: Some("guide".to_owned()),
+                slots: [("weapon".to_owned(), vec!["Heart of the Oak@55".to_owned()])].into(),
+                merc_slots: [("weapon".to_owned(), vec!["Insight@27".to_owned()])].into(),
+            },
+        );
+        config.bis.insert(
+            "demonmaster".to_owned(),
+            crate::config::Bis {
+                build: "blood boil".to_owned(),
+                slots: BTreeMap::new(),
+                merc_slots: BTreeMap::new(),
+            },
+        );
+        config
+    }
+
+    #[test]
+    fn config_json_resolves_the_selected_build() {
+        // The resolved view: the selection-only character gets the build's display name,
+        // damages and annotated pieces; a builds-only character rides along for its select.
+        let json = config_json(&resolved_config(), &GearInfo::default());
+        let chars = json
+            .get("characters")
+            .and_then(|v| v.as_array())
+            .map_or_else(Vec::new, Vec::clone);
+        assert_eq!(chars.len(), 1, "one character: {chars:?}");
+        let char = chars.first().map_or(serde_json::Value::Null, Clone::clone);
+        assert_eq!(char.get("name"), Some(&serde_json::json!("demonmaster")));
+        assert_eq!(char.get("build"), Some(&serde_json::json!("blood boil")));
+        assert_eq!(char.get("build_name"), Some(&serde_json::json!("Blood Boil")));
         assert_eq!(
-            set_bis("bis = \"oops\"\n", "Hork", "b", &[("weapon", vec![])]),
-            None
+            char.get("damages"),
+            Some(&serde_json::json!(["physical", "fire"]))
+        );
+        // The piece carries its level, tick and runeword info.
+        let weapon = char
+            .pointer("/slots/weapon/0")
+            .map_or(serde_json::Value::Null, Clone::clone);
+        assert_eq!(
+            weapon.get("piece"),
+            Some(&serde_json::json!("Heart of the Oak@55"))
+        );
+        assert_eq!(weapon.get("name"), Some(&serde_json::json!("Heart of the Oak")));
+        assert_eq!(weapon.get("level"), Some(&serde_json::json!(55)));
+        assert_eq!(weapon.get("tick"), Some(&serde_json::Value::Null));
+        assert_eq!(weapon.get("better"), Some(&serde_json::json!(false)));
+        assert_eq!(
+            weapon.get("runes"),
+            Some(&serde_json::json!(["Ko", "Vex", "Pul", "Thul"]))
         );
         assert_eq!(
-            set_bis("[bis]\nHork = 5\n", "Hork", "b", &[("weapon", vec![])]),
-            None
+            char.pointer("/merc_slots/weapon/0/name"),
+            Some(&serde_json::json!("Insight"))
         );
+    }
+
+    #[test]
+    fn config_json_marks_owned_stash_and_better_pieces() {
+        // The live gear state annotates the pieces: owned ✓, stash ✓(stash), and a set/unique
+        // equipped piece strikes the slot's chase pieces through.
+        let gear = GearInfo {
+            owned: vec!["Heart of the Oak".to_owned()],
+            stash: vec!["Insight".to_owned()],
+            equipped: vec![(4, 7)], // body slot 4 = weapon, quality 7 = unique
+            merc_equipped: vec![],
+        };
+        let json = config_json(&resolved_config(), &gear);
+        let char = json
+            .pointer("/characters/0")
+            .map_or(serde_json::Value::Null, Clone::clone);
+        assert_eq!(
+            char.pointer("/slots/weapon/0/tick"),
+            Some(&serde_json::json!("owned"))
+        );
+        assert_eq!(
+            char.pointer("/slots/weapon/0/better"),
+            Some(&serde_json::json!(true)),
+            "a unique equipped in the weapon slot beats the chase pieces"
+        );
+        assert_eq!(
+            char.pointer("/merc_slots/weapon/0/tick"),
+            Some(&serde_json::json!("stash"))
+        );
+    }
+
+    #[test]
+    fn builds_json_lists_slug_name_damages_and_counts() {
+        let json = builds_json(&resolved_config());
+        let builds = json
+            .get("builds")
+            .and_then(|v| v.as_array())
+            .map_or_else(Vec::new, Vec::clone);
+        assert_eq!(builds.len(), 1, "{builds:?}");
+        let build = builds.first().map_or(serde_json::Value::Null, Clone::clone);
+        assert_eq!(build.get("slug"), Some(&serde_json::json!("blood boil")));
+        assert_eq!(build.get("name"), Some(&serde_json::json!("Blood Boil")));
+        assert_eq!(
+            build.get("damages"),
+            Some(&serde_json::json!(["physical", "fire"]))
+        );
+        assert_eq!(build.get("notes"), Some(&serde_json::json!("guide")));
+        assert_eq!(
+            build.get("slots"),
+            Some(&serde_json::json!({"weapon": 1})),
+            "per-slot piece counts"
+        );
+        assert_eq!(build.get("merc_slots"), Some(&serde_json::json!({"weapon": 1})));
     }
 
     #[test]
     fn reads_requests() -> Result<()> {
-        let request = b"POST /api/build\r\nContent-Length: 5\r\n\r\nhello";
+        let request = b"POST /api/bis\r\nContent-Length: 5\r\n\r\nhello";
         let Some(Parsed::Request(method, path, body)) = read_request(&mut Cursor::new(&request[..])) else {
             return Err(anyhow!("request not parsed"));
         };
-        assert_eq!((method.as_str(), path.as_str()), ("POST", "/api/build"));
+        assert_eq!((method.as_str(), path.as_str()), ("POST", "/api/bis"));
         assert_eq!(body, b"hello");
         Ok(())
     }
@@ -965,37 +1083,14 @@ mod tests {
     }
 
     #[test]
-    fn piece_names_strip_the_level_suffix() {
-        assert_eq!(piece_name("Insight@27"), "Insight");
-        assert_eq!(piece_name("Stealth"), "Stealth");
-        assert_eq!(piece_name(" White@35 "), "White");
-    }
-
-    #[test]
-    fn runeword_hints_name_runes_and_bases() -> Result<()> {
-        let hint = runeword_hint("Insight@27").ok_or_else(|| anyhow!("Insight is a runeword"))?;
-        assert!(hint.starts_with("Insight: Ral+Tir+Tal+Sol · "), "{hint}");
-        assert!(hint.contains("staves"), "{hint}");
-        assert!(runeword_hint("Crafted Rare").is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn runeword_json_keys_are_lowercase() {
-        let json = runewords_json();
-        assert!(json.get("steel").is_some(), "lowercase keys");
-        assert!(json.get("Steel").is_none(), "no display-name keys");
-    }
-
-    #[test]
     fn oversized_bodies_are_rejected_without_allocating() {
-        let request = format!("POST /api/build\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1);
+        let request = format!("POST /api/bis\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1);
         assert!(matches!(
             read_request(&mut Cursor::new(request)),
             Some(Parsed::TooLarge)
         ));
         // At the cap itself the body is still served (a complete 1 MiB request).
-        let header = format!("POST /api/build\r\nContent-Length: {MAX_BODY}\r\n\r\n");
+        let header = format!("POST /api/bis\r\nContent-Length: {MAX_BODY}\r\n\r\n");
         let mut request = header.into_bytes();
         request.resize(request.len() + MAX_BODY, 0);
         assert!(matches!(
@@ -1049,11 +1144,45 @@ mod tests {
         }
     }
 
+    /// The `{ "text", "colour" }` pairs of a block's lines in the live JSON.
+    fn lines_of(json: &serde_json::Value, key: &str) -> Vec<(String, String)> {
+        json.get(key)
+            .and_then(|v| v.as_array())
+            .map_or_else(Vec::new, |lines| {
+                lines
+                    .iter()
+                    .map(|l| {
+                        (
+                            l.get("text")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or_default()
+                                .to_owned(),
+                            l.get("colour")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or_default()
+                                .to_owned(),
+                        )
+                    })
+                    .collect()
+            })
+    }
+
     #[test]
     fn live_json_has_the_documented_shape() -> Result<()> {
         let blocks = crate::render::TextBlocks {
             guide: vec![crate::info::Band::plain("fcr (7 / 105)", crate::info::GUIDE_TEXT)],
-            level_full: vec!["Level 3 → a (5)".to_owned()],
+            level_full: vec![
+                crate::info::LevelEntry {
+                    text: "Level 3 → a (3)".to_owned(),
+                    mlvl: 3,
+                    bucket: "equal",
+                },
+                crate::info::LevelEntry {
+                    text: "b (5)".to_owned(),
+                    mlvl: 5,
+                    bucket: "above",
+                },
+            ],
             keep: vec!["Keep: Harlequin Crest (S)".to_owned()],
             sell: vec!["Sell: Gravenspine (inv)".to_owned()],
             give: vec!["Give away: Lem Rune (stash)".to_owned()],
@@ -1088,34 +1217,24 @@ mod tests {
             Some("Durance of Hate Level 3")
         );
         // Each block becomes `{ "text", "colour" }` lines in the block's overlay colour.
-        let colour_of = |key: &str| -> Vec<(String, String)> {
-            json.get(key)
-                .and_then(|v| v.as_array())
-                .map_or_else(Vec::new, |lines| {
-                    lines
-                        .iter()
-                        .map(|l| {
-                            (
-                                l.get("text")
-                                    .and_then(|t| t.as_str())
-                                    .unwrap_or_default()
-                                    .to_owned(),
-                                l.get("colour")
-                                    .and_then(|c| c.as_str())
-                                    .unwrap_or_default()
-                                    .to_owned(),
-                            )
-                        })
-                        .collect()
-                })
-        };
+        let colour_of = |key: &str| -> Vec<(String, String)> { lines_of(&json, key) };
         assert_eq!(
             colour_of("guide"),
             vec![("fcr (7 / 105)".to_owned(), "#c882ff".to_owned())]
         );
+        // The level-suggestion band: structured entries with the monster level and the
+        // below/equal/above bucket, in the own-level-first reading order.
+        let levels = json
+            .get("levels")
+            .and_then(|v| v.as_array())
+            .map_or_else(Vec::new, Vec::clone);
         assert_eq!(
-            colour_of("levels"),
-            vec![("Level 3 → a (5)".to_owned(), "#78d2ff".to_owned())]
+            levels,
+            vec![
+                serde_json::json!({"text": "Level 3 → a (3)", "colour": "#78d2ff", "mlvl": 3, "bucket": "equal"}),
+                serde_json::json!({"text": "b (5)", "colour": "#78d2ff", "mlvl": 5, "bucket": "above"}),
+            ],
+            "{levels:?}"
         );
         assert_eq!(
             colour_of("keep"),

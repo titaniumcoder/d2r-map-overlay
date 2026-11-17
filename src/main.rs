@@ -207,8 +207,7 @@ fn load_for_drawing(path: &str, config: &config::Config) -> Result<game::Snapsho
     session::Session::default().apply(&mut snap);
     config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
     snap.player.build = config
-        .builds
-        .for_player(&snap.player.name, snap.player.class)
+        .damages_for_player(&snap.player.name, Some(snap.player.class))
         .to_vec();
     Ok(snap)
 }

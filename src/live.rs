@@ -64,10 +64,11 @@ pub fn run(
     mut journal: Journal,
     config: &config::Config,
 ) {
-    // The companion web page: edits config.toml in a browser (user request, 2026-11-17).
+    // The companion web page: selects each character's build in a browser (user decision,
+    // 2026-11-17).
     thread::spawn(crate::web::serve);
     let config_path = config::default_path();
-    let mut config_modified = config_path.as_ref().and_then(|p| modified_at(p));
+    let mut watched = Watched::now(config_path.as_deref());
     let cache = offset_cache::default_path();
     // The last open error printed: a repeat isn't printed again, a different one is.
     let mut open_err = String::new();
@@ -76,7 +77,7 @@ pub fn run(
     loop {
         // Hot-reload while no game is attached (webapp edits, hand edits); during a session
         // `follow_game` reloads on its own tick loop.
-        check_reload(&mut config, config_path.as_deref(), &mut config_modified);
+        check_reload(&mut config, config_path.as_deref(), &mut watched);
         let Ok(pid) = process::find_d2r_pid() else {
             if !waiting_logged {
                 eprintln!("waiting for D2R to start");
@@ -118,7 +119,7 @@ pub fn run(
         });
         // `follow_game` may have reloaded on its own: resync so the next outer check doesn't
         // reload the same file twice.
-        config_modified = config_path.as_ref().and_then(|p| modified_at(p));
+        watched = Watched::now(config_path.as_deref());
         // The process is gone (or never got a table): hide until the next one is in a game.
         // The dashboard stops showing stale data with the same breath.
         web::clear_live();
@@ -134,21 +135,55 @@ fn modified_at(path: &std::path::Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// Hot-reloads `config` when the file at `config_path` changed on disk (webapp edits, hand
-/// edits). A failed reload (unreadable, invalid TOML) logs and keeps the current config, so a
-/// half-written or broken file can never blank the overlay's settings; the mtime is still
-/// recorded, so the error is logged once per change, not once per tick.
-fn check_reload(
-    config: &mut config::Config,
-    config_path: Option<&std::path::Path>,
-    config_modified: &mut Option<SystemTime>,
-) {
+/// The watched state behind the hot reload: `config.toml`'s mtime and the `builds/`
+/// directory's per-file `(name, mtime)` list. The builds dir is re-checked with a cheap
+/// `read_dir` every tick (user decision, 2026-11-17): a directory's own mtime would miss
+/// in-place edits of a build file, while this notices both those and added/removed files.
+#[derive(Debug, Default, PartialEq)]
+struct Watched {
+    config: Option<SystemTime>,
+    builds: Option<Vec<(String, SystemTime)>>,
+}
+
+impl Watched {
+    /// The current on-disk state of `config_path` and its `builds/` directory.
+    fn now(config_path: Option<&Path>) -> Self {
+        Self {
+            config: config_path.and_then(modified_at),
+            builds: config_path
+                .map(config::builds_dir_for)
+                .and_then(|dir| builds_state(&dir)),
+        }
+    }
+}
+
+/// The builds dir's `(file name, mtime)` pairs sorted by name, or `None` when the directory
+/// doesn't exist (no builds — also the state a later creation is detected against).
+fn builds_state(dir: &Path) -> Option<Vec<(String, SystemTime)>> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut state = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
+            continue;
+        };
+        state.push((entry.file_name().to_string_lossy().into_owned(), modified));
+    }
+    state.sort();
+    Some(state)
+}
+
+/// Hot-reloads `config` when `config.toml` or its `builds/` directory changed on disk (webapp
+/// edits, hand edits, agent-authored build files). A failed reload (unreadable, invalid TOML)
+/// logs and keeps the current config, so a half-written or broken file can never blank the
+/// overlay's settings; the watched state is still recorded, so the error is logged once per
+/// change, not once per tick.
+fn check_reload(config: &mut config::Config, config_path: Option<&std::path::Path>, watched: &mut Watched) {
     let Some(path) = config_path else { return };
-    let Some(modified) = modified_at(path) else { return };
-    if *config_modified == Some(modified) {
+    let now = Watched::now(config_path);
+    if *watched == now {
         return;
     }
-    *config_modified = Some(modified);
+    *watched = now;
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) => {
@@ -157,10 +192,11 @@ fn check_reload(
         }
     };
     match config::parse(&text) {
-        Ok((loaded, warnings)) => {
+        Ok((mut loaded, warnings)) => {
             for w in warnings {
                 eprintln!("config {}: {w}", path.display());
             }
+            loaded.build_defs = config::load_builds(&config::builds_dir_for(path));
             eprintln!("config reloaded from {}", path.display());
             *config = loaded;
         }
@@ -222,7 +258,7 @@ fn follow_game(
     config: &mut config::Config,
     config_path: Option<&Path>,
 ) -> Result<(), UiGone> {
-    let mut config_modified = config_path.and_then(modified_at);
+    let mut watched = Watched::now(config_path);
     let mut session = Session::default();
     let state_path = game_file::default_path();
     if let Some(state) = state_path.as_deref().and_then(game_file::load) {
@@ -236,7 +272,7 @@ fn follow_game(
         let start = Instant::now();
         // Hot-reload here, not only in `run`: this loop is where every consumer (valuables,
         // shrines, builds, bis) reads `config`, and it only returns when D2R exits.
-        check_reload(config, config_path, &mut config_modified);
+        check_reload(config, config_path, &mut watched);
         // The previous player id (or game.json's on a restart) keeps the choice sticky.
         match game::snapshot(mem, table, items_table.base(), player, session.player_id()) {
             Ok(mut snap) => {
@@ -251,11 +287,13 @@ fn follow_game(
                 journal.observe(&snap);
                 let update = session.apply(&mut snap);
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
+                // Damages: the character's own `[builds]` entry, else the selected build's,
+                // else its class's. `BiS`: inline slots when present, else the selected
+                // build's (user decision, 2026-11-17).
                 snap.player.build = config
-                    .builds
-                    .for_player(&snap.player.name, snap.player.class)
+                    .damages_for_player(&snap.player.name, Some(snap.player.class))
                     .to_vec();
-                snap.player.bis = config.bis_for_player(&snap.player.name).cloned();
+                snap.player.bis = config.resolved_bis(&snap.player.name);
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }
@@ -274,6 +312,14 @@ fn follow_game(
                 // (user request, 2026-11-17); serialization of a few short lines at 5 Hz is
                 // cheap. Cleared again on snapshot errors (menu, loading) and game exit.
                 let blocks = render::text_blocks(&snap, w, info::font());
+                // The config page annotates its resolved `BiS` view with the live ✓ and the
+                // equipped-quality pairs; published alongside the dashboard JSON.
+                web::publish_gear(web::GearInfo {
+                    owned: snap.owned_names.clone(),
+                    stash: snap.stash_names.clone(),
+                    equipped: snap.equipped.clone(),
+                    merc_equipped: snap.merc_equipped.clone(),
+                });
                 web::publish_live(web::live_json(&web::LiveInfo {
                     player_name: &snap.player.name,
                     class: snap.player.class,

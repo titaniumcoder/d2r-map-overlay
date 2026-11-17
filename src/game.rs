@@ -220,7 +220,7 @@ pub struct Player {
     /// breakpoint/gear guide (user request, 2026-11-17). `None` if the stat list is unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<SpeedStats>,
-    /// The character's build from the config ([`crate::config::Builds::for_player`]), primary
+    /// The character's build from the config ([`crate::config::Config::damages_for_player`]), primary
     /// damage first; colours the info line's monster levels ([`crate::build::rate`]). Not read
     /// from the game nor kept in the JSON: set from the config after reading or loading.
     #[serde(skip)]

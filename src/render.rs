@@ -974,8 +974,10 @@ pub struct TextBlocks {
     /// overlay draws the text (plain ✓ embedded), the dashboard marks ✓(stash) from the tick.
     pub bis: Vec<info::BisLine>,
     /// The whole level-suggestion band ([`info::level_lines_full`]), for the dashboard: the
-    /// overlay draws the capped short display ([`TextBlocks::level`]) instead.
-    pub level_full: Vec<String>,
+    /// overlay draws the capped short display ([`TextBlocks::level`]) instead. Each entry
+    /// carries its monster level and below/equal/above bucket so the dashboard can lay the
+    /// band out in three columns.
+    pub level_full: Vec<info::LevelEntry>,
 }
 
 /// The overlay's text rows for a `width` px canvas ([`keep_lines`]) and the dashboard's groups

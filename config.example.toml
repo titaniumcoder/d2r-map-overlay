@@ -35,11 +35,15 @@ normal_only = ["stamina"]
 # druid = ["physical"]
 # necromancer = ["physical"]
 
-# [bis.<character>]: the build name and the best-in-slot gear to chase for that character
-# (user request, 2026-11-17). Shown as a light-gold "BiS <build> → …" line under the guide.
-# Item names are free text (runewords, uniques, whatever you are chasing); trim + empty-item
-# warnings apply. Example from the Blood Boil Warlock guide:
+# [bis.<character>]: the agent-authored build definition to chase for that character
+# (user request, 2026-11-17). The gear itself lives in `builds/<slug>.toml` next to this file
+# (one build per file, authored by the agent; see `builds/blood-boil.toml`). Resolution order:
+# inline slots (legacy, below) if present, else the selected build's slots, else none.
 #
 # [bis.Demonmaster]
-# build = "Blood Boil"
-# gear = ["Spirit", "Stealth", "Insight", "Enigma", "Heart of the Oak", "Mang Song's Lesson"]
+# build = "blood boil"
+#
+# Legacy inline slots (the webapp no longer edits them; they win over the build's):
+#
+# [bis.Demonmaster.slots]
+# weapon = ["Mang Song's Lesson@82", "Heart of the Oak@55"]

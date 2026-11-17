@@ -280,24 +280,12 @@ pub fn bis_lines(
     // 2026-11-17): equip it instead of chasing a second one. A piece sitting in the shared
     // stash is ticked too ([`Tick::Stash`]); the overlay shows the same plain ✓, the dashboard
     // marks ✓(stash) from the line's tick.
-    let tick = |piece: &str| -> Option<Tick> {
-        let name = piece.split('@').next().unwrap_or(piece).trim();
-        if owned_names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
-            Some(Tick::Owned)
-        } else if stash_names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
-            Some(Tick::Stash)
-        } else {
-            None
-        }
-    };
     for slot in crate::config::SLOT_NAMES {
         let Some(pieces) = bis.slots.get(slot) else {
             continue;
         };
         // Already better: a set/unique equipped in that slot is presumed the current BiS.
-        if let Some(body) = slot_body(slot)
-            && equipped.iter().any(|&(b, q)| b == body && (q == 5 || q == 7))
-        {
+        if slot_equipped_better(slot, equipped) {
             continue;
         }
         // Only pieces relevant for the current level (req ≤ level + 5); the highest-level one
@@ -310,7 +298,7 @@ pub fn bis_lines(
         else {
             continue;
         };
-        let t = tick(piece);
+        let t = piece_tick(piece, owned_names, stash_names);
         let mark = if t.is_some() { "✓ " } else { "" };
         if out.len() < MAX_BIS_LINES {
             out.push(BisLine {
@@ -327,11 +315,7 @@ pub fn bis_lines(
         let Some(pieces) = bis.merc_slots.get(slot) else {
             continue;
         };
-        if let Some(body) = slot_body(slot)
-            && merc_equipped
-                .iter()
-                .any(|&(b, q)| b == body && (q == 5 || q == 7))
-        {
+        if slot_equipped_better(slot, merc_equipped) {
             continue;
         }
         let Some((piece, req)) = pieces
@@ -342,7 +326,7 @@ pub fn bis_lines(
         else {
             continue;
         };
-        let t = tick(piece);
+        let t = piece_tick(piece, owned_names, stash_names);
         let mark = if t.is_some() { "✓ " } else { "" };
         if out.len() < MAX_BIS_LINES {
             out.push(BisLine {
@@ -395,8 +379,10 @@ pub const fn body_slot_name(body: u8) -> Option<&'static str> {
 }
 
 /// The required character level of a `BiS` piece: the `@level` config suffix, else the known
-/// runeword levels; `None` when unknown (the piece then always shows).
-fn piece_level(piece: &str) -> Option<u32> {
+/// runeword levels; `None` when unknown (the piece then always shows). Shared by the overlay's
+/// chase list and the config page's resolved view ([`crate::web`]).
+#[must_use]
+pub fn piece_level(piece: &str) -> Option<u32> {
     if let Some(at) = piece.rfind('@')
         && let Ok(n) = piece[at + 1..].parse::<u32>()
     {
@@ -409,10 +395,34 @@ fn piece_level(piece: &str) -> Option<u32> {
         .map(|&(_, l)| l)
 }
 
-/// The bare piece name of a `BiS` piece string (`"Insight@27"` → `"Insight"`); the same parse
-/// as the config page's `piece_name` ([`crate::web`]).
-fn piece_name(piece: &str) -> &str {
+/// The bare piece name of a `BiS` piece string (`"Insight@27"` → `"Insight"`); shared by the
+/// overlay's chase list and the config page's resolved view ([`crate::web`]).
+#[must_use]
+pub fn piece_name(piece: &str) -> &str {
     piece.split_once('@').map_or(piece, |(name, _)| name).trim()
+}
+
+/// Why a `BiS` piece is ticked: the character owns it (equipped, carried or personally
+/// stashed) or it sits in the shared stash ([`Tick`]); `None` for neither. Shared by the
+/// overlay's chase list and the config page's resolved view ([`crate::web`]).
+#[must_use]
+pub fn piece_tick(piece: &str, owned_names: &[String], stash_names: &[String]) -> Option<Tick> {
+    let name = piece_name(piece);
+    if owned_names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+        Some(Tick::Owned)
+    } else if stash_names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+        Some(Tick::Stash)
+    } else {
+        None
+    }
+}
+
+/// Whether the equipped piece in `slot`'s body location is set or unique quality: presumed the
+/// current `BiS`, so the slot's chase pieces are already beaten (the overlay skips the slot
+/// entirely, the config page strikes its pieces through instead).
+#[must_use]
+pub fn slot_equipped_better(slot: &str, equipped: &[(u8, u32)]) -> bool {
+    slot_body(slot).is_some_and(|body| equipped.iter().any(|&(b, q)| b == body && (q == 5 || q == 7)))
 }
 
 /// The runeword behind a `BiS` piece string, when the piece names one (case-insensitive).
@@ -491,22 +501,43 @@ pub fn level_lines(
     )
 }
 
-/// [`level_lines`] without the display caps, for the dashboard: one line per area in the band
+/// One dashboard level-suggestion entry ([`level_lines_full`]): the rendered line, the area's
+/// monster level, and which of the dashboard's three columns it belongs to — `below` / `equal`
+/// / `above` the character level (`equal` = `mlvl == char_level`). The suggestions are ordered
+/// own-level-first (the overlay's reading order); the bucket lets the dashboard's "Where to
+/// go" panel re-group them into its below / equal / above columns.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LevelEntry {
+    /// The rendered line (`Level 34 → Halls of Death's Calling (34)` for the band's first
+    /// entry, `Halls of Anguish (33)` for the rest) — the overlay's own-level-first reading
+    /// order, kept as the text even when the dashboard re-groups by [`LevelEntry::bucket`].
+    pub text: String,
+    pub mlvl: u8,
+    pub bucket: &'static str,
+}
+
+/// [`level_lines`] without the display caps, for the dashboard: one entry per area in the band
 /// (the first carries the `Level N →` prefix), in the same usefulness order, uncapped within
 /// the band; the nearest-areas fallback (empty band) keeps its 5-entry cap.
-pub fn level_lines_full(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<String> {
+pub fn level_lines_full(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<LevelEntry> {
     let (Some(lvl), areas) = (char_level, level_suggestions(char_level, difficulty)) else {
         return Vec::new();
     };
     areas
         .iter()
         .enumerate()
-        .map(|(i, (name, mlvl))| {
-            if i == 0 {
+        .map(|(i, &(name, mlvl))| LevelEntry {
+            text: if i == 0 {
                 format!("Level {lvl} → {name} ({mlvl})")
             } else {
                 format!("{name} ({mlvl})")
-            }
+            },
+            mlvl,
+            bucket: match mlvl {
+                m if m == lvl => "equal",
+                m if m < lvl => "below",
+                _ => "above",
+            },
         })
         .collect()
 }
@@ -1558,11 +1589,47 @@ mod tests {
         // no `+N more` tail, no cap (the overlay's short display is [`level_lines`]).
         let full = level_lines_full(Some(1), Some(0));
         assert_eq!(full.len(), 14, "the whole −5…+4 band: {full:?}");
-        assert_eq!(full.first().map(String::as_str), Some("Level 1 → Blood Moor (1)"));
-        assert_eq!(full.get(1).map(String::as_str), Some("Den of Evil (1)"));
-        assert_eq!(full.get(13).map(String::as_str), Some("Hole Level 2 (5)"));
-        assert_eq!(level_lines_full(Some(80), Some(0)), Vec::<String>::new());
-        assert_eq!(level_lines_full(None, Some(0)), Vec::<String>::new());
+        let first = full.first().map_or_else(LevelEntry::default, Clone::clone);
+        assert_eq!(first.text, "Level 1 → Blood Moor (1)");
+        assert_eq!(first.mlvl, 1);
+        assert_eq!(first.bucket, "equal");
+        let second = full.get(1).map_or_else(LevelEntry::default, Clone::clone);
+        assert_eq!(second.text, "Den of Evil (1)");
+        assert_eq!(second.mlvl, 1);
+        assert_eq!(second.bucket, "equal");
+        let last = full.get(13).map_or_else(LevelEntry::default, Clone::clone);
+        assert_eq!(last.text, "Hole Level 2 (5)");
+        assert_eq!(last.mlvl, 5);
+        assert_eq!(last.bucket, "above");
+        assert_eq!(level_lines_full(Some(80), Some(0)), Vec::<LevelEntry>::new());
+        assert_eq!(level_lines_full(None, Some(0)), Vec::<LevelEntry>::new());
+    }
+
+    #[test]
+    fn level_lines_full_buckets_areas_below_equal_and_above_the_level() {
+        // The dashboard's three "Where to go" columns come from the `bucket` field: below /
+        // equal / above the character level (`equal` = mlvl == char_level, user request,
+        // 2026-11-17). Normal 23: the band is 18–27, own-level-first in `text`.
+        let full = level_lines_full(Some(23), Some(0));
+        assert!(!full.is_empty(), "the band is not empty for clvl 23");
+        for entry in &full {
+            let expected = match entry.mlvl {
+                23 => "equal",
+                m if m < 23 => "below",
+                _ => "above",
+            };
+            let mlvl = entry.mlvl;
+            assert_eq!(entry.bucket, expected, "entry: {entry:?}");
+            assert!(entry.text.contains(&format!("({mlvl})")), "{entry:?}");
+        }
+        // Own level first: the first entry carries the `Level N →` prefix and is `equal`.
+        if let Some(first) = full.first() {
+            assert_eq!(first.bucket, "equal");
+            assert!(first.text.starts_with("Level 23 → "), "{first:?}");
+        }
+        // The band's edges are represented: at least one `below` and one `above` entry.
+        assert!(full.iter().any(|e| e.bucket == "below"), "{full:?}");
+        assert!(full.iter().any(|e| e.bucket == "above"), "{full:?}");
     }
 
     #[test]
