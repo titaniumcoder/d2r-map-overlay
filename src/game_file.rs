@@ -115,6 +115,7 @@ mod tests {
                 char_level: None,
                 build: vec![],
             },
+            party: vec![],
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
             level: Level {

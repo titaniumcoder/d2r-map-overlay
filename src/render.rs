@@ -404,6 +404,10 @@ const MARKER_OUTLINE: Rgba = [0, 0, 0, 220];
 const LANDMARK_GOLD: Rgba = [255, 200, 30, 255];
 /// Halo ring radius in px, beyond the star's tips.
 const LANDMARK_RING: f32 = 13.0;
+/// Font size of the party member name labels (user request, 2026-11-17).
+const PARTY_NAME_PX: f32 = 12.0;
+/// px above the dot centre the name label sits.
+const PARTY_NAME_OFFSET: f32 = 8.0;
 /// "?" marker for an unconfirmed landmark: a light gold glyph on a dark translucent disc.
 const SUSPECT_TEXT: Rgba = [255, 235, 150, 255];
 const SUSPECT_DISC: Rgba = [0, 0, 0, 150];
@@ -514,6 +518,9 @@ pub enum Marker {
     /// Live quest boss ([`BOSS_MONSTERS`](crate::levels_data::BOSS_MONSTERS) by txt id): a red
     /// horned skull.
     Boss,
+    /// Another live player of the level (online game, see [`PartyMember`](crate::game::PartyMember)):
+    /// a yellow dot, drawn below the player so the local player stays on top.
+    Party,
     /// The player. Drawn below drops and rings: on big levels a fresh drop lies within a pixel or
     /// two of the player and would otherwise be hidden (live, Bloody Foothills, a large charm 3.6
     /// tiles away).
@@ -571,6 +578,7 @@ impl Marker {
                 let radius = Self::Drop(kind).style().1 + RING_GAP;
                 (tier_colour(tier), radius, Shape::Circle)
             }
+            Self::Party => ([255, 230, 90, 255], 2.5, Shape::Circle),
             Self::Player => ([40, 255, 60, 255], 2.5, Shape::Circle),
         }
     }
@@ -910,6 +918,11 @@ fn markers_with(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f6
         .chain(landmarks(snap, rules))
         .chain(border_exits(snap))
         .collect();
+    out.extend(
+        snap.party
+            .iter()
+            .map(|p| (Marker::Party, f64::from(p.x), f64::from(p.y))),
+    );
     out.push((Marker::Player, f64::from(snap.player.x), f64::from(snap.player.y)));
     // Stable sort: keeps snapshot order within one kind.
     out.sort_by_key(|&(m, _, _)| m);
@@ -1084,22 +1097,45 @@ fn render_rules(
         }
     }
     if let Some(font) = font {
-        let inset = info::keep_band_height(font, keep.len());
-        info::draw(
-            &mut pm,
-            font,
-            &info::info_line(
-                snap.level.id,
-                snap.difficulty,
-                snap.terrorized,
-                snap.cows,
-                &snap.player.build,
-            ),
-            inset,
-        );
-        info::draw_keep(&mut pm, font, &keep);
+        // Party member names above their dots (user request, 2026-11-17).
+        draw_party_names(&mut pm, font, snap, view);
+        draw_text_bands(&mut pm, font, snap, &keep);
     }
     Ok(pm)
+}
+
+/// The info line at the bottom, then the keep/sell/give-away rows below it.
+fn draw_text_bands(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, keep: &[(String, Rgba)]) {
+    let inset = info::keep_band_height(font, keep.len());
+    info::draw(
+        pm,
+        font,
+        &info::info_line(
+            snap.level.id,
+            snap.difficulty,
+            snap.terrorized,
+            snap.cows,
+            &snap.player.build,
+        ),
+        inset,
+    );
+    info::draw_keep(pm, font, keep);
+}
+
+/// Draws each party member's name centred above their dot (user request, 2026-11-17).
+fn draw_party_names(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, view: View) {
+    for p in &snap.party {
+        let (cx, cy) = view.to_screen(f64::from(p.x), f64::from(p.y));
+        info::draw_text_centred(
+            pm,
+            font,
+            PARTY_NAME_PX,
+            info::PARTY_NAME_TEXT,
+            &p.name,
+            cx,
+            cy - PARTY_NAME_OFFSET,
+        );
+    }
 }
 
 /// Strokes `trail` (world tiles) as one translucent polyline with round joins, broken where two
@@ -1615,6 +1651,7 @@ mod tests {
                 char_level: None,
                 build: vec![],
             },
+            party: vec![],
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
             level: Level {
@@ -2024,6 +2061,32 @@ mod tests {
         assert_eq!(
             kinds,
             vec![Marker::Exit, Marker::Special(None), Marker::Elite, Marker::Player]
+        );
+    }
+
+    fn party_member(x: u16, y: u16) -> crate::game::PartyMember {
+        crate::game::PartyMember {
+            id: 2,
+            name: "M".into(),
+            class: 0,
+            char_level: None,
+            x,
+            y,
+        }
+    }
+
+    #[test]
+    fn markers_draw_party_below_the_player() {
+        let mut snap = empty_snapshot(5, 5);
+        snap.party = vec![party_member(2, 3), party_member(8, 9)];
+        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![Marker::Party, Marker::Party, Marker::Player],
+            "members below the player so the local player stays on top"
         );
     }
 

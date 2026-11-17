@@ -77,6 +77,9 @@ impl<'de> Deserialize<'de> for Addr {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Snapshot {
     pub player: Player,
+    /// Other live players in this level (online games): drawn as yellow dots with their names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub party: Vec<PartyMember>,
     pub player_candidates: Vec<Candidate>,
     /// Which rule picked `player` among `player_candidates`. Left out of the JSON when it is the
     /// default (first candidate), so older dumps round-trip.
@@ -193,6 +196,24 @@ pub struct Player {
     /// from the game nor kept in the JSON: set from the config after reading or loading.
     #[serde(skip)]
     pub build: Vec<crate::build::Damage>,
+}
+
+/// Another player in the same level, live (online games; user request, 2026-11-17). Read from a
+/// player-type unit other than the chosen one; only members of the player's current level are
+/// kept (their coordinates wouldn't fit another level's map).
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PartyMember {
+    /// Unit id; stable across ticks, so the map follows the player.
+    pub id: u32,
+    /// Character name ([`Reader::player_name`]).
+    pub name: String,
+    /// Character class (txt row, as [`Player::class`]).
+    pub class: u32,
+    /// Character level; `None` if unreadable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub char_level: Option<u8>,
+    pub x: u16,
+    pub y: u16,
 }
 
 /// The character level from the raw stat value: 1..=99, or the same shifted left by 8 (some D2
@@ -577,6 +598,48 @@ pub struct ItemDrop {
     pub y: u32,
 }
 
+/// Reads all live player candidates (unit table, `PLAYER` type); unreadable ones warn.
+fn player_candidates<M: ReadMem>(r: &mut Reader<'_, M>, unit_table: u64) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+    for addr in r.units(unit_table, unit_table::PLAYER) {
+        match r.player_candidate(addr) {
+            Ok(Some(p)) => candidates.push(p),
+            Ok(None) => {}
+            Err(e) => r.warn(format!("player unit {addr:#x}: {e:#}")),
+        }
+    }
+    candidates
+}
+
+/// Reads the other live players of the local player's level (an online game). Their unit positions
+/// are valid map coordinates only for their own level, so members elsewhere are dropped.
+fn read_party<M: ReadMem>(
+    r: &mut Reader<'_, M>,
+    candidates: &[Candidate],
+    chosen: Addr,
+    level_id: u32,
+) -> Vec<PartyMember> {
+    let mut party = Vec::new();
+    for c in candidates {
+        if c.addr == chosen {
+            continue;
+        }
+        match r.player(c.addr.0) {
+            Ok((p, _)) if p.level_id == level_id => party.push(PartyMember {
+                id: p.id,
+                name: p.name,
+                class: p.class,
+                char_level: p.char_level,
+                x: p.x,
+                y: p.y,
+            }),
+            Ok(_) => {}
+            Err(e) => r.warn(format!("party player {:#x}: {e:#}", c.addr.0)),
+        }
+    }
+    party
+}
+
 /// Reads one snapshot. `unit_table` is the hash table address from [`crate::image::Image::unit_table`];
 /// `items_table` is the item-code table from [`items::find_table`] (`None`: unique and set drops only).
 /// `previous` is the unit id of the player chosen before (see [`ChosenBy::Previous`]).
@@ -597,14 +660,7 @@ pub fn snapshot(
         suppressed: 0,
     };
 
-    let mut candidates = Vec::new();
-    for addr in r.units(unit_table, unit_table::PLAYER) {
-        match r.player_candidate(addr) {
-            Ok(Some(p)) => candidates.push(p),
-            Ok(None) => {}
-            Err(e) => r.warn(format!("player unit {addr:#x}: {e:#}")),
-        }
-    }
+    let candidates = player_candidates(&mut r, unit_table);
     // Items first: their owner ids tell which candidate is the local player.
     let candidate_ids: Vec<u32> = candidates.iter().map(|c| c.id).collect();
     let scan = r.items(unit_table, items_table, &candidate_ids);
@@ -616,6 +672,7 @@ pub fn snapshot(
         }
     };
     let (player, level_addr) = r.player(chosen.addr.0).context("reading the player")?;
+    let party = read_party(&mut r, &candidates, chosen.addr, player.level_id);
 
     let rooms = r.walk(
         r.ptr(level_addr, level::FIRST_ROOM2)?,
@@ -675,6 +732,7 @@ pub fn snapshot(
 
     Ok(Snapshot {
         player,
+        party,
         player_candidates: candidates,
         player_chosen_by: chosen_by,
         level,
