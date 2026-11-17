@@ -240,6 +240,16 @@ def short_setup(setup):
     return setup if setup in ("starter", "standard") else "alternative"
 
 
+# Target lines the user doesn't want (2026-11-17: "too experienced for that"; the breakpoint
+# numbers are on the dashboard's guide chips and the main skill in the skill plan anyway).
+DROP_TARGETS = ("Attributes", "Stats", "Resistances", "Immunities", "FCR", "FHR", "Block",
+                "Main skill")
+
+
+def keep_target(line):
+    return not any(line.startswith(p + ":") for p in DROP_TARGETS)
+
+
 def targets_blood_boil(t):
     a = t["attributes"]["planner_totals"]
     return [
@@ -396,11 +406,11 @@ def main(argv):
                                      base=i.get("base") or "", stats=i.get("stats") or [],
                                      why=i.get("why") or "", notes="from the leveling guide; " + (i.get("notes") or ""))
     plan, recipes, tips, stats, switch_note = [], [], [], [], cfg.get("switch_note", "")
+    # No attribute plan either (user request): `stats` stays empty.
     if stem == "blood-boil":
         targets = targets_blood_boil(d["targets"])
     else:
         targets = targets_generic(d)
-        stats = stats_lines(d.get("stats_plan"))
         recipes = [recipe_of(r) for r in d.get("recipes") or []]
         sp = d.get("skill_plan")
         act_tips = list(d.get("act_tips") or [])
@@ -447,7 +457,7 @@ def main(argv):
               "# instead of editing by hand. Setups: starter / standard = the guide's variants (or the",
               "# leveling stage, 'lvl a-b'), everything else folds as alternative."]
     L += [f"name = {q(cfg['name'])}", f"damages = [{', '.join(q(x) for x in cfg['damages'])}]",
-          "notes = " + q(cfg["notes"]), "targets = [" + ", ".join(q(x) for x in targets) + "]"]
+          "notes = " + q(cfg["notes"]), "targets = [" + ", ".join(q(x) for x in targets if keep_target(x)) + "]"]
     if stem != "blood-boil" or cfg.get("cls"):
         L.append(f"class = {q(cfg['cls'])}")
     if cfg.get("default"):
