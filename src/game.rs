@@ -80,6 +80,13 @@ pub struct Snapshot {
     /// Other live players in this level (online games): drawn as yellow dots with their names.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub party: Vec<PartyMember>,
+    /// The local player's equipped `(body slot, quality)` pairs: the `BiS` per-slot "already
+    /// better" check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub equipped: Vec<(u8, u32)>,
+    /// The mercenary's equipped `(body slot, quality)` pairs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merc_equipped: Vec<(u8, u32)>,
     pub player_candidates: Vec<Candidate>,
     /// Which rule picked `player` among `player_candidates`. Left out of the JSON when it is the
     /// default (first candidate), so older dumps round-trip.
@@ -200,6 +207,10 @@ pub struct Player {
     /// from the game nor kept in the JSON: set from the config after reading or loading.
     #[serde(skip)]
     pub build: Vec<crate::build::Damage>,
+    /// The character's `BiS` build and gear list from the config ([`crate::config::Bis`]); shown
+    /// as a chase list under the guide. Config-set like `build`, not kept in the JSON.
+    #[serde(skip)]
+    pub bis: Option<crate::config::Bis>,
 }
 
 /// The player's speed stats and elemental resistances as granted by gear (stat ids from
@@ -361,6 +372,11 @@ struct ItemScan {
     /// Speed/resist stats summed over each owner's equipped items and carried charms (the
     /// guide's numbers; the player's own stat list is base-only, no item stats).
     gear: HashMap<u32, SpeedStats>,
+    /// The local player's equipped `(body slot, quality)` pairs (the `BiS` "already better"
+    /// check: set/unique quality there hides the slot).
+    equipped: Vec<(u8, u32)>,
+    /// The same for the mercenary's gear (owner `NO_OWNER`).
+    merc_equipped: Vec<(u8, u32)>,
 }
 
 /// A stored item with its `item_data::PAGE` and `item_data::OWNER`.
@@ -719,6 +735,8 @@ pub fn snapshot(
     let party = read_party(&mut r, &candidates, chosen.addr, player.level_id);
     // The guide's numbers: the chosen player's equipped items and carried charms.
     player.speed = scan.gear.get(&chosen.id).copied();
+    let equipped = scan.equipped.clone();
+    let merc_equipped = scan.merc_equipped.clone();
 
     let rooms = r.walk(
         r.ptr(level_addr, level::FIRST_ROOM2)?,
@@ -779,6 +797,8 @@ pub fn snapshot(
     Ok(Snapshot {
         player,
         party,
+        equipped,
+        merc_equipped,
         player_candidates: candidates,
         player_chosen_by: chosen_by,
         level,
@@ -1070,6 +1090,7 @@ impl<M: ReadMem> Reader<'_, M> {
             // player's stat list is base-only, no item stats).
             speed: None,
             build: Vec::new(),
+            bis: None,
         };
         Ok((player, level))
     }
@@ -1389,8 +1410,36 @@ impl<M: ReadMem> Reader<'_, M> {
             {
                 self.accumulate_gear(addr, &head, scan.gear.entry(owner).or_default());
             }
+            // Equipped pieces by owner kind, for the `BiS` per-slot display.
+            if let Some(quality) = self.equipped_quality(&head)
+                && let Some(slot) = self.equipped_slot(&head)
+            {
+                let owner = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok());
+                let list = if owner == Some(crate::offsets::item_data::NO_OWNER) {
+                    &mut scan.merc_equipped
+                } else if candidates.contains(&owner.unwrap_or(0)) {
+                    &mut scan.equipped
+                } else {
+                    continue;
+                };
+                if !list.contains(&(slot, quality)) {
+                    list.push((slot, quality));
+                }
+            }
         }
         scan
+    }
+
+    /// The `item_data::BODY` slot of an equipped item (`None` when not equipped).
+    fn equipped_slot(&self, head: &UnitHead) -> Option<u8> {
+        let data = head.unit_data?;
+        let body = self.u8(data, item_data::BODY).ok()?;
+        (body != 0 && body != 255).then_some(body)
+    }
+
+    /// The `item_data::QUALITY` of an item (`None` if unreadable).
+    fn equipped_quality(&self, head: &UnitHead) -> Option<u32> {
+        head.unit_data.and_then(|d| self.u32(d, item_data::QUALITY).ok())
     }
 
     /// The owner whose gear stats `item` contributes to: the player's equipped items (body slot)

@@ -41,6 +41,12 @@ pub const SHRINE_NAMES: [&str; 23] = [
     "poison",
 ];
 
+/// The `BiS` slot names, in display order (amulet, rings, body, helm, hands, feet, belt,
+/// weapons; user's order, 2026-11-17).
+pub const SLOT_NAMES: [&str; 11] = [
+    "amulet", "ring1", "ring2", "body", "helm", "gloves", "boots", "belt", "weapon", "offhand", "swap",
+];
+
 /// Class names by class id (charstats row), for `[builds.class]`.
 pub const CLASS_NAMES: [&str; 8] = [
     "amazon",
@@ -65,6 +71,25 @@ pub struct Config {
     pub valuables: Valuables,
     pub shrines: Shrines,
     pub builds: Builds,
+    /// Per-character `BiS` build and gear list (`[bis.<name>]`).
+    pub bis: BTreeMap<String, Bis>,
+}
+
+/// A character's `BiS` build and per-slot gear: `[bis.<name>]` (user request, 2026-11-17:
+/// the Blood Boil Warlock guide's gear as the first entry, shown per slot, only pieces relevant
+/// for the character's level, and only when the equipped piece isn't already better).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bis {
+    /// The build's display name (e.g. "Blood Boil").
+    pub build: String,
+    /// The mercenary's label (e.g. "Act 2 Combat (Prayer)"), if the guide has merc gear.
+    pub merc: Option<String>,
+    /// Slot name → pieces in chase order (`"Name@<required level>"`; the guide shows the
+    /// highest-level one the character can currently use, so a slot can graduate from Spirit
+    /// to Enigma as the character levels).
+    pub slots: BTreeMap<String, Vec<String>>,
+    /// The mercenary's slot name → pieces.
+    pub merc_slots: BTreeMap<String, Vec<String>>,
 }
 
 /// `[valuables]`: the tiers highlighted per category (see [`crate::valuables`]).
@@ -141,6 +166,14 @@ pub struct Builds {
     pub classes: BTreeMap<u32, Vec<Damage>>,
 }
 
+impl Config {
+    /// The `BiS` entry of the character `name` (any case), or `None`.
+    #[must_use]
+    pub fn bis_for_player(&self, name: &str) -> Option<&Bis> {
+        self.bis.get(&name.to_lowercase())
+    }
+}
+
 impl Builds {
     /// The build of the character `name` (any case) of `class`: its own entry, else its class's,
     /// else none.
@@ -159,6 +192,19 @@ struct RawConfig {
     valuables: Valuables,
     shrines: RawShrines,
     builds: RawBuilds,
+    bis: BTreeMap<String, RawBis>,
+}
+
+/// `[bis.<name>]` as written: `build`, optional `merc` label, and the per-slot pieces
+/// (`slots` for the character, `merc_slots` for the mercenary). A piece is `"Name"` or
+/// `"Name@<required level>"` (the level makes the piece filterable by character level).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawBis {
+    build: String,
+    merc: String,
+    slots: BTreeMap<String, Vec<String>>,
+    merc_slots: BTreeMap<String, Vec<String>>,
 }
 
 /// `[builds]` as written: character name = damage names, plus the `class` table (class id or name
@@ -273,11 +319,60 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), toml::de::Error> {
         })
         .collect();
     let builds = builds(raw.builds, &mut warnings);
+    let mut bis = BTreeMap::new();
+    for (name, raw) in raw.bis {
+        let mut slots = BTreeMap::new();
+        for (slot, pieces) in raw.slots {
+            let trimmed: Vec<String> = pieces
+                .iter()
+                .map(|p| p.trim().to_owned())
+                .filter(|p| !p.is_empty())
+                .collect();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if SLOT_NAMES.contains(&slot.as_str()) {
+                slots.insert(slot, trimmed);
+            } else {
+                warnings.push(format!(
+                    "bis {name}: unknown slot {slot:?} ignored (known: {})",
+                    SLOT_NAMES.join(", ")
+                ));
+            }
+        }
+        let mut merc_slots = BTreeMap::new();
+        for (slot, pieces) in raw.merc_slots {
+            let trimmed: Vec<String> = pieces
+                .iter()
+                .map(|p| p.trim().to_owned())
+                .filter(|p| !p.is_empty())
+                .collect();
+            if !trimmed.is_empty() {
+                merc_slots.insert(slot, trimmed);
+            }
+        }
+        if raw.build.trim().is_empty() || (slots.is_empty() && merc_slots.is_empty()) {
+            warnings.push(format!(
+                "bis {name}: needs a build name and at least one slot piece; ignored"
+            ));
+            continue;
+        }
+        bis.insert(
+            name.to_lowercase(),
+            Bis {
+                build: raw.build.trim().to_owned(),
+                merc: (!raw.merc.trim().is_empty()).then(|| raw.merc.trim().to_owned()),
+                slots,
+                merc_slots,
+            },
+        );
+    }
     Ok((
         Config {
             valuables: raw.valuables,
             shrines: Shrines { show, normal_only },
             builds,
+            bis,
         },
         warnings,
     ))
@@ -330,7 +425,7 @@ pub fn load_from(path: &Path) -> Config {
 mod tests {
     use super::*;
     use crate::testutil::temp_dir;
-    use anyhow::Result;
+    use anyhow::{Result, anyhow};
 
     #[test]
     fn defaults() -> Result<()> {
@@ -407,6 +502,43 @@ mod tests {
             parse("[builds]\nVex = \"lightning\"\n").is_err(),
             "a list is required"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn bis_entries() -> Result<()> {
+        let (config, warnings) = parse(
+            "[bis.Demonmaster]\nbuild = \"Blood Boil\"\n\
+             [bis.Demonmaster.slots]\nweapon = [\"Heart of the Oak@55\"]\nbody = [\"Stealth@17\", \"Enigma@65\"]\nring1 = [\" \"]\n\
+             unknown = [\"x\"]\n\
+             [bis.Demonmaster.merc_slots]\nweapon = [\"Insight@27\"]",
+        )?;
+        // Blank pieces are dropped silently; unknown slots warn.
+        assert_eq!(
+            warnings,
+            vec![
+                "bis Demonmaster: unknown slot \"unknown\" ignored (known: amulet, ring1, ring2, body, helm, gloves, boots, belt, weapon, offhand, swap)".to_owned(),
+            ],
+            "{warnings:?}"
+        );
+        let Some(bis) = config.bis_for_player("DEMONmaster") else {
+            return Err(anyhow!("no bis entry"));
+        };
+        assert_eq!(bis.build, "Blood Boil");
+        assert_eq!(
+            bis.slots.get("weapon").map(Vec::as_slice),
+            Some(&["Heart of the Oak@55".to_owned()][..])
+        );
+        assert!(!bis.slots.contains_key("ring1"), "blank pieces are dropped");
+        assert!(bis.merc.is_none());
+        assert_eq!(
+            bis.merc_slots.get("weapon").map(Vec::as_slice),
+            Some(&["Insight@27".to_owned()][..])
+        );
+        assert!(config.bis_for_player("other").is_none());
+        // No build name or no slots at all: ignored with a warning.
+        let (_, warnings) = parse("[bis.X]\nbuild = \"b\"\n[bis.X.slots]\nhelm = [\" \"]")?;
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
         Ok(())
     }
 

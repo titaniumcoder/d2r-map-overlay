@@ -978,6 +978,18 @@ fn keep_lines(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> Vec<(Strin
         info::keep_lines(f, &snap.inventory_keep, max_width),
         info::spare_lines(f, info::SELL_PREFIX, &snap.sell, max_width),
         info::spare_lines(f, info::GIVE_PREFIX, &snap.give_away, max_width),
+        // The BiS chase list (user request, 2026-11-17) last: much further down than the other
+        // text, under the keep/sell/give-away lines.
+        snap.player.bis.as_ref().map_or_else(Vec::new, |bis| {
+            info::bis_lines(
+                bis,
+                snap.player.char_level,
+                &snap.equipped,
+                &snap.merc_equipped,
+                f,
+                max_width,
+            )
+        }),
     )
 }
 
@@ -1669,8 +1681,11 @@ mod tests {
                 char_level: None,
                 speed: None,
                 build: vec![],
+                bis: None,
             },
             party: vec![],
+            equipped: vec![],
+            merc_equipped: vec![],
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
             level: Level {

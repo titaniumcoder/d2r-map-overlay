@@ -59,9 +59,13 @@ pub const GIVE_PREFIX: &str = "Give away: ";
 /// The level-suggestion line(s) between the info line and the keep lines: light blue.
 const LEVEL_TEXT: [u8; 4] = [120, 210, 255, 255];
 /// The breakpoint/gear/runeword guide lines (user request, 2026-11-17): light violet.
-const GUIDE_TEXT: [u8; 4] = [200, 130, 255, 255];
+pub const GUIDE_TEXT: [u8; 4] = [200, 130, 255, 255];
+/// The `BiS` chase list ([`bis_lines`]): light gold.
+pub const BIS_TEXT: [u8; 4] = [255, 210, 120, 255];
 /// Most level-suggestion lines.
 const MAX_LEVEL_LINES: usize = 2;
+/// Most `BiS` chase lines per section (per-slot lines; hard truncation beyond it).
+const MAX_BIS_LINES: usize = 12;
 /// From this character level on no areas are suggested (everywhere is fine).
 pub const SUGGEST_UNTIL: u8 = 75;
 /// The suggested areas' monster level is at most this many above the character level (the top of
@@ -218,6 +222,147 @@ pub fn level_suggestions(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<
     areas
 }
 
+/// The `BiS` per-slot chase lines (user request, 2026-11-17): one line per configured slot —
+/// `helm: Mang Song's Lesson (82)` — in the user's slot order, only pieces relevant for the
+/// character's level (required level ≤ character level + 5), and skipping slots where the
+/// equipped piece is already set/unique quality (presumed the current `BiS`). The mercenary's
+/// slots follow under `BiS <merc>`. At most [`MAX_BIS_LINES`] per section.
+pub fn bis_lines(
+    bis: &crate::config::Bis,
+    char_level: Option<u8>,
+    equipped: &[(u8, u32)],
+    merc_equipped: &[(u8, u32)],
+    font: &FontVec,
+    max_width: f32,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let lvl = u32::from(char_level.unwrap_or(0));
+    for slot in crate::config::SLOT_NAMES {
+        let Some(pieces) = bis.slots.get(slot) else {
+            continue;
+        };
+        // Already better: a set/unique equipped in that slot is presumed the current BiS.
+        if let Some(body) = slot_body(slot)
+            && equipped.iter().any(|&(b, q)| b == body && (q == 5 || q == 7))
+        {
+            continue;
+        }
+        // Only pieces relevant for the current level (req ≤ level + 5); the highest-level one
+        // is the current chase target, so a slot graduates from Stealth to Enigma.
+        let Some((piece, req)) = pieces
+            .iter()
+            .filter_map(|p| piece_level(p).map(|l| (p, l)))
+            .filter(|&(_, l)| l <= lvl + 5)
+            .max_by_key(|&(_, l)| l)
+        else {
+            continue;
+        };
+        if out.len() < MAX_BIS_LINES {
+            out.push(format!(
+                "{slot}: {} ({req})",
+                piece.split('@').next().unwrap_or(piece)
+            ));
+        }
+    }
+    if let Some(merc) = bis.merc.as_ref().filter(|_| !bis.merc_slots.is_empty())
+        && out.len() < MAX_BIS_LINES
+    {
+        out.push(format!("BiS {merc}"));
+    }
+    for slot in crate::config::SLOT_NAMES {
+        let Some(pieces) = bis.merc_slots.get(slot) else {
+            continue;
+        };
+        if let Some(body) = slot_body(slot)
+            && merc_equipped
+                .iter()
+                .any(|&(b, q)| b == body && (q == 5 || q == 7))
+        {
+            continue;
+        }
+        let Some((piece, req)) = pieces
+            .iter()
+            .filter_map(|p| piece_level(p).map(|l| (p, l)))
+            .filter(|&(_, l)| l <= lvl + 5)
+            .max_by_key(|&(_, l)| l)
+        else {
+            continue;
+        };
+        if out.len() < MAX_BIS_LINES {
+            out.push(format!(
+                "merc {slot}: {} ({req})",
+                piece.split('@').next().unwrap_or(piece)
+            ));
+        }
+    }
+    wrap_plain(out, font, max_width)
+}
+
+/// The required character level of a `BiS` piece: the `@level` config suffix, else the known
+/// runeword levels; `None` when unknown (the piece then always shows).
+fn piece_level(piece: &str) -> Option<u32> {
+    if let Some(at) = piece.rfind('@')
+        && let Ok(n) = piece[at + 1..].parse::<u32>()
+    {
+        return Some(n);
+    }
+    let name = piece.split('@').next().unwrap_or(piece);
+    RUNEWORD_LEVELS
+        .iter()
+        .find(|(w, _)| name.eq_ignore_ascii_case(w))
+        .map(|&(_, l)| l)
+}
+
+/// Body slot ids for the `BiS` slot names ([`crate::game`] equip locations).
+fn slot_body(slot: &str) -> Option<u8> {
+    match slot {
+        "helm" => Some(1),
+        "amulet" => Some(2),
+        "body" => Some(3),
+        "weapon" | "swap" => Some(4),
+        "offhand" => Some(5),
+        "ring1" => Some(6),
+        "ring2" => Some(7),
+        "belt" => Some(8),
+        "boots" => Some(9),
+        "gloves" => Some(10),
+        _ => None,
+    }
+}
+
+/// The known runeword required character levels (classic tables); named uniques carry their
+/// level in the config's `@level` suffix instead.
+const RUNEWORD_LEVELS: [(&str, u32); 20] = [
+    ("Steel", 13),
+    ("Stealth", 17),
+    ("Leaf", 19),
+    ("Ancient's Pledge", 21),
+    ("Zephyr", 21),
+    ("Spirit", 25),
+    ("Strength", 25),
+    ("Insight", 27),
+    ("Lore", 27),
+    ("Honor", 27),
+    ("Smoke", 37),
+    ("Bulwark", 35),
+    ("Treachery", 43),
+    ("Harlequin Crest", 42),
+    ("Andariel's Visage", 66),
+    ("Heart of the Oak", 55),
+    ("Infinity", 63),
+    ("Fortitude", 59),
+    ("Enigma", 65),
+    ("Mang Song's Lesson", 82),
+];
+
+/// Wraps each `lines` entry to `max_width` px ([`fit_plain`]); over-long lines are truncated.
+fn wrap_plain(lines: Vec<String>, font: &FontVec, max_width: f32) -> Vec<String> {
+    lines
+        .into_iter()
+        .map(|line| fit_plain(font, &line, max_width))
+        .collect()
+}
+
 /// The level suggestions as lines of at most `max_width` px in `font`:
 /// `Level 34 → Halls of Death's Calling (34), Halls of Anguish (33)`, at most
 /// [`MAX_LEVEL_LINES`] (the last then ends in `+N more`). Empty without suggestions.
@@ -309,6 +454,7 @@ pub fn stack(
     keep: Vec<String>,
     sell: Vec<String>,
     give: Vec<String>,
+    bis: Vec<String>,
 ) -> Vec<(String, [u8; 4])> {
     let mut rows = Vec::new();
     for (lines, colour) in [
@@ -317,6 +463,7 @@ pub fn stack(
         (keep, KEEP_TEXT),
         (sell, SELL_TEXT),
         (give, GIVE_TEXT),
+        (bis, BIS_TEXT),
     ] {
         if lines.is_empty() {
             continue;
@@ -910,6 +1057,13 @@ mod tests {
             l("Keep: k"),
             l("Sell: s"),
             vec!["Give away: g".into(), "h".into()],
+            vec![],
+        );
+        // The BiS block is last: the guide sits at the top, the chase list far below.
+        assert_eq!(
+            stack(l("g"), vec![], vec![], vec![], vec![], vec![]).len(),
+            2,
+            "guide: gap + line"
         );
         let want: Vec<(String, [u8; 4])> = vec![
             (String::new(), LEVEL_TEXT),
@@ -924,11 +1078,16 @@ mod tests {
         ];
         assert_eq!(rows, want);
         assert_eq!(
-            stack(vec![], vec![], vec![], vec![], l("Give away: g")),
+            stack(vec![], vec![], vec![], vec![], l("Give away: g"), vec![]),
             vec![(String::new(), GIVE_TEXT), ("Give away: g".to_owned(), GIVE_TEXT)],
             "a gap below the info line even for the only block"
         );
-        assert_eq!(stack(vec![], vec![], vec![], vec![], vec![]), vec![]);
+        assert_eq!(stack(vec![], vec![], vec![], vec![], vec![], vec![]), vec![]);
+        // The BiS block comes last with its own colour.
+        assert_eq!(
+            stack(vec![], vec![], vec![], vec![], vec![], l("BiS b → x")).len(),
+            2
+        );
     }
 
     #[test]

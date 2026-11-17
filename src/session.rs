@@ -607,8 +607,11 @@ mod tests {
                 char_level: None,
                 speed: None,
                 build: vec![],
+                bis: None,
             },
             party: vec![],
+            equipped: vec![],
+            merc_equipped: vec![],
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
             level: Level {

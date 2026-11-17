@@ -174,6 +174,7 @@ fn follow_game(
                     .builds
                     .for_player(&snap.player.name, snap.player.class)
                     .to_vec();
+                snap.player.bis = config.bis_for_player(&snap.player.name).cloned();
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }

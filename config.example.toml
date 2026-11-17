@@ -34,3 +34,12 @@ normal_only = ["stamina"]
 # paladin, barbarian, druid, assassin) or its id 0..6.
 # druid = ["physical"]
 # necromancer = ["physical"]
+
+# [bis.<character>]: the build name and the best-in-slot gear to chase for that character
+# (user request, 2026-11-17). Shown as a light-gold "BiS <build> → …" line under the guide.
+# Item names are free text (runewords, uniques, whatever you are chasing); trim + empty-item
+# warnings apply. Example from the Blood Boil Warlock guide:
+#
+# [bis.Demonmaster]
+# build = "Blood Boil"
+# gear = ["Spirit", "Stealth", "Insight", "Enigma", "Heart of the Oak", "Mang Song's Lesson"]

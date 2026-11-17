@@ -167,6 +167,7 @@ mod tests {
                 res_poison: 5,
             }),
             build: Vec::new(),
+            bis: None,
         }
     }
 
