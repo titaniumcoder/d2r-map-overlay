@@ -59,8 +59,12 @@ const LEVEL_TEXT: [u8; 4] = [120, 210, 255, 255];
 const MAX_LEVEL_LINES: usize = 2;
 /// From this character level on no areas are suggested (everywhere is fine).
 pub const SUGGEST_UNTIL: u8 = 75;
-/// The suggested areas' monster level is this many above the character level.
+/// The suggested areas' monster level is at most this many above the character level (the top of
+/// the band, and what the suggestions are ranked towards).
 const SUGGEST_BONUS: u8 = 2;
+/// The suggested areas' monster level is at least this many below the character level (monsters
+/// more than this many levels below give heavily penalized experience).
+const SUGGEST_FLOOR: u8 = 5;
 /// Most suggested areas.
 const MAX_SUGGESTIONS: usize = 2;
 /// Town level ids: never suggested.
@@ -167,27 +171,34 @@ pub fn info_line(
 }
 
 /// Areas to level in for a character of `char_level` in `difficulty`: up to [`MAX_SUGGESTIONS`]
-/// areas (name, monster level) whose monster level is the character level +
-/// [`SUGGEST_BONUS`], in level-id order; if none matches exactly, the nearest ones (a monster
-/// level above the target wins a tie). Towns, special levels and areas without monster levels are
-/// never suggested. Empty for an unknown level or difficulty, and from level [`SUGGEST_UNTIL`] on.
+/// areas (name, monster level) whose monster level is in the realistic range — at most
+/// [`SUGGEST_BONUS`] above and at most [`SUGGEST_FLOOR`] below the character level — ranked by
+/// closeness to the character level + [`SUGGEST_BONUS`], ties in level-id order; if none is in the
+/// range, the nearest ones (a monster level above the target wins a tie). Towns, special levels
+/// and areas without monster levels are never suggested. Empty for an unknown level or
+/// difficulty, and from level [`SUGGEST_UNTIL`] on.
 pub fn level_suggestions(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<(&'static str, u8)> {
     let (Some(lvl), Some(d)) = (char_level.filter(|&l| l < SUGGEST_UNTIL), difficulty) else {
         return Vec::new();
     };
     let target = lvl + SUGGEST_BONUS;
+    let floor = lvl.saturating_sub(SUGGEST_FLOOR);
     let mut areas: Vec<(&'static str, u8)> = LEVELS
         .iter()
         .filter(|&&(id, _, _)| !TOWNS.contains(&id) && id < FIRST_SPECIAL_LEVEL)
         .filter_map(|&(_, name, lvls)| Some((name, *lvls.get(usize::from(d))?)))
         .filter(|&(_, mlvl)| mlvl > 0)
         .collect();
-    if areas.iter().any(|&(_, mlvl)| mlvl == target) {
-        areas.retain(|&(_, mlvl)| mlvl == target);
-    } else {
-        // Stable sort: equally near areas stay in level-id order.
-        areas.sort_by_key(|&(_, mlvl)| (mlvl.abs_diff(target), mlvl < target));
+    let in_range: Vec<(&'static str, u8)> = areas
+        .iter()
+        .copied()
+        .filter(|&(_, mlvl)| floor <= mlvl && mlvl <= target)
+        .collect();
+    if !in_range.is_empty() {
+        areas = in_range;
     }
+    // Stable sort: equally near areas stay in level-id order.
+    areas.sort_by_key(|&(_, mlvl)| (mlvl.abs_diff(target), mlvl < target));
     areas.truncate(MAX_SUGGESTIONS);
     areas
 }
@@ -849,24 +860,27 @@ mod tests {
             level_suggestions(Some(1), Some(0)),
             vec![("Burial Grounds", 3), ("Crypt", 3)]
         );
-        // A single exact match stays alone (no nearest one added).
+        // Normal 34: the band is 29–36; mlvl 36 ranks first, then the next nearest (no mlvl 35
+        // areas).
         assert_eq!(
             level_suggestions(Some(34), Some(0)),
-            vec![("Halls of Vaught", 36)]
+            vec![("Halls of Vaught", 36), ("Halls of Death's Calling", 34)]
         );
     }
 
     #[test]
-    fn level_suggestions_nearest_prefers_above() {
-        // Normal 33 → 35: none; 36 (above) before 34 (below), both 1 away.
+    fn level_suggestions_band_caps_above() {
+        // Normal 33: the band is 28–35; the mlvl 36 areas are 3 above and no longer suggested;
+        // 34 and 33 are the nearest inside it.
         assert_eq!(
             level_suggestions(Some(33), Some(0)),
-            vec![("Halls of Vaught", 36), ("Halls of Death's Calling", 34)]
+            vec![("Halls of Death's Calling", 34), ("Halls of Anguish", 33)]
         );
-        // Normal 18 → 20: none; the mlvl 21 areas in id order beat 18 (2 below).
+        // Normal 18: the band is 13–20; the mlvl 21 areas are 3 above and no longer suggested;
+        // mlvl 20 has no areas, so the nearest inside it are 18 and 17.
         assert_eq!(
             level_suggestions(Some(18), Some(0)),
-            vec![("Spider Forest", 21), ("Great Marsh", 21)]
+            vec![("Valley of Snakes", 18), ("Lost City", 17)]
         );
     }
 
