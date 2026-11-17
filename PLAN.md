@@ -342,7 +342,7 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   matches Coral Heavy Gloves of Frost, "Russet Heavy Boots of Haste" needs both) in the current stage's
   character or merc slots (outgrown pieces skipped) → bold ▲ with the slot, and an upgrade entry of kind
   `shop` (key `shop:<slot>:<piece>`, so it chimes once per build piece). Required level above clvl → faded.
-- [ ] Vendor panel: implemented 2026-11-18; tick after a live shop shows the decoded names.
+- [x] Vendor panel: implemented 2026-11-18; verified live the same day on Fara (A2): ~65 store items decoded to sensible magic names ("Bronze Double Axe of Maiming", "Helm of the Jackal", "Shimmering Large Shield of Deflecting"), store affix words sit at the same offsets as owned items.
 
 ## Build definitions and BiS selection (2026-11-17)
 - **Agent-authored build files**: `~/.config/d2r-map-overlay/builds/<slug>.toml`, one build per file
