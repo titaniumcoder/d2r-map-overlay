@@ -226,7 +226,7 @@ pub fn level_suggestions(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<
 /// `helm: Mang Song's Lesson (82)` — in the user's slot order, only pieces relevant for the
 /// character's level (required level ≤ character level + 5), and skipping slots where the
 /// equipped piece is already set/unique quality (presumed the current `BiS`). The mercenary's
-/// slots follow under `BiS <merc>`. At most [`MAX_BIS_LINES`] per section.
+/// slots follow prefixed `merc`. At most [`MAX_BIS_LINES`] per section.
 pub fn bis_lines(
     bis: &crate::config::Bis,
     char_level: Option<u8>,
@@ -263,11 +263,6 @@ pub fn bis_lines(
                 piece.split('@').next().unwrap_or(piece)
             ));
         }
-    }
-    if let Some(merc) = bis.merc.as_ref().filter(|_| !bis.merc_slots.is_empty())
-        && out.len() < MAX_BIS_LINES
-    {
-        out.push(format!("BiS {merc}"));
     }
     for slot in crate::config::SLOT_NAMES {
         let Some(pieces) = bis.merc_slots.get(slot) else {

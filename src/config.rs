@@ -82,8 +82,6 @@ pub struct Config {
 pub struct Bis {
     /// The build's display name (e.g. "Blood Boil").
     pub build: String,
-    /// The mercenary's label (e.g. "Act 2 Combat (Prayer)"), if the guide has merc gear.
-    pub merc: Option<String>,
     /// Slot name → pieces in chase order (`"Name@<required level>"`; the guide shows the
     /// highest-level one the character can currently use, so a slot can graduate from Spirit
     /// to Enigma as the character levels).
@@ -195,14 +193,13 @@ struct RawConfig {
     bis: BTreeMap<String, RawBis>,
 }
 
-/// `[bis.<name>]` as written: `build`, optional `merc` label, and the per-slot pieces
+/// `[bis.<name>]` as written: `build` and the per-slot pieces
 /// (`slots` for the character, `merc_slots` for the mercenary). A piece is `"Name"` or
 /// `"Name@<required level>"` (the level makes the piece filterable by character level).
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawBis {
     build: String,
-    merc: String,
     slots: BTreeMap<String, Vec<String>>,
     merc_slots: BTreeMap<String, Vec<String>>,
 }
@@ -361,7 +358,6 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), toml::de::Error> {
             name.to_lowercase(),
             Bis {
                 build: raw.build.trim().to_owned(),
-                merc: (!raw.merc.trim().is_empty()).then(|| raw.merc.trim().to_owned()),
                 slots,
                 merc_slots,
             },
@@ -530,7 +526,6 @@ mod tests {
             Some(&["Heart of the Oak@55".to_owned()][..])
         );
         assert!(!bis.slots.contains_key("ring1"), "blank pieces are dropped");
-        assert!(bis.merc.is_none());
         assert_eq!(
             bis.merc_slots.get("weapon").map(Vec::as_slice),
             Some(&["Insight@27".to_owned()][..])
