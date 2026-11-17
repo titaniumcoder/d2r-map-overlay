@@ -2048,10 +2048,10 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .rc.runeword { border-left-color: var(--rune); } .rc.craft { border-left-color: #e08a3c; }
 .rc.cube { border-left-color: var(--magic); } .rc.socket { border-left-color: var(--gold); }
 .rc.ready { box-shadow: inset 0 0 0 1px rgba(111,220,111,.35); }
-.rc-h { display: flex; gap: 8px; align-items: baseline; }
-.rc-h .nm { font-weight: 650; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rc-h { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
+.rc-h .nm { font-weight: 650; flex: 1 1 14em; min-width: 0; overflow-wrap: break-word; }
 .rc.runeword .rc-h .nm { color: var(--rune); }
-.rc-h .lv { font-size: 11px; color: var(--dim); text-align: right; }
+.rc-h .lv { font-size: 11px; color: var(--dim); flex: 0 1 auto; margin-left: auto; text-align: right; }
 .ins { margin: 6px 0 4px; padding: 0; list-style: none; font-size: 12.5px; }
 .ins li { display: flex; flex-wrap: wrap; gap: 0 6px; padding: 1px 0; }
 .ins .mk { min-width: 30px; font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
