@@ -31,6 +31,7 @@ mod session;
 mod testutil;
 mod valuables;
 mod weapons_data;
+mod web;
 
 use std::thread;
 

@@ -10,7 +10,7 @@ use std::io;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use smithay_client_toolkit::reexports::calloop::channel::Sender;
 
@@ -55,11 +55,19 @@ pub fn run(
     mut journal: Journal,
     config: &config::Config,
 ) {
+    // The companion web page: edits config.toml in a browser (user request, 2026-11-17).
+    thread::spawn(crate::web::serve);
+    let config_path = config::default_path();
+    let mut config_modified = config_path.as_ref().and_then(|p| modified_at(p));
     let cache = offset_cache::default_path();
     // The last open error printed: a repeat isn't printed again, a different one is.
     let mut open_err = String::new();
     let mut waiting_logged = false;
+    let mut config = config.clone();
     loop {
+        // Hot-reload while no game is attached (webapp edits, hand edits); during a session
+        // `follow_game` reloads on its own tick loop.
+        check_reload(&mut config, config_path.as_deref(), &mut config_modified);
         let Ok(pid) = process::find_d2r_pid() else {
             if !waiting_logged {
                 eprintln!("waiting for D2R to start");
@@ -87,13 +95,70 @@ pub fn run(
         eprintln!("attached to D2R (pid {pid})");
         waiting_logged = false;
         let follow = find_table(pid, &mem, cache.as_deref()).map_or(Ok(()), |table| {
-            follow_game(tx, pid, &mem, table, player, size, &mut journal, config)
+            follow_game(
+                tx,
+                pid,
+                &mem,
+                table,
+                player,
+                size,
+                &mut journal,
+                &mut config,
+                config_path.as_deref(),
+            )
         });
+        // `follow_game` may have reloaded on its own: resync so the next outer check doesn't
+        // reload the same file twice.
+        config_modified = config_path.as_ref().and_then(|p| modified_at(p));
         // The process is gone (or never got a table): hide until the next one is in a game.
         if follow.and_then(|()| send(tx, Msg::Hide)).is_err() {
             return;
         }
         eprintln!("D2R (pid {pid}) exited");
+    }
+}
+
+/// The file's last modification time, if readable.
+fn modified_at(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// Hot-reloads `config` when the file at `config_path` changed on disk (webapp edits, hand
+/// edits). A failed reload (unreadable, invalid TOML) logs and keeps the current config, so a
+/// half-written or broken file can never blank the overlay's settings; the mtime is still
+/// recorded, so the error is logged once per change, not once per tick.
+fn check_reload(
+    config: &mut config::Config,
+    config_path: Option<&std::path::Path>,
+    config_modified: &mut Option<SystemTime>,
+) {
+    let Some(path) = config_path else { return };
+    let Some(modified) = modified_at(path) else { return };
+    if *config_modified == Some(modified) {
+        return;
+    }
+    *config_modified = Some(modified);
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("config {}: {e}; keeping the current one", path.display());
+            return;
+        }
+    };
+    match config::parse(&text) {
+        Ok((loaded, warnings)) => {
+            for w in warnings {
+                eprintln!("config {}: {w}", path.display());
+            }
+            eprintln!("config reloaded from {}", path.display());
+            *config = loaded;
+        }
+        Err(e) => {
+            eprintln!(
+                "config {}: invalid, keeping the current one:\n{e}",
+                path.display()
+            );
+        }
     }
 }
 
@@ -143,8 +208,10 @@ fn follow_game(
     player: Option<&str>,
     (w, h): (u32, u32),
     journal: &mut Journal,
-    config: &config::Config,
+    config: &mut config::Config,
+    config_path: Option<&Path>,
 ) -> Result<(), UiGone> {
+    let mut config_modified = config_path.and_then(modified_at);
     let mut session = Session::default();
     let state_path = game_file::default_path();
     if let Some(state) = state_path.as_deref().and_then(game_file::load) {
@@ -156,6 +223,9 @@ fn follow_game(
     let mut items_table = ItemsTable::NotSearched;
     loop {
         let start = Instant::now();
+        // Hot-reload here, not only in `run`: this loop is where every consumer (valuables,
+        // shrines, builds, bis) reads `config`, and it only returns when D2R exits.
+        check_reload(config, config_path, &mut config_modified);
         // The previous player id (or game.json's on a restart) keeps the choice sticky.
         match game::snapshot(mem, table, items_table.base(), player, session.player_id()) {
             Ok(mut snap) => {
