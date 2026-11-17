@@ -89,6 +89,11 @@ fn current_gear() -> GearInfo {
     gear_cell().read().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
+/// The pages' icon (served at `/favicon.ico`; the pages inline the same SVG, percent-encoded,
+/// as a data URI): a gold isometric diamond — the overlay's level map — on the dashboard's
+/// dark panel colour, with the player as a red-orange dot. Simple shapes, so it reads at 16 px.
+const FAVICON_SVG: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='#1a1815'/><path d='M16 4 28 16 16 28 4 16Z' fill='#2b2721' stroke='#c8a85a' stroke-width='3' stroke-linejoin='round'/><circle cx='16' cy='16' r='4' fill='#ff6b3d'/></svg>";
+
 /// The answer of `GET /api/live` while no game is attached (or between games).
 const NO_LIVE_JSON: &str = "{\"live\": false}";
 
@@ -244,6 +249,7 @@ fn handle(stream: TcpStream) {
         Parsed::TooLarge => respond("413 Content Too Large", "text/plain", "request body too large\n"),
         Parsed::Request(method, path, body) => match (method.as_str(), path.as_str()) {
             ("GET", "/" | "/index.html" | "/dashboard" | "/config") => html_page(&path),
+            ("GET", "/favicon.ico") => respond("200 OK", "image/svg+xml", FAVICON_SVG),
             ("GET", "/api/config") => api_config(),
             ("GET", "/api/builds") => api_builds(),
             ("GET", "/api/live") => api_live(),
@@ -435,7 +441,7 @@ fn api_builds() -> String {
 fn config_json(config: &crate::config::Config, gear: &GearInfo) -> serde_json::Value {
     let damages = |name: &str| {
         config
-            .damages_for_player(name, None)
+            .damages_for_player(name, None, None)
             .iter()
             .map(|d| d.name())
             .collect::<Vec<_>>()
@@ -443,11 +449,13 @@ fn config_json(config: &crate::config::Config, gear: &GearInfo) -> serde_json::V
     // The resolved `BiS` view plus the selection as written (the slug the page's select
     // sets back; `resolved_bis` reports the display name, not the slug).
     let bis_named = |name: &str| {
-        let resolved = config.resolved_bis(name).unwrap_or_else(|| crate::config::Bis {
-            build: String::new(),
-            slots: BTreeMap::new(),
-            merc_slots: BTreeMap::new(),
-        });
+        let resolved = config
+            .resolved_bis(name, None, None)
+            .unwrap_or_else(|| crate::config::Bis {
+                build: String::new(),
+                slots: BTreeMap::new(),
+                merc_slots: BTreeMap::new(),
+            });
         let build = config.bis.get(name).map_or(String::new(), |b| b.build.clone());
         Some((
             build,
@@ -593,6 +601,13 @@ pub struct LiveInfo<'a> {
     pub stash_owned: &'a [String],
     /// The character's skill allocation, shown as the class's three skill trees.
     pub skills: &'a crate::game::Skills,
+    /// The character's guide stage ([`crate::config::Config::stage`]; `None` without a
+    /// build): the stage strip, and `build` is its build.
+    pub stage: Option<crate::config::Stage<'a>>,
+    /// Runes and gems held outside the shared materials tab ([`crate::game::Snapshot`]).
+    pub held_materials: &'a [(String, u32)],
+    /// White socketed bases the character holds ([`crate::stash::white_bases`]).
+    pub white_bases: &'a [String],
     /// Unix seconds of the tick that produced this data.
     pub updated_at: u64,
 }
@@ -646,9 +661,460 @@ pub fn live_json(info: &LiveInfo) -> String {
         "stash_pages": stash_pages(info.stash),
         "stash_materials": stash_materials(info.stash),
         "stash_owned": info.stash_owned,
-        "skills": skills_json(info.class, info.char_level, info.skills),
+        "skills": skills_json(
+            info.class,
+            info.char_level,
+            info.skills,
+            info.build.map_or(&[][..], |b| b.skill_plan.as_slice()),
+        ),
+        "stage": stage_json(info.stage.as_ref()),
+        "recipes": recipes_json(info),
+        "upgrades": upgrades_json(info),
     })
     .to_string()
+}
+
+/// The guide stage (`live_json`'s `stage` section): `{ "slug", "name", "class_default",
+/// "next": { "slug", "name", "level", "auto", "note" } | null }`, `null` without a build.
+fn stage_json(stage: Option<&crate::config::Stage>) -> serde_json::Value {
+    let Some(stage) = stage else {
+        return serde_json::Value::Null;
+    };
+    let next = stage.next.map(|(slug, next)| {
+        serde_json::json!({
+            "slug": slug,
+            "name": next.name,
+            "level": stage.build.switch_level,
+            "auto": stage.build.auto_switch,
+            "note": stage.build.switch_note,
+        })
+    });
+    serde_json::json!({
+        "slug": stage.slug,
+        "name": stage.build.name,
+        "class_default": stage.class_default,
+        "next": next,
+    })
+}
+
+/// Gem grade prefixes (chipped … perfect; the normal grade has none) and colours, for
+/// reading recipe inputs.
+const GEM_GRADES: [&str; 4] = ["chipped", "flawed", "flawless", "perfect"];
+const GEM_COLOURS: [&str; 7] = [
+    "amethyst", "topaz", "sapphire", "emerald", "ruby", "diamond", "skull",
+];
+
+/// One recipe input line, read: a material the reader counts (rune or gem, by its
+/// [`crate::stash::material_name`] name), any gem of one grade, or a base item the reader
+/// can't check (free text).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Input {
+    Material { name: String, need: u32 },
+    AnyGem { grade: String, need: u32 },
+    Base,
+}
+
+impl Input {
+    /// Reads `"Tal"`, `"3 Tal Rune"`, `"1-2 Ral Rune"`, `"Ort Rune x2"`, `"1 Chipped Topaz"`,
+    /// `"1 Chipped Gem (any)"`; everything else is a [`Input::Base`]. A count range takes its
+    /// minimum.
+    fn parse(text: &str) -> Self {
+        let text = text.trim();
+        let mut need = 1;
+        let mut rest = text;
+        if let Some((count, after)) = text.split_once(' ') {
+            let low = count.split_once('-').map_or(count, |(low, _)| low);
+            if let Ok(n) = low.parse::<u32>() {
+                need = n;
+                rest = after.trim();
+            }
+        }
+        if let Some((before, times)) = rest.rsplit_once(" x")
+            && let Ok(n) = times.trim().parse::<u32>()
+        {
+            need = need.saturating_mul(n);
+            rest = before.trim();
+        }
+        let lower = rest.to_lowercase();
+        let bare = lower
+            .strip_suffix(" runes")
+            .or_else(|| lower.strip_suffix(" rune"))
+            .unwrap_or(&lower);
+        if let Some(rune) = crate::stash::RUNE_NAMES
+            .iter()
+            .find(|r| r.eq_ignore_ascii_case(bare))
+        {
+            return Self::Material {
+                name: format!("{rune} Rune"),
+                need,
+            };
+        }
+        let words: Vec<&str> = lower.split_whitespace().collect();
+        match words.as_slice() {
+            [grade, colour] if GEM_GRADES.contains(grade) && GEM_COLOURS.contains(colour) => Self::Material {
+                name: title_case(&lower),
+                need,
+            },
+            [colour] if GEM_COLOURS.contains(colour) => Self::Material {
+                name: title_case(&lower),
+                need,
+            },
+            [grade, "gem" | "gems", ..] if GEM_GRADES.contains(grade) => Self::AnyGem {
+                grade: (*grade).to_owned(),
+                need,
+            },
+            _ => Self::Base,
+        }
+    }
+
+    /// How many of this input the character has, from the merged material counts; `None`
+    /// for a base item.
+    fn have(&self, materials: &[(String, u32)]) -> Option<u32> {
+        match self {
+            Self::Material { name, .. } => Some(
+                materials
+                    .iter()
+                    .filter(|(n, _)| n.eq_ignore_ascii_case(name))
+                    .map(|(_, q)| q)
+                    .sum(),
+            ),
+            Self::AnyGem { grade, .. } => Some(
+                materials
+                    .iter()
+                    .filter(|(n, _)| {
+                        let n = n.to_lowercase();
+                        n.split_once(' ')
+                            .is_some_and(|(g, colour)| g == grade && GEM_COLOURS.contains(&colour))
+                    })
+                    .map(|(_, q)| q)
+                    .sum(),
+            ),
+            Self::Base => None,
+        }
+    }
+
+    /// The material key and count this input needs (`None` for a base item).
+    fn need(&self) -> Option<(String, u32)> {
+        match self {
+            Self::Material { name, need } => Some((name.to_lowercase(), *need)),
+            Self::AnyGem { grade, need } => Some((format!("{grade} gem"), *need)),
+            Self::Base => None,
+        }
+    }
+}
+
+/// `"chipped topaz"` → `"Chipped Topaz"`.
+fn title_case(text: &str) -> String {
+    text.split_whitespace()
+        .map(|w| {
+            let mut chars = w.chars();
+            chars
+                .next()
+                .map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The runes and gems the character has: the shared materials tab's stacks plus the ones
+/// held in inventory, cube and stash pages, `(name, count)` merged by name.
+fn owned_materials(info: &LiveInfo) -> Vec<(String, u32)> {
+    let mut out: Vec<(String, u32)> = info.held_materials.to_vec();
+    let stacks = info
+        .stash
+        .iter()
+        .filter(|t| t.kind == crate::stash::TabKind::Materials)
+        .flat_map(|t| &t.items);
+    for item in stacks {
+        let qty = item.quantity.unwrap_or(1);
+        match out.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(&item.name)) {
+            Some((_, count)) => *count = count.saturating_add(qty),
+            None => out.push((item.name.clone(), qty)),
+        }
+    }
+    out
+}
+
+/// The socket count a base input names (`"with exactly 2 sockets"`, `"2-socket helm"`).
+fn socket_count(text: &str) -> Option<u8> {
+    let lower = text.to_lowercase();
+    lower.match_indices("socket").find_map(|(at, _)| {
+        let before = lower.get(..at)?.trim_end_matches([' ', '-']);
+        before
+            .chars()
+            .last()?
+            .to_digit(10)
+            .and_then(|d| u8::try_from(d).ok())
+    })
+}
+
+/// The white bases (`"Hard Leather Armor 2os"`) a base input line names by base name, with
+/// the socket count it asks for when it names one: a cheap "you probably have it" hint.
+fn matching_bases<'a>(text: &str, bases: &'a [String]) -> Vec<&'a str> {
+    let lower = text.to_lowercase();
+    let sockets = socket_count(text);
+    bases
+        .iter()
+        .filter(|b| {
+            let Some((name, os)) = b.rsplit_once(' ') else {
+                return false;
+            };
+            let name = name.strip_prefix("eth ").unwrap_or(name).to_lowercase();
+            let has = os.strip_suffix("os").and_then(|n| n.parse::<u8>().ok());
+            lower.contains(&name) && sockets.is_none_or(|want| has == Some(want))
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+/// The current stage's recipes (`live_json`'s `recipes` section; an `upgrade` recipe that
+/// makes a rune or gem — `material` — only when another recipe still misses it), each
+/// `{ "name", "kind", "material",
+/// "result", "req", "notes", "inputs": [...] }` with every input as `{ "text", "status",
+/// "have", "need", "hint" }`: `status` is `"have"`/`"missing"` for a rune or gem (counted over
+/// all of the recipe's lines naming it, against [`owned_materials`]), `"likely"` for a base
+/// line naming a white socketed base the character holds (`hint` lists them), else
+/// `"check"` (a base the reader can't verify).
+fn recipes_json(info: &LiveInfo) -> Vec<serde_json::Value> {
+    let Some(build) = info.build else {
+        return Vec::new();
+    };
+    let materials = owned_materials(info);
+    // The runes and gems the other recipes still miss: an `upgrade` recipe (3 Ral → Ort,
+    // gem upgrades) is shown only when its result is one of them (coordinator request,
+    // 2026-11-17: the tornado guide lists ~60 of them).
+    let missing: Vec<String> = build
+        .recipes
+        .iter()
+        .filter(|r| r.kind != "upgrade")
+        .flat_map(|r| {
+            let inputs: Vec<Input> = r.inputs.iter().map(|t| Input::parse(t)).collect();
+            need_totals(&inputs)
+                .into_iter()
+                .filter(|(key, need)| {
+                    inputs
+                        .iter()
+                        .find(|i| i.need().is_some_and(|(k, _)| k == *key))
+                        .and_then(|i| i.have(&materials))
+                        .is_some_and(|have| have < *need)
+                })
+                .map(|(key, _)| key)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    build
+        .recipes
+        .iter()
+        .filter(|recipe| {
+            let makes = Input::parse(&recipe.result).need();
+            recipe.kind != "upgrade" || makes.is_none_or(|(key, _)| missing.contains(&key))
+        })
+        .map(|recipe| {
+            let inputs: Vec<Input> = recipe.inputs.iter().map(|t| Input::parse(t)).collect();
+            let totals = need_totals(&inputs);
+            let lines: Vec<serde_json::Value> = recipe
+                .inputs
+                .iter()
+                .zip(&inputs)
+                .map(|(text, input)| {
+                    let have = input.have(&materials);
+                    let need = input
+                        .need()
+                        .and_then(|(key, _)| totals.iter().find(|(k, _)| *k == key))
+                        .map(|(_, n)| *n);
+                    let bases = if have.is_none() {
+                        matching_bases(text, info.white_bases)
+                    } else {
+                        Vec::new()
+                    };
+                    let status = match (have, need) {
+                        (Some(have), Some(need)) if have >= need => "have",
+                        (Some(_), _) => "missing",
+                        (None, _) if !bases.is_empty() => "likely",
+                        (None, _) => "check",
+                    };
+                    serde_json::json!({
+                        "text": text,
+                        "status": status,
+                        "have": have,
+                        "need": need,
+                        "hint": (!bases.is_empty()).then(|| bases.join(", ")),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "name": recipe.name,
+                "kind": recipe.kind,
+                "material": Input::parse(&recipe.result).need().is_some(),
+                "result": recipe.result,
+                "req": recipe.req,
+                "notes": recipe.notes,
+                "inputs": lines,
+            })
+        })
+        .collect()
+}
+
+/// The material keys a recipe's inputs need, summed over its lines (a runeword naming one
+/// rune twice needs two).
+fn need_totals(inputs: &[Input]) -> Vec<(String, u32)> {
+    let mut totals: Vec<(String, u32)> = Vec::new();
+    for (key, n) in inputs.iter().filter_map(Input::need) {
+        match totals.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, total)) => *total = total.saturating_add(n),
+            None => totals.push((key, n)),
+        }
+    }
+    totals
+}
+
+/// The `ItemData::BODY` slots a build slot's equipped piece sits in (the merged ring column
+/// reads both rings).
+fn slot_bodies(slot: &str) -> &'static [u8] {
+    match slot {
+        "helm" => &[1],
+        "amulet" => &[2],
+        "body" => &[3],
+        "weapon" | "swap" => &[4],
+        "offhand" => &[5],
+        "ring1" | "ring2" => &[6, 7],
+        "belt" => &[8],
+        "boots" => &[9],
+        "gloves" => &[10],
+        _ => &[],
+    }
+}
+
+/// The comparison base of the equipped piece(s) in `bodies`: the strongest one's required
+/// level (two rings compare against the higher one), `None` when nothing comparable is
+/// equipped.
+fn equipped_level(bodies: &[u8], info: &LiveInfo) -> Option<u32> {
+    bodies
+        .iter()
+        .filter_map(|&body| info.equipped_items.iter().find(|e| e.body == body))
+        .filter_map(crate::game::Equipped::required_level)
+        .max()
+}
+
+/// A build piece's grid state against the equipped comparison level and the character
+/// level `lvl` (see [`grid_pieces`] for the states).
+fn piece_state(req: Option<u32>, equipped_level: Option<u32>, lvl: u32) -> &'static str {
+    match req {
+        Some(req) if equipped_level.is_some_and(|eq| req <= eq) => "worse",
+        Some(req) if req > lvl + 5 => "too_high",
+        _ => "better",
+    }
+}
+
+/// The upgrades the character can make right now (`live_json`'s `upgrades` section), each
+/// `{ "key", "kind", "slot", "name", "why" }`; the page chimes when a new `key` appears:
+/// - `"equip"`: a current-stage piece of a character slot that is owned (✓ or ✓ stash),
+///   wearable (required level ≤ character level), "better" in its slot ([`piece_state`]) and
+///   not equipped already — the best such piece per slot;
+/// - `"craft"`: a current-stage runeword recipe whose runes are all owned, whose piece is
+///   wearable and "better" in its slot.
+///
+/// The mercenary's slots are left out: its equipped items are not read, so every owned
+/// piece would always count as better.
+fn upgrades_json(info: &LiveInfo) -> Vec<serde_json::Value> {
+    let (Some(bis), Some(lvl)) = (info.bis, info.char_level) else {
+        return Vec::new();
+    };
+    let lvl = u32::from(lvl);
+    let mut out = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for slot in crate::config::SLOT_NAMES {
+        // The swap set is unread (its column mirrors the active weapon), so a swap piece
+        // would be compared against the main weapon: no equip upgrades for it (review).
+        if slot == "swap" {
+            continue;
+        }
+        let Some(pieces) = bis.slots.get(slot) else {
+            continue;
+        };
+        let column = if slot.starts_with("ring") { "ring" } else { slot };
+        let eq_level = equipped_level(slot_bodies(slot), info);
+        let found = pieces.iter().find_map(|piece| {
+            let name = crate::info::piece_name(piece);
+            let req = crate::info::piece_level(piece)?;
+            let tick = crate::info::piece_tick(piece, info.owned, info.stash_owned)?;
+            let worn = info
+                .equipped_items
+                .iter()
+                .any(|e| e.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name)));
+            (req <= lvl && !worn && piece_state(Some(req), eq_level, lvl) == "better").then(|| {
+                let place = match tick {
+                    crate::info::Tick::Owned => "you have it",
+                    crate::info::Tick::Stash => "in the shared stash",
+                };
+                let versus = eq_level.map_or_else(String::new, |eq| format!(" (equipped: lvl {eq})"));
+                (name, format!("{place} · lvl {req}{versus}"))
+            })
+        });
+        if let Some((name, why)) = found {
+            let key = format!("equip:{column}:{name}");
+            if !seen.contains(&key) {
+                seen.push(key.clone());
+                out.push(serde_json::json!({
+                    "key": key, "kind": "equip", "slot": column, "name": name, "why": why,
+                }));
+            }
+        }
+    }
+    let materials = owned_materials(info);
+    for recipe in info.build.map_or(&[][..], |b| b.recipes.as_slice()) {
+        if recipe.kind != "runeword" {
+            continue;
+        }
+        let slot_piece = crate::config::SLOT_NAMES.iter().find_map(|slot| {
+            bis.slots.get(*slot)?.iter().find_map(|p| {
+                crate::info::piece_name(p)
+                    .eq_ignore_ascii_case(recipe.name.trim())
+                    .then_some((*slot, p))
+            })
+        });
+        let Some((slot, piece)) = slot_piece else {
+            continue;
+        };
+        let req = crate::info::piece_level(piece);
+        let inputs: Vec<Input> = recipe.inputs.iter().map(|t| Input::parse(t)).collect();
+        let runes_owned = need_totals(&inputs).iter().all(|(key, need)| {
+            inputs
+                .iter()
+                .find(|i| i.need().is_some_and(|(k, _)| k == *key))
+                .and_then(|i| i.have(&materials))
+                .is_some_and(|have| have >= *need)
+        });
+        let has_runes = inputs.iter().any(|i| matches!(i, Input::Material { .. }));
+        let column = if slot.starts_with("ring") { "ring" } else { slot };
+        if has_runes
+            && runes_owned
+            && req.is_some_and(|r| r <= lvl)
+            && piece_state(req, equipped_level(slot_bodies(slot), info), lvl) == "better"
+        {
+            let base = recipe
+                .inputs
+                .iter()
+                .zip(&inputs)
+                .filter(|(_, i)| **i == Input::Base)
+                .map(|(t, _)| t.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            let why = if base.is_empty() {
+                "all runes owned".to_owned()
+            } else {
+                format!("all runes owned · base: {base}")
+            };
+            out.push(serde_json::json!({
+                "key": format!("craft:{column}:{}", recipe.name),
+                "kind": "craft",
+                "slot": column,
+                "name": recipe.name,
+                "why": why,
+            }));
+        }
+    }
+    out
 }
 
 /// The skill trees (`live_json`'s `skills` section): `{ "total", "left", "right", "trees":
@@ -659,7 +1125,12 @@ pub fn live_json(info: &LiveInfo) -> String {
 /// "row", "col", "req", "points", "locked", "left", "right" }`: its grid place, required level,
 /// hard points, whether the required level is above the character's, and whether it is on a
 /// mouse button.
-fn skills_json(class: u32, char_level: Option<u8>, skills: &crate::game::Skills) -> serde_json::Value {
+fn skills_json(
+    class: u32,
+    char_level: Option<u8>,
+    skills: &crate::game::Skills,
+    plan: &[crate::config::SkillTarget],
+) -> serde_json::Value {
     use crate::skills_data;
     let trees = usize::try_from(class)
         .ok()
@@ -690,7 +1161,7 @@ fn skills_json(class: u32, char_level: Option<u8>, skills: &crate::game::Skills)
             let spent: u32 = on_page.clone().map(|s| u32::from(points(s.id))).sum();
             let list: Vec<serde_json::Value> = on_page
                 .map(|s| {
-                    serde_json::json!({
+                    let mut json = serde_json::json!({
                         "id": s.id,
                         "name": s.name,
                         "row": s.row,
@@ -700,19 +1171,90 @@ fn skills_json(class: u32, char_level: Option<u8>, skills: &crate::game::Skills)
                         "locked": char_level.is_some_and(|l| s.req_level > l),
                         "left": skills.left == Some(s.id),
                         "right": skills.right == Some(s.id),
-                    })
+                    });
+                    if let (false, Some(level), Some(obj)) =
+                        (plan.is_empty(), char_level, json.as_object_mut())
+                    {
+                        let (target, mark) = plan_mark(plan, s.name, level, points(s.id));
+                        obj.insert("target".to_owned(), serde_json::json!(target));
+                        obj.insert(
+                            "final".to_owned(),
+                            serde_json::json!(plan_target(plan, s.name, u8::MAX)),
+                        );
+                        obj.insert("plan".to_owned(), serde_json::json!(mark));
+                    }
+                    json
                 })
                 .collect();
             serde_json::json!({ "name": name, "points": spent, "skills": list })
         })
         .collect();
     let total: u32 = skills.points.iter().map(|(_, p)| u32::from(*p)).sum();
+    let by_name = |name: &str| {
+        skills_data::SKILLS
+            .iter()
+            .find(|s| u32::from(s.class) == class && s.name.eq_ignore_ascii_case(name.trim()))
+            .map_or(0, |s| points(s.id))
+    };
+    let next = char_level
+        .and_then(|level| next_point(plan, level, by_name))
+        .map(|t| serde_json::json!({ "skill": t.skill, "target": t.points, "by_level": t.by_level, "note": t.note }));
     serde_json::json!({
         "total": total,
         "left": button(skills.left),
         "right": button(skills.right),
         "trees": trees,
+        "plan": !plan.is_empty(),
+        "next": next,
     })
+}
+
+/// The skill plan's target for `skill` at character level `level`: the highest cumulative
+/// target among its entries due by then (0 when none is).
+fn plan_target(plan: &[crate::config::SkillTarget], skill: &str, level: u8) -> u8 {
+    plan.iter()
+        .filter(|t| t.by_level <= level && t.skill.trim().eq_ignore_ascii_case(skill))
+        .map(|t| t.points)
+        .max()
+        .unwrap_or(0)
+}
+
+/// A skill's target at `level` and how its hard `points` compare: `"under"` below the target,
+/// `"over"` above anything the plan ever puts there (wasted points), `"ahead"` above the
+/// current target but within the plan (an early quest point), `None` on target.
+fn plan_mark(
+    plan: &[crate::config::SkillTarget],
+    skill: &str,
+    level: u8,
+    points: u8,
+) -> (u8, Option<&'static str>) {
+    let target = plan_target(plan, skill, level);
+    let most = plan_target(plan, skill, u8::MAX);
+    let mark = if points < target {
+        Some("under")
+    } else if points > most {
+        Some("over")
+    } else if points > target {
+        Some("ahead")
+    } else {
+        None
+    };
+    (target, mark)
+}
+
+/// Where the next skill point goes: the first plan entry, in order, that is due at `level`
+/// and not reached yet (`points_of` gives a skill's hard points by name); when every due
+/// entry is reached, the first upcoming entry not reached yet.
+fn next_point(
+    plan: &[crate::config::SkillTarget],
+    level: u8,
+    points_of: impl Fn(&str) -> u8,
+) -> Option<&crate::config::SkillTarget> {
+    let open = |t: &&crate::config::SkillTarget| points_of(&t.skill) < t.points;
+    plan.iter()
+        .filter(|t| t.by_level <= level)
+        .find(open)
+        .or_else(|| plan.iter().filter(|t| t.by_level > level).find(open))
 }
 
 /// The normal shared-stash pages as `[{ "page": n, "items": [{ "text", "colour" }] }]`, UI
@@ -896,9 +1438,29 @@ fn gear_json(info: &LiveInfo) -> serde_json::Value {
         "columns": columns,
         "build": info.bis.map(|b| b.build.as_str()),
         "targets": info.build.map_or(&[][..], |b| b.targets.as_slice()),
+        "stats_plan": info.build.map_or(&[][..], |b| b.stats_plan.as_slice()),
+        "tips": tips_json(info),
         "merc": merc,
         "extras": extras,
     })
+}
+
+/// The current stage's tips for the character level, as `{ "levels", "text" }` (all of them
+/// while the level is unknown).
+fn tips_json(info: &LiveInfo) -> Vec<serde_json::Value> {
+    info.build
+        .map_or(&[][..], |b| b.tips.as_slice())
+        .iter()
+        .filter(|t| info.char_level.is_none_or(|l| (t.from..=t.to).contains(&l)))
+        .map(|t| {
+            let levels = if t.from == t.to {
+                t.from.to_string()
+            } else {
+                format!("{}-{}", t.from, t.to)
+            };
+            serde_json::json!({ "levels": levels, "text": t.text })
+        })
+        .collect()
 }
 
 /// One gear-grid column: the equipped header piece(s) for `bodies`, the build's `pieces`
@@ -919,7 +1481,7 @@ fn grid_column(
     // The column's comparison base: the strongest equipped piece's requirement. Two rings
     // with different levels compare against the higher one (a piece better than one ring
     // but worse than the other is still worth listing as better).
-    let equipped_level = header.iter().filter_map(|e| e.required_level()).max();
+    let equipped_level = equipped_level(bodies, info);
     // The off-hand is unusable while a two-handed weapon is equipped (weapons.txt
     // `2handed`, looked up by the weapon's item code).
     let note = (title == "Off-Hand")
@@ -960,11 +1522,7 @@ fn grid_pieces(pieces: &[String], equipped_level: Option<u32>, info: &LiveInfo) 
         .iter()
         .map(|piece| {
             let req = crate::info::piece_level(piece);
-            let state = match req {
-                Some(req) if equipped_level.is_some_and(|eq| req <= eq) => "worse",
-                Some(req) if req > lvl + 5 => "too_high",
-                _ => "better",
-            };
+            let state = piece_state(req, equipped_level, lvl);
             let mut json = serde_json::json!({
                 "piece": piece,
                 "name": crate::info::piece_name(piece),
@@ -1166,6 +1724,7 @@ fn api_bis(body: &str) -> String {
 const fn config_page() -> &'static str {
     r#"<!doctype html>
 <html><head><meta charset="utf-8"><title>d2r-map-overlay config</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%231a1815'/%3E%3Cpath%20d='M16%204%2028%2016%2016%2028%204%2016Z'%20fill='%232b2721'%20stroke='%23c8a85a'%20stroke-width='3'%20stroke-linejoin='round'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='4'%20fill='%23ff6b3d'/%3E%3C/svg%3E">
 <style>
 body { font-family: sans-serif; background: #1a1a1a; color: #ddd; margin: 2em; }
 input, select { background: #2a2a2a; color: #eee; border: 1px solid #555; padding: 4px; }
@@ -1261,6 +1820,7 @@ const DASHBOARD_HEAD: &str = r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>D2R Dashboard</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%231a1815'/%3E%3Cpath%20d='M16%204%2028%2016%2016%2028%204%2016Z'%20fill='%232b2721'%20stroke='%23c8a85a'%20stroke-width='3'%20stroke-linejoin='round'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='4'%20fill='%23ff6b3d'/%3E%3C/svg%3E">
 <style>
 :root {
   --bg: #0f0e0c; --panel: #1a1815; --panel2: #221f1b; --line: #3a342c; --line2: #2b2721;
@@ -1390,6 +1950,52 @@ details.help summary { cursor: pointer; color: var(--faint); }
   font-variant-numeric: tabular-nums; }
 .sk .mb { position: absolute; bottom: 3px; right: 5px; font-size: 10px; font-weight: 700; color: var(--accent); letter-spacing: .06em; }
 
+/* Guide: upgrades banner, stage strip, tips, skill targets, recipes */
+.bell { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; color: var(--faint);
+  font-size: 13px; line-height: 1; padding: 4px 9px; cursor: pointer; filter: grayscale(1); opacity: .6; }
+.bell.on { color: var(--gold); border-color: var(--gold); filter: none; opacity: 1; }
+.upbar { background: rgba(111,220,111,.08); border-bottom: 1px solid rgba(111,220,111,.35); }
+.upbar .wrap { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; padding: 8px 16px; }
+.upbar .t { color: var(--good); font-weight: 650; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.up { background: var(--panel2); border: 1px solid rgba(111,220,111,.35); border-radius: 6px; padding: 3px 9px; font-size: 13px; }
+.up .k { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--good); margin-right: 4px; }
+.up.craft .k { color: var(--rune); }
+.up .sl { color: var(--dim); font-size: 11.5px; } .up .why { color: var(--faint); font-size: 11.5px; }
+.stage { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin: 0 0 12px; padding: 8px 12px;
+  background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); font-size: 13px; }
+.stage .lbl { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+.stage b { color: var(--gold); } .stage .cond { color: var(--dim); } .stage .arrow { color: var(--faint); }
+.tips { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel2); }
+.tips h3 { margin: 0 0 4px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+.tips ul { margin: 0; padding-left: 18px; font-size: 12.5px; } .tips li { margin: 2px 0; }
+.targets.stats li { background: rgba(122,140,255,.07); border-color: rgba(122,140,255,.3); }
+.sk .tg { display: block; font-size: 10.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.sk.under { opacity: 1; border-color: rgba(212,154,58,.8); } .sk.under .tg { color: var(--accent); font-weight: 650; }
+.sk.over { border-color: var(--bad); } .sk.over .tg { color: var(--bad); font-weight: 650; }
+.sk.ahead .tg { color: var(--faint); }
+.sk.planned { opacity: .9; border-style: dashed; border-color: rgba(200,168,90,.55); }
+.sk.planned .nm { color: var(--text); }
+.chip.next { border-color: var(--accent); color: var(--accent); }
+.rcs { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.rc { background: var(--panel2); border: 1px solid var(--line2); border-left: 3px solid var(--line); border-radius: 0 6px 6px 0; padding: 8px 10px; min-width: 0; }
+.rc.runeword { border-left-color: var(--rune); } .rc.craft { border-left-color: #e08a3c; }
+.rc.cube { border-left-color: var(--magic); } .rc.socket { border-left-color: var(--gold); }
+.rc.ready { box-shadow: inset 0 0 0 1px rgba(111,220,111,.35); }
+.rc-h { display: flex; gap: 8px; align-items: baseline; }
+.rc-h .nm { font-weight: 650; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rc.runeword .rc-h .nm { color: var(--rune); }
+.rc-h .lv { font-size: 11px; color: var(--dim); text-align: right; }
+.ins { margin: 6px 0 4px; padding: 0; list-style: none; font-size: 12.5px; }
+.ins li { display: flex; flex-wrap: wrap; gap: 0 6px; padding: 1px 0; }
+.ins .mk { min-width: 30px; font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ins .have .mk, .ins .likely .mk { color: var(--good); } .ins .missing .mk { color: var(--bad); }
+.ins .check .mk { color: var(--faint); font-weight: 400; }
+.ins .tx { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ins .hint { flex-basis: 100%; padding-left: 36px; font-size: 11px; color: var(--good); }
+.rc .res { font-size: 12px; color: #b9c4ff; overflow-wrap: anywhere; }
+.rc .note { font-size: 11px; color: var(--faint); margin-top: 3px; }
+details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer; font-size: 12px; color: var(--dim); margin-bottom: 8px; }
+
 @media (max-width: 1200px) { .gear { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 900px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
@@ -1402,20 +2008,27 @@ details.help summary { cursor: pointer; color: var(--faint); }
   <div class="who" id="who"><span class="waiting">waiting for game…</span></div>
   <div class="chips" id="guide"></div>
   <div class="meta"><span id="updated"></span> · <a href="/config">config</a></div>
+  <button type="button" class="bell" id="bell" aria-pressed="false" title="upgrade chime off (click to enable)">🔔</button>
 </div></div>
+<div class="upbar" id="upgrades" hidden></div>
 <div class="wrap">
+<div class="stage" id="stage" hidden></div>
 <section class="panel full"><h2>Gear <span class="sub" id="buildname"></span></h2>
 <details class="help"><summary>How to read this</summary>
 Each card is a slot. The dashed box shows what is equipped (name and required level), and below it are the build's pieces, best first.
 ▲ / green outline = an upgrade you can wear now, faded = above the level gate (character level + 5), struck through = already beaten by what you wear.
 ✓ = owned, ✓ stash = in the shared stash. A runeword the reader can't decode shows as “runeword (unnamed)”. The Swap card mirrors the active weapon set.
 </details>
+<div id="tips"></div>
 <ul class="targets" id="targets"></ul>
+<ul class="targets stats" id="statsplan"></ul>
 <div class="gear" id="gear"></div>
 <div id="mercbox"><h3 class="row-h">Mercenary · charms · sockets</h3>
 <div class="gear" id="merc"></div><div class="gear extras" id="extras"></div></div></section>
 <section class="panel full" id="skillpanel"><h2>Skills <span class="sub" id="skillsum"></span></h2>
 <div id="skills"></div></section>
+<section class="panel full" id="recipepanel" hidden><h2>Recipes <span class="sub">✓ = you have it (shared stash, inventory, cube, stash) · bases can't be read: check them</span></h2>
+<div id="recipes"></div></section>
 <div class="grid">
 <section class="panel"><h2>Where to go <span class="sub">monster level around yours</span></h2><div id="levels"></div></section>
 <section class="panel"><h2>Shared stash</h2><div id="stash"></div></section>
@@ -1503,6 +2116,10 @@ function gear(g) {
   g = g || {};
   $("buildname").textContent = g.build || "";
   $("targets").innerHTML = (g.targets || []).map(t => `<li>${esc(t)}</li>`).join("");
+  $("statsplan").innerHTML = (g.stats_plan || []).map(t => `<li>stats ${esc(t)}</li>`).join("");
+  const tips = g.tips || [];
+  $("tips").innerHTML = tips.length
+    ? `<div class="tips"><h3>Guide tips for your level</h3><ul>${tips.map(t => `<li>${esc(t.text)}</li>`).join("")}</ul></div>` : "";
   $("gear").innerHTML = (g.columns || []).map(col => {
     const eq = (col.equipped || []).map(e => {
       const unknown = !e.name || e.name === "(unknown)";
@@ -1538,18 +2155,28 @@ function stash(r) {
 // row/column grid. Allocated skills are gold with their hard points as a badge, the mouse-button
 // skills carry an L / R mark, unspent ones are dim and the ones above the character level dimmer.
 function skillTrees(s) {
-  $("skillsum").textContent = s ? `${s.total} point${s.total === 1 ? "" : "s"} spent · without +skills from gear` : "";
+  $("skillsum").textContent = s ? `${s.total} point${s.total === 1 ? "" : "s"} spent · without +skills from gear`
+    + (s.plan ? " · badges: yours / guide now → guide final" : "") : "";
   if (!s) { $("skills").innerHTML = '<div class="empty">skill list not read yet</div>'; return; }
   const btn = (b, label) => b ? `<span class="chip"><b>${label}</b>${esc(b.name)}</span>` : "";
-  const buttons = btn(s.left, "left") + btn(s.right, "right");
+  const next = s.next
+    ? `<span class="chip next" title="${esc(s.next.note || "")}"><b>next point</b>→ ${esc(s.next.skill)} (guide ${esc(s.next.target)} by lvl ${esc(s.next.by_level)})</span>`
+    : s.plan ? '<span class="chip"><b>guide</b>skills on plan</span>' : "";
+  const buttons = btn(s.left, "left") + btn(s.right, "right") + next;
   const trees = (s.trees || []).map(t => {
     const cells = (t.skills || []).map(k => {
-      const cls = ["sk", k.points ? "on" : k.locked ? "locked" : "", k.left || k.right ? "btn" : ""].join(" ");
+      let cls = ["sk", k.points ? "on" : k.locked ? "locked" : "", k.left || k.right ? "btn" : "", k.plan || ""].join(" ");
+      // The stage's recommendation: actual / target now → final target; a recommended skill
+      // without points yet gets a dashed "planned" outline, the rest of the tree stays dim.
+      const recommended = k.final != null && k.final > 0;
+      if (recommended && !k.points) cls += " planned";
+      const tg = recommended || (k.final != null && k.points)
+        ? `<span class="tg" title="hard points / guide now → guide final">${esc(k.points)} / ${esc(k.target)} → ${esc(k.final)}${k.plan ? " · " + esc(k.plan) : ""}</span>` : "";
       const badge = k.points ? `<span class="pt">${esc(k.points)}</span>` : "";
       const mark = (k.left ? "L" : "") + (k.right ? "R" : "");
       const place = `grid-row:${Number(k.row) || "auto"};grid-column:${Number(k.col) || "auto"}`;
       return `<div class="${cls}" style="${place}" title="${esc(k.name)}">${badge}<span class="nm">${esc(k.name)}</span>`
-        + `<span class="rq">lvl ${esc(k.req)}</span>${mark ? `<span class="mb">${mark}</span>` : ""}</div>`;
+        + `<span class="rq">lvl ${esc(k.req)}</span>${tg}${mark ? `<span class="mb">${mark}</span>` : ""}</div>`;
     }).join("");
     return `<div class="tree"><h3><span>${esc(t.name)}</span><span class="pts">${esc(t.points)}</span></h3><div class="tgrid">${cells}</div></div>`;
   }).join("");
@@ -1560,11 +2187,122 @@ function sell(r) {
   $("sell").innerHTML = all.map(e => `<div class="line" style="color:${col(e.colour)}">${esc(e.text)}</div>`).join("")
     || '<div class="empty">nothing to sell or keep right now</div>';
 }
+// The guide stage strip: current stage, the next one and how it starts.
+function stage(st) {
+  const el = $("stage");
+  el.hidden = !st;
+  if (!st) { el.innerHTML = ""; return; }
+  const via = st.class_default ? ' <span class="badge">class default</span>' : "";
+  let next = "";
+  if (st.next) {
+    const at = st.next.level != null ? `level ${esc(st.next.level)}+` : "when the guide says so";
+    next = `<span class="arrow">→</span> next: <b>${esc(st.next.name)}</b> <span class="cond">`
+      + (st.next.auto ? `starts automatically at level ${esc(st.next.level)}`
+        : `guide: ${esc(st.next.note || at)} → switch on <a href="/config">/config</a>`) + "</span>";
+  }
+  el.innerHTML = `<span class="lbl">Guide stage</span> <b>${esc(st.name)}</b>${via} ${next}`;
+}
+// Upgrade chime: the bell toggles it (the click is the user gesture browsers need before audio
+// may play); the choice is remembered. A new upgrade key since the last frame chimes once; the
+// first frame after loading only records the keys.
+// Upgrade keys already announced for `seenFor` (the character): keys are only ever added, so
+// a key that vanishes for one flaky tick doesn't chime again; a new character starts silent.
+let soundOn = false, audio = null, seenUpgrades = null, seenFor = null;
+try { soundOn = localStorage.getItem("d2r-chime") === "on"; } catch (e) { /* storage blocked */ }
+function ensureAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!audio && AC) audio = new AC();
+  if (audio && audio.state === "suspended") audio.resume().catch(() => {});
+}
+function chime() {
+  if (!audio) return;
+  const play = () => {
+    const t = audio.currentTime;
+    for (const [f, d] of [[659.25, 0], [987.77, 0.16]]) {
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t + d);
+      g.gain.exponentialRampToValueAtTime(0.12, t + d + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.24);
+      o.connect(g); g.connect(audio.destination);
+      o.start(t + d); o.stop(t + d + 0.26);
+    }
+  };
+  if (audio.state === "running") play(); else audio.resume().then(play).catch(() => {});
+}
+function bellUi() {
+  const b = $("bell");
+  b.classList.toggle("on", soundOn);
+  b.setAttribute("aria-pressed", soundOn ? "true" : "false");
+  b.title = soundOn ? "upgrade chime on (click to mute)" : "upgrade chime off (click to enable)";
+}
+$("bell").addEventListener("click", () => {
+  soundOn = !soundOn;
+  try { localStorage.setItem("d2r-chime", soundOn ? "on" : "off"); } catch (e) { /* storage blocked */ }
+  if (soundOn) { ensureAudio(); chime(); }
+  bellUi();
+});
+// A remembered "on" still needs one gesture on the page before audio may start.
+document.addEventListener("pointerdown", () => { if (soundOn) ensureAudio(); }, true);
+bellUi();
+function upgrades(list, who) {
+  list = list || [];
+  const keys = list.map(u => u.key);
+  if (who !== seenFor) { seenFor = who; seenUpgrades = new Set(keys); }
+  const fresh = keys.filter(k => !seenUpgrades.has(k));
+  if (fresh.length && soundOn) chime();
+  fresh.forEach(k => seenUpgrades.add(k));
+  const el = $("upgrades");
+  el.hidden = !list.length;
+  el.innerHTML = list.length ? `<div class="wrap"><span class="t">Upgrades available</span>` + list.map(u =>
+    `<span class="up ${esc(u.kind)}"><span class="k">${u.kind === "craft" ? "craft" : "equip"}</span>${esc(u.name)} <span class="sl">${esc(u.slot)}</span> <span class="why">· ${esc(u.why)}</span></span>`).join("") + "</div>" : "";
+}
+// The recipes the current stage uses, grouped by kind, one card each. Rune and gem upgrades
+// fold into one group (only the ones making an input another recipe still misses arrive).
+const RECIPE_GROUPS = [["runeword", "Runewords"], ["craft", "Crafting"], ["cube", "Cube"], ["socket", "Sockets and quest services"], ["upgrade", "Upgrades"]];
+let recipeFoldOpen = false;
+document.addEventListener("toggle", e => {
+  const d = e.target;
+  if (d instanceof HTMLDetailsElement && d.classList.contains("rgroup")) recipeFoldOpen = d.open;
+}, true);
+function recipeCard(r) {
+  const ins = (r.inputs || []).map(i => {
+    const mk = i.status === "have" ? "✓" : i.status === "likely" ? "✓?" : i.status === "missing" ? `${esc(i.have)}/${esc(i.need)}` : "check";
+    const hint = i.hint ? `<span class="hint">you have: ${esc(i.hint)}</span>` : "";
+    return `<li class="${esc(i.status)}"><span class="mk">${mk}</span><span class="tx">${esc(i.text)}</span>${hint}</li>`;
+  }).join("");
+  const counted = (r.inputs || []).filter(i => i.status === "have" || i.status === "missing");
+  const ready = counted.length && counted.every(i => i.status === "have");
+  return `<div class="rc ${esc(r.kind)}${ready ? " ready" : ""}"><div class="rc-h"><span class="nm">${esc(r.name)}</span>`
+    + `${r.req ? `<span class="lv">${esc(r.req)}</span>` : ""}</div><ul class="ins">${ins}</ul>`
+    + `${r.result ? `<div class="res">→ ${esc(r.result)}</div>` : ""}${r.notes ? `<div class="note">${esc(r.notes)}</div>` : ""}</div>`;
+}
+function recipes(list) {
+  list = list || [];
+  $("recipepanel").hidden = !list.length;
+  const known = RECIPE_GROUPS.map(g => g[0]);
+  const groups = RECIPE_GROUPS.concat([["", "Other"]]).map(([kind, title]) => {
+    const group = list.filter(r => kind ? r.kind === kind : !known.includes(r.kind));
+    const plain = group.filter(r => !(kind === "upgrade" && r.material));
+    const folded = kind === "upgrade" ? group.filter(r => r.material) : [];
+    let html = plain.length ? `<h3 class="row-h">${title}</h3><div class="rcs">${plain.map(recipeCard).join("")}</div>` : "";
+    if (folded.length) {
+      html += `<details class="rgroup"${recipeFoldOpen ? " open" : ""}><summary>${folded.length} rune / gem upgrade${folded.length > 1 ? "s" : ""} for inputs you still miss</summary>`
+        + `<div class="rcs">${folded.map(recipeCard).join("")}</div></details>`;
+    }
+    return html;
+  });
+  $("recipes").innerHTML = groups.join("");
+}
 // One rendered frame from a live payload (the first-paint fetch and every SSE event).
 function render(r) {
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
-    for (const id of ["guide", "levels", "gear", "merc", "extras", "targets", "stash", "sell", "skills"]) $(id).innerHTML = "";
+    for (const id of ["guide", "levels", "gear", "merc", "extras", "targets", "statsplan", "tips", "stash", "sell", "skills", "recipes"]) $(id).innerHTML = "";
+    $("recipepanel").hidden = true;
+    stage(null);
+    // The upgrade keys stay remembered: coming back from the menu must not chime again.
+    $("upgrades").hidden = true;
     $("skillsum").textContent = "";
     $("updated").textContent = "";
     document.title = "D2R Dashboard (waiting for game)";
@@ -1577,8 +2315,11 @@ function render(r) {
   document.title = `${p.name}${p.level != null ? " L" + p.level : ""} · ${r.area || "?"} — D2R Dashboard`;
   guide(r.guide);
   levels(r.levels);
+  stage(r.stage);
+  upgrades(r.upgrades, p.name);
   gear(r.gear);
   skillTrees(r.skills);
+  recipes(r.recipes);
   stash(r);
   sell(r);
 }
@@ -2120,6 +2861,9 @@ mod tests {
             stash,
             stash_owned,
             skills: &EMPTY_SKILLS,
+            stage: None,
+            held_materials: &[],
+            white_bases: &[],
             updated_at: 1_700_000_000,
         }
     }
@@ -2154,6 +2898,9 @@ mod tests {
             stash: &[],
             stash_owned: &[],
             skills: &EMPTY_SKILLS,
+            stage: None,
+            held_materials: &[],
+            white_bases: &[],
             updated_at: 1_700_000_000,
         };
         gear_json(&info)
@@ -2619,6 +3366,425 @@ mod tests {
         assert_eq!(at("/merc/0/pieces/0/name"), "Insight");
         assert_eq!(at("/extras/0/title"), "charms");
         assert_eq!(at("/extras/0/pieces/0/level"), 70);
+    }
+
+    /// A skill-plan entry.
+    fn target(skill: &str, points: u8, by_level: u8) -> config::SkillTarget {
+        config::SkillTarget {
+            skill: skill.to_owned(),
+            points,
+            by_level,
+            note: String::new(),
+        }
+    }
+
+    #[test]
+    fn skill_plan_targets_marks_and_next_point() -> Result<()> {
+        let plan = [
+            target("Firestorm", 1, 2),
+            target("Firestorm", 2, 3),
+            target("Molten Boulder", 1, 6),
+            target("Firestorm", 3, 8),
+        ];
+        assert_eq!(plan_target(&plan, "Firestorm", 1), 0, "nothing due yet");
+        assert_eq!(plan_target(&plan, "firestorm", 7), 2, "the highest due target");
+        assert_eq!(plan_target(&plan, "Fissure", 99), 0, "not in the plan");
+        assert_eq!(plan_mark(&plan, "Firestorm", 7, 1), (2, Some("under")));
+        assert_eq!(plan_mark(&plan, "Firestorm", 7, 2), (2, None));
+        assert_eq!(
+            plan_mark(&plan, "Firestorm", 7, 3),
+            (2, Some("ahead")),
+            "within the plan"
+        );
+        assert_eq!(
+            plan_mark(&plan, "Firestorm", 7, 4),
+            (2, Some("over")),
+            "beyond the plan"
+        );
+        assert_eq!(plan_mark(&plan, "Fissure", 7, 1), (0, Some("over")));
+        // The next point: the first due entry not reached, in plan order …
+        let points = |fs: u8, mb: u8| {
+            move |name: &str| {
+                if name == "Firestorm" {
+                    fs
+                } else if name == "Molten Boulder" {
+                    mb
+                } else {
+                    0
+                }
+            }
+        };
+        let next =
+            |level, fs, mb| next_point(&plan, level, points(fs, mb)).map(|t| (t.skill.as_str(), t.points));
+        assert_eq!(next(7, 1, 0), Some(("Firestorm", 2)));
+        assert_eq!(next(7, 2, 0), Some(("Molten Boulder", 1)));
+        // … else the first upcoming one; nothing once the plan is done.
+        assert_eq!(next(7, 2, 1), Some(("Firestorm", 3)));
+        assert_eq!(next(9, 3, 1), None);
+        // In the live JSON: the per-skill target and mark, and the hint (a level 7 druid with
+        // Firestorm 1: under, next point Firestorm).
+        let skills = crate::game::Skills {
+            points: vec![(225, 1)],
+            left: None,
+            right: None,
+        };
+        let json = skills_json(5, Some(7), &skills, &plan);
+        let firestorm = (0..3)
+            .filter_map(|t| json.pointer(&format!("/trees/{t}/skills"))?.as_array())
+            .flatten()
+            .find(|k| k.get("name") == Some(&"Firestorm".into()))
+            .cloned()
+            .context("firestorm")?;
+        assert_eq!(firestorm.get("target"), Some(&serde_json::json!(2)));
+        assert_eq!(firestorm.get("plan"), Some(&serde_json::json!("under")));
+        assert_eq!(
+            firestorm.get("final"),
+            Some(&serde_json::json!(3)),
+            "the stage's last target"
+        );
+        assert_eq!(json.pointer("/next/skill"), Some(&serde_json::json!("Firestorm")));
+        // Without a plan: no targets.
+        let json = skills_json(5, Some(7), &skills, &[]);
+        assert!(json.pointer("/trees/0/skills/0/target").is_none());
+        assert_eq!(json.get("next"), Some(&serde_json::Value::Null));
+        Ok(())
+    }
+
+    #[test]
+    fn recipe_inputs_parse() {
+        let material = |name: &str, need| Input::Material {
+            name: name.to_owned(),
+            need,
+        };
+        assert_eq!(Input::parse("Tal"), material("Tal Rune", 1));
+        assert_eq!(Input::parse("3 Tal Rune"), material("Tal Rune", 3));
+        assert_eq!(Input::parse("1-2 Ral Rune"), material("Ral Rune", 1));
+        assert_eq!(Input::parse("Ort Rune x2"), material("Ort Rune", 2));
+        assert_eq!(Input::parse("1 Chipped Topaz"), material("Chipped Topaz", 1));
+        assert_eq!(Input::parse("Perfect skull"), material("Perfect Skull", 1));
+        assert_eq!(
+            Input::parse("1 Chipped Gem (any)"),
+            Input::AnyGem {
+                grade: "chipped".to_owned(),
+                need: 1
+            }
+        );
+        assert_eq!(
+            Input::parse("non-magic Body Armor with exactly 2 sockets"),
+            Input::Base
+        );
+        assert_eq!(Input::parse("Weapon"), Input::Base);
+        assert_eq!(socket_count("non-magic Helm with exactly 2 sockets"), Some(2));
+        assert_eq!(socket_count("3-socket shield"), Some(3));
+        assert_eq!(socket_count("Socketed (2)"), None);
+    }
+
+    /// A leveling build: Stealth (body, 17) and Leaf (weapon, 19) runewords, a Tal → Ral and
+    /// an Ort → Thul upgrade, a cube recipe; one unique per slot for the equip upgrades.
+    fn guide_build() -> config::Build {
+        let recipe = |name: &str, kind: &str, inputs: &[&str], result: &str| config::Recipe {
+            name: name.to_owned(),
+            kind: kind.to_owned(),
+            inputs: inputs.iter().map(|&i| i.to_owned()).collect(),
+            result: result.to_owned(),
+            ..config::Recipe::default()
+        };
+        config::Build {
+            name: "Leveling".to_owned(),
+            slots: [
+                (
+                    "body".to_owned(),
+                    vec!["Stealth@17".to_owned(), "2os Body Armor".to_owned()],
+                ),
+                ("weapon".to_owned(), vec!["Leaf@19".to_owned()]),
+                (
+                    "helm".to_owned(),
+                    vec!["Harlequin Crest@62".to_owned(), "Biggin's Bonnet@3".to_owned()],
+                ),
+                ("ring1".to_owned(), vec!["Nagelring@7".to_owned()]),
+                ("ring2".to_owned(), vec!["Nagelring@7".to_owned()]),
+            ]
+            .into(),
+            recipes: vec![
+                recipe(
+                    "Stealth",
+                    "runeword",
+                    &[
+                        "Tal",
+                        "Eth",
+                        "non-magic Hard Leather Armor with exactly 2 sockets",
+                    ],
+                    "Stealth",
+                ),
+                recipe(
+                    "Leaf",
+                    "runeword",
+                    &["Tir", "Ral", "non-magic Staff with 2 sockets"],
+                    "Leaf",
+                ),
+                recipe("3 Tal -> Ral", "upgrade", &["3 Tal Rune"], "Ral Rune"),
+                recipe("3 Ort -> Thul", "upgrade", &["3 Ort Rune"], "Thul Rune"),
+                recipe("Imbue", "upgrade", &["white Druid Pelt"], "Rare Druid Pelt"),
+                recipe(
+                    "Recharge",
+                    "cube",
+                    &["1 Ort Rune", "1 Chipped Gem (any)", "Weapon"],
+                    "recharged",
+                ),
+            ],
+            ..config::Build::default()
+        }
+    }
+
+    /// The live JSON of a level-`level` character with `build`, the materials tab `stash`,
+    /// `held` materials and `bases`, `owned` names and `equipped_items`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "test fixture builder; each argument is one LiveInfo field"
+    )]
+    fn guide_json(
+        build: &config::Build,
+        level: u8,
+        stash: &[crate::stash::StashTab],
+        held: &[(String, u32)],
+        bases: &[String],
+        owned: &[String],
+        equipped_items: &[crate::game::Equipped],
+    ) -> Result<serde_json::Value> {
+        let bis = config::Bis {
+            build: build.name.clone(),
+            slots: build.slots.clone(),
+            merc_slots: BTreeMap::new(),
+        };
+        let blocks = crate::render::TextBlocks::default();
+        let mut info = live_info(5, &blocks, &[], stash, &[]);
+        info.char_level = Some(level);
+        info.bis = Some(&bis);
+        info.build = Some(build);
+        info.held_materials = held;
+        info.white_bases = bases;
+        info.owned = owned;
+        info.equipped_items = equipped_items;
+        Ok(serde_json::from_str(&live_json(&info))?)
+    }
+
+    /// The materials tab with `stacks` of `(name, code, qty)`.
+    fn materials_tab(stacks: &[(&str, &str, u32)]) -> Vec<crate::stash::StashTab> {
+        vec![crate::stash::StashTab {
+            kind: crate::stash::TabKind::Materials,
+            items: stacks
+                .iter()
+                .map(|&(name, code, qty)| {
+                    stash_item(name, code, crate::offsets::item_data::QUALITY_NORMAL, Some(qty))
+                })
+                .collect(),
+        }]
+    }
+
+    #[test]
+    fn recipes_tick_owned_inputs_and_fold_upgrades() -> Result<()> {
+        let build = guide_build();
+        // Tal in the shared materials tab, Eth and a chipped gem held in the inventory, a
+        // white 2os Hard Leather Armor in the cube.
+        let stash = materials_tab(&[("Tal Rune", "r07", 1), ("Ral Rune", "r08", 1)]);
+        let held = [("Eth Rune".to_owned(), 1), ("Chipped Ruby".to_owned(), 2)];
+        let bases = ["Hard Leather Armor 2os".to_owned()];
+        let json = guide_json(&build, 18, &stash, &held, &bases, &[], &[])?;
+        let recipes = json
+            .get("recipes")
+            .and_then(|r| r.as_array())
+            .context("recipes")?;
+        let names: Vec<&str> = recipes.iter().filter_map(|r| r.get("name")?.as_str()).collect();
+        // Tir is missing for Leaf, but no upgrade makes Tir; Thul is needed nowhere, Ral is
+        // owned: both rune upgrades stay out. The Imbue isn't a rune or gem: always shown.
+        assert_eq!(names, ["Stealth", "Leaf", "Imbue", "Recharge"]);
+        let statuses = |i: usize| -> Vec<String> {
+            recipes
+                .get(i)
+                .and_then(|r| r.get("inputs")?.as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .map(|l| {
+                    l.get("status")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or_default()
+                        .to_owned()
+                })
+                .collect()
+        };
+        assert_eq!(
+            statuses(0),
+            ["have", "have", "likely"],
+            "the 2os Hard Leather Armor hint"
+        );
+        assert_eq!(
+            recipes.first().and_then(|r| r.pointer("/inputs/2/hint")),
+            Some(&serde_json::json!("Hard Leather Armor 2os"))
+        );
+        assert_eq!(statuses(1), ["missing", "have", "check"]);
+        assert_eq!(
+            recipes.get(1).and_then(|r| r.pointer("/inputs/0/have")),
+            Some(&serde_json::json!(0))
+        );
+        assert_eq!(
+            statuses(3),
+            ["missing", "have", "check"],
+            "any chipped gem counts"
+        );
+        assert_eq!(
+            recipes.get(2).and_then(|r| r.get("material")),
+            Some(&serde_json::json!(false))
+        );
+        // With Ral missing too (a two-Ral runeword), Tal → Ral appears, flagged material.
+        let mut two_ral = guide_build();
+        if let Some(leaf) = two_ral.recipes.get_mut(1) {
+            leaf.inputs = vec!["Ral".to_owned(), "Ral".to_owned()];
+        }
+        let json = guide_json(&two_ral, 18, &stash, &held, &bases, &[], &[])?;
+        let leaf = json.pointer("/recipes/1/inputs/0").cloned().unwrap_or_default();
+        assert_eq!(
+            (leaf.get("have"), leaf.get("need")),
+            (Some(&serde_json::json!(1)), Some(&serde_json::json!(2)))
+        );
+        let upgrade = json
+            .get("recipes")
+            .and_then(|r| r.as_array())
+            .and_then(|r| {
+                r.iter().find(|r| {
+                    r.get("kind") == Some(&"upgrade".into()) && r.get("material") == Some(&true.into())
+                })
+            })
+            .and_then(|r| r.get("name").cloned());
+        assert_eq!(upgrade, Some(serde_json::json!("3 Tal -> Ral")));
+        Ok(())
+    }
+
+    #[test]
+    fn upgrades_list_wearable_owned_pieces_and_craftable_runewords() -> Result<()> {
+        let build = guide_build();
+        let keys = |json: &serde_json::Value| -> Vec<String> {
+            json.get("upgrades")
+                .and_then(|u| u.as_array())
+                .map_or_else(Vec::new, |u| {
+                    u.iter()
+                        .filter_map(|x| x.get("key")?.as_str().map(str::to_owned))
+                        .collect()
+                })
+        };
+        // Biggin's Bonnet (helm, 3) and Nagelring (rings, 7) are owned; level 20.
+        let owned = ["Biggin's Bonnet".to_owned(), "Nagelring".to_owned()];
+        let json = guide_json(&build, 20, &[], &[], &[], &owned, &[])?;
+        assert_eq!(
+            keys(&json),
+            ["equip:ring:Nagelring", "equip:helm:Biggin's Bonnet"],
+            "slot order, one ring entry"
+        );
+        // Too low a level to wear Nagelring; Biggin's already equipped: neither.
+        let worn = [crate::game::Equipped {
+            body: 1,
+            quality: crate::offsets::item_data::QUALITY_UNIQUE,
+            code: Some("bhm".to_owned()),
+            name: Some("Biggin's Bonnet".to_owned()),
+            file_index: None,
+            runeword: false,
+        }];
+        let json = guide_json(&build, 6, &[], &[], &[], &owned, &worn)?;
+        assert_eq!(keys(&json), Vec::<String>::new());
+        // An equipped unique of a higher level than the piece (Harlequin Crest, 62) beats it.
+        let json = guide_json(&build, 20, &[], &[], &[], &owned[..1], &[equipped_unique(1)])?;
+        assert_eq!(keys(&json), Vec::<String>::new(), "already beaten: worse");
+        // Craft: Stealth's runes owned at 17+ (the base is not checked); Leaf misses Tir.
+        let stash = materials_tab(&[("Tal Rune", "r07", 1), ("Ral Rune", "r08", 1)]);
+        let held = [("Eth Rune".to_owned(), 1)];
+        let json = guide_json(&build, 17, &stash, &held, &[], &[], &[])?;
+        assert_eq!(keys(&json), ["craft:body:Stealth"]);
+        assert_eq!(
+            json.pointer("/upgrades/0/why").and_then(|w| w.as_str()),
+            Some("all runes owned · base: non-magic Hard Leather Armor with exactly 2 sockets")
+        );
+        // Below the runeword's level: not yet.
+        let json = guide_json(&build, 16, &stash, &held, &[], &[], &[])?;
+        assert_eq!(keys(&json), Vec::<String>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn stage_json_shows_current_and_next() {
+        let leveling = config::Build {
+            name: "Leveling".to_owned(),
+            next: Some("tornado".to_owned()),
+            switch_level: Some(38),
+            auto_switch: false,
+            switch_note: Some("you have Spirit".to_owned()),
+            ..config::Build::default()
+        };
+        let tornado = config::Build {
+            name: "Tornado".to_owned(),
+            ..config::Build::default()
+        };
+        let stage = config::Stage {
+            slug: "leveling",
+            build: &leveling,
+            class_default: true,
+            next: Some(("tornado", &tornado)),
+        };
+        assert_eq!(
+            stage_json(Some(&stage)),
+            serde_json::json!({
+                "slug": "leveling", "name": "Leveling", "class_default": true,
+                "next": { "slug": "tornado", "name": "Tornado", "level": 38, "auto": false, "note": "you have Spirit" },
+            })
+        );
+        let last = config::Build {
+            next: None,
+            ..leveling.clone()
+        };
+        let stage = config::Stage {
+            build: &last,
+            next: None,
+            ..stage
+        };
+        assert_eq!(
+            stage_json(Some(&stage)).get("next"),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(stage_json(None), serde_json::Value::Null);
+    }
+
+    #[test]
+    fn favicon_is_served_and_linked_from_both_pages() -> Result<()> {
+        let page_link = |page: &str| {
+            page.contains("<link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg")
+        };
+        assert!(page_link(DASHBOARD_HEAD), "dashboard links the icon");
+        assert!(page_link(config_page()), "config page links the icon");
+        // The inline copy is the served SVG, percent-encoded.
+        let encoded = FAVICON_SVG
+            .replace('#', "%23")
+            .replace('<', "%3C")
+            .replace('>', "%3E")
+            .replace(' ', "%20");
+        assert!(DASHBOARD_HEAD.contains(&encoded), "same SVG inline and served");
+        // The route: a real request through `handle`.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        let addr = listener.local_addr()?;
+        let server = thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                handle(stream);
+            }
+        });
+        let mut client = std::net::TcpStream::connect(addr)?;
+        client.write_all(b"GET /favicon.ico HTTP/1.1\r\nHost: x\r\n\r\n")?;
+        let mut answer = String::new();
+        client.read_to_string(&mut answer)?;
+        server.join().map_err(|_| anyhow!("server thread panicked"))?;
+        assert!(answer.starts_with("HTTP/1.1 200 OK"), "{answer}");
+        assert!(answer.contains("Content-Type: image/svg+xml"), "{answer}");
+        assert!(
+            answer.ends_with(FAVICON_SVG) && FAVICON_SVG.starts_with("<svg"),
+            "{answer}"
+        );
+        Ok(())
     }
 
     #[test]

@@ -38,7 +38,10 @@ normal_only = ["stamina"]
 # [bis.<character>]: the agent-authored build definition to chase for that character
 # (user request, 2026-11-17). The gear itself lives in `builds/<slug>.toml` next to this file
 # (one build per file, authored by the agent; see `builds/blood-boil.toml`). Resolution order:
-# inline slots (legacy, below) if present, else the selected build's slots, else none.
+# inline slots (legacy, below) if present, else the selected build — or, without a selection, the
+# build marked `default_for_class` for the character's class — at its current guide stage, else none.
+# Stages chain through the build files' `next` (switched here on the config page, or automatically
+# by level where a build sets `auto_switch`).
 #
 # [bis.Demonmaster]
 # build = "blood boil"

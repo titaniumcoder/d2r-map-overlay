@@ -291,9 +291,11 @@ fn follow_game(
                 // else its class's. `BiS`: inline slots when present, else the selected
                 // build's (user decision, 2026-11-17).
                 snap.player.build = config
-                    .damages_for_player(&snap.player.name, Some(snap.player.class))
+                    .damages_for_player(&snap.player.name, Some(snap.player.class), snap.player.char_level)
                     .to_vec();
-                snap.player.bis = config.resolved_bis(&snap.player.name);
+                let (class, level) = (Some(snap.player.class), snap.player.char_level);
+                let stage = config.stage(&snap.player.name, class, level);
+                snap.player.bis = config.resolved_bis(&snap.player.name, class, level);
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }
@@ -330,7 +332,10 @@ fn follow_game(
                         .map_or_else(|| format!("Level {}", snap.level.id), str::to_owned),
                     blocks: &blocks,
                     bis: snap.player.bis.as_ref(),
-                    build: config.selected_build(&snap.player.name),
+                    build: stage.map(|s| s.build),
+                    stage,
+                    held_materials: &snap.held_materials,
+                    white_bases: &snap.white_bases,
                     equipped: &snap.equipped,
                     equipped_items: &snap.equipped_items,
                     owned: &snap.owned_names,

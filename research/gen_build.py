@@ -1,0 +1,498 @@
+"""Turn a researched build guide (JSON, see ~/.config/d2r-map-overlay/builds/*.source.json)
+into an agent-authored build file (builds/<slug>.toml) for the overlay's dashboard.
+
+Usage:
+    python3 -I research/gen_build.py SOURCE.json OUT.toml [--leveling LEVELING.json]
+                                     [--prerequisites NEXT.json]
+
+Deterministic: the same inputs give the same file byte for byte, so it can be re-run whenever
+the research JSON changes. Per-build settings (display name, class, damages, stage chain)
+live in BUILDS below, keyed by the source file's stem (`druid-leveling.source` counts as
+`druid-leveling`).
+
+- `--leveling` (Tornado endgame): the leveling guide's post-respec plan (level 38-75) and its
+  tips for those levels are merged in front of the endgame plan; that guide's respec IS the
+  switch into this stage.
+- `--prerequisites` (the stage before a manual switch): the next stage's `prerequisites`
+  become this stage's `switch_note`.
+
+Skill names are checked against src/skills_data.rs (class skills); mismatches are reported
+on stderr and in the exit summary.
+"""
+
+import json
+import os
+import re
+import sys
+
+# Per-build settings by source stem. `next` is the next stage's slug (lowercased name).
+BUILDS = {
+    "blood-boil": dict(
+        name="Blood Boil", cls="warlock", damages=["physical", "fire"], default=True,
+        header=[
+            "# Source: Maxroll Blood Boil Warlock guide ({url}, {author}, updated {updated})",
+            "# + Maxroll D2Planner profiles; stats from the planner game data. Generated 2026-11-17 from",
+            "# blood-boil.source.json next to this file. Setups: starter (lvl ~75 guide variant), standard",
+            "# (lvl 99 endgame), alternative (Gear Options table / Magic Find variant).",
+        ],
+        notes="Maxroll Blood Boil Warlock S16 (MacroBioBoi): Starter + Standard setups, Gear Options alternatives, Magic Find variant.",
+    ),
+    "druid-leveling": dict(
+        name="Druid Leveling", cls="druid", damages=["fire", "physical"], default=True,
+        next="druid tornado", switch_level=38, auto_switch=False,
+        notes="Maxroll Druid Leveling (Teo1904): Firestorm / Molten Boulder / Fissure to level 38, then respec to Tornado + Hurricane (next stage).",
+    ),
+    "druid-tornado": dict(
+        name="Druid Tornado", cls="druid", damages=["physical", "cold"],
+        next="druid fissure", switch_level=75, auto_switch=False,
+        notes="Maxroll Tornado Hurricane Druid (endgame): Starter + Standard setups, Gear Options alternatives. Levels 38-75 follow the leveling guide's post-respec plan.",
+    ),
+    "druid-fissure": dict(
+        name="Druid Fissure", cls="druid", damages=["fire", "physical"],
+        notes="Maxroll Fissure Druid (endgame): Starter + Standard setups; Magic Find, Ubers and Gear Options items fold as alternatives. Only once the gear is near-perfect.",
+    ),
+}
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CLASS_IDS = {"amazon": 0, "sorceress": 1, "necromancer": 2, "paladin": 3, "barbarian": 4,
+             "druid": 5, "assassin": 6, "warlock": 7}
+SLOTMAP = {"ring": "ring1"}
+EXTRA = {"charm": "charms", "jewel": "jewels", "rune": "runes"}
+ORDER = ["weapon", "offhand", "swap", "helm", "body", "gloves", "belt", "boots", "amulet", "ring1"]
+MAX_POINTS = 20
+# Known guide-text errors, fixed deterministically (build, level, skill) -> skill.
+FIXES = {
+    # The leveling guide says Firestorm at 27, which would push Firestorm to 21 (over the max);
+    # the planner's skillProgression for that stage has Fissure there (see the entry's note).
+    ("druid-leveling", "27", "Firestorm"): "Fissure",
+}
+
+problems = []
+
+
+def q(s):
+    return json.dumps(s, ensure_ascii=False)
+
+
+def class_skills(cls):
+    """Skill names of class `cls` from the generated src/skills_data.rs."""
+    text = open(os.path.join(HERE, "..", "src", "skills_data.rs"), encoding="utf-8").read()
+    names = set()
+    for m in re.finditer(r'name: "([^"]+)",\s*class: (\d+),', text):
+        if int(m.group(2)) == CLASS_IDS[cls]:
+            names.add(m.group(1))
+    return names
+
+
+def clean_skill(name):
+    """'Oak Sage (max last)' -> 'Oak Sage'."""
+    return re.sub(r"\s*\(.*?\)\s*$", "", name).strip()
+
+
+# ---------------------------------------------------------------- skill plan
+LEVEL_RE = re.compile(r"^~?(\d+)(?:\s*-\s*~?(\d+))?")
+
+
+def level_range(text):
+    m = LEVEL_RE.match(str(text).strip())
+    if not m:
+        return None
+    a = int(m.group(1))
+    return a, int(m.group(2) or a)
+
+
+def allocations(entry, current):
+    """The single-point allocations (skill names, in order) of one guide entry."""
+    skill, points = entry["skill"], entry["points"]
+    if isinstance(points, int):
+        return [skill] * points
+    p = str(points).strip()
+    if p == "max":
+        return [skill] * (MAX_POINTS - current.get(skill, 0))
+    if p == "1 each":
+        return [s.strip() for s in skill.split(",")]
+    # "Tornado max (+5), Hurricane +5": alternate the parts.
+    parts = []
+    for part in p.split(","):
+        m = re.match(r"\s*(.+?)\s+(?:max\s*)?\(?\+(\d+)\)?\s*$", part)
+        if not m:
+            problems.append(f"skill plan: unreadable points {p!r} for {skill!r}")
+            return []
+        parts.append([m.group(1).strip()] * int(m.group(2)))
+    out = []
+    while any(parts):
+        for lst in parts:
+            if lst:
+                out.append(lst.pop())
+    return out
+
+
+def expand_plan(entries, build, known, current=None):
+    """Guide deltas -> cumulative per-level targets: [(skill, points, by_level, note)].
+    Quest entries take the next numbered entry's start level (approximate)."""
+    current = dict(current or {})
+    ranges = [level_range(e["level"]) for e in entries]
+    out = []  # [skill, points, level, note]
+    for i, e in enumerate(entries):
+        e = dict(e)
+        e["skill"] = FIXES.get((build, str(e["level"]), e["skill"]), e["skill"])
+        rng = ranges[i]
+        note = ""
+        if rng is None:
+            nxt = next((r for r in ranges[i + 1:] if r), None)
+            prv = next((r for r in reversed(ranges[:i]) if r), None)
+            lvl = nxt[0] if nxt else (prv[1] if prv else 1)
+            rng = (lvl, lvl)
+            note = f"quest point: {e['level']} (level approximate)"
+        elif e.get("main_skill"):
+            note = f"main skill from here: {e['main_skill']}"
+        elif "~" in str(e["level"]) or "approx" in str(e["level"]):
+            note = "levels approximate"
+        allocs = allocations(e, current)
+        a, b = rng
+        span = b - a + 1
+        first = True
+        for k, skill in enumerate(allocs):
+            skill = clean_skill(skill)
+            if skill not in known:
+                problems.append(f"{build}: skill {skill!r} is not a {BUILDS[build]['cls']} skill in skills_data.rs")
+            current[skill] = current.get(skill, 0) + 1
+            if current[skill] > MAX_POINTS:
+                problems.append(f"{build}: {skill} would reach {current[skill]} at level {a}")
+            lvl = a + (k * span) // len(allocs)
+            if out and out[-1][0] == skill and out[-1][2] == lvl:
+                out[-1][1] = current[skill]
+            else:
+                out.append([skill, current[skill], lvl, note if first else ""])
+            first = False
+    return out, current
+
+
+def simulate(current, start_level, order, build, known, last_level=99):
+    """One point per level from start_level+1, maxing `order` (skill, cap) in turn."""
+    current = dict(current)
+    out = []
+    queue = []
+    for skill, cap in order:
+        skill = clean_skill(skill)
+        if skill not in known:
+            problems.append(f"{build}: skill {skill!r} is not a {BUILDS[build]['cls']} skill in skills_data.rs")
+        queue += [skill] * max(0, cap - current.get(skill, 0))
+    for level, skill in zip(range(start_level + 1, last_level + 1), queue):
+        current[skill] = current.get(skill, 0) + 1
+        out.append([skill, current[skill], level, ""])
+    return out
+
+
+def allocation_at(alloc, level, order, note):
+    """A respec: the whole allocation `alloc` due at `level`, in `order` first."""
+    names = [clean_skill(s) for s in order if clean_skill(s) in alloc]
+    names += [s for s in alloc if s not in names]
+    return [[s, alloc[s], level, note if i == 0 else ""] for i, s in enumerate(names)]
+
+
+# ---------------------------------------------------------------- text helpers
+def tip_range(text):
+    m = re.search(r"(\d+)\s*-\s*(\d+)", text)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    m = re.search(r"(\d+)\+", text)
+    return f"{m.group(1)}+" if m else None
+
+
+def req_text(req):
+    if isinstance(req, str) or req is None:
+        return req or ""
+    parts = []
+    if "level" in req:
+        parts.append(f"character level {req['level']}")
+    if "sockets" in req:
+        parts.append(f"{req['sockets']} sockets")
+    if "item" in req:
+        parts.append(req["item"])
+    if not parts and "cube_description" in req:
+        parts.append("Horadric Cube")
+    return "; ".join(parts)
+
+
+def recipe_of(r):
+    inputs = list(r.get("inputs") or [])
+    req = r.get("req")
+    notes = r.get("notes") or ""
+    if isinstance(req, dict) and r["kind"] == "runeword" and not any(" " in i for i in inputs):
+        bases = " / ".join(req.get("allowed_bases") or ["item"])
+        line = f"non-magic {bases} with exactly {req.get('sockets', '?')} sockets"
+        if r.get("bases_in_guide"):
+            line += " (guide: " + ", ".join(r["bases_in_guide"]) + ")"
+        inputs.append(line)
+    if r.get("used_for"):
+        notes = (notes + " " if notes else "") + "Used for: " + ", ".join(r["used_for"]) + "."
+    return dict(name=r["name"], kind=r["kind"], inputs=inputs, result=r.get("result") or "",
+                req=req_text(req), notes=notes)
+
+
+def short_setup(setup):
+    if not setup:
+        return ""
+    m = re.match(r"(lvl [\d+-]+)", setup)
+    if m:
+        return m.group(1)
+    return setup if setup in ("starter", "standard") else "alternative"
+
+
+def targets_blood_boil(t):
+    a = t["attributes"]["planner_totals"]
+    return [
+        f"FCR: {t['fcr']['minimum']}, goal {t['fcr']['goal']}",
+        "Stats: " + t["attributes"]["rule"] + f" (planner lvl 75: {a['starter_lvl75']['str']} str / {a['starter_lvl75']['vit']} vit; lvl 99: {a['standard_lvl99']['str']} str / {a['standard_lvl99']['vit']} vit)",
+        "Fire pierce: " + t["fire_resistance_pierce"],
+        f"Merc: starter {t['mercenary']['starter']}; endgame {t['mercenary']['standard']} — needs {t['mercenary']['needs']}",
+        "Bound demon: " + t["bound_demon"],
+    ]
+
+
+def targets_generic(d):
+    """Short target lines from a druid guide's `targets` (hardcore-only parts left out)."""
+    t = d.get("targets") or {}
+    out = []
+    for key, v in t.items():
+        if any(w in key for w in ("hardcore", "note", "desirable", "farming")):
+            continue
+        label = key.replace("_", " ").upper() if len(key) <= 3 else key.replace("_", " ").capitalize()
+        if isinstance(v, str):
+            out.append(f"{label}: {v}")
+        elif isinstance(v, list) and v and isinstance(v[0], dict):
+            if "when" in v[0]:
+                out.append("Levels: " + "; ".join(f"{x['when']}: {x['target']}" for x in v))
+            elif "skill" in v[0]:
+                out.append("Main skill: " + "; ".join(f"{x['levels']} {x['skill']}" for x in v))
+        elif isinstance(v, dict):
+            bits = []
+            if "breakpoints" in v:
+                bits.append("breakpoints " + " / ".join(f"{b}%" for b in v["breakpoints"]))
+            for k in ("rule", "target", "priority", "goal", "general", "standard"):
+                if isinstance(v.get(k), str):
+                    bits.append(v[k])
+            if "minimum" in v and not isinstance(v["minimum"], dict):
+                bits.append(f"at least {v['minimum']}" + ("%" if len(key) <= 3 else "") if isinstance(v["minimum"], int) else str(v["minimum"]))
+            if bits:
+                out.append(f"{label}: " + "; ".join(bits))
+    m = d.get("merc") or {}
+    if isinstance(m.get("type"), str):
+        out.append("Merc: " + m["type"] + (f" — {m['why']}" if m.get("why") else ""))
+    elif isinstance(m.get("type"), dict):
+        out.append("Merc: " + "; ".join(f"{k} {v['merc']}" for k, v in m["type"].items() if isinstance(v, dict) and v.get("merc")))
+    return out
+
+
+def stats_lines(sp):
+    if isinstance(sp, list):
+        return [f"lvl {x['level']}: {x['allocation']}" for x in sp]
+    if not isinstance(sp, dict):
+        return []
+    if "rule" in sp:
+        lines = [sp["rule"]]
+        for name, v in (sp.get("planner_points_spent") or {}).items():
+            if "hardcore" in name:
+                continue
+            lines.append(f"planner {name.replace('_', ' ')}: " + " / ".join(f"{n} {k}" for k, n in v.items() if n))
+        return lines
+    return [f"{name.replace('_', ' ')}: {v['rule']}" for name, v in sp.items() if isinstance(v, dict) and v.get("rule")]
+
+
+def switch_note_leveling(d):
+    r = d["respec"]
+    return ("respec to Tornado + Hurricane before Nightmare Mephisto (~level 38, as early as NM Act 2): "
+            "Tornado 15, Hurricane 9, Cyclone Armor 14, 1 each in Arctic Blast and Twister")
+
+
+def switch_note_prereq(p):
+    lvl = p.get("character_level")
+    lvl = lvl.get("minimum") if isinstance(lvl, dict) else lvl
+    full = (p.get("full_potential") or {}).get("must_have") or []
+    full_items = [x["item"] if isinstance(x, dict) else x for x in full]
+    minimum = (p.get("minimum_to_start") or {}).get("must_have") or []
+    note = f"only once the gear is near-perfect (level {lvl}+): {', '.join(full_items)}"
+    if minimum:
+        note += f". Minimum kit: {', '.join(minimum)}"
+    return note
+
+
+# ---------------------------------------------------------------- main
+def main(argv):
+    args = argv[1:]
+    opts = {}
+    for flag in ("--leveling", "--prerequisites"):
+        if flag in args:
+            i = args.index(flag)
+            opts[flag] = args[i + 1]
+            del args[i:i + 2]
+    src, out = args
+    stem = os.path.basename(src).removesuffix(".json").removesuffix(".source")
+    cfg = BUILDS[stem]
+    d = json.load(open(src, encoding="utf-8"))
+    known = class_skills(cfg["cls"])
+    for i in d["items"]:
+        i["name"] = i["name"].replace("@", " all res")
+
+    def ref(i):
+        return i["name"] + (f"@{i['req_level']}" if i.get("req_level") else "")
+
+    leveling_items = any(str(i.get("setup") or "").startswith("lvl") for i in d["items"])
+    if leveling_items:
+        key = lambda i: (i["slot"], -(i.get("req_level") or 0), i.get("rank_in_slot") or 99)
+    else:
+        key = lambda i: (i["slot"], i.get("rank_in_slot") if i.get("rank_in_slot") is not None else 999)
+    slots, merc, extras = {}, {}, {}
+    for i in sorted(d["items"], key=key):
+        s = i["slot"]
+        if s.startswith("merc_"):
+            lst = merc.setdefault(s[5:], [])
+        elif s in EXTRA:
+            lst = extras.setdefault(EXTRA[s], [])
+        else:
+            lst = slots.setdefault(SLOTMAP.get(s, s), [])
+        if ref(i) not in lst:
+            lst.append(ref(i))
+    late = []
+    if "--leveling" in opts:
+        # The leveling guide's late gear (its runewords and magic pieces from level 13 on) is
+        # what the character wears when it switches here at ~38: the low-level end of each
+        # slot. Pieces this guide lists too move to the end; the others are appended.
+        lev = json.load(open(opts["--leveling"], encoding="utf-8"))
+        late = [i for i in lev["items"]
+                if i.get("kind") in ("runeword", "magic", "unique", "set")
+                and not str(i.get("setup", "")).startswith("lvl 1-")]
+        late.sort(key=lambda i: -(i.get("req_level") or 0))
+        names = {i["name"] for i in late} | {"Insight"}
+        for lst in list(slots.values()) + list(merc.values()):
+            lst.sort(key=lambda r: r.split("@")[0] in names)
+        for i in late:
+            s_ = i["slot"]
+            lst = merc.setdefault(s_[5:], []) if s_.startswith("merc_") else slots.setdefault(SLOTMAP.get(s_, s_), [])
+            if not any(r.split("@")[0] == i["name"] for r in lst):
+                lst.append(ref(i))
+    pieces = {}
+    for i in sorted(d["items"], key=lambda i: i.get("rank_in_slot") if i.get("rank_in_slot") is not None else 999):
+        if i["name"] in pieces:
+            continue
+        notes = [n for n in [i.get("notes") or ""] if n]
+        if stem == "blood-boil":
+            if "magic_find" in (i.get("setups") or []) and i["setup"] == "alternative":
+                notes.insert(0, "Magic Find setup")
+            setup = i.get("setup") or ""
+        else:
+            setup = short_setup(i.get("setup"))
+            if setup == "alternative" and i.get("setup") not in (None, "alternative"):
+                notes.insert(0, f"{i['setup'].replace('_', ' ')} setup")
+            if i.get("merc_tier"):
+                notes.insert(0, f"merc gear: {i['merc_tier']} game")
+        pieces[i["name"]] = dict(kind=i.get("kind") or "", setup=setup, base=i.get("base") or "",
+                                 stats=i.get("stats") or [], why=i.get("why") or "", notes="; ".join(notes))
+
+    for i in late:
+        if i["name"] not in pieces:
+            pieces[i["name"]] = dict(kind=i.get("kind") or "", setup=short_setup(i.get("setup")),
+                                     base=i.get("base") or "", stats=i.get("stats") or [],
+                                     why=i.get("why") or "", notes="from the leveling guide; " + (i.get("notes") or ""))
+    plan, recipes, tips, stats, switch_note = [], [], [], [], cfg.get("switch_note", "")
+    if stem == "blood-boil":
+        targets = targets_blood_boil(d["targets"])
+    else:
+        targets = targets_generic(d)
+        stats = stats_lines(d.get("stats_plan"))
+        recipes = [recipe_of(r) for r in d.get("recipes") or []]
+        sp = d.get("skill_plan")
+        act_tips = list(d.get("act_tips") or [])
+        if isinstance(sp, dict) and "entries" in sp:
+            # The leveling guide: everything before the respec (the next stage takes over).
+            pre = [e for e in sp["entries"] if "respec" not in e["stage"]]
+            plan, _ = expand_plan(pre, stem, known)
+            if "respec" in d:
+                switch_note = switch_note_leveling(d)
+        elif isinstance(sp, dict):
+            if "--leveling" in opts:
+                lev = json.load(open(opts["--leveling"], encoding="utf-8"))
+                post = [e for e in lev["skill_plan"]["entries"] if "respec" in e["stage"]]
+                plan, current = expand_plan(post, stem, known)
+                last = max(p[2] for p in plan)
+                order = [(s, MAX_POINTS) for s in sp.get("max_order") or []]
+                left = (sp.get("leftover_points") or {}).get("skill")
+                if left:
+                    order.append((left, MAX_POINTS))
+                plan += simulate(current, max(last, 75), order, stem, known)
+                act_tips = [t for t in lev.get("act_tips") or []
+                            if (level_range(tip_range(t["range"]) or "0") or (0,))[0] >= 38]
+            else:
+                alloc = sp["planner_allocations"]["starter_lvl75"]
+                order = (sp.get("variants") or {}).get("starter_standard_magic_find", {}).get("max_order") or sp.get("max_order") or []
+                for s in alloc:
+                    if s not in known:
+                        problems.append(f"{stem}: skill {s!r} is not a {cfg['cls']} skill in skills_data.rs")
+                plan = allocation_at(alloc, 75, order, "respec: the guide's level-75 Starter allocation")
+                plan += simulate(alloc, 75, [(s, MAX_POINTS) for s in order], stem, known)
+        for t in act_tips:
+            rng = tip_range(t["range"])
+            if rng:
+                tips += [(rng, x) for x in t.get("tips") or []]
+        if "--prerequisites" in opts:
+            switch_note = switch_note_prereq(json.load(open(opts["--prerequisites"], encoding="utf-8"))["prerequisites"])
+
+    L = ["# Agent-authored build definition (do not edit while the overlay runs: it is hot-reloaded)."]
+    if "header" in cfg:
+        L += [h.format(url=d["source_url"], author=d["author"], updated=d["guide_updated"]) for h in cfg["header"]]
+    else:
+        L += [f"# Source: {d['build']} ({d['source_url']}, {d['author']}, updated {d['guide_updated']}).",
+              f"# Generated by research/gen_build.py from {stem}.source.json next to this file; re-run it",
+              "# instead of editing by hand. Setups: starter / standard = the guide's variants (or the",
+              "# leveling stage, 'lvl a-b'), everything else folds as alternative."]
+    L += [f"name = {q(cfg['name'])}", f"damages = [{', '.join(q(x) for x in cfg['damages'])}]",
+          "notes = " + q(cfg["notes"]), "targets = [" + ", ".join(q(x) for x in targets) + "]"]
+    if stem != "blood-boil" or cfg.get("cls"):
+        L.append(f"class = {q(cfg['cls'])}")
+    if cfg.get("default"):
+        L.append("default_for_class = true")
+    if cfg.get("next"):
+        L += [f"next = {q(cfg['next'])}", f"switch_level = {cfg['switch_level']}",
+              f"auto_switch = {'true' if cfg['auto_switch'] else 'false'}"]
+        if switch_note:
+            L.append(f"switch_note = {q(switch_note)}")
+    if stats:
+        L.append("stats_plan = [" + ", ".join(q(x) for x in stats) + "]")
+    if plan:
+        L.append("skill_plan = [")
+        for skill, points, lvl, note in plan:
+            n = f", note = {q(note)}" if note else ""
+            L.append(f"  {{ skill = {q(skill)}, points = {points}, by_level = {lvl}{n} }},")
+        L.append("]")
+    L += ["", "[slots]"]
+    for s in ORDER:
+        if s in slots:
+            L.append(f"{s} = [" + ", ".join(q(x) for x in slots[s]) + "]")
+    L += ["", "[merc_slots]"] + [f"{s} = [" + ", ".join(q(x) for x in v) + "]" for s, v in merc.items()]
+    L += ["", "[extras]"] + [f"{s} = [" + ", ".join(q(x) for x in v) + "]" for s, v in extras.items()]
+    for n, p in pieces.items():
+        L += ["", f"[pieces.{q(n)}]"]
+        for k in ["kind", "setup", "base", "why", "notes"]:
+            if p[k]:
+                L.append(f"{k} = {q(p[k])}")
+        if p["stats"]:
+            L.append("stats = [" + ", ".join(q(x) for x in p["stats"]) + "]")
+    for r in recipes:
+        L += ["", "[[recipes]]", f"name = {q(r['name'])}", f"kind = {q(r['kind'])}",
+              "inputs = [" + ", ".join(q(x) for x in r["inputs"]) + "]"]
+        for k in ("result", "req", "notes"):
+            if r[k]:
+                L.append(f"{k} = {q(r[k])}")
+    for rng, text in tips:
+        L += ["", "[[tips]]", f"levels = {q(rng)}", f"text = {q(text)}"]
+    with open(out, "w", encoding="utf-8") as f:
+        f.write("\n".join(L) + "\n")
+    for p in problems:
+        print("PROBLEM:", p, file=sys.stderr)
+    print(f"{out}: {len(plan)} skill targets, {len(recipes)} recipes, {len(tips)} tips, "
+          f"{sum(len(v) for v in slots.values())} slot pieces, {len(problems)} problems", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

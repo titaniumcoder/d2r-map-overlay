@@ -1669,6 +1669,8 @@ mod tests {
             inventory_keep: vec![],
             sell: vec![],
             give_away: vec![],
+            held_materials: vec![],
+            white_bases: vec![],
             difficulty: None,
             terrorized: false,
             cows: None,

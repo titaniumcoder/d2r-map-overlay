@@ -92,6 +92,91 @@ pub struct Build {
     /// Items outside the equipment slots (`[extras]`: charms, jewels, runes …), group name →
     /// pieces in the same `"Name@<required level>"` format.
     pub extras: BTreeMap<String, Vec<String>>,
+    /// The class the build is for (`class = "druid"`, class id as in [`CLASS_NAMES`]).
+    pub class: Option<u32>,
+    /// A character of [`Build::class`] without a `[bis.<name>]` selection gets this build
+    /// (user request, 2026-11-17: a new character works before it is named in the config).
+    pub default_for_class: bool,
+    /// The slug of the guide's next stage (`next = "druid tornado"`), see [`Config::stage`].
+    pub next: Option<String>,
+    /// The character level at which the next stage starts.
+    pub switch_level: Option<u8>,
+    /// Whether the next stage starts on its own at [`Build::switch_level`]; when false the
+    /// dashboard only says when to switch on `/config`.
+    pub auto_switch: bool,
+    /// The guide's advice for the switch (respec, prerequisites).
+    pub switch_note: Option<String>,
+    /// Cumulative hard-point targets, in the guide's order (`[[skill_plan]]`).
+    pub skill_plan: Vec<SkillTarget>,
+    /// The recipes the guide uses (`[[recipes]]`: runewords, crafts, cube recipes …).
+    pub recipes: Vec<Recipe>,
+    /// Leveling tips by character-level range (`[[tips]]`).
+    pub tips: Vec<Tip>,
+    /// How to spend stat points, one line per level range.
+    pub stats_plan: Vec<String>,
+}
+
+/// One `[[skill_plan]]` entry: by character level `by_level` the guide has `points` hard
+/// points in `skill` (CUMULATIVE, not the points added at that level).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillTarget {
+    /// The skill's displayed name, as in [`crate::skills_data::SKILLS`].
+    pub skill: String,
+    pub points: u8,
+    pub by_level: u8,
+    #[serde(default)]
+    pub note: String,
+}
+
+/// One `[[recipes]]` entry: what the guide crafts and from what (all text, shown as a card).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Recipe {
+    pub name: String,
+    /// One of [`RECIPE_KINDS`].
+    pub kind: String,
+    /// One input per line: a rune (`"Tal"`, `"3 Tal Rune"`), a gem (`"1 Chipped Topaz"`) or
+    /// a free-text base item (`"non-magic Body Armor with 2 sockets"`).
+    pub inputs: Vec<String>,
+    pub result: String,
+    /// Its requirement as text (`"character level 17 (highest rune)"`).
+    pub req: String,
+    pub notes: String,
+}
+
+/// The recipe kinds the dashboard groups by.
+pub const RECIPE_KINDS: [&str; 5] = ["runeword", "craft", "cube", "socket", "upgrade"];
+
+/// One `[[tips]]` entry: a leveling tip shown while the character level is in `from..=to`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Tip {
+    pub from: u8,
+    pub to: u8,
+    pub text: String,
+}
+
+/// `[[tips]]` as written: `levels = "1-13"` (or `"75"`, `"75+"`).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawTip {
+    levels: String,
+    text: String,
+}
+
+/// The `from..=to` character levels of a tip's `levels` text: `"1-13"`, `"75"` or `"75+"`
+/// (to level 99). `None` when unreadable or reversed.
+fn tip_levels(levels: &str) -> Option<(u8, u8)> {
+    let levels = levels.trim();
+    let (from, to) = if let Some(from) = levels.strip_suffix('+') {
+        (from.trim().parse().ok()?, 99)
+    } else if let Some((from, to)) = levels.split_once('-') {
+        (from.trim().parse().ok()?, to.trim().parse().ok()?)
+    } else {
+        let level = levels.parse().ok()?;
+        (level, level)
+    };
+    (from <= to).then_some((from, to))
 }
 
 /// `[pieces."<name>"]` of a build file: the details of one piece (all optional).
@@ -215,27 +300,94 @@ pub struct Builds {
     pub classes: BTreeMap<u32, Vec<Damage>>,
 }
 
+/// Where a character is in its build guide's stage chain ([`Config::stage`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stage<'a> {
+    /// The current stage's slug and build.
+    pub slug: &'a str,
+    pub build: &'a Build,
+    /// Whether the chain started at the class default (no `[bis.<name>]` selection).
+    pub class_default: bool,
+    /// The next stage, when the current one names an existing build that isn't already part
+    /// of the chain (a cycle shows no next stage).
+    pub next: Option<(&'a str, &'a Build)>,
+}
+
 impl Config {
     /// The build definition the character's `[bis]` entry selects, if it names one that exists.
     #[must_use]
     pub fn selected_build(&self, name: &str) -> Option<&Build> {
+        self.selected(name).map(|(_, b)| b)
+    }
+
+    /// [`Config::selected_build`] with its slug.
+    fn selected(&self, name: &str) -> Option<(&str, &Build)> {
         let slug = self.bis.get(&name.to_lowercase())?.build.trim().to_lowercase();
-        if slug.is_empty() {
-            None
-        } else {
-            self.build_defs.get(&slug)
+        self.build_defs
+            .get_key_value(&slug)
+            .map(|(slug, build)| (slug.as_str(), build))
+    }
+
+    /// The default build of class id `class` (`default_for_class = true`); the first by slug
+    /// when several claim it.
+    #[must_use]
+    pub fn class_default(&self, class: u32) -> Option<(&str, &Build)> {
+        self.build_defs
+            .iter()
+            .find(|(_, b)| b.default_for_class && b.class == Some(class))
+            .map(|(slug, b)| (slug.as_str(), b))
+    }
+
+    /// The character's current guide stage: the selected build (else its class's default),
+    /// followed along `next` while the stage switches automatically (`auto_switch`) and the
+    /// character `level` has reached `switch_level`. A `next` that is already part of the
+    /// chain stops it (cycle guard). `class`/`level` are `None` where unknown (the config
+    /// page): no class default, no automatic switch.
+    #[must_use]
+    pub fn stage(&self, name: &str, class: Option<u32>, level: Option<u8>) -> Option<Stage<'_>> {
+        let (start, class_default) = match self.selected(name) {
+            Some(selected) => (selected, false),
+            None => (class.and_then(|c| self.class_default(c))?, true),
+        };
+        let (mut slug, mut build) = start;
+        let mut chain = vec![slug];
+        let next_of = |build: &Build| {
+            let next = build.next.as_deref()?;
+            self.build_defs
+                .get_key_value(next)
+                .map(|(slug, build)| (slug.as_str(), build))
+        };
+        while let Some((next_slug, next_build)) = next_of(build) {
+            let due = build.auto_switch
+                && build
+                    .switch_level
+                    .zip(level)
+                    .is_some_and(|(switch, level)| level >= switch);
+            if !due || chain.contains(&next_slug) {
+                break;
+            }
+            chain.push(next_slug);
+            (slug, build) = (next_slug, next_build);
         }
+        Some(Stage {
+            slug,
+            build,
+            class_default,
+            next: next_of(build).filter(|(next, _)| !chain.contains(next)),
+        })
     }
 
     /// The character's `BiS` resolved over the build files: its inline slots when it has any,
-    /// else the selected build's slots (else none — a build file may omit slots).
+    /// else the current stage's slots ([`Config::stage`]; else none — a build file may omit
+    /// slots).
     #[must_use]
-    pub fn resolved_bis(&self, name: &str) -> Option<Bis> {
-        let bis = self.bis.get(&name.to_lowercase())?;
-        if !bis.slots.is_empty() || !bis.merc_slots.is_empty() {
+    pub fn resolved_bis(&self, name: &str, class: Option<u32>, level: Option<u8>) -> Option<Bis> {
+        if let Some(bis) = self.bis.get(&name.to_lowercase())
+            && (!bis.slots.is_empty() || !bis.merc_slots.is_empty())
+        {
             return Some(bis.clone());
         }
-        let def = self.selected_build(name)?;
+        let def = self.stage(name, class, level)?.build;
         Some(Bis {
             build: def.name.clone(),
             slots: def.slots.clone(),
@@ -243,16 +395,18 @@ impl Config {
         })
     }
 
-    /// The character's damage types, primary first: its own `[builds]` entry, else the selected
-    /// build's damages, else its class's (`class` as charstats row id; `None` where the caller
-    /// doesn't know a class, e.g. the config page).
+    /// The character's damage types, primary first: its own `[builds]` entry, else the current
+    /// stage's damages ([`Config::stage`]), else its class's (`class` as charstats row id;
+    /// `None` where the caller doesn't know a class, e.g. the config page).
     #[must_use]
-    pub fn damages_for_player(&self, name: &str, class: Option<u32>) -> &[Damage] {
+    pub fn damages_for_player(&self, name: &str, class: Option<u32>, level: Option<u8>) -> &[Damage] {
         if let Some(damages) = self.builds.names.get(&name.to_lowercase()) {
             return damages;
         }
-        if let Some(def) = self.selected_build(name) {
-            return &def.damages;
+        if let Some(stage) = self.stage(name, class, level)
+            && !stage.build.damages.is_empty()
+        {
+            return &stage.build.damages;
         }
         class
             .and_then(|c| self.builds.classes.get(&c))
@@ -399,6 +553,16 @@ struct RawBuild {
     pieces: BTreeMap<String, PieceInfo>,
     targets: Vec<String>,
     extras: BTreeMap<String, Vec<String>>,
+    class: String,
+    default_for_class: bool,
+    next: String,
+    switch_level: Option<u8>,
+    auto_switch: bool,
+    switch_note: String,
+    skill_plan: Vec<SkillTarget>,
+    recipes: Vec<Recipe>,
+    tips: Vec<RawTip>,
+    stats_plan: Vec<String>,
 }
 
 /// Parses one build file's text: the lowercased build name (the slug a `[bis.<name>]` `build`
@@ -414,6 +578,34 @@ fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de::Err
     let slots = parse_slot_tables(raw.slots, &label, &mut warnings);
     let merc_slots = parse_slot_tables(raw.merc_slots, &label, &mut warnings);
     let notes = raw.notes.trim().to_owned();
+    let class = class_of_build(&raw.class, &label, &mut warnings);
+    check_skill_names(&raw.skill_plan, class, &label, &mut warnings);
+    for recipe in &raw.recipes {
+        if !RECIPE_KINDS.contains(&recipe.kind.as_str()) {
+            warnings.push(format!(
+                "{label}: recipe {:?} has unknown kind {:?} (known: {})",
+                recipe.name,
+                recipe.kind,
+                RECIPE_KINDS.join(", ")
+            ));
+        }
+    }
+    let mut tips = Vec::new();
+    for tip in raw.tips {
+        match tip_levels(&tip.levels) {
+            Some((from, to)) => tips.push(Tip {
+                from,
+                to,
+                text: tip.text.trim().to_owned(),
+            }),
+            None => warnings.push(format!(
+                "{label}: tip levels {:?} unreadable (want \"1-13\", \"75\" or \"75+\"); ignored",
+                tip.levels
+            )),
+        }
+    }
+    let next = raw.next.trim().to_lowercase();
+    let switch_note = raw.switch_note.trim().to_owned();
     Ok((
         name.to_lowercase(),
         Build {
@@ -435,9 +627,54 @@ fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de::Err
                 .map(|(group, pieces)| (group, clean_pieces(&pieces)))
                 .filter(|(_, pieces)| !pieces.is_empty())
                 .collect(),
+            class,
+            default_for_class: raw.default_for_class,
+            next: (!next.is_empty()).then_some(next),
+            switch_level: raw.switch_level,
+            auto_switch: raw.auto_switch,
+            switch_note: (!switch_note.is_empty()).then_some(switch_note),
+            skill_plan: raw.skill_plan,
+            recipes: raw.recipes,
+            tips,
+            stats_plan: clean_pieces(&raw.stats_plan),
         },
         warnings,
     ))
+}
+
+/// The class id of a build file's `class` text (empty: none; unknown: warned and none).
+fn class_of_build(class: &str, label: &str, warnings: &mut Vec<String>) -> Option<u32> {
+    if class.trim().is_empty() {
+        return None;
+    }
+    let id = class_id(class);
+    if id.is_none() {
+        warnings.push(format!(
+            "{label}: unknown class {class:?} ignored (known: {})",
+            CLASS_NAMES.join(", ")
+        ));
+    }
+    id
+}
+
+/// Warns about skill-plan skills that aren't skills of `class` (any class when unknown), so a
+/// typo doesn't silently drop the guide's target from the skills panel.
+fn check_skill_names(plan: &[SkillTarget], class: Option<u32>, label: &str, warnings: &mut Vec<String>) {
+    for target in plan {
+        let known = crate::skills_data::SKILLS.iter().any(|s| {
+            s.name.eq_ignore_ascii_case(target.skill.trim()) && class.is_none_or(|c| u32::from(s.class) == c)
+        });
+        if !known
+            && !warnings
+                .iter()
+                .any(|w| w.contains(&format!("{:?}", target.skill)))
+        {
+            warnings.push(format!(
+                "{label}: skill plan names unknown skill {:?}",
+                target.skill
+            ));
+        }
+    }
 }
 
 /// Loads every `*.toml` build definition from `dir` (one build per file, agent-authored), keyed
@@ -673,29 +910,37 @@ mod tests {
              [builds.class]\ndruid = [\"physical\"]\n4 = [\"physical\"]\nbard = [\"fire\"]\n",
         )?;
         assert_eq!(
-            c.damages_for_player("Vex", Some(6)),
+            c.damages_for_player("Vex", Some(6), None),
             [Lightning, Fire, Physical],
             "deduped, in order"
         );
         assert_eq!(
-            c.damages_for_player("vex", Some(1)),
+            c.damages_for_player("vex", Some(1), None),
             [Lightning, Fire, Physical],
             "name in any case"
         );
         assert_eq!(
-            c.damages_for_player("Other", Some(5)),
+            c.damages_for_player("Other", Some(5), None),
             [Cold],
             "own entry beats the class"
         );
-        assert_eq!(c.damages_for_player("Bear", Some(5)), [Physical], "class by name");
-        assert_eq!(c.damages_for_player("Barb", Some(4)), [Physical], "class by id");
         assert_eq!(
-            c.damages_for_player("Sorc", Some(1)),
+            c.damages_for_player("Bear", Some(5), None),
+            [Physical],
+            "class by name"
+        );
+        assert_eq!(
+            c.damages_for_player("Barb", Some(4), None),
+            [Physical],
+            "class by id"
+        );
+        assert_eq!(
+            c.damages_for_player("Sorc", Some(1), None),
             [] as [Damage; 0],
             "nothing configured"
         );
         assert_eq!(
-            c.damages_for_player("Sorc", None),
+            c.damages_for_player("Sorc", None, None),
             [] as [Damage; 0],
             "no class known: still no damages"
         );
@@ -835,7 +1080,7 @@ mod tests {
         );
         // Selection-only: the build's slots and damages come through.
         let resolved = config
-            .resolved_bis("DEMONmaster")
+            .resolved_bis("DEMONmaster", None, None)
             .ok_or_else(|| anyhow!("unresolved"))?;
         assert_eq!(resolved.build, "Blood Boil", "the display name, not the slug");
         assert_eq!(
@@ -843,7 +1088,7 @@ mod tests {
             Some(&["Heart of the Oak@55".to_owned()][..])
         );
         assert_eq!(
-            config.damages_for_player("DEMONmaster", None),
+            config.damages_for_player("DEMONmaster", None, None),
             [Damage::Physical, Damage::Fire],
             "the build's damages"
         );
@@ -858,7 +1103,7 @@ mod tests {
             .names
             .insert("demonmaster".to_owned(), vec![Damage::Fire]);
         let resolved = config
-            .resolved_bis("demonmaster")
+            .resolved_bis("demonmaster", None, None)
             .ok_or_else(|| anyhow!("unresolved"))?;
         assert!(
             !resolved.slots.contains_key("weapon"),
@@ -868,11 +1113,17 @@ mod tests {
             resolved.slots.get("body").map(Vec::as_slice),
             Some(&["Stealth@17".to_owned()][..])
         );
-        assert_eq!(config.damages_for_player("demonmaster", Some(7)), [Damage::Fire]);
+        assert_eq!(
+            config.damages_for_player("demonmaster", Some(7), None),
+            [Damage::Fire]
+        );
         // No bis entry at all: no resolved BiS, only the class fallback for damages.
-        assert!(config.resolved_bis("other").is_none());
+        assert!(config.resolved_bis("other", None, None).is_none());
         config.builds.classes.insert(7, vec![Damage::Lightning]);
-        assert_eq!(config.damages_for_player("other", Some(7)), [Damage::Lightning]);
+        assert_eq!(
+            config.damages_for_player("other", Some(7), None),
+            [Damage::Lightning]
+        );
         // A selected build that doesn't exist resolves to nothing.
         config.bis.insert(
             "ghost".to_owned(),
@@ -882,8 +1133,178 @@ mod tests {
                 merc_slots: BTreeMap::new(),
             },
         );
-        assert!(config.resolved_bis("ghost").is_none());
-        assert_eq!(config.damages_for_player("ghost", None), [] as [Damage; 0]);
+        assert!(config.resolved_bis("ghost", None, None).is_none());
+        assert_eq!(config.damages_for_player("ghost", None, None), [] as [Damage; 0]);
+        Ok(())
+    }
+
+    #[test]
+    fn build_guide_keys_parse() -> Result<()> {
+        let text = "name = \"Druid Leveling\"\nclass = \"Druid\"\ndefault_for_class = true\n\
+             next = \"Druid Tornado\"\nswitch_level = 38\nauto_switch = true\nswitch_note = \" respec \"\n\
+             stats_plan = [\"2-11: all Vitality\", \" \"]\n\
+             skill_plan = [{ skill = \"Firestorm\", points = 1, by_level = 2, note = \"start\" }, { skill = \"Fissure\", points = 2, by_level = 13 }]\n\
+             [[recipes]]\nname = \"Stealth\"\nkind = \"runeword\"\ninputs = [\"Tal\", \"Eth\", \"2os armor\"]\nresult = \"Stealth\"\nreq = \"level 17\"\n\
+             [[recipes]]\nname = \"Odd\"\nkind = \"alchemy\"\n\
+             [[tips]]\nlevels = \"1-13\"\ntext = \"Den of Evil\"\n\
+             [[tips]]\nlevels = \"75+\"\ntext = \"late\"\n\
+             [[tips]]\nlevels = \"soon\"\ntext = \"bad\"\n";
+        let (slug, def, warnings) = parse_build(text)?;
+        assert_eq!(slug, "druid leveling");
+        assert_eq!(def.class, Some(5));
+        assert!(def.default_for_class && def.auto_switch);
+        assert_eq!(def.next.as_deref(), Some("druid tornado"), "the slug, lowercased");
+        assert_eq!(def.switch_level, Some(38));
+        assert_eq!(def.switch_note.as_deref(), Some("respec"));
+        assert_eq!(def.stats_plan, ["2-11: all Vitality"]);
+        assert_eq!(def.skill_plan.len(), 2);
+        assert_eq!(
+            def.skill_plan
+                .first()
+                .map(|t| (t.skill.as_str(), t.points, t.by_level, t.note.as_str())),
+            Some(("Firestorm", 1, 2, "start"))
+        );
+        assert_eq!(def.recipes.first().map(|r| r.inputs.len()), Some(3));
+        assert_eq!(
+            def.tips,
+            [
+                Tip {
+                    from: 1,
+                    to: 13,
+                    text: "Den of Evil".to_owned()
+                },
+                Tip {
+                    from: 75,
+                    to: 99,
+                    text: "late".to_owned()
+                },
+            ]
+        );
+        // The unknown recipe kind and the unreadable tip levels are warned about.
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        // Unknown skills of the build's class, unknown classes and unknown keys.
+        let (_, _, warnings) = parse_build(
+            "name = \"B\"\nclass = \"druid\"\nskill_plan = [{ skill = \"Blizzard\", points = 1, by_level = 2 }]\n",
+        )?;
+        assert!(
+            warnings.iter().any(|w| w.contains("\"Blizzard\"")),
+            "{warnings:?}"
+        );
+        let (_, def, warnings) = parse_build("name = \"B\"\nclass = \"monk\"\n")?;
+        assert_eq!((def.class, warnings.len()), (None, 1));
+        assert!(parse_build("name = \"B\"\n[[recipes]]\nname = \"x\"\ncolour = \"red\"\n").is_err());
+        assert!(parse_build("name = \"B\"\nskill_plan = [{ skill = \"Fissure\", points = 1 }]\n").is_err());
+        assert_eq!(tip_levels("38"), Some((38, 38)));
+        assert_eq!(tip_levels("13-1"), None);
+        Ok(())
+    }
+
+    /// A druid chain: leveling →(auto at 38) tornado →(manual) fissure.
+    fn druid_chain() -> Config {
+        let build = |name: &str, next: Option<&str>, auto: bool| Build {
+            name: name.to_owned(),
+            class: Some(5),
+            default_for_class: name == "Leveling",
+            next: next.map(str::to_owned),
+            switch_level: next.map(|_| 38),
+            auto_switch: auto,
+            switch_note: Some("note".to_owned()),
+            damages: vec![Damage::Fire],
+            ..Build::default()
+        };
+        let mut config = Config::default();
+        config
+            .build_defs
+            .insert("leveling".to_owned(), build("Leveling", Some("tornado"), true));
+        config
+            .build_defs
+            .insert("tornado".to_owned(), build("Tornado", Some("fissure"), false));
+        config
+            .build_defs
+            .insert("fissure".to_owned(), build("Fissure", None, false));
+        config
+    }
+
+    #[test]
+    fn stage_follows_the_auto_chain_by_level() -> Result<()> {
+        let config = druid_chain();
+        let stage = |level| config.stage("NewDruid", Some(5), level);
+        // No selection: the class default; below the switch level it stays.
+        let s = stage(Some(37)).ok_or_else(|| anyhow!("no stage"))?;
+        assert_eq!((s.slug, s.class_default), ("leveling", true));
+        assert_eq!(s.next.map(|(slug, _)| slug), Some("tornado"));
+        // At 38 the auto switch moves on; tornado's next is manual, so it stops there.
+        let s = stage(Some(38)).ok_or_else(|| anyhow!("no stage"))?;
+        assert_eq!(s.slug, "tornado");
+        assert_eq!(
+            s.next.map(|(slug, b)| (slug, b.name.as_str())),
+            Some(("fissure", "Fissure"))
+        );
+        assert_eq!(
+            stage(Some(99)).map(|s| s.slug),
+            Some("tornado"),
+            "manual never switches"
+        );
+        assert_eq!(
+            stage(None).map(|s| s.slug),
+            Some("leveling"),
+            "unknown level: no switch"
+        );
+        // Other classes and an unknown class get no default.
+        assert!(config.stage("NewDruid", Some(1), Some(50)).is_none());
+        assert!(config.stage("NewDruid", None, Some(50)).is_none());
+        // The stage drives the BiS and the damages.
+        assert_eq!(
+            config.resolved_bis("x", Some(5), Some(40)).map(|b| b.build),
+            Some("Tornado".to_owned())
+        );
+        assert_eq!(config.damages_for_player("x", Some(5), Some(40)), [Damage::Fire]);
+        Ok(())
+    }
+
+    #[test]
+    fn stage_selection_beats_the_default_and_cycles_stop() -> Result<()> {
+        let mut config = druid_chain();
+        // A selection (the user switched on /config) starts there, not at the default.
+        config.bis.insert(
+            "bear".to_owned(),
+            Bis {
+                build: "Fissure".to_owned(),
+                slots: BTreeMap::new(),
+                merc_slots: BTreeMap::new(),
+            },
+        );
+        let s = config
+            .stage("Bear", Some(5), Some(90))
+            .ok_or_else(|| anyhow!("no stage"))?;
+        assert_eq!((s.slug, s.class_default, s.next), ("fissure", false, None));
+        // A cycle (fissure → leveling, all automatic) stops before repeating a stage and
+        // shows no next stage.
+        for slug in ["tornado", "fissure"] {
+            if let Some(b) = config.build_defs.get_mut(slug) {
+                b.auto_switch = true;
+                b.switch_level = Some(1);
+            }
+        }
+        if let Some(b) = config.build_defs.get_mut("fissure") {
+            b.next = Some("leveling".to_owned());
+        }
+        let s = config
+            .stage("Other", Some(5), Some(60))
+            .ok_or_else(|| anyhow!("no stage"))?;
+        assert_eq!(
+            s.slug, "fissure",
+            "leveling → tornado → fissure, then the cycle stops"
+        );
+        assert_eq!(s.next, None, "the cycle's next is already in the chain");
+        // A next that names no build: no next stage.
+        if let Some(b) = config.build_defs.get_mut("fissure") {
+            b.next = Some("missing".to_owned());
+        }
+        assert_eq!(
+            config.stage("Other", Some(5), Some(60)).and_then(|s| s.next),
+            None
+        );
         Ok(())
     }
 

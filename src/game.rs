@@ -162,6 +162,15 @@ pub struct Snapshot {
     /// keep-one item). Yellow lines below `sell`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub give_away: Vec<valuables::Spare>,
+    /// The runes and gems the player holds in inventory, cube and stash pages (the shared
+    /// materials tab is in [`Snapshot::stash`]), `(name, count)` ([`stash::held_materials`]):
+    /// the dashboard's recipe ✓. Live-mode only, not in the JSON.
+    #[serde(skip)]
+    pub held_materials: Vec<(String, u32)>,
+    /// The player's white socketed bases without a runeword ([`stash::white_bases`]): the
+    /// dashboard's recipe base hint. Live-mode only, not in the JSON.
+    #[serde(skip)]
+    pub white_bases: Vec<String>,
     /// 0 Normal, 1 Nightmare, 2 Hell; `None` if unreadable (and in old fixtures).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<u8>,
@@ -911,6 +920,8 @@ pub fn snapshot(
     let mine = player_items(scan.inventory, scan.stored, chosen.id, &shared_tabs);
     let inventory_keep = valuables::keep_list(&mine);
     let (sell, give_away) = valuables::spare_lists(&mine);
+    let held_materials = stash::held_materials(mine.iter().map(|(item, _)| item));
+    let white_bases = stash::white_bases(mine.iter().map(|(item, _)| item));
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
     let terrorized = is_terrorized(&monsters);
     let skills = r.skills(chosen.addr.0, player.class);
@@ -939,6 +950,8 @@ pub fn snapshot(
         inventory_keep,
         sell,
         give_away,
+        held_materials,
+        white_bases,
         difficulty,
         terrorized,
         cows: None,

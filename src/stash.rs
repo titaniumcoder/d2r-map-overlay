@@ -75,7 +75,7 @@ pub fn stash_item(drop: &ItemDrop, quantity: Option<u32>) -> StashItem {
 }
 
 /// Rune names by rune number (`r01` El … `r33` Zod), runes.txt order.
-const RUNE_NAMES: [&str; 33] = [
+pub const RUNE_NAMES: [&str; 33] = [
     "El", "Eld", "Tir", "Nef", "Eth", "Ith", "Tal", "Ral", "Ort", "Thul", "Amn", "Sol", "Shael", "Dol",
     "Hel", "Io", "Lum", "Ko", "Fal", "Lem", "Pul", "Um", "Mal", "Ist", "Gul", "Vex", "Ohm", "Lo", "Sur",
     "Ber", "Jah", "Cham", "Zod",
@@ -120,6 +120,53 @@ pub fn material_name(code: &str) -> Option<String> {
             .map(|r| format!("{r} Rune")),
         _ => None,
     }
+}
+
+/// The runes and gems among `items` (the player's own inventory, cube and stash items; the
+/// shared materials tab's stacks are counted from [`StashTab`]s instead) as `(name, count)`
+/// with [`material_name`] names, sorted by name: the recipe inputs' ✓ on the dashboard.
+#[must_use]
+pub fn held_materials<'a>(items: impl IntoIterator<Item = &'a ItemDrop>) -> Vec<(String, u32)> {
+    let mut out: Vec<(String, u32)> = Vec::new();
+    for item in items {
+        let Some(bytes) = item.code.as_deref().and_then(items::code_bytes) else {
+            continue;
+        };
+        let material =
+            items::gem(bytes).is_some() || matches!(items::code_kind(bytes), Some(DropKind::Rune(_)));
+        let Some(name) = item.code.as_deref().filter(|_| material).and_then(material_name) else {
+            continue;
+        };
+        match out.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, count)) => *count += 1,
+            None => out.push((name, 1)),
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The white (normal or superior quality) socketed bases among `items` that hold no runeword
+/// yet, as `"[eth ]<base name> <n>os"`, sorted: the recipe base lines' hint on the dashboard.
+#[must_use]
+pub fn white_bases<'a>(items: impl IntoIterator<Item = &'a ItemDrop>) -> Vec<String> {
+    let mut out: Vec<String> = items
+        .into_iter()
+        .filter(|i| {
+            matches!(i.quality, item_data::QUALITY_NORMAL | item_data::QUALITY_SUPERIOR)
+                && i.sockets > 0
+                && i.flags & item_data::FLAG_RUNEWORD == 0
+        })
+        .filter_map(|i| {
+            let code = i.code.as_deref()?;
+            let base =
+                crate::item_levels_data::armor_name(code).or_else(|| crate::weapons_data::name(code))?;
+            let eth = if i.ethereal { "eth " } else { "" };
+            Some(format!("{eth}{base} {}os", i.sockets))
+        })
+        .collect();
+    out.sort();
+    out
 }
 
 /// Display names of the identified unique/set items across `tabs`, first-seen order,
@@ -195,6 +242,59 @@ mod tests {
         assert_eq!(material_name("rvl").as_deref(), Some("Full Rejuvenation Potion"));
         assert_eq!(material_name("r34"), None);
         assert_eq!(material_name("crs"), None);
+    }
+
+    /// An item with `code`, `quality` and `sockets` (no flags) for the holdings tests.
+    fn drop_of(code: &str, quality: u32, sockets: u8) -> ItemDrop {
+        ItemDrop {
+            id: 0,
+            code: Some(code.to_owned()),
+            kind: DropKind::Base,
+            quality,
+            flags: 0,
+            ethereal: false,
+            sockets,
+            unique_index: None,
+            item_data_head: String::new(),
+            highlight: None,
+            x: 0,
+            y: 0,
+        }
+    }
+
+    #[test]
+    fn held_materials_count_runes_and_gems_only() {
+        let items = [
+            drop_of("r07", item_data::QUALITY_NORMAL, 0),
+            drop_of("gcv", item_data::QUALITY_NORMAL, 0),
+            drop_of("r07", item_data::QUALITY_NORMAL, 0),
+            drop_of("rvl", item_data::QUALITY_NORMAL, 0),
+            drop_of("crs", item_data::QUALITY_NORMAL, 4),
+        ];
+        assert_eq!(
+            held_materials(&items),
+            [("Chipped Amethyst".to_owned(), 1), ("Tal Rune".to_owned(), 2)],
+            "potions and weapons are not recipe materials"
+        );
+    }
+
+    #[test]
+    fn white_bases_are_socketed_non_magic_items_without_a_runeword() {
+        let mut runeword = drop_of("crs", item_data::QUALITY_NORMAL, 4);
+        runeword.flags = item_data::FLAG_RUNEWORD;
+        let mut eth = drop_of("crs", item_data::QUALITY_SUPERIOR, 4);
+        eth.ethereal = true;
+        let items = [
+            drop_of("crs", item_data::QUALITY_NORMAL, 4),
+            drop_of("crs", item_data::QUALITY_MAGIC, 4),
+            drop_of("crs", item_data::QUALITY_NORMAL, 0),
+            runeword,
+            eth,
+        ];
+        assert_eq!(
+            white_bases(&items),
+            ["Crystal Sword 4os", "eth Crystal Sword 4os"]
+        );
     }
 
     #[test]

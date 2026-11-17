@@ -308,6 +308,18 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   `POST /api/build` (damages) and slot-editing `POST /api/bis` UI are gone; `POST /api/bis` now writes
   the selection only, `GET /api/builds` lists the available builds, and `GET /api/config` returns the
   resolved view (per character: build slug/name, resolved damages, per-piece annotated slots).
+- **Guide stages (2026-11-17, druid)**: a build file may also carry `class`, `default_for_class` (a
+  character without a `[bis]` selection gets its class default), a stage chain `next` / `switch_level` /
+  `auto_switch` / `switch_note` (`Config::stage`: selected build, else class default, then follow `next`
+  while `auto_switch` and clvl ≥ `switch_level`; cycle-guarded; the user chose all-manual switches),
+  `[[skill_plan]]` cumulative hard-point targets (skills panel: yours / guide-now → final, next-point
+  hint), `[[recipes]]` (runeword/craft/cube/socket/upgrade; dashboard Recipes panel with ✓ from the
+  shared materials + `Snapshot.held_materials`, bases via `white_bases`), `[[tips]]` by level range and
+  `stats_plan`. Generated from the guide research JSON by `research/gen_build.py`.
+- **Upgrades + chime**: `upgrades` in the live JSON = owned/stash pieces of the current stage wearable now
+  and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
+  are all owned. The page chimes (WebAudio, 🔔 toggle) when a key appears that this character hasn't had.
+- [x] Guide stages, recipes panel, upgrade chime, favicon (2026-11-17).
 - **Hot reload**: the mtime watcher watches `config.toml` AND the `builds/` directory (a cheap
   `read_dir` per tick — a directory's own mtime would miss in-place edits of a build file).
 - **Dashboard "Where to go"**: the level-suggestion band is structured (`mlvl` + `bucket`:
