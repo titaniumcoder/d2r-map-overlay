@@ -26,6 +26,7 @@ mod offset_cache;
 mod offsets;
 mod overlay;
 mod process;
+mod quests;
 mod render;
 mod runewords_data;
 mod session;
@@ -177,6 +178,11 @@ fn dump(player: Option<&str>, config: &config::Config) -> Result<()> {
     let img = image::find_image(&maps, &mem).context("locating D2R.exe image")?;
     let table = img.unit_table(&mem, offset_cache::default_path().as_deref(), true)?;
     let items_table = items::locate(pid, &mem);
+    // The quest record goes to stderr: the snapshot JSON on stdout stays as it was.
+    match img.quest_flags_global(&mem).and_then(|g| quests::read(&mem, g)) {
+        Ok(words) => eprintln!("quest flags: {words:04x?}"),
+        Err(e) => eprintln!("quest flags: {e:#}"),
+    }
     let mut snap = game::snapshot(&mem, table.addr, items_table, player, None)?;
     valuables::apply(&mut snap.drops, &config.valuables);
     println!("{}", serde_json::to_string_pretty(&snap)?);

@@ -215,6 +215,21 @@ def req_text(req):
     return "; ".join(parts)
 
 
+# Quest-reward recipes: the quest whose reward the recipe is (names from src/quests.rs QUESTS),
+# so the dashboard can drop the recipe once the reward is used. Matched on the recipe name.
+QUEST_REWARDS = [
+    (re.compile(r"imbue|tools of the trade", re.I), "Tools of the Trade"),
+    (re.compile(r"larzuk|siege on harrogath", re.I), "Siege on Harrogath"),
+    (re.compile(r"\banya\b|prison of ice", re.I), "Prison of Ice"),
+]
+
+
+def quest_of(r):
+    if r.get("quest"):
+        return r["quest"]
+    return next((q for pat, q in QUEST_REWARDS if pat.search(r["name"])), "")
+
+
 def recipe_of(r):
     inputs = list(r.get("inputs") or [])
     req = r.get("req")
@@ -228,7 +243,7 @@ def recipe_of(r):
     if r.get("used_for"):
         notes = (notes + " " if notes else "") + "Used for: " + ", ".join(r["used_for"]) + "."
     return dict(name=r["name"], kind=r["kind"], inputs=inputs, result=r.get("result") or "",
-                req=req_text(req), notes=notes)
+                req=req_text(req), notes=notes, quest=quest_of(r))
 
 
 def short_setup(setup):
@@ -491,7 +506,7 @@ def main(argv):
     for r in recipes:
         L += ["", "[[recipes]]", f"name = {q(r['name'])}", f"kind = {q(r['kind'])}",
               "inputs = [" + ", ".join(q(x) for x in r["inputs"]) + "]"]
-        for k in ("result", "req", "notes"):
+        for k in ("result", "req", "notes", "quest"):
             if r[k]:
                 L.append(f"{k} = {q(r[k])}")
     for rng, text in tips:

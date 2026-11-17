@@ -627,6 +627,8 @@ pub struct LiveInfo<'a> {
     pub held_materials: &'a [(String, u32)],
     /// White socketed bases the character holds ([`crate::stash::white_bases`]).
     pub white_bases: &'a [String],
+    /// The quest flags of the current game ([`crate::quests::read`]); empty when unread.
+    pub quests: &'a [u16],
     /// Unix seconds of the tick that produced this data.
     pub updated_at: u64,
 }
@@ -889,7 +891,9 @@ fn matching_bases<'a>(text: &str, bases: &'a [String]) -> Vec<&'a str> {
 /// The current stage's recipes (`live_json`'s `recipes` section; an `upgrade` recipe that
 /// makes a rune or gem — `material` — only when another recipe still misses it), each
 /// `{ "name", "kind", "material",
-/// "result", "req", "notes", "inputs": [...] }` with every input as `{ "text", "status",
+/// "result", "req", "notes", "quest", "inputs": [...] }` (`quest`: `"ready"` when the recipe's
+/// quest reward waits to be taken, `"todo"` while the quest isn't done, else `null`; a recipe
+/// whose quest reward is used is left out) with every input as `{ "text", "status",
 /// "have", "need", "hint" }`: `status` is `"have"`/`"missing"` for a rune or gem (counted over
 /// all of the recipe's lines naming it, against [`owned_materials`]), `"likely"` for a base
 /// line naming a white socketed base the character holds (`hint` lists them), else
@@ -898,12 +902,21 @@ fn recipes_json(info: &LiveInfo) -> Vec<serde_json::Value> {
     let Some(build) = info.build else {
         return Vec::new();
     };
+    // A quest-reward recipe (Charsi's imbue, Larzuk's socket) is gone once its reward is
+    // used (user request, 2026-11-18); with the flags unread it stays.
+    let reward = |r: &crate::config::Recipe| {
+        crate::quests::word_of(&r.quest).and_then(|w| crate::quests::reward(info.quests, w))
+    };
+    let recipes: Vec<&crate::config::Recipe> = build
+        .recipes
+        .iter()
+        .filter(|r| reward(r) != Some(crate::quests::Reward::Used))
+        .collect();
     let materials = owned_materials(info);
     // The runes and gems the other recipes still miss: an `upgrade` recipe (3 Ral → Ort,
     // gem upgrades) is shown only when its result is one of them (coordinator request,
     // 2026-11-17: the tornado guide lists ~60 of them).
-    let missing: Vec<String> = build
-        .recipes
+    let missing: Vec<String> = recipes
         .iter()
         .filter(|r| r.kind != "upgrade")
         .flat_map(|r| {
@@ -921,9 +934,8 @@ fn recipes_json(info: &LiveInfo) -> Vec<serde_json::Value> {
                 .collect::<Vec<_>>()
         })
         .collect();
-    build
-        .recipes
-        .iter()
+    recipes
+        .into_iter()
         .filter(|recipe| {
             let makes = Input::parse(&recipe.result).need();
             recipe.kind != "upgrade" || makes.is_none_or(|(key, _)| missing.contains(&key))
@@ -968,6 +980,11 @@ fn recipes_json(info: &LiveInfo) -> Vec<serde_json::Value> {
                 "result": recipe.result,
                 "req": recipe.req,
                 "notes": recipe.notes,
+                "quest": match reward(recipe) {
+                    Some(crate::quests::Reward::Ready) => Some("ready"),
+                    Some(crate::quests::Reward::NotEarned) => Some("todo"),
+                    Some(crate::quests::Reward::Used) | None => None,
+                },
                 "inputs": lines,
             })
         })
@@ -2052,6 +2069,7 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .rc-h .nm { font-weight: 650; flex: 1 1 14em; min-width: 0; overflow-wrap: break-word; }
 .rc.runeword .rc-h .nm { color: var(--rune); }
 .rc-h .lv { font-size: 11px; color: var(--dim); flex: 0 1 auto; margin-left: auto; text-align: right; }
+.rc-h .qt { font-size: 11px; color: var(--dim); white-space: nowrap; } .rc-h .qt.ready { color: #6fdc6f; }
 .ins { margin: 6px 0 4px; padding: 0; list-style: none; font-size: 12.5px; }
 .ins li { display: flex; flex-wrap: wrap; gap: 0 6px; padding: 1px 0; }
 .ins .mk { min-width: 30px; font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -2341,7 +2359,10 @@ function recipeCard(r) {
   }).join("");
   const counted = (r.inputs || []).filter(i => i.status === "have" || i.status === "missing");
   const ready = counted.length && counted.every(i => i.status === "have");
-  return `<div class="rc ${esc(r.kind)}${ready ? " ready" : ""}"><div class="rc-h"><span class="nm">${esc(r.name)}</span>`
+  // Quest-reward recipes: whether the reward waits (used ones never arrive).
+  const quest = r.quest === "ready" ? '<span class="qt ready">reward ready</span>'
+    : r.quest === "todo" ? '<span class="qt">quest not done yet</span>' : "";
+  return `<div class="rc ${esc(r.kind)}${ready ? " ready" : ""}"><div class="rc-h"><span class="nm">${esc(r.name)}</span>${quest}`
     + `${r.req ? `<span class="lv">${esc(r.req)}</span>` : ""}</div><ul class="ins">${ins}</ul>`
     + `${r.result ? `<div class="res">→ ${esc(r.result)}</div>` : ""}${r.notes ? `<div class="note">${esc(r.notes)}</div>` : ""}</div>`;
 }
@@ -2934,6 +2955,7 @@ mod tests {
             stage: None,
             held_materials: &[],
             white_bases: &[],
+            quests: &[],
             updated_at: 1_700_000_000,
         }
     }
@@ -2971,6 +2993,7 @@ mod tests {
             stage: None,
             held_materials: &[],
             white_bases: &[],
+            quests: &[],
             updated_at: 1_700_000_000,
         };
         gear_json(&info)
@@ -3787,6 +3810,70 @@ mod tests {
             })
             .and_then(|r| r.get("name").cloned());
         assert_eq!(upgrade, Some(serde_json::json!("3 Tal -> Ral")));
+        Ok(())
+    }
+
+    #[test]
+    fn recipes_hide_used_quest_rewards() -> Result<()> {
+        let mut build = guide_build();
+        if let Some(r) = build.recipes.iter_mut().find(|r| r.name == "Imbue") {
+            r.quest = "Tools of the Trade".to_owned();
+        }
+        let quest_recipe = |name: &str, quest: &str| config::Recipe {
+            name: name.to_owned(),
+            kind: "socket".to_owned(),
+            quest: quest.to_owned(),
+            ..config::Recipe::default()
+        };
+        build.recipes.push(quest_recipe("Larzuk", "Siege on Harrogath"));
+        build.recipes.push(quest_recipe("Respec", "Akara respec"));
+        let blocks = crate::render::TextBlocks::default();
+        let quest_view = |quests: &[u16]| -> Result<Vec<(String, serde_json::Value)>> {
+            let mut info = live_info(5, &blocks, &[], &[], &[]);
+            info.build = Some(&build);
+            info.quests = quests;
+            let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+            Ok(json
+                .get("recipes")
+                .and_then(|r| r.as_array())
+                .context("recipes")?
+                .iter()
+                .map(|r| {
+                    (
+                        r.get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or_default()
+                            .to_owned(),
+                        r.get("quest").cloned().unwrap_or_default(),
+                    )
+                })
+                .filter(|(name, _)| ["Imbue", "Larzuk", "Respec"].contains(&name.as_str()))
+                .collect())
+        };
+        // Unread flags: every quest recipe stays, unmarked.
+        let null = serde_json::Value::Null;
+        assert_eq!(
+            quest_view(&[])?,
+            [
+                ("Imbue".to_owned(), null.clone()),
+                ("Larzuk".to_owned(), null.clone()),
+                ("Respec".to_owned(), null)
+            ]
+        );
+        // Elemental's live record: imbue used (gone), Act 5 not reached, respec pending.
+        let mut live = vec![0u16; 48];
+        for (word, value) in [(3, 0x1049), (41, 0x8002)] {
+            if let Some(w) = live.get_mut(word) {
+                *w = value;
+            }
+        }
+        assert_eq!(
+            quest_view(&live)?,
+            [
+                ("Larzuk".to_owned(), serde_json::json!("todo")),
+                ("Respec".to_owned(), serde_json::json!("ready"))
+            ]
+        );
         Ok(())
     }
 

@@ -274,6 +274,25 @@ impl Image {
         )
     }
 
+    /// Live address of the quest-flags global ([`crate::offsets::quest_flags`]), by a
+    /// structural search of `.data` ([`find_quest_flags`]; needs a game in progress). Reads the
+    /// PE header, `.data` and one header per pointer-like `.data` word (~45k small reads,
+    /// once per process).
+    ///
+    /// # Errors
+    /// Fails if `.data` can't be read or the search doesn't find exactly one record pair.
+    pub fn quest_flags_global(&self, mem: &impl ReadMem) -> Result<u64> {
+        let header_len = usize::try_from(HEADER_LEN.min(self.size))?;
+        let header = self.read_alias(mem, 0, header_len)?;
+        let (rva, vsize) = section(&header, b".data").context("no .data section in the PE header")?;
+        let len = usize::try_from(vsize)?.min(usize::try_from(self.size.saturating_sub(u64::from(rva)))?);
+        let data = self.read_alias(mem, u64::from(rva), len)?;
+        let found = find_quest_flags(mem, &data, u64::from(rva))?;
+        self.live_base
+            .checked_add(found)
+            .context("quest flags address overflow")
+    }
+
     /// Structural search for the unit table in `.data` (see [`find_unit_table`]); `.data` is
     /// taken from `image` if it was read, else read on its own.
     fn structural_rva(&self, mem: &impl ReadMem, header: &[u8], image: Option<&[u8]>) -> Result<u64> {
@@ -416,6 +435,44 @@ fn find_unit_table(mem: &impl ReadMem, data: &[u8], data_rva: u64) -> Result<u64
         [rva] => Ok(*rva),
         [] => bail!("no candidate in .data ({:#x} bytes)", data.len()),
         many => bail!("{} candidates at rva {many:#x?}", many.len()),
+    }
+}
+
+/// Finds the quest-flags global in `data` (the `.data` section, which starts at `data_rva`):
+/// the first of exactly one pair of adjacent 8-byte slots that both point to a quest-record
+/// header ([`crate::quests::is_header`]). Live 2026-11-18 exactly two slots matched, adjacent;
+/// the first holds the player's quest flags.
+///
+/// # Errors
+/// Fails unless exactly one adjacent pair is found; the error lists the matching RVAs.
+fn find_quest_flags(mem: &impl ReadMem, data: &[u8], data_rva: u64) -> Result<u64> {
+    let len = crate::offsets::quest_flags::HEADER_LEN;
+    let hits: Vec<usize> = data
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .enumerate()
+        .filter(|&(_, &w)| is_user_ptr(u64::from_le_bytes(w)))
+        .filter(|&(_, &w)| {
+            mem.read_bytes(u64::from_le_bytes(w), len)
+                .is_ok_and(|h| crate::quests::is_header(&h))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let pairs: Vec<usize> = hits
+        .windows(2)
+        .filter_map(|w| match *w {
+            [a, b] if b == a + 1 => Some(a),
+            _ => None,
+        })
+        .collect();
+    let rva = |i: usize| data_rva + (i as u64) * 8;
+    match pairs.as_slice() {
+        [first] => Ok(rva(*first)),
+        _ => bail!(
+            "expected one adjacent pair of quest-record slots in .data, found {:#x?}",
+            hits.iter().map(|&i| rva(i)).collect::<Vec<_>>()
+        ),
     }
 }
 
@@ -865,6 +922,50 @@ mod tests {
         let (img, mem) = image_fixture(&[0x10_0000], 0x1234, false);
         assert_eq!(img.read_alias(&mem, 0x10_0000, 3)?, vec![0x48, 0x03, 0xC7]);
         assert!(img.read_alias(&mem, img.size - 1, 2).is_err());
+        Ok(())
+    }
+
+    /// A quest-record header at `at` in `heap` (`heap` starts at `HEAP`): the buffer right
+    /// after it, 0x300 bits, 0x60 bytes.
+    fn put_quest_header(heap: &mut [u8], at: usize) {
+        let buf = (HEAP + at as u64 + 0x30).to_le_bytes();
+        for (off, bytes) in [
+            (0, &buf[..]),
+            (8, &0x300u32.to_le_bytes()[..]),
+            (0x28, &0x60u64.to_le_bytes()[..]),
+        ] {
+            heap.get_mut(at + off..at + off + bytes.len())
+                .into_iter()
+                .for_each(|d| d.copy_from_slice(bytes));
+        }
+    }
+
+    #[test]
+    fn quest_flags_take_the_first_of_the_adjacent_pair() -> Result<()> {
+        let mut heap = vec![0u8; 0x400];
+        put_quest_header(&mut heap, 0x100);
+        put_quest_header(&mut heap, 0x200);
+        put_quest_header(&mut heap, 0x300);
+        let mut mem = FakeMem::default();
+        mem.add(HEAP, heap);
+        let mut data = vec![0u8; 0x1000];
+        let put = |data: &mut [u8], off: usize, p: u64| {
+            data.get_mut(off..off + 8)
+                .into_iter()
+                .for_each(|d| d.copy_from_slice(&p.to_le_bytes()));
+        };
+        // A lone header pointer (decoy), a pointer to something else, then the pair.
+        put(&mut data, 0x40, HEAP + 0x300);
+        put(&mut data, 0x80, HEAP + 0x10);
+        put(&mut data, 0x800, HEAP + 0x100);
+        put(&mut data, 0x808, HEAP + 0x200);
+        assert_eq!(find_quest_flags(&mem, &data, DRVA)?, DRVA + 0x800);
+        // Without the pair: an error naming the lone hit.
+        put(&mut data, 0x808, 0);
+        let err = find_quest_flags(&mem, &data, DRVA)
+            .err()
+            .context("expected error")?;
+        assert!(err.to_string().contains("adjacent pair"), "{err}");
         Ok(())
     }
 }

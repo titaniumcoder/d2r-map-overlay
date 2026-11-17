@@ -143,6 +143,10 @@ pub struct Recipe {
     /// Its requirement as text (`"character level 17 (highest rune)"`).
     pub req: String,
     pub notes: String,
+    /// The quest whose reward this recipe is (`"Tools of the Trade"` for Charsi's imbue,
+    /// `"Siege on Harrogath"` for Larzuk's socket; a name from [`crate::quests::QUESTS`]),
+    /// empty for none. The dashboard drops the recipe once the reward is used.
+    pub quest: String,
 }
 
 /// The recipe kinds the dashboard groups by.
@@ -587,6 +591,12 @@ fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de::Err
                 recipe.name,
                 recipe.kind,
                 RECIPE_KINDS.join(", ")
+            ));
+        }
+        if !recipe.quest.is_empty() && crate::quests::word_of(&recipe.quest).is_none() {
+            warnings.push(format!(
+                "{label}: recipe {:?} names unknown quest {:?} (shown regardless of quest state)",
+                recipe.name, recipe.quest
             ));
         }
     }
@@ -1146,6 +1156,8 @@ mod tests {
              skill_plan = [{ skill = \"Firestorm\", points = 1, by_level = 2, note = \"start\" }, { skill = \"Fissure\", points = 2, by_level = 13 }]\n\
              [[recipes]]\nname = \"Stealth\"\nkind = \"runeword\"\ninputs = [\"Tal\", \"Eth\", \"2os armor\"]\nresult = \"Stealth\"\nreq = \"level 17\"\n\
              [[recipes]]\nname = \"Odd\"\nkind = \"alchemy\"\n\
+             [[recipes]]\nname = \"Imbue\"\nkind = \"upgrade\"\nquest = \"tools of the trade\"\n\
+             [[recipes]]\nname = \"Socket\"\nkind = \"socket\"\nquest = \"Larzuk\"\n\
              [[tips]]\nlevels = \"1-13\"\ntext = \"Den of Evil\"\n\
              [[tips]]\nlevels = \"75+\"\ntext = \"late\"\n\
              [[tips]]\nlevels = \"soon\"\ntext = \"bad\"\n";
@@ -1180,8 +1192,17 @@ mod tests {
                 },
             ]
         );
-        // The unknown recipe kind and the unreadable tip levels are warned about.
-        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert_eq!(
+            def.recipes.get(2).map(|r| r.quest.as_str()),
+            Some("tools of the trade")
+        );
+        // The unknown recipe kind, the unknown quest and the unreadable tip levels are
+        // warned about.
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("unknown quest \"Larzuk\"")),
+            "{warnings:?}"
+        );
         // Unknown skills of the build's class, unknown classes and unknown keys.
         let (_, _, warnings) = parse_build(
             "name = \"B\"\nclass = \"druid\"\nskill_plan = [{ skill = \"Blizzard\", points = 1, by_level = 2 }]\n",

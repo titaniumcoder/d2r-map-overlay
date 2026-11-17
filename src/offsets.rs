@@ -223,6 +223,35 @@ pub mod act_misc {
     pub const DIFFICULTY: u64 = 0x830;
 }
 
+/// The client's quest flags of the current game: a `.data` global points to a `BitBuffer`
+/// header, which points to 48 little-endian u16 words, one per quest (classic d2s order,
+/// see [`crate::quests::QUESTS`]). Live-verified 2026-11-18 (druid "Elemental", clvl 21,
+/// Normal, Acts 1–2 done, research/quests.py): the global sat at rva 0x1edaf78 (build
+/// `6ad81202-279c000`), found by a structural search of `.data` (exactly two adjacent slots
+/// point to a header of this shape; the first is this record, the second a record of
+/// unknown meaning with bits 13/15 on finished quests). `PlayerData +0x40/+0x48/+0x50` hold
+/// headers of the same shape per difficulty, but on the client they stay all zero.
+pub mod quest_flags {
+    /// ptr to the word buffer.
+    pub const BUFFER: u64 = 0x00;
+    /// u32 size in bits.
+    pub const BITS: u64 = 0x08;
+    /// u64 size in bytes.
+    pub const BYTES: u64 = 0x28;
+    /// The header's size (what the structural search reads).
+    pub const HEADER_LEN: usize = 0x30;
+    /// Expected [`BITS`] and [`BYTES`] values.
+    pub const BITS_VALUE: u32 = 0x300;
+    pub const BYTES_VALUE: u64 = 0x60;
+    /// Bit 0 of a quest word: reward granted (D2MOO `QFLAG_REWARDGRANTED`): the quest is done
+    /// and its reward taken. Live: set on every finished Act 1–2 quest.
+    pub const REWARD_GRANTED: u16 = 0x0001;
+    /// Bit 1: reward pending (`QFLAG_REWARDPENDING`): done, reward not yet taken (Charsi's
+    /// imbue, Larzuk's socket); D2MOO clears it when the reward is granted. Live: set alone
+    /// on word 41 (Akara's respec, unused), clear on Tools of the Trade (imbue used).
+    pub const REWARD_PENDING: u16 = 0x0002;
+}
+
 /// `PlayerData` (unit data of a player).
 pub mod player_data {
     /// Character name, NUL-terminated.

@@ -268,6 +268,7 @@ fn follow_game(
     let mut cow_stats = cows::Counter::open(cows::default_path(), journal::default_dir().as_deref());
     let mut dedup = Dedup::default();
     let mut items_table = ItemsTable::NotSearched;
+    let mut quest_flags = QuestFlags::default();
     loop {
         let start = Instant::now();
         // Hot-reload here, not only in `run`: this loop is where every consumer (valuables,
@@ -336,6 +337,7 @@ fn follow_game(
                     stage,
                     held_materials: &snap.held_materials,
                     white_bases: &snap.white_bases,
+                    quests: quest_flags.read(pid, mem, update.new_game),
                     equipped: &snap.equipped,
                     equipped_items: &snap.equipped_items,
                     owned: &snap.owned_names,
@@ -363,6 +365,7 @@ fn follow_game(
                 }
                 // Menu or loading: the dashboard keeps the last game, marked offline.
                 web::clear_live();
+                quest_flags.forget();
                 if dedup.hide(Hidden::NoGame) {
                     eprintln!("no game state (menu or loading?): {e:#}");
                     send(tx, Msg::Hide)?;
@@ -371,6 +374,72 @@ fn follow_game(
         }
         cow_stats.tick(Instant::now());
         thread::sleep(TICK.saturating_sub(start.elapsed()));
+    }
+}
+
+/// Wait between searches for the quest-flags global while it isn't found.
+const QUEST_SEARCH_EVERY: Duration = Duration::from_secs(10);
+/// Failed searches before giving up until the next game (each one reads `.data` and ~45k
+/// headers on the tick thread, so a miss must not repeat forever).
+const QUEST_SEARCH_TRIES: u32 = 3;
+
+/// The quest-flags global of the attached process ([`image::Image::quest_flags_global`]):
+/// searched during a game, at most every [`QUEST_SEARCH_EVERY`] and [`QUEST_SEARCH_TRIES`]
+/// times per game, until found; then the record is read through it each tick (48 words,
+/// cheap). The last good record is kept across a failed read, so used quest recipes don't
+/// flicker back; it is dropped on a new game and when the snapshot fails (menu, exit).
+#[derive(Debug, Default)]
+struct QuestFlags {
+    global: Option<u64>,
+    last_search: Option<Instant>,
+    /// Failed searches in this game.
+    failures: u32,
+    /// The last record read successfully.
+    record: Vec<u16>,
+    /// The last search error printed (a repeat isn't printed again).
+    last_err: String,
+}
+
+impl QuestFlags {
+    /// The current game's quest record (the last good one if this tick's read failed); empty
+    /// until one was read. `new_game` resets the record and the search budget.
+    fn read(&mut self, pid: u32, mem: &ProcMem, new_game: bool) -> &[u16] {
+        if new_game {
+            self.record.clear();
+            self.failures = 0;
+        }
+        let due = self.last_search.is_none_or(|t| t.elapsed() >= QUEST_SEARCH_EVERY);
+        if self.global.is_none() && self.failures < QUEST_SEARCH_TRIES && due {
+            self.last_search = Some(Instant::now());
+            let found = process::read_maps(pid)
+                .and_then(|maps| image::find_image(&maps, mem)?.quest_flags_global(mem));
+            match found {
+                Ok(addr) => {
+                    eprintln!("quest flags at {addr:#x}");
+                    self.global = Some(addr);
+                }
+                Err(e) => {
+                    self.failures += 1;
+                    let msg = format!("{e:#}");
+                    if msg != self.last_err {
+                        eprintln!(
+                            "quest flags not found ({}/{QUEST_SEARCH_TRIES} this game): {msg}",
+                            self.failures
+                        );
+                        self.last_err = msg;
+                    }
+                }
+            }
+        }
+        if let Some(words) = self.global.and_then(|g| crate::quests::read(mem, g).ok()) {
+            self.record = words;
+        }
+        &self.record
+    }
+
+    /// Drops the record (no game: menu, loading, exit); the global and budget stay.
+    fn forget(&mut self) {
+        self.record.clear();
     }
 }
 

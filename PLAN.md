@@ -100,6 +100,19 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   points, no unspent `newskills` stat). Gear-granted skills sit in the list with 0 hard points; no bonus-level
   field in the node's first 0x100 bytes. Tree layout from `research/gen_skills.py` → `src/skills_data.rs`.
 
+- **Quest flags** (live 2026-11-18, druid "Elemental" clvl 21 Normal, probe `research/quests.py`):
+  PlayerData `+0x40/+0x48/+0x50` point to per-difficulty quest BitBuffers, but on the client they
+  stay **all zero** (server copy). The client's record of the current game is a `.data` global
+  (rva 0x1edaf78 in build `6ad81202-279c000`; found by structural search: exactly two adjacent
+  `.data` slots point to a header `{+0x00 buffer ptr, +0x08 u32 0x300 bits, +0x28 u64 0x60 bytes}`,
+  the first is the record, the second an unknown record with bits 13/15 on finished quests).
+  Buffer = 48 u16 words in classic d2s order (1–6 Act 1: Den, Burial Grounds, **3 Tools of the
+  Trade**, Cain, Tower, Andariel; 9–14 Act 2; 17–22 Act 3; 25–27 Act 4; **35 Siege on Harrogath**
+  … 40 Eve of Destruction; 41 Akara respec; intros/completions in 0/7/8/15/16/23/24/28).
+  Bits (D2MOO): 0 reward granted, 1 reward pending, 12 primary goal done. Live: Acts 1–2 words all
+  bit 0 (Seven Tombs `0x3e25`), Tools of the Trade `0x1049` = imbue used (user confirmed), Blood
+  Raven `0x000c` (not done), Act 3 entered (word 16 = 1, quests 0), Act 5 all 0, respec word
+  `0x8002` = pending (unused). Assumed to be the current game's difficulty (only Normal seen).
 ## Markers
 - **Waypoint**: object ids table (119, 157 seen; full list from objects.txt waypoint rows).
 - **Exits**: type-5 presets + room-tile links (link target level id → label "→ Jail Level 2").
@@ -328,6 +341,12 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
   are all owned. The page chimes (WebAudio, 🔔 toggle) when a key appears that this character hasn't had.
 - [x] Guide stages, recipes panel, upgrade chime, favicon (2026-11-17).
+- **Quest-reward recipes** (user request, 2026-11-18): a `[[recipes]]` entry may name its quest
+  (`quest = "Tools of the Trade"`, `"Siege on Harrogath"`, `"Prison of Ice"`; names in
+  `src/quests.rs`). The Recipes panel drops it once the reward is used (bit 0 set, bit 1 clear),
+  marks it "reward ready" (bit 1) or "quest not done yet", and shows it unmarked while the flags
+  are unread. `research/gen_build.py` derives the key from the recipe name (imbue/Larzuk/Anya).
+- [x] Quest flags reader + quest-reward recipes (2026-11-18).
 - **Hot reload**: the mtime watcher watches `config.toml` AND the `builds/` directory (a cheap
   `read_dir` per tick — a directory's own mtime would miss in-place edits of a build file).
 - **Dashboard "Where to go"**: the level-suggestion band is structured (`mlvl` + `bucket`:
