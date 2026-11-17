@@ -473,7 +473,7 @@ const RUNEWORD_LEVELS: [(&str, u32); 20] = [
 /// go" panel re-group them into its below / equal / above columns.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LevelEntry {
-    /// The rendered line (`Level 34 → Halls of Death's Calling (34)` for the band's first
+    /// The rendered line (`Level 34 → Halls of Pain (34)` for the band's first
     /// entry, `Halls of Anguish (33)` for the rest) — the overlay's own-level-first reading
     /// order, kept as the text even when the dashboard re-groups by [`LevelEntry::bucket`].
     pub text: String,
@@ -1192,25 +1192,25 @@ mod tests {
         // +5 above and out of the band (user example: 23 → 18–27, i.e. −5…+4).
         let areas = level_suggestions(Some(34), Some(0));
         let head: &[(&str, u8)] = &[
-            ("Halls of Death's Calling", 34),
+            ("Halls of Pain", 34),
             ("Halls of Anguish", 33),
-            ("Nihlathaks Temple", 32),
-            ("Crystalized Cavern Level 1", 29),
-            ("Cellar of Pity", 29),
-            ("Crystalized Cavern Level 2", 29),
-            ("Echo Chamber", 29),
-            ("Glacial Caves Level 1", 29),
-            ("Glacial Caves Level 2", 29),
+            ("Nihlathak's Temple", 32),
+            ("Crystalline Passage", 29),
+            ("Frozen River", 29),
+            ("Glacial Trail", 29),
+            ("Drifter Cavern", 29),
+            ("The Ancients' Way", 29),
+            ("Icy Cellar", 29),
         ];
         assert_eq!(areas.get(..9), Some(head));
-        let tail: &[(&str, u8)] = &[("Halls of Vaught", 36), ("Rocky Summit", 37)];
+        let tail: &[(&str, u8)] = &[("Halls of Vaught", 36), ("Arreat Summit", 37)];
         assert_eq!(areas.get(9..), Some(tail));
     }
 
     #[test]
     fn level_suggestions_band_edges_and_skip_the_cow_level() {
         // Normal 23: the user-specified band is 18–27 (23 − 5 … 23 + 4, user example
-        // 2026-11-17): the mlvl 17 areas and the mlvl 28 Chaos Sanctum are out, the own-level
+        // 2026-11-17): the mlvl 17 areas and the mlvl 28 Chaos Sanctuary are out, the own-level
         // areas first, the above-level ones last and mildest first.
         let areas = level_suggestions(Some(23), Some(0));
         let head: &[(&str, u8)] = &[

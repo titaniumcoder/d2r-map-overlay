@@ -1,10 +1,14 @@
 """Generate src/levels_data.rs from blizzhackers/d2data (D2R JSON game tables).
 
-Usage: python3 -I research/gen_levels.py <dir with levels.json, monstats.json, superuniques.json> > src/levels_data.rs
+Usage: python3 -I research/gen_levels.py <dir with levels.json, monstats.json, superuniques.json, allstrings-eng.json> > src/levels_data.rs
 Fetch the tables with:
   gh api repos/blizzhackers/d2data/contents/json/levels.json -H "Accept: application/vnd.github.raw" > levels.json
   gh api repos/blizzhackers/d2data/contents/json/monstats.json -H "Accept: application/vnd.github.raw" > monstats.json
   gh api repos/blizzhackers/d2data/contents/json/superuniques.json -H "Accept: application/vnd.github.raw" > superuniques.json
+  gh api repos/blizzhackers/d2data/contents/json/allstrings-eng.json -H "Accept: application/vnd.github.raw" > allstrings-eng.json
+Area names are the displayed English strings: levels.txt LevelName is a string-table key, and
+several keys are old internal names ("Cellar of Pity" shows as "Frozen River", "Hell1" as
+"Abaddon"), so the name is looked up in allstrings-eng.json, falling back to the key.
 Monster levels are the expansion columns (MonLvlEx, MonLvlEx(N), MonLvlEx(H)).
 Immunities (IMMUNITIES) are resist >= 100 in the monstats Res* columns of the spawned types.
 """
@@ -18,6 +22,8 @@ levels = levels if isinstance(levels, list) else list(levels.values())
 monstats = monstats if isinstance(monstats, list) else list(monstats.values())
 mon = {r.get("Id"): r for r in monstats}
 supers = json.load(open(f"{src}/superuniques.json"))
+strings = json.load(open(f"{src}/allstrings-eng.json"))
+KEEP_KEY = {"Duriel's Lair", "Moo Moo Farm"}
 supers = supers if isinstance(supers, list) else list(supers.values())
 
 # Monster preset txt id of a superunique's spawn point = this + hcIdx.
@@ -52,7 +58,10 @@ print()
 print("/// (level id, area name, expansion monster level for Normal, Nightmare, Hell).")
 print("pub const LEVELS: &[(u32, &str, [u8; 3])] = &[")
 for r in sorted(levels, key=lambda r: r.get("Id", 0)):
-    lid, name = r.get("Id"), r.get("LevelName") or r.get("Name") or ""
+    lid, key = r.get("Id"), r.get("LevelName") or r.get("Name") or ""
+    # Two keys collide in the merged string table with an unrelated entry; the game shows
+    # the key itself for these (Duriel's Lair, the cow level).
+    name = key if key in KEEP_KEY else (strings.get(key) or key)
     lv = [r.get("MonLvlEx") or 0, r.get("MonLvlEx(N)") or 0, r.get("MonLvlEx(H)") or 0]
     if lid is None or lid == 0:
         continue
