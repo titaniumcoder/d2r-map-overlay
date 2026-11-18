@@ -1062,11 +1062,11 @@ fn matching_bases<'a>(text: &str, bases: &'a [String]) -> Vec<&'a str> {
 
 /// The current stage's recipes (`live_json`'s `recipes` section; an `upgrade` recipe that
 /// makes a rune or gem — `material` — only when another recipe still misses it), each
-/// `{ "name", "kind", "material",
-/// "result", "req", "notes", "quest", "inputs": [...] }` (`quest`: `"ready"` when the recipe's
-/// quest reward waits to be taken, `"todo"` while the quest isn't done, else `null`; a recipe
-/// whose quest reward is used is left out) with every input as `{ "text", "status",
-/// "have", "need", "hint" }`: `status` is `"have"`/`"missing"` for a rune or gem (counted over
+/// `{ "name", "kind", "material", "result", "req", "notes", "quest", "inputs": [...] }`
+/// (`quest`: `"ready"` when the recipe's quest reward waits to be taken, `"todo"` while the
+/// quest isn't done, else `null`; a recipe whose quest reward is used, or a runeword the
+/// character already has, is left out) with every input as `{ "text", "status", "have",
+/// "need", "hint" }`: `status` is `"have"`/`"missing"` for a rune or gem (counted over
 /// all of the recipe's lines naming it, against [`owned_materials`]), `"likely"` for a base
 /// line naming a white socketed base the character holds (`hint` lists them), else
 /// `"check"` (a base the reader can't verify).
@@ -1079,10 +1079,20 @@ fn recipes_json(info: &LiveInfo) -> Vec<serde_json::Value> {
     let reward = |r: &crate::config::Recipe| {
         crate::quests::word_of(&r.quest).and_then(|w| crate::quests::reward(info.quests, w))
     };
+    // A runeword the character already has (worn, carried, cubed, personally or shared
+    // stashed: runewords are named in those lists since 442de00) is built: its recipe goes
+    // (user request, 2026-11-18). Other kinds have no such signal: a craft's result is a rare
+    // with a random name, cube recipes (repair, recharge) are repeatable, a socket recipe's
+    // base isn't told apart from a found one; only their quest rewards (above) drop them.
+    let worn = crate::game::worn_names(info.equipped_items);
+    let already_made = |r: &crate::config::Recipe| {
+        r.kind == "runeword"
+            && crate::info::piece_tick(&r.name, &worn, info.owned, info.stash_owned).is_some()
+    };
     let recipes: Vec<&crate::config::Recipe> = build
         .recipes
         .iter()
-        .filter(|r| reward(r) != Some(crate::quests::Reward::Used))
+        .filter(|r| reward(r) != Some(crate::quests::Reward::Used) && !already_made(r))
         .collect();
     let materials = owned_materials(info);
     // The runes and gems the other recipes still miss: an `upgrade` recipe (3 Ral → Ort,
@@ -4086,6 +4096,49 @@ mod tests {
             })
             .and_then(|r| r.get("name").cloned());
         assert_eq!(upgrade, Some(serde_json::json!("3 Tal -> Ral")));
+        Ok(())
+    }
+
+    #[test]
+    fn recipes_hide_runewords_already_built() -> Result<()> {
+        let build = guide_build();
+        let blocks = crate::render::TextBlocks::default();
+        let names = |owned: &[String], stash_owned: &[String]| -> Result<Vec<String>> {
+            let mut info = live_info(5, &blocks, &[], &[], stash_owned);
+            info.build = Some(&build);
+            info.owned = owned;
+            let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+            Ok(json
+                .get("recipes")
+                .and_then(|r| r.as_array())
+                .context("recipes")?
+                .iter()
+                .filter_map(|r| r.get("name").and_then(|n| n.as_str()).map(str::to_owned))
+                .collect())
+        };
+        let all = names(&[], &[])?;
+        assert!(
+            all.contains(&"Stealth".to_owned()) && all.contains(&"Leaf".to_owned()),
+            "{all:?}"
+        );
+        // Owned (worn, carried, cubed or private stash), any case: Stealth goes, Leaf stays.
+        let got = names(&["stealth".to_owned()], &[])?;
+        assert!(
+            !got.contains(&"Stealth".to_owned()) && got.contains(&"Leaf".to_owned()),
+            "{got:?}"
+        );
+        // In the shared stash counts too.
+        let got = names(&[], &["Leaf".to_owned()])?;
+        assert!(
+            !got.contains(&"Leaf".to_owned()) && got.contains(&"Stealth".to_owned()),
+            "{got:?}"
+        );
+        // Only runewords: an owned item named like another kind's recipe keeps it.
+        let got = names(&["Recharge".to_owned(), "Imbue".to_owned()], &[])?;
+        assert!(
+            got.contains(&"Recharge".to_owned()) && got.contains(&"Imbue".to_owned()),
+            "{got:?}"
+        );
         Ok(())
     }
 
