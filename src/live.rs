@@ -267,6 +267,7 @@ fn publish_dashboard(
         equipped: &snap.equipped,
         equipped_items: &snap.equipped_items,
         owned: &snap.owned_names,
+        runeword_copies: &snap.runeword_copies,
         stash: &snap.stash,
         stash_owned: &snap.stash_names,
         skills: &snap.skills,

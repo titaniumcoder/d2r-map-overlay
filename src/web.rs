@@ -614,6 +614,9 @@ pub struct LiveInfo<'a> {
     /// Display names of the identified unique/set items the character owns (equipped,
     /// carried, personally stashed): the grid pieces' ✓ ticks.
     pub owned: &'a [String],
+    /// One name per runeword copy outside the shared stash, the mercenary's worn ones included
+    /// ([`crate::game::Snapshot::runeword_copies`]): the Recipes panel's built count.
+    pub runeword_copies: &'a [String],
     /// The (session-cached) shared-stash tabs, shown in their own panel.
     pub stash: &'a [crate::stash::StashTab],
     /// Names of the identified unique/set items in the shared stash, emitted as
@@ -1060,13 +1063,48 @@ fn matching_bases<'a>(text: &str, bases: &'a [String]) -> Vec<&'a str> {
         .collect()
 }
 
+/// How many copies of runeword `name` the character has: one per [`LiveInfo::runeword_copies`]
+/// entry (worn, carried, cubed, private stash, the mercenary's worn) plus one per runeword
+/// item in the shared-stash tabs. The two sources don't overlap: the shared stash's items are
+/// owned by its tab units, never by the player.
+fn runeword_copies(info: &LiveInfo, name: &str) -> usize {
+    let held = info
+        .runeword_copies
+        .iter()
+        .filter(|n| crate::info::same_name(n, name))
+        .count();
+    let stashed = info
+        .stash
+        .iter()
+        .flat_map(|tab| &tab.items)
+        .filter(|item| item.runeword && crate::info::same_name(&item.name, name))
+        .count();
+    held + stashed
+}
+
+/// How many copies of runeword `name` the stage `build` wants: the player and merc slots
+/// whose piece list names it, at least one (a recipe for a runeword no slot lists).
+fn runeword_slots(build: &crate::config::Build, name: &str) -> usize {
+    build
+        .slots
+        .values()
+        .chain(build.merc_slots.values())
+        .filter(|pieces| {
+            pieces
+                .iter()
+                .any(|p| crate::info::same_name(crate::info::piece_name(p), name))
+        })
+        .count()
+        .max(1)
+}
+
 /// The current stage's recipes (`live_json`'s `recipes` section; an `upgrade` recipe that
 /// makes a rune or gem — `material` — only when another recipe still misses it), each
 /// `{ "name", "kind", "material", "result", "req", "notes", "quest", "inputs": [...] }`
 /// (`quest`: `"ready"` when the recipe's quest reward waits to be taken, `"todo"` while the
 /// quest isn't done, else `null`; a recipe whose quest reward is used, or a runeword the
-/// character already has, is left out) with every input as `{ "text", "status", "have",
-/// "need", "hint" }`: `status` is `"have"`/`"missing"` for a rune or gem (counted over
+/// character has a copy of for every stage slot wanting it, is left out) with every input as
+/// `{ "text", "status", "have", "need", "hint" }`: `status` is `"have"`/`"missing"` for a rune or gem (counted over
 /// all of the recipe's lines naming it, against [`owned_materials`]), `"likely"` for a base
 /// line naming a white socketed base the character holds (`hint` lists them), else
 /// `"check"` (a base the reader can't verify).
@@ -1079,15 +1117,14 @@ fn recipes_json(info: &LiveInfo) -> Vec<serde_json::Value> {
     let reward = |r: &crate::config::Recipe| {
         crate::quests::word_of(&r.quest).and_then(|w| crate::quests::reward(info.quests, w))
     };
-    // A runeword the character already has (worn, carried, cubed, personally or shared
-    // stashed: runewords are named in those lists since 442de00) is built: its recipe goes
-    // (user request, 2026-11-18). Other kinds have no such signal: a craft's result is a rare
-    // with a random name, cube recipes (repair, recharge) are repeatable, a socket recipe's
-    // base isn't told apart from a found one; only their quest rewards (above) drop them.
-    let worn = crate::game::worn_names(info.equipped_items);
+    // A runeword is built once the character has a copy for every slot of the stage that
+    // wants it (player and merc slots naming it, at least one): its recipe goes (user request,
+    // 2026-11-18; Spirit sword plus Spirit shield stays until both exist). Other kinds have no
+    // such signal: a craft's result is a rare with a random name, cube recipes (repair,
+    // recharge) are repeatable, a socket recipe's base isn't told apart from a found one; only
+    // their quest rewards (above) drop them.
     let already_made = |r: &crate::config::Recipe| {
-        r.kind == "runeword"
-            && crate::info::piece_tick(&r.name, &worn, info.owned, info.stash_owned).is_some()
+        r.kind == "runeword" && runeword_copies(info, &r.name) >= runeword_slots(build, &r.name)
     };
     let recipes: Vec<&crate::config::Recipe> = build
         .recipes
@@ -3228,6 +3265,7 @@ mod tests {
             equipped,
             equipped_items: &[],
             owned: &[],
+            runeword_copies: &[],
             stash,
             stash_owned,
             skills: &EMPTY_SKILLS,
@@ -3269,6 +3307,7 @@ mod tests {
             equipped: &[],
             equipped_items,
             owned,
+            runeword_copies: &[],
             stash: &[],
             stash_owned: &[],
             skills: &EMPTY_SKILLS,
@@ -4099,46 +4138,85 @@ mod tests {
         Ok(())
     }
 
+    /// The recipe names `live_json` lists for `build` with these runeword copies held and
+    /// these runewords in a shared-stash page.
+    fn recipe_names(build: &config::Build, copies: &[String], stashed: &[&str]) -> Result<Vec<String>> {
+        let blocks = crate::render::TextBlocks::default();
+        let stash = vec![crate::stash::StashTab {
+            kind: crate::stash::TabKind::Page(1),
+            items: stashed
+                .iter()
+                .map(|&name| crate::stash::StashItem {
+                    runeword: true,
+                    ..stash_item(name, "aar", crate::offsets::item_data::QUALITY_NORMAL, None)
+                })
+                .collect(),
+        }];
+        let mut info = live_info(5, &blocks, &[], &stash, &[]);
+        info.build = Some(build);
+        info.runeword_copies = copies;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        Ok(json
+            .get("recipes")
+            .and_then(|r| r.as_array())
+            .context("recipes")?
+            .iter()
+            .filter_map(|r| r.get("name").and_then(|n| n.as_str()).map(str::to_owned))
+            .collect())
+    }
+
     #[test]
     fn recipes_hide_runewords_already_built() -> Result<()> {
         let build = guide_build();
-        let blocks = crate::render::TextBlocks::default();
-        let names = |owned: &[String], stash_owned: &[String]| -> Result<Vec<String>> {
-            let mut info = live_info(5, &blocks, &[], &[], stash_owned);
-            info.build = Some(&build);
-            info.owned = owned;
-            let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-            Ok(json
-                .get("recipes")
-                .and_then(|r| r.as_array())
-                .context("recipes")?
-                .iter()
-                .filter_map(|r| r.get("name").and_then(|n| n.as_str()).map(str::to_owned))
-                .collect())
-        };
-        let all = names(&[], &[])?;
+        let all = recipe_names(&build, &[], &[])?;
         assert!(
             all.contains(&"Stealth".to_owned()) && all.contains(&"Leaf".to_owned()),
             "{all:?}"
         );
-        // Owned (worn, carried, cubed or private stash), any case: Stealth goes, Leaf stays.
-        let got = names(&["stealth".to_owned()], &[])?;
+        // Held (worn, carried, cubed, private stash or on the merc), any case: Stealth goes,
+        // Leaf stays.
+        let got = recipe_names(&build, &["stealth".to_owned()], &[])?;
         assert!(
             !got.contains(&"Stealth".to_owned()) && got.contains(&"Leaf".to_owned()),
             "{got:?}"
         );
         // In the shared stash counts too.
-        let got = names(&[], &["Leaf".to_owned()])?;
+        let got = recipe_names(&build, &[], &["Leaf"])?;
         assert!(
             !got.contains(&"Leaf".to_owned()) && got.contains(&"Stealth".to_owned()),
             "{got:?}"
         );
         // Only runewords: an owned item named like another kind's recipe keeps it.
-        let got = names(&["Recharge".to_owned(), "Imbue".to_owned()], &[])?;
+        let got = recipe_names(&build, &["Recharge".to_owned(), "Imbue".to_owned()], &[])?;
         assert!(
             got.contains(&"Recharge".to_owned()) && got.contains(&"Imbue".to_owned()),
             "{got:?}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn recipes_keep_runewords_until_every_slot_has_a_copy() -> Result<()> {
+        let mut build = guide_build();
+        // Stealth wanted twice: the body slot and a merc body slot.
+        build
+            .merc_slots
+            .insert("body".to_owned(), vec!["Stealth@17".to_owned()]);
+        assert_eq!(runeword_slots(&build, "Stealth"), 2);
+        assert_eq!(runeword_slots(&build, "Leaf"), 1);
+        assert_eq!(runeword_slots(&build, "Spirit"), 1, "listed in no slot: one copy");
+        let stealth = |copies: &[String], stashed: &[&str]| -> Result<bool> {
+            Ok(recipe_names(&build, copies, stashed)?.contains(&"Stealth".to_owned()))
+        };
+        assert!(stealth(&[], &[])?);
+        // Needed 2, owned 1: shown.
+        assert!(stealth(&["Stealth".to_owned()], &[])?);
+        assert!(stealth(&[], &["Stealth"])?);
+        // Owned 2, held and stashed in any mix: hidden.
+        assert!(!stealth(&["Stealth".to_owned(), "Stealth".to_owned()], &[])?);
+        assert!(!stealth(&["Stealth".to_owned()], &["Stealth"])?);
+        // Another runeword's copy doesn't count.
+        assert!(stealth(&["Stealth".to_owned(), "Leaf".to_owned()], &[])?);
         Ok(())
     }
 
@@ -4270,6 +4348,7 @@ mod tests {
             equipped: &[],
             equipped_items: &[],
             owned: &[],
+            runeword_copies: &[],
             stash: &[],
             stash_owned: &[],
             skills: &EMPTY_SKILLS,
@@ -4410,6 +4489,7 @@ mod tests {
             equipped: &[],
             equipped_items: &equipped_items,
             owned: &[],
+            runeword_copies: &[],
             stash: &[],
             stash_owned: &[],
             skills: &EMPTY_SKILLS,
@@ -4473,6 +4553,7 @@ mod tests {
                 equipped: &[],
                 equipped_items,
                 owned: &[],
+                runeword_copies: &[],
                 stash: &[],
                 stash_owned: &[],
                 skills: &EMPTY_SKILLS,

@@ -109,6 +109,11 @@ pub struct Snapshot {
     /// ✓ (the worn ones apart: [`worn_names`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned_names: Vec<String>,
+    /// One name per runeword copy the player has outside the shared stash (worn, carried,
+    /// cubed, privately stashed) or the mercenary wears, duplicates kept: the Recipes panel
+    /// keeps a runeword recipe until every slot of the stage that wants it can be filled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runeword_copies: Vec<String>,
     /// The shared-stash tabs as read this snapshot. Empty once the tab units vanish (stash UI
     /// closed); the session keeps the last capture ([`crate::session::Session`]). Left out of
     /// the JSON when empty, so older dumps stay loadable.
@@ -458,6 +463,16 @@ struct ItemScan {
     equipped_items: HashMap<u32, Vec<Equipped>>,
     /// The same for the mercenary's gear (owner `NO_OWNER`).
     merc_equipped: Vec<(u8, u32)>,
+    /// One name per runeword copy, per owning candidate (worn, carried, cubed, private stash)
+    /// and under `NO_OWNER` for the mercenary's worn ones: [`Snapshot::runeword_copies`].
+    runeword_copies: HashMap<u32, Vec<String>>,
+}
+
+/// Appends `name` to `names` unless it is there already ([`crate::info::same_name`]).
+fn push_unique_name(names: &mut Vec<String>, name: String) {
+    if !names.iter().any(|n| crate::info::same_name(n, &name)) {
+        names.push(name);
+    }
 }
 
 /// One live shared-stash tab of the player ([`Reader::shared_tabs`]).
@@ -933,6 +948,12 @@ pub fn snapshot(
     let merc_equipped = scan.merc_equipped.clone();
     let equipped_items = scan.equipped_items.get(&chosen.id).cloned().unwrap_or_default();
     let owned_names = scan.owned_names.get(&chosen.id).cloned().unwrap_or_default();
+    let runeword_copies: Vec<String> = [chosen.id, item_data::NO_OWNER]
+        .iter()
+        .filter_map(|id| scan.runeword_copies.get(id))
+        .flatten()
+        .cloned()
+        .collect();
 
     let LevelWalk {
         mut level,
@@ -980,6 +1001,7 @@ pub fn snapshot(
         merc_equipped,
         equipped_items,
         owned_names,
+        runeword_copies,
         stash,
         stash_names,
         player_candidates: candidates,
@@ -1845,24 +1867,30 @@ impl<M: ReadMem> Reader<'_, M> {
                 self.capture_weapon_wsm(&head, owner, items_table, &mut scan.weapons);
             }
             // Owned identified unique/set items and runewords (worn, carried, cubed or in the
-            // private stash): the `BiS` list marks owned pieces with a ✓.
-            if let Some(owner) = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok())
-                && candidates.contains(&owner)
+            // private stash): the `BiS` list marks owned pieces with a ✓. The mercenary's worn
+            // runewords (owner `NO_OWNER`, equipped) count as copies only.
+            let item_owner = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok());
+            let merc_worn = item_owner == Some(item_data::NO_OWNER) && self.equipped_slot(&head).is_some();
+            if let Some(owner) = item_owner
+                && (merc_worn || candidates.contains(&owner))
             {
                 let quality = self.equipped_quality(&head);
-                let name = if matches!(quality, Some(item_data::QUALITY_UNIQUE | item_data::QUALITY_SET)) {
-                    self.item_fields(addr, &head, items_table)
-                        .ok()
-                        .and_then(|d| valuables::unique_set_name(&d).map(str::to_owned))
+                if matches!(quality, Some(item_data::QUALITY_UNIQUE | item_data::QUALITY_SET)) {
+                    let name = (!merc_worn)
+                        .then(|| self.item_fields(addr, &head, items_table).ok())
+                        .flatten()
+                        .and_then(|d| valuables::unique_set_name(&d).map(str::to_owned));
+                    if let Some(name) = name {
+                        push_unique_name(scan.owned_names.entry(owner).or_default(), name);
+                    }
                 } else {
                     let flags = head.unit_data.and_then(|d| self.u32(d, item_data::FLAGS).ok());
-                    flags.and_then(|f| self.runeword_name(addr, f, items_table))
-                };
-                let names = scan.owned_names.entry(owner).or_default();
-                if let Some(name) = name
-                    && !names.iter().any(|n| crate::info::same_name(n, &name))
-                {
-                    names.push(name);
+                    if let Some(name) = flags.and_then(|f| self.runeword_name(addr, f, items_table)) {
+                        scan.runeword_copies.entry(owner).or_default().push(name.clone());
+                        if !merc_worn {
+                            push_unique_name(scan.owned_names.entry(owner).or_default(), name);
+                        }
+                    }
                 }
             }
             // Equipped pieces by owner kind, for the `BiS` per-slot display.
@@ -3062,10 +3090,30 @@ mod tests {
         stored_item(&mut m, I4, (40, 4, id, 0), (1, 255), &[], I5)?;
         set_owner(&mut m, I4, BOB_ID)?;
         set_body(&mut m, I4, 3)?;
-        // The mercenary's equipped armour (NO_OWNER, body 3): pairs only, not enriched.
-        stored_item(&mut m, I5, (40, 2, id, 0), (1, 255), &[], 0)?;
+        // The mercenary's equipped armour (NO_OWNER, body 3): pairs only, not enriched. A
+        // runeword over the same Tir/Ral socket chain, so a second copy of Leaf.
+        stored_item(
+            &mut m,
+            I5,
+            (40, 2, id | item_data::FLAG_RUNEWORD, 0),
+            (1, 255),
+            &[],
+            I6,
+        )?;
         set_owner(&mut m, I5, item_data::NO_OWNER)?;
         set_body(&mut m, I5, 3)?;
+        patch(&mut m, I5, UNIT_SIZE, unit::INVENTORY, &INV0.to_le_bytes())?;
+        // The same runeword owned by nobody but in no body slot (ground, shop): no copy.
+        stored_item(
+            &mut m,
+            I6,
+            (40, 2, id | item_data::FLAG_RUNEWORD, 0),
+            (1, 255),
+            &[],
+            0,
+        )?;
+        set_owner(&mut m, I6, item_data::NO_OWNER)?;
+        patch(&mut m, I6, UNIT_SIZE, unit::INVENTORY, &INV0.to_le_bytes())?;
         base_items_table(&mut m)?;
 
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
@@ -3102,6 +3150,8 @@ mod tests {
             "a worn runeword is owned: {:?}",
             s.owned_names
         );
+        // Bob's copy and the merc's, each counted; the unworn ownerless one not.
+        assert_eq!(s.runeword_copies, ["Leaf", "Leaf"]);
         assert_eq!(
             worn_names(eq),
             ["Harlequin Crest", "Cleglaw's Claw", "Leaf"],

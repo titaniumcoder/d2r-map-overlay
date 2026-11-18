@@ -430,11 +430,14 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   marks it "reward ready" (bit 1) or "quest not done yet", and shows it unmarked while the flags
   are unread. `research/gen_build.py` derives the key from the recipe name (imbue/Larzuk/Anya).
 - [x] Quest flags reader + quest-reward recipes (2026-11-18).
-- Built runewords (user request, 2026-11-18): a `runeword` recipe whose runeword the character
-  has (worn, carried, cubed, private or shared stash; `info::piece_tick` on the recipe name) is
-  dropped from the Recipes panel. Other kinds have no reliable "built" signal (craft results are
-  randomly named rares, cube recipes repeat, a socketed base isn't told apart from a found one):
-  only their quest rewards hide them.
+- Built runewords (user request, 2026-11-18): a `runeword` recipe is dropped from the Recipes
+  panel once the character has as many copies as the current stage wants: needed = the player
+  `[slots]` and `[merc_slots]` whose piece list names the runeword (at least 1; Spirit sword +
+  Spirit shield needs 2), owned = `Snapshot::runeword_copies` (one entry per copy, worn, carried,
+  cubed, private stash and the merc's worn ones) plus the runeword items in the shared-stash
+  tabs (`web::runeword_copies`; the sources don't overlap). Other kinds have no reliable
+  "built" signal (craft results are randomly named rares, cube recipes repeat, a socketed base
+  isn't told apart from a found one): only their quest rewards hide them.
 - **Hot reload**: the mtime watcher watches `config.toml` AND the `builds/` directory (a cheap
   `read_dir` per tick — a directory's own mtime would miss in-place edits of a build file).
 - **Dashboard "Where to go"**: the level-suggestion band is structured (`mlvl` + `bucket`:

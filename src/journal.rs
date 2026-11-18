@@ -638,6 +638,7 @@ mod tests {
             merc_equipped: vec![],
             equipped_items: vec![],
             owned_names: vec![],
+            runeword_copies: vec![],
             stash: vec![],
             stash_names: vec![],
             player_candidates: vec![],
