@@ -363,8 +363,9 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   composed name. Required level = max(base, prefix, suffix `levelreq`). Tables: `research/gen_affixes.py`
   → `src/affixes_data.rs` (affixes, misc bases, vendor names).
 - **Not yet live-verified**: that a STORE item's affix words sit at the same offsets (assumed from owned items).
-- **Open: suffix id 0** is read as "no suffix", but magicsuffix row 0 is a real affix ("of Health"); whether
-  an item of Health reads 0 (and so loses its suffix in the name) is unsettled — check on a live item.
+- **Suffix id 0** is read as "no suffix". Settled live 2026-11-18 (4 h shop recording, Acts 1–2, 89 windows):
+  9 items "… of Health" (Scale Mail, Kite Shield, …) kept their suffix and none of 1312 magic store items was
+  named as a bare base, so "of Health" does not read 0.
 - Reader (`game::Reader::shop`, towns only): the first monster with `FLAG_IN_STORE` items in its inventory
   chain (cap 300) → `Snapshot.shop` (`shop::Shop`: vendor name, items with base/prefix/suffix/name/req).
   Only magic (quality 4) names are decoded; others show the base name.

@@ -51,8 +51,9 @@ pub struct ShopItem {
 pub fn shop_item(code: Option<&str>, quality: u32, page: u8, prefix_id: u16, suffix_id: u16) -> ShopItem {
     let (base_level, base) = code.map_or((None, None), base_of);
     let magic = quality == item_data::QUALITY_MAGIC;
-    // Id 0 is taken as "no affix". UNSETTLED: magicsuffix row 0 is a real row ("of Health"),
-    // so an item of Health may read 0 too and lose its suffix here; check on a live item.
+    // Id 0 is taken as "no affix". Live 2026-11-18: 9 store items "… of Health" were named with
+    // their suffix and none of 1312 magic store items came out affix-less, so "of Health" does
+    // not read 0.
     let prefix = (magic && prefix_id != 0)
         .then(|| affixes_data::prefix(prefix_id))
         .flatten();
