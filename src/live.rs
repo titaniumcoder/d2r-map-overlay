@@ -354,6 +354,7 @@ fn follow_game(
                 // The config page annotates its resolved `BiS` view with the live ✓ and the
                 // equipped-quality pairs; published alongside the dashboard JSON.
                 web::publish_gear(web::GearInfo {
+                    worn: crate::game::worn_names(&snap.equipped_items),
                     owned: snap.owned_names.clone(),
                     stash: snap.stash_names.clone(),
                     equipped: snap.equipped.clone(),

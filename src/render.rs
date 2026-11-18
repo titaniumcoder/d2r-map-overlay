@@ -988,6 +988,7 @@ pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextB
                 snap.player.char_level,
                 &snap.equipped,
                 &snap.merc_equipped,
+                &crate::game::worn_names(&snap.equipped_items),
                 &snap.owned_names,
                 &snap.stash_names,
                 f,

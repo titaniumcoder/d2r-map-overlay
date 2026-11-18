@@ -324,6 +324,14 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   and the `BiS` ✓: `bis_lines` ticks a line `owned` (character's own) or `stash` from the two name lists; the
   dashboard gets the structured per-line `tick` and marks ✓(stash) distinctly (no string scraping) — the
   `BiS` lines are dashboard-only since the 2026-11-17 text-stack migration.
+- **Runewords and worn vs owned ticks** (user report 2026-11-18: a Stealth in the private stash had no ✓):
+  runewords are named from their socketed runes (`Reader::runeword_name`: runeword flag + the item's own
+  socket chain) for EVERY owned item (inventory, cube, private stash, worn) into `owned_names`, and for
+  shared-stash items (the `StashItem` takes the runeword name, so the stash panel shows it too) into
+  `stash_names`. `info::Tick` is `worn` (in `game::worn_names(equipped_items)`), `owned` (owned but not
+  worn) or `stash`; the dashboard ticks worn pieces green and owned/stash ones yellow ("you have it, go
+  equip it"; ✓ owned / ✓ stash). The overlay text keeps one plain ✓. Not yet verified live on a stashed
+  runeword (the socket chain of a non-worn item is assumed the same as a worn one's).
 
 ## Vendor trade window (added 2026-11-18, user request: "nice to have")
 - **Store items are not in the unit table**: they hang off the vendor NPC, a monster unit (type 1):

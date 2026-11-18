@@ -104,8 +104,9 @@ pub struct Snapshot {
     /// ([`Equipped`]). Kept next to [`Snapshot::equipped`], which other code consumes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub equipped_items: Vec<Equipped>,
-    /// Display names of identified unique/set items the player owns (equipped, carried,
-    /// stashed): the `BiS` list marks owned pieces with a ✓.
+    /// Display names of identified unique/set items and named runewords the player owns
+    /// (equipped, carried, cubed, privately stashed): the `BiS` list marks owned pieces with a
+    /// ✓ (the worn ones apart: [`worn_names`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned_names: Vec<String>,
     /// The shared-stash tabs as read this snapshot. Empty once the tab units vanish (stash UI
@@ -813,6 +814,14 @@ impl Equipped {
     }
 }
 
+/// The names of the worn items that have one (identified unique/set, named runeword): the
+/// `BiS` ✓ of a piece the character wears ([`crate::info::Tick::Worn`]), as opposed to one it
+/// merely owns ([`Snapshot::owned_names`], which includes the worn ones).
+#[must_use]
+pub fn worn_names(items: &[Equipped]) -> Vec<String> {
+    items.iter().filter_map(|e| e.name.clone()).collect()
+}
+
 /// Reads all live player candidates (unit table, `PLAYER` type); unreadable ones warn.
 fn player_candidates<M: ReadMem>(r: &mut Reader<'_, M>, unit_table: u64) -> Vec<Candidate> {
     let mut candidates = Vec::new();
@@ -1336,7 +1345,12 @@ impl<M: ReadMem> Reader<'_, M> {
                         .unit_data
                         .filter(|_| materials)
                         .and_then(|d| self.u32(d, item_data::QUANTITY).ok());
-                    items.push(stash::stash_item(&item, quantity));
+                    let mut entry = stash::stash_item(&item, quantity);
+                    // A runeword goes by its name (the `BiS` ✓ and the stash panel).
+                    if let Some(word) = self.runeword_name(addr, item.flags, items_table) {
+                        entry.name = word;
+                    }
+                    items.push(entry);
                 }
                 StashTab {
                     kind: tab.kind,
@@ -1816,22 +1830,25 @@ impl<M: ReadMem> Reader<'_, M> {
                 self.accumulate_gear(addr, &head, scan.gear.entry(owner).or_default());
                 self.capture_weapon_wsm(&head, owner, items_table, &mut scan.weapons);
             }
-            // Owned identified unique/set items: the `BiS` list marks owned pieces with a ✓.
+            // Owned identified unique/set items and runewords (worn, carried, cubed or in the
+            // private stash): the `BiS` list marks owned pieces with a ✓.
             if let Some(owner) = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok())
                 && candidates.contains(&owner)
             {
                 let quality = self.equipped_quality(&head);
-                if matches!(quality, Some(item_data::QUALITY_UNIQUE | item_data::QUALITY_SET)) {
-                    let name = self
-                        .item_fields(addr, &head, items_table)
+                let name = if matches!(quality, Some(item_data::QUALITY_UNIQUE | item_data::QUALITY_SET)) {
+                    self.item_fields(addr, &head, items_table)
                         .ok()
-                        .and_then(|d| valuables::unique_set_name(&d).map(str::to_owned));
-                    let names = scan.owned_names.entry(owner).or_default();
-                    if let Some(name) = name
-                        && !names.iter().any(|n| crate::info::same_name(n, &name))
-                    {
-                        names.push(name);
-                    }
+                        .and_then(|d| valuables::unique_set_name(&d).map(str::to_owned))
+                } else {
+                    let flags = head.unit_data.and_then(|d| self.u32(d, item_data::FLAGS).ok());
+                    flags.and_then(|f| self.runeword_name(addr, f, items_table))
+                };
+                let names = scan.owned_names.entry(owner).or_default();
+                if let Some(name) = name
+                    && !names.iter().any(|n| crate::info::same_name(n, &name))
+                {
+                    names.push(name);
                 }
             }
             // Equipped pieces by owner kind, for the `BiS` per-slot display.
@@ -1874,15 +1891,8 @@ impl<M: ReadMem> Reader<'_, M> {
         if !merc {
             let items = scan.equipped_items.entry(owner).or_default();
             if items.iter().all(|e| e.body != slot) {
-                let item = self.equipped_item(addr, head, slot, quality, items_table);
-                // A worn runeword is owned: the `BiS` list ticks it like a unique.
-                if let Some(word) = item.name.as_deref().filter(|_| item.runeword) {
-                    let names = scan.owned_names.entry(owner).or_default();
-                    if !names.iter().any(|n| crate::info::same_name(n, word)) {
-                        names.push(word.to_owned());
-                    }
-                }
-                items.push(item);
+                // A worn runeword is in `owned_names` already (the owned-items pass).
+                items.push(self.equipped_item(addr, head, slot, quality, items_table));
             }
         }
     }
@@ -1936,11 +1946,7 @@ impl<M: ReadMem> Reader<'_, M> {
         let name = valuables::unique_set_name_parts(quality, flags, file_index).map(str::to_owned);
         let named_index = if name.is_some() { file_index } else { None };
         let runeword = flags & item_data::FLAG_RUNEWORD != 0;
-        let name = name.or_else(|| {
-            let table = items_table.filter(|_| runeword)?;
-            let runes = self.socketed_codes(addr, table);
-            stash::runeword_by_runes(&runes).map(|w| w.name.to_owned())
-        });
+        let name = name.or_else(|| self.runeword_name(addr, flags, items_table));
         Equipped {
             body: slot,
             quality,
@@ -2054,6 +2060,15 @@ impl<M: ReadMem> Reader<'_, M> {
             }
         }
         out
+    }
+
+    /// The runeword name of the item at `addr` (flags `flags`): `None` unless it carries the
+    /// [`item_data::FLAG_RUNEWORD`] bit and its socketed runes ([`Reader::socketed_codes`])
+    /// spell a known runeword ([`stash::runeword_by_runes`]). Live 2026-11-18 on worn items.
+    fn runeword_name(&self, addr: u64, flags: u32, items_table: Option<u64>) -> Option<String> {
+        let table = items_table.filter(|_| flags & item_data::FLAG_RUNEWORD != 0)?;
+        let runes = self.socketed_codes(addr, table);
+        stash::runeword_by_runes(&runes).map(|w| w.name.to_owned())
     }
 
     /// The item codes of what is socketed in the item at `addr`, in socket order: the
@@ -3068,6 +3083,11 @@ mod tests {
             "a worn runeword is owned: {:?}",
             s.owned_names
         );
+        assert_eq!(
+            worn_names(eq),
+            ["Harlequin Crest", "Cleglaw's Claw", "Leaf"],
+            "and worn"
+        );
         let armour = eq.get(3).context("armour")?;
         assert_eq!(armour.name, None, "magic: no name");
         assert_eq!(
@@ -3075,6 +3095,37 @@ mod tests {
             Some(43),
             "magic: the BASE item's levelreq (affixes can raise the real one)"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_stashed_runeword_is_owned_but_not_worn() -> Result<()> {
+        // User report 2026-11-18: a Stealth in the private stash got no ✓. Here Bob's private
+        // stash (page 4) holds a finished Leaf (Tir, Ral) on a Crystal Sword.
+        let mut m = world()?;
+        let id = item_data::FLAG_IDENTIFIED;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        stored_item(
+            &mut m,
+            I1,
+            (30, 2, id | item_data::FLAG_RUNEWORD, 0),
+            (item_mode::STORED, 4),
+            &[],
+            0,
+        )?;
+        set_owner(&mut m, I1, BOB_ID)?;
+        let (rune_tir, rune_ral) = (0x80_7000, 0x80_8000);
+        stored_item(&mut m, rune_tir, (41, 2, 0, 0), (6, 255), &[], 0)?;
+        stored_item(&mut m, rune_ral, (42, 2, 0, 0), (6, 255), &[], 0)?;
+        let sockets = chain_items(&mut m, &[rune_tir, rune_ral])?;
+        tab_inventory(&mut m, INV0, item_data::NO_OWNER, sockets)?;
+        patch(&mut m, I1, UNIT_SIZE, unit::INVENTORY, &INV0.to_le_bytes())?;
+        base_items_table(&mut m)?;
+
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        assert_eq!(s.owned_names, vec!["Leaf"]);
+        assert!(s.equipped_items.is_empty(), "stashed, not worn");
+        assert_eq!(worn_names(&s.equipped_items), Vec::<String>::new());
         Ok(())
     }
 

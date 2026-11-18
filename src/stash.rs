@@ -215,21 +215,22 @@ pub fn white_bases<'a>(items: impl IntoIterator<Item = &'a ItemDrop>) -> Vec<Str
     out
 }
 
-/// Display names of the identified unique/set items across `tabs`, first-seen order,
-/// duplicates (case-insensitive) left out: the ✓ source for `BiS` pieces sitting in the
-/// stash. An identified unique/set whose `item_data::FILE_INDEX` was unreadable keeps its
-/// base name here, which no `BiS` piece name matches — a wrong tick is therefore unlikely.
+/// Display names of the identified unique/set items and the named runewords (the reader
+/// names them from their socketed runes) across `tabs`, first-seen order, duplicates
+/// (case-insensitive) left out: the ✓ source for `BiS` pieces sitting in the stash. An
+/// identified unique/set whose `item_data::FILE_INDEX` was unreadable keeps its base name
+/// here, which no `BiS` piece name matches — a wrong tick is therefore unlikely.
 #[must_use]
 pub fn stash_names(tabs: &[StashTab]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for tab in tabs {
         for item in &tab.items {
-            if matches!(
+            let unique_or_set = matches!(
                 u32::from(item.quality),
                 item_data::QUALITY_SET | item_data::QUALITY_UNIQUE
-            ) && item.identified
-                && !out.iter().any(|n| n.eq_ignore_ascii_case(&item.name))
-            {
+            ) && item.identified;
+            let runeword = item.runeword && crate::runewords_data::lookup(&item.name).is_some();
+            if (unique_or_set || runeword) && !out.iter().any(|n| n.eq_ignore_ascii_case(&item.name)) {
                 out.push(item.name.clone());
             }
         }
@@ -254,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn stash_names_keeps_identified_unique_and_set_names() {
+    fn stash_names_keeps_identified_unique_set_and_runeword_names() {
         let id = item_data::FLAG_IDENTIFIED;
         let tabs = [StashTab {
             kind: TabKind::Page(1),
@@ -265,11 +266,20 @@ mod tests {
                 item("Cathan's Seal", item_data::QUALITY_SET, 0), // unidentified: out
                 item("Crystal Sword", item_data::QUALITY_NORMAL, id), // not unique/set: out
                 item("Harlequin Crest", item_data::QUALITY_UNIQUE, id), // duplicate: out
+                StashItem {
+                    runeword: true,
+                    ..item("Stealth", item_data::QUALITY_NORMAL, id)
+                },
+                // A runeword the runes didn't name keeps its base name: out.
+                StashItem {
+                    runeword: true,
+                    ..item("Studded Leather 2os", item_data::QUALITY_NORMAL, id)
+                },
             ],
         }];
         assert_eq!(
             stash_names(&tabs),
-            vec!["Harlequin Crest", "uap", "Sigon's Visor"]
+            vec!["Harlequin Crest", "uap", "Sigon's Visor", "Stealth"]
         );
         assert_eq!(stash_names(&[]), Vec::<String>::new());
     }

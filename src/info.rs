@@ -219,12 +219,16 @@ pub fn level_suggestions(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<
     areas
 }
 
-/// Why a `BiS` line carries its ✓: the piece is the character's own ([`Tick::Owned`]:
-/// equipped, carried or personally stashed) or sits in the shared stash ([`Tick::Stash`]).
-/// The overlay ticks both the same (plain ✓, embedded in [`BisLine::text`]); the dashboard
+/// Why a `BiS` line carries its ✓: the character wears the piece ([`Tick::Worn`]), owns it
+/// without wearing it ([`Tick::Owned`]: carried, cubed or personally stashed) or it sits in
+/// the shared stash ([`Tick::Stash`]). The dashboard ticks worn pieces green and the others
+/// yellow ("you have it, go equip it"; user request 2026-11-18).
+///
+/// The overlay ticks all three the same (plain ✓, embedded in [`BisLine::text`]); the dashboard
 /// distinguishes them via the line's structured `tick` field ([`crate::web::live_json`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tick {
+    Worn,
     Owned,
     Stash,
 }
@@ -234,6 +238,7 @@ impl Tick {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Worn => "worn",
             Self::Owned => "owned",
             Self::Stash => "stash",
         }
@@ -263,6 +268,7 @@ pub fn bis_lines(
     char_level: Option<u8>,
     equipped: &[(u8, u32)],
     merc_equipped: &[(u8, u32)],
+    worn_names: &[String],
     owned_names: &[String],
     stash_names: &[String],
     font: &FontVec,
@@ -292,7 +298,7 @@ pub fn bis_lines(
         else {
             continue;
         };
-        let t = piece_tick(piece, owned_names, stash_names);
+        let t = piece_tick(piece, worn_names, owned_names, stash_names);
         let mark = if t.is_some() { "✓ " } else { "" };
         if out.len() < MAX_BIS_LINES {
             out.push(BisLine {
@@ -320,7 +326,8 @@ pub fn bis_lines(
         else {
             continue;
         };
-        let t = piece_tick(piece, owned_names, stash_names);
+        // The character's worn names are not the mercenary's.
+        let t = piece_tick(piece, &[], owned_names, stash_names);
         let mark = if t.is_some() { "✓ " } else { "" };
         if out.len() < MAX_BIS_LINES {
             out.push(BisLine {
@@ -411,13 +418,21 @@ pub fn piece_name(piece: &str) -> &str {
     piece.split_once('@').map_or(piece, |(name, _)| name).trim()
 }
 
-/// Why a `BiS` piece is ticked: the character owns it (equipped, carried or personally
-/// stashed) or it sits in the shared stash ([`Tick`]); `None` for neither. Shared by the
-/// overlay's chase list and the config page's resolved view ([`crate::web`]).
+/// Why a `BiS` piece is ticked: the character wears it (`worn_names`), owns it otherwise
+/// (`owned_names`: carried, cubed or personally stashed; may include the worn ones) or it
+/// sits in the shared stash ([`Tick`]); `None` for none of these. Shared by the overlay's
+/// chase list and the dashboard and config pages ([`crate::web`]).
 #[must_use]
-pub fn piece_tick(piece: &str, owned_names: &[String], stash_names: &[String]) -> Option<Tick> {
+pub fn piece_tick(
+    piece: &str,
+    worn_names: &[String],
+    owned_names: &[String],
+    stash_names: &[String],
+) -> Option<Tick> {
     let name = piece_name(piece);
-    if owned_names.iter().any(|n| same_name(n, name)) {
+    if worn_names.iter().any(|n| same_name(n, name)) {
+        Some(Tick::Worn)
+    } else if owned_names.iter().any(|n| same_name(n, name)) {
         Some(Tick::Owned)
     } else if stash_names.iter().any(|n| same_name(n, name)) {
         Some(Tick::Stash)
@@ -966,13 +981,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn worn_beats_owned_beats_stash() {
+        let names = |n: &str| vec![n.to_owned()];
+        let stealth = names("Stealth");
+        assert_eq!(
+            piece_tick("Stealth@17", &stealth, &stealth, &stealth),
+            Some(Tick::Worn)
+        );
+        assert_eq!(
+            piece_tick("Stealth@17", &[], &stealth, &stealth),
+            Some(Tick::Owned)
+        );
+        assert_eq!(piece_tick("Stealth@17", &[], &[], &stealth), Some(Tick::Stash));
+        assert_eq!(piece_tick("Stealth@17", &[], &[], &[]), None);
+    }
+
+    #[test]
     fn same_name_ignores_case_spaces_and_apostrophes() {
         assert!(same_name("Ancient's Pledge", "Ancients' Pledge"));
         assert!(same_name(" leaf", "Leaf"));
         assert!(!same_name("Lea", "Leaf"));
         assert_eq!(piece_level("Ancients' Pledge"), Some(21), "builds' spelling");
         assert_eq!(
-            piece_tick("Ancients' Pledge", &["Ancient's Pledge".to_owned()], &[]),
+            piece_tick("Ancients' Pledge", &[], &["Ancient's Pledge".to_owned()], &[]),
             Some(Tick::Owned)
         );
     }
@@ -1153,7 +1184,7 @@ mod tests {
         };
         let owned = ["Harlequin Crest".to_owned()];
         let stash = ["Treachery".to_owned()];
-        let lines = bis_lines(&bis, Some(90), &[], &[], &owned, &stash, font, 10_000.0);
+        let lines = bis_lines(&bis, Some(90), &[], &[], &[], &owned, &stash, font, 10_000.0);
         // The character line carries its tick too (not just the merc lines), and the overlay
         // text shows the plain ✓ for both tick kinds. A unique piece is no runeword; a runeword
         // piece carries its runeword for the dashboard's hint line.
@@ -1182,7 +1213,7 @@ mod tests {
             Some(&["Shael", "Thul", "Lem"][..])
         );
         // Unticked pieces keep `tick: null` and no mark.
-        let none = bis_lines(&bis, Some(90), &[], &[], &[], &[], font, 10_000.0);
+        let none = bis_lines(&bis, Some(90), &[], &[], &[], &[], &[], font, 10_000.0);
         assert_eq!(none.first().map(|l| l.tick), Some(None));
         assert_eq!(
             none.first().map(|l| l.text.clone()),

@@ -61,6 +61,8 @@ static LIVE: OnceLock<RwLock<Option<String>>> = OnceLock::new();
 /// first game, so nothing is ticked or struck through then.
 #[derive(Debug, Clone, Default)]
 pub struct GearInfo {
+    /// Names of the worn pieces ([`crate::game::worn_names`]): their ✓ is green.
+    pub worn: Vec<String>,
     pub owned: Vec<String>,
     pub stash: Vec<String>,
     pub equipped: Vec<(u8, u32)>,
@@ -452,7 +454,7 @@ fn api_builds() -> String {
 ///   selected build's), as lowercased names,
 /// - `slots`/`merc_slots`: the resolved per-slot piece lists — inline slots when the config
 ///   has any, else the selected build's ([`crate::config::Config::resolved_bis`]) — each piece
-///   annotated with its required level, its ✓ (`tick`: `"owned"`/`"stash"`/`null`,
+///   annotated with its required level, its ✓ (`tick`: `"worn"`/`"owned"`/`"stash"`/`null`,
 ///   [`crate::info::piece_tick`]), whether the equipped piece is already better (`better`,
 ///   [`crate::info::slot_equipped_better`]) and, for a runeword piece, its `runes` and
 ///   `bases`.
@@ -543,7 +545,7 @@ fn piece_json(piece: &str, slot: &str, equipped: &[(u8, u32)], gear: &GearInfo) 
         "piece": piece,
         "name": name,
         "level": crate::info::piece_level(piece),
-        "tick": crate::info::piece_tick(piece, &gear.owned, &gear.stash)
+        "tick": crate::info::piece_tick(piece, &gear.worn, &gear.owned, &gear.stash)
             .map(crate::info::Tick::as_str),
         "better": crate::info::slot_equipped_better(slot, equipped),
     });
@@ -646,8 +648,8 @@ pub struct LiveInfo<'a> {
 /// "stash_owned": […], "skills": {…} | null }`, where
 /// each line is `{ "text": …, "colour": "#rrggbb" }` (the overlay line's colour as hex; the
 /// guide's per-span colours are flattened to the base colour) — except the `bis` lines, which
-/// carry a structured `"tick": "owned" | "stash" | null` (computed in Rust from the owned and
-/// stash name lists, [`info::Tick`]): the page marks ✓(stash) from it instead of scraping the
+/// carry a structured `"tick": "worn" | "owned" | "stash" | null` (computed in Rust from the
+/// worn, owned and stash name lists, [`info::Tick`]): the page marks ✓(stash) from it instead of scraping the
 /// line text, and, for a runeword piece, `"runes"` and `"bases"` for the hint line under the
 /// piece. The `levels` lines are the whole level-suggestion band, one area per line, each as
 /// `{ "text", "colour", "mlvl", "bucket" }` ([`crate::info::LevelEntry`]: the own-level-first
@@ -1253,11 +1255,12 @@ fn upgrades_json(info: &LiveInfo) -> Vec<serde_json::Value> {
         let found = pieces.iter().filter(|p| !outgrown(p, info)).find_map(|piece| {
             let name = crate::info::piece_name(piece);
             let req = crate::info::piece_level(piece)?;
-            let tick = crate::info::piece_tick(piece, info.owned, info.stash_owned)?;
+            // Worn pieces are filtered by `is_worn` below, so no worn names here.
+            let tick = crate::info::piece_tick(piece, &[], info.owned, info.stash_owned)?;
             (req <= lvl && !is_worn(name, info) && piece_state(Some(req), eq_level, lvl) == "better").then(
                 || {
                     let place = match tick {
-                        crate::info::Tick::Owned => "you have it",
+                        crate::info::Tick::Worn | crate::info::Tick::Owned => "you have it",
                         crate::info::Tick::Stash => "in the shared stash",
                     };
                     let versus = eq_level.map_or_else(String::new, |eq| format!(" (equipped: lvl {eq})"));
@@ -1660,7 +1663,7 @@ fn gear_json(info: &LiveInfo) -> serde_json::Value {
         let pieces = info.bis.and_then(|b| b.merc_slots.get(slot))?;
         Some(serde_json::json!({
             "title": title,
-            "pieces": grid_pieces(pieces, None, info),
+            "pieces": grid_pieces(pieces, None, &[], info),
         }))
     })
     .collect();
@@ -1672,7 +1675,7 @@ fn gear_json(info: &LiveInfo) -> serde_json::Value {
         .map(|(group, pieces)| {
             serde_json::json!({
                 "title": group,
-                "pieces": grid_pieces(pieces, None, info),
+                "pieces": grid_pieces(pieces, None, &[], info),
             })
         })
         .collect();
@@ -1744,7 +1747,12 @@ fn grid_column(
             .map(|e| serde_json::json!({ "name": equipped_name(e), "level": e.required_level() }))
             .collect::<Vec<_>>(),
         "note": note,
-        "pieces": grid_pieces(pieces.map_or(&[][..], Vec::as_slice), equipped_level, info),
+        "pieces": grid_pieces(
+            pieces.map_or(&[][..], Vec::as_slice),
+            equipped_level,
+            &crate::game::worn_names(info.equipped_items),
+            info,
+        ),
     })
 }
 
@@ -1758,7 +1766,12 @@ fn grid_column(
 ///   unidentified unique/set), or the piece's level is unknown; never struck through.
 ///
 /// A column whose equipped piece is unnameable therefore shows no strike-throughs.
-fn grid_pieces(pieces: &[String], equipped_level: Option<u32>, info: &LiveInfo) -> Vec<serde_json::Value> {
+fn grid_pieces(
+    pieces: &[String],
+    equipped_level: Option<u32>,
+    worn: &[String],
+    info: &LiveInfo,
+) -> Vec<serde_json::Value> {
     let lvl = u32::from(info.char_level.unwrap_or(0));
     pieces
         .iter()
@@ -1774,7 +1787,7 @@ fn grid_pieces(pieces: &[String], equipped_level: Option<u32>, info: &LiveInfo) 
                 "name": crate::info::piece_name(piece),
                 "level": req,
                 "state": state,
-                "tick": crate::info::piece_tick(piece, info.owned, info.stash_owned)
+                "tick": crate::info::piece_tick(piece, worn, info.owned, info.stash_owned)
                     .map(crate::info::Tick::as_str),
             });
             if let Some(rw) = crate::runewords_data::lookup(crate::info::piece_name(piece))
@@ -2017,7 +2030,7 @@ button { padding: 4px 10px; }
 .piece { margin: 2px 0; }
 .hint { color: #9c9; font-size: 0.85em; }
 .rwhint { color: #888; font-size: 0.8em; margin-left: 1.5em; }
-.owned { color: #6f6; }
+.owned { color: #6f6; } .owned.have { color: #e8cf3a; }
 .stash { color: #6f6; }
 .better { text-decoration: line-through; color: #777; }
 </style></head><body>
@@ -2040,8 +2053,10 @@ function esc(s) {
 // One piece line: name (level), tick, strike-through, runeword hint.
 function pieceHtml(p) {
   const level = p.level != null ? ` (${p.level})` : "";
-  const tick = p.tick === "owned" ? ` <span class="owned">\u2713</span>`
-    : p.tick === "stash" ? ` <span class="owned">\u2713</span><span class="hint">(stash)</span>` : "";
+  // Green = worn; yellow = owned elsewhere (carried, cube, private or shared stash).
+  const tick = p.tick === "worn" ? ` <span class="owned">\u2713</span>`
+    : p.tick === "owned" ? ` <span class="owned have">\u2713</span>`
+    : p.tick === "stash" ? ` <span class="owned have">\u2713</span><span class="hint">(stash)</span>` : "";
   const strike = p.better ? " better" : "";
   const hint = p.runes
     ? `<div class="rwhint">${esc(p.runes.join(" + "))} · ${esc((p.bases || []).join(", "))}</div>` : "";
@@ -2110,7 +2125,7 @@ const DASHBOARD_HEAD: &str = r#"<!doctype html>
   --bg: #0f0e0c; --panel: #1a1815; --panel2: #221f1b; --line: #3a342c; --line2: #2b2721;
   --text: #e4ddd0; --dim: #9a8f7f; --faint: #6b6255;
   --gold: #c8a85a; --unique: #c7b377; --set: #3fcf5a; --rune: #e0a040; --magic: #7a8cff;
-  --good: #6fdc6f; --bad: #ff6b5b; --accent: #d49a3a;
+  --good: #6fdc6f; --bad: #ff6b5b; --accent: #d49a3a; --have: #e8cf3a;
   --radius: 8px;
 }
 * { box-sizing: border-box; }
@@ -2176,6 +2191,7 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .pc .nm { font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .pc .lv { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pc .tick { color: var(--good); font-weight: 700; font-size: 12px; }
+.pc .tick.have { color: var(--have); }
 .pc .sub { font-size: 11.5px; color: var(--dim); }
 .pc ul.st { margin: 3px 0 0; padding: 0; list-style: none; font-size: 11.5px; color: #b9c4ff; }
 .pc ul.st li::before { content: "· "; color: var(--faint); }
@@ -2375,8 +2391,10 @@ function kindOf(p) {
   return "unique";
 }
 function piece(p) {
-  const tick = p.tick === "owned" ? ' <span class="tick">✓</span>'
-    : p.tick === "stash" ? ' <span class="tick">✓ stash</span>' : "";
+  // Green = worn; yellow = owned elsewhere: go equip it (carried, cube, private stash, shared stash).
+  const tick = p.tick === "worn" ? ' <span class="tick">✓</span>'
+    : p.tick === "owned" ? ' <span class="tick have">✓ owned</span>'
+    : p.tick === "stash" ? ' <span class="tick have">✓ stash</span>' : "";
   const lvl = p.level != null ? `<span class="lv">lvl ${p.level}</span>` : "";
   const sub = p.runes
     ? `<div class="sub">${esc(p.runes.join(" "))}${p.bases && p.bases.length ? " · " + esc(p.bases.join(", ")) : ""}</div>`
@@ -2804,6 +2822,7 @@ mod tests {
         // The live gear state annotates the pieces: owned ✓, stash ✓(stash), and a set/unique
         // equipped piece strikes the slot's chase pieces through.
         let gear = GearInfo {
+            worn: vec![],
             owned: vec!["Heart of the Oak".to_owned()],
             stash: vec!["Insight".to_owned()],
             equipped: vec![(4, 7)], // body slot 4 = weapon, quality 7 = unique
@@ -2825,6 +2844,16 @@ mod tests {
         assert_eq!(
             char.pointer("/merc_slots/weapon/0/tick"),
             Some(&serde_json::json!("stash"))
+        );
+        // Worn beats owned (owned_names include the worn pieces): the green ✓.
+        let wearing = GearInfo {
+            worn: vec!["Heart of the Oak".to_owned()],
+            ..gear
+        };
+        let json = config_json(&resolved_config(), &wearing);
+        assert_eq!(
+            json.pointer("/characters/0/slots/weapon/0/tick"),
+            Some(&serde_json::json!("worn"))
         );
     }
 
@@ -3746,7 +3775,7 @@ mod tests {
         info.build = Some(&build);
         info.char_level = Some(21);
         let pieces = ["Old Pelt", "Stealth@17", "Lore@27", "Tal Rune@17", "Shako@62"].map(str::to_owned);
-        let json = grid_pieces(&pieces, None, &info);
+        let json = grid_pieces(&pieces, None, &[], &info);
         let names: Vec<_> = json.iter().filter_map(|p| p.get("name")?.as_str()).collect();
         assert_eq!(
             names,
@@ -3762,7 +3791,7 @@ mod tests {
         assert_eq!(field("Lore", "now"), None, "not yet");
         assert_eq!(field("Tal Rune", "setup"), Some(serde_json::json!("lvl 17+")));
         info.char_level = Some(60);
-        let json = grid_pieces(&pieces, None, &info);
+        let json = grid_pieces(&pieces, None, &[], &info);
         let names: Vec<_> = json.iter().filter_map(|p| p.get("name")?.as_str()).collect();
         assert_eq!(names, ["Tal Rune", "Shako"], "a rune never runs out");
         assert_eq!(level_range("lvl 13-26"), Some((13, 26)));
