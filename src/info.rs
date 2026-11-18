@@ -89,6 +89,9 @@ const OUTLINE: [u8; 4] = [0, 0, 0, 220];
 pub const BAD_TEXT: [u8; 4] = [235, 70, 60, 255];
 /// The monster-level part in an area good for the build ([`Rating::Good`]).
 const GOOD_TEXT: [u8; 4] = [80, 220, 100, 255];
+/// An area name (info line, exit labels) where the character gets almost no experience
+/// ([`crate::xp::is_low`]); white otherwise (user request, 2026-11-18).
+pub const LOW_XP_TEXT: [u8; 4] = [140, 140, 140, 255];
 
 pub const fn difficulty_name(d: u8) -> Option<&'static str> {
     match d {
@@ -113,6 +116,9 @@ pub struct InfoLine {
     pub terrorized: bool,
     /// How the area suits the build: colours the stats before a [`TERRORIZED`] part.
     pub rating: Rating,
+    /// The area gives the character almost no experience ([`crate::xp::is_low`]): the area name
+    /// is drawn in [`LOW_XP_TEXT`]. Set by the caller, which knows the character level.
+    pub low_xp: bool,
 }
 
 impl InfoLine {
@@ -174,6 +180,7 @@ pub fn info_line(
         stats,
         terrorized,
         rating: build::rate(level_id, difficulty, build),
+        low_xp: false,
     }
 }
 
@@ -678,7 +685,12 @@ pub fn band_height(font: &FontVec) -> u32 {
 
 /// Width in px of `text` set in `font` (advances plus kerning).
 fn text_width(font: &FontVec, text: &str) -> f32 {
-    let scaled = font.as_scaled(PxScale::from(TEXT_PX));
+    text_width_at(font, TEXT_PX, text)
+}
+
+/// [`text_width`] at `size` px.
+fn text_width_at(font: &FontVec, size: f32, text: &str) -> f32 {
+    let scaled = font.as_scaled(PxScale::from(size));
     let mut width = 0.0;
     let mut prev: Option<GlyphId> = None;
     for c in text.chars() {
@@ -739,10 +751,38 @@ pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine) {
     }
 }
 
-/// The fitted `text` of `line` ([`fit_text`]) as coloured parts, left to right: white, then the
-/// stats in the rating's colour (red or green; white when neutral), then a terrorized line's
-/// [`TERRORIZED`] in violet. Empty parts are left out.
+/// The fitted `text` of `line` ([`fit_text`]) as coloured parts, left to right: white, the area
+/// name grey when it gives almost no experience, then the stats in the rating's colour (red or
+/// green; white when neutral), then a terrorized line's [`TERRORIZED`] in violet. Empty parts
+/// are left out.
 fn spans<'a>(line: &InfoLine, text: &'a str) -> Vec<(&'a str, [u8; 4])> {
+    let mut parts = rated_spans(line, text);
+    if !line.low_xp {
+        return parts;
+    }
+    // The text is `[difficulty · ]area[ · stats]` and fitting only shortens the area, so the
+    // area sits between the known prefix and suffix lengths, inside the first (white) part.
+    let start = line.difficulty.map_or(0, |d| d.len() + SEPARATOR.len());
+    let tail: usize = line.stats.iter().map(|s| SEPARATOR.len() + s.len()).sum();
+    let end = text.len().saturating_sub(tail);
+    let Some(&(head, TEXT)) = parts.first() else {
+        return parts;
+    };
+    let (Some(before), Some(area), Some(after)) = (head.get(..start), head.get(start..end), head.get(end..))
+    else {
+        return parts;
+    };
+    parts.splice(
+        ..1,
+        [(before, TEXT), (area, LOW_XP_TEXT), (after, TEXT)]
+            .into_iter()
+            .filter(|(part, _)| !part.is_empty()),
+    );
+    parts
+}
+
+/// [`spans`] without the area colouring.
+fn rated_spans<'a>(line: &InfoLine, text: &'a str) -> Vec<(&'a str, [u8; 4])> {
     // Shortening only cuts the area name, so the fitted text still ends in the stats.
     let (rest, terror) = match text.strip_suffix(TERRORIZED) {
         Some(rest) if line.terrorized => (rest, TERRORIZED),
@@ -810,6 +850,35 @@ pub fn fit_plain(font: &FontVec, text: &str, max_width: f32) -> String {
         }
     }
     text.to_owned()
+}
+
+/// Map label text size in px (exit target names).
+const LABEL_PX: f32 = 12.0;
+/// Px between a label's baseline and the centre of the marker it names.
+const LABEL_RAISE: f32 = 7.0;
+
+/// Draws `text` as a map label in `colour` with the info line's dark outline, centred above
+/// (`cx`, `cy`) and pushed inside the canvas above `bottom` (the map area's height in px, so
+/// labels stay off the info line) so it isn't clipped at the edges.
+pub fn draw_label(
+    pm: &mut Pixmap,
+    font: &FontVec,
+    colour: [u8; 4],
+    text: &str,
+    (cx, cy): (f32, f32),
+    bottom: u32,
+) {
+    let width = text_width_at(font, LABEL_PX, text);
+    let scaled = font.as_scaled(PxScale::from(LABEL_PX));
+    let (ascent, descent) = (scaled.ascent(), scaled.descent());
+    // +1/+2: room for the outline.
+    let right = f32_px(pm.width()) - width - 2.0;
+    let pen = (cx - width / 2.0).min(right).max(1.0);
+    // `descent` is negative: the lowest baseline keeps the descenders and outline above `bottom`.
+    let baseline = (cy - LABEL_RAISE)
+        .min(f32_px(bottom) + descent - 1.0)
+        .max(ascent + 1.0);
+    draw_outlined(pm, font, LABEL_PX, colour, text, (pen, baseline), false);
 }
 
 /// Draws `c` at `size` px in `colour` with the info line's dark 1 px outline, its ink box centred
@@ -1483,6 +1552,39 @@ mod tests {
     }
 
     const VEX: [Damage; 3] = [Damage::Lightning, Damage::Fire, Damage::Physical];
+
+    #[test]
+    fn low_xp_greys_only_the_area_name() {
+        // Travincal, Nightmare, good for Vex: the stats stay green.
+        let mut line = info_line(83, Some(1), false, None, &VEX);
+        line.low_xp = true;
+        let text = line.text();
+        assert_eq!(
+            spans(&line, &text),
+            vec![
+                ("Nightmare · ", TEXT),
+                ("Travincal", LOW_XP_TEXT),
+                (" · ", TEXT),
+                ("mlvl 54 · champ 56 · unique 57", GOOD_TEXT)
+            ]
+        );
+        // Normal (no rating): the white stats follow the grey name.
+        let mut line = info_line(83, Some(0), false, None, &VEX);
+        line.low_xp = true;
+        let text = line.text();
+        assert_eq!(
+            spans(&line, &text),
+            vec![
+                ("Normal · ", TEXT),
+                ("Travincal", LOW_XP_TEXT),
+                (" · mlvl 24 · champ 26 · unique 27", TEXT)
+            ]
+        );
+        // A shortened name and no difficulty: still just the name.
+        let mut line = info_line(83, None, false, None, &[]);
+        line.low_xp = true;
+        assert_eq!(spans(&line, "Travi…"), vec![("Travi…", LOW_XP_TEXT)]);
+    }
 
     #[test]
     fn rating_colours_only_the_stats() {

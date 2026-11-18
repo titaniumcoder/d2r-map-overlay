@@ -429,7 +429,19 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   give-away and `BiS` lines are dashboard-only: `live` publishes them via `GET /api/live`
   (`render::text_blocks`). The overlay hides in towns (the guide line it showed there overlapped
   the game's terror-zone list; user request, 2026-11-17).
-- Iso projection `sx = x − y, sy = (x + y)/2`, scaled to fit the level bounds.
+- Exit labels (2026-11-18): each linked level's name in 12 px outlined text above its exit (on the
+  tile exit preset of the linking room, else the room's centre; on the border triangle for
+  walk-through borders); `render::exit_labels`.
+- XP colouring (user request, 2026-11-18): exit labels and the info line's area name are grey
+  (`info::LOW_XP_TEXT`) when the area's table monster level gives the character less than
+  `xp::LOW_XP` = 25% experience, white otherwise; towns, unknown levels and a terrorized current
+  level stay white; the info line's monster-level build colouring is unchanged. Rule (`xp.rs`,
+  Arreat Summit experience page, verified 2026-11-18): within ±5 levels 100%; monster 6/7/8/9/10+
+  below 207/159/110/61/13 of 256 (81/62/43/24/5%); monster above a clvl < 25 character by
+  6/7/8/9/10+: 225/174/92/38/5 of 256 (88/68/36/15/2%); clvl ≥ 25: `clvl/mlvl`. No Act 5 rule
+  exists: the user's "Act 5 Normal gives ~no XP before 25" is the clvl < 25 table against mlvl
+  24+ (grey up to clvl 15). The clvl 70+ penalty (976…5/1024) is the same everywhere and left out
+  of the colouring (it would grey every area from clvl 86). No D2R patch is known to change this.
 - Visible only while the Hyprland active window class is `steam_app_battlenet` with title `Diablo II: Resurrected`.
 
 ## Permissions
@@ -442,7 +454,7 @@ Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each re
 - [x] **M1 reader** (verified live in Jail 1, 2026-11-14; fixture tests/fixtures/jail1-snapshot.json): `d2r-map-overlay --dump` prints one JSON snapshot. Validate against `research/rooms.py` / `presets.py` output in Jail 1 and Tower 5; confirm player chain `+0x150` and the elite flag bits.
 - [x] **M2 overlay**: draw a static snapshot file (no game needed) — layer-shell, click-through, iso render.
 - [x] **M3 live**: reader thread + Hyprland focus hide/show; ~5 Hz redraw.
-- [ ] **M4 markers**: classification tables, per-game accumulation, exit labels.
+- [ ] **M4 markers**: classification tables, per-game accumulation, exit labels (exit labels done 2026-11-18, XP-coloured; not yet verified live).
 - [x] **M4b item drops**: implemented 2026-11-14 (items table found live; static path verified with a gem). Quality values live-confirmed 2026-11-17: set (5) on quest item `qui` and small charm `sml`, unique (7) on quest item `spc` — all with `unique_index` 0 (unidentified/no name), consistent with the index-only-when-identified rule. Named drops confirmed from the journal 2026-11-18: identified dirk `dir` = unique row 40 The Diggler; `bsd`/`gts`/`brs` = set rows 13/14/15 Isenhart's Lightbrand/Parry/Case; `chn` = set row 26 Cathan's Mesh.
 - [ ] **Cleanup**: remove D2RMH exe/launcher (`~/.local/bin/d2rmh`); keep classic 1.13c files for phase 2.
 - [ ] **Backlog: buff tracker** (user, 2026-11-18: "later"): dashboard Buffs panel — active states from the state bits at stat list `+0xB30`, the buff's own stat list (tagged with its state id) for values like Cyclone Armor's remaining absorb or Feral Rage stacks, and a countdown from the list's expiry frame vs the game frame counter (counter not yet found). Needs one recorded session.

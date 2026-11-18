@@ -13,7 +13,10 @@ use crate::game::{Bounds, Monster, Preset, PresetKind, Room, RoomRect, Snapshot}
 use crate::items::{CharmSize, DropKind, GemColour};
 use crate::offsets::monster_data;
 use crate::valuables::Tier;
-use crate::{info, session};
+use crate::{info, session, xp};
+
+/// Exit labels in an area that gives experience ([`draw_exit_labels`]).
+const LABEL_TEXT: [u8; 4] = [255, 255, 255, 255];
 
 /// Object txt ids of waypoints: every waypoint row of classic objects.txt. Live-verified: 119
 /// (Act 1 town), 156 (Act 2 outdoor, Dry Hills), 157 (Act 1 indoor, Jail 1).
@@ -832,6 +835,14 @@ impl Span {
 /// marker sits at the centre of the shared border strips; it points from the centre of this
 /// level's touching rooms to the centre of the other level's.
 pub fn border_exits(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
+    border_exits_to(snap)
+        .into_iter()
+        .map(|(_, marker, x, y)| (marker, x, y))
+        .collect()
+}
+
+/// [`border_exits`] with each marker's target level id first.
+fn border_exits_to(snap: &Snapshot) -> Vec<(u32, Marker, f64, f64)> {
     let mut levels: Vec<u32> = snap.border_links.iter().map(|l| l.to_level_id).collect();
     levels.sort_unstable();
     levels.dedup();
@@ -855,9 +866,51 @@ pub fn border_exits(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
             let (sx, sy) = strip.centre2();
             #[allow(clippy::cast_precision_loss, reason = "world tiles are far below 2^52")]
             let (x, y) = (sx as f64 / 2.0, sy as f64 / 2.0);
-            Some((Marker::BorderExit { dir, entry }, x, y))
+            Some((id, Marker::BorderExit { dir, entry }, x, y))
         })
         .collect()
+}
+
+/// One label per level this level links to: the target level id and where its name goes (world
+/// tiles). A room-tile link's label sits on the tile exit preset in its room (the room's centre
+/// if the preset isn't loaded); a walk-through border's on its [`border_exits`] triangle. Links
+/// from rooms the level doesn't list are left out.
+pub fn exit_labels(snap: &Snapshot) -> Vec<(u32, f64, f64)> {
+    let mut out: Vec<(u32, f64, f64)> = Vec::new();
+    for l in &snap.room_links {
+        if l.to_level_id == snap.level.id || out.iter().any(|&(id, _, _)| id == l.to_level_id) {
+            continue;
+        }
+        let Some(room) = snap
+            .level
+            .rooms
+            .iter()
+            .find(|r| r.x == l.from_room.x && r.y == l.from_room.y)
+        else {
+            continue;
+        };
+        let inside = |p: &&Preset| {
+            p.kind == PresetKind::Tile
+                && (room.x..room.x.saturating_add(room.w)).contains(&p.x)
+                && (room.y..room.y.saturating_add(room.h)).contains(&p.y)
+        };
+        let (x, y) = snap.presets.iter().find(inside).map_or_else(
+            || {
+                (
+                    f64::from(room.x) + f64::from(room.w) / 2.0,
+                    f64::from(room.y) + f64::from(room.h) / 2.0,
+                )
+            },
+            |p| (f64::from(p.x), f64::from(p.y)),
+        );
+        out.push((l.to_level_id, x, y));
+    }
+    for (id, _, x, y) in border_exits_to(snap) {
+        if !out.iter().any(|&(seen, _, _)| seen == id) {
+            out.push((id, x, y));
+        }
+    }
+    out
 }
 
 /// [`markers`] with custom landmark rules (for tests).
@@ -1105,24 +1158,39 @@ fn render_rules(
         }
     }
     if let Some(font) = font {
+        draw_exit_labels(&mut pm, view, font, snap);
         draw_info_line(&mut pm, font, snap);
     }
     Ok(pm)
 }
 
-/// The info line at the bottom of the frame.
+/// The target area names of the level's exits ([`exit_labels`]), grey where the character gets
+/// almost no experience ([`xp::is_low`]), white otherwise.
+fn draw_exit_labels(pm: &mut Pixmap, view: View, font: &FontVec, snap: &Snapshot) {
+    for (id, x, y) in exit_labels(snap) {
+        let name = info::level_name(id).map_or_else(|| format!("Level {id}"), str::to_owned);
+        let colour = if xp::is_low(id, snap.difficulty, snap.player.char_level) {
+            info::LOW_XP_TEXT
+        } else {
+            LABEL_TEXT
+        };
+        let bottom = map_height(pm.height(), Some(font));
+        info::draw_label(pm, font, colour, &name, view.to_screen(x, y), bottom);
+    }
+}
+
+/// The info line at the bottom of the frame. A terrorized level's monster levels follow the
+/// character, so its name is never greyed.
 fn draw_info_line(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot) {
-    info::draw(
-        pm,
-        font,
-        &info::info_line(
-            snap.level.id,
-            snap.difficulty,
-            snap.terrorized,
-            snap.cows,
-            &snap.player.build,
-        ),
+    let mut line = info::info_line(
+        snap.level.id,
+        snap.difficulty,
+        snap.terrorized,
+        snap.cows,
+        &snap.player.build,
     );
+    line.low_xp = !snap.terrorized && xp::is_low(snap.level.id, snap.difficulty, snap.player.char_level);
+    info::draw(pm, font, &line);
 }
 
 /// Strokes `trail` (world tiles) as one translucent polyline with round joins, broken where two
@@ -2539,6 +2607,9 @@ mod tests {
         };
         let mut snap = fixture()?;
         snap.difficulty = Some(0);
+        // Exit labels are white text on the map too (`exit_labels_are_grey_where_xp_is_low`).
+        snap.room_links.clear();
+        snap.border_links.clear();
         let (w, h) = (400, 400);
         let pm = render_with(&snap, w, h, Some(font))?;
         let top = map_height(h, Some(font));
@@ -2878,6 +2949,77 @@ mod tests {
             ],
             "far level 30 and tile-linked level 29 get none"
         );
+    }
+
+    #[test]
+    fn one_exit_label_per_linked_level() {
+        let got = exit_labels(&bordered(28));
+        assert_eq!(
+            got,
+            vec![
+                // Tile link from room b without a loaded tile preset: the room's centre.
+                (29, 160.0, 120.0),
+                (26, 160.0, 140.5),
+                (28, 140.0, 99.5),
+            ]
+        );
+        let mut snap = bordered(28);
+        snap.presets = vec![preset(PresetKind::Tile, 1)];
+        if let Some(p) = snap.presets.first_mut() {
+            (p.x, p.y) = (150, 110);
+        }
+        assert_eq!(
+            exit_labels(&snap).first(),
+            Some(&(29, 150.0, 110.0)),
+            "on the exit tile"
+        );
+    }
+
+    #[test]
+    fn exit_labels_are_grey_where_xp_is_low() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        // One room linking to Bloody Foothills (Normal mlvl 24).
+        let mut snap = empty_snapshot(120, 120);
+        snap.level.rooms = vec![room(100, 100, true)];
+        snap.room_links = vec![RoomLink {
+            from_room: RoomPos { x: 100, y: 100 },
+            to_level_id: 110,
+            to_room: RoomPos { x: 0, y: 0 },
+        }];
+        snap.difficulty = Some(0);
+        let count = |snap: &Snapshot| -> Result<(u32, u32)> {
+            let (w, h) = (400, 400);
+            let pm = render_with(snap, w, h, Some(font))?;
+            let (mut grey, mut white) = (0, 0);
+            for y in 0..map_height(h, Some(font)) {
+                for x in 0..w {
+                    let p = rgba(&pm, x, y)?;
+                    // Glyph cores, opaque over the translucent room fill; edges blend.
+                    if p[3] >= 250 && p.iter().take(3).all(|&c| (125..=155).contains(&c)) {
+                        grey += 1;
+                    } else if is_text_white(p) {
+                        white += 1;
+                    }
+                }
+            }
+            Ok((grey, white))
+        };
+        // clvl 10: 14 levels below the monsters, 2%.
+        snap.player.char_level = Some(10);
+        let (grey, white) = count(&snap)?;
+        assert!(grey >= 20 && white == 0, "low xp: {grey} grey, {white} white");
+        // clvl 20: 4 below, full experience.
+        snap.player.char_level = Some(20);
+        let (grey, white) = count(&snap)?;
+        // White glyph edges blend into a few grey-ish pixels.
+        assert!(
+            white >= 20 && grey * 4 < white,
+            "full xp: {grey} grey, {white} white"
+        );
+        Ok(())
     }
 
     #[test]
