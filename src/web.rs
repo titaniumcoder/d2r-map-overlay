@@ -1850,7 +1850,11 @@ fn grid_pieces(
                     // the guide starts using it.
                     let min = req.unwrap_or(from);
                     obj.insert("setup".to_owned(), serde_json::json!(format!("lvl {min}+")));
-                } else if info.char_level.is_some() && (from..=to).contains(&lvl) {
+                } else if info.char_level.is_some()
+                    && (from..=to).contains(&lvl)
+                    // In the guide's window but above the piece's own requirement: not yet.
+                    && req.is_none_or(|r| r <= lvl)
+                {
                     obj.insert("now".to_owned(), serde_json::json!(true));
                 }
             }
@@ -3838,6 +3842,20 @@ mod tests {
         };
         assert_eq!(field("Stealth", "now"), Some(serde_json::json!(true)));
         assert_eq!(field("Lore", "now"), None, "not yet");
+        // In Lore's window (26-38) but below its own level 27: still not "wear now".
+        info.char_level = Some(26);
+        let json26 = grid_pieces(&pieces, None, &[], &info);
+        let lore = json26
+            .iter()
+            .find(|p| p.get("name").and_then(|n| n.as_str()) == Some("Lore"));
+        assert_eq!(lore.and_then(|p| p.get("now")), None, "level 27 needed");
+        info.char_level = Some(27);
+        let json27 = grid_pieces(&pieces, None, &[], &info);
+        let lore = json27
+            .iter()
+            .find(|p| p.get("name").and_then(|n| n.as_str()) == Some("Lore"));
+        assert_eq!(lore.and_then(|p| p.get("now")), Some(&serde_json::json!(true)));
+        info.char_level = Some(21);
         assert_eq!(field("Tal Rune", "setup"), Some(serde_json::json!("lvl 17+")));
         info.char_level = Some(60);
         let json = grid_pieces(&pieces, None, &[], &info);
