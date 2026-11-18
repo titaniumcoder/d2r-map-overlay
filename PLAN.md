@@ -456,11 +456,11 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - Marker labels (user request, 2026-11-18): short tags beside non-monster markers in the marker's
   colour lifted 35% toward white (`render::marker_label_colour`): waypoint "wp", well "well",
   shrines a 3-capital tag per type (`config::SHRINE_TAGS`, listed in `config.example.toml`),
-  quest objects and landmarks ≤5 letters (`render::MARKER_TAGS`: malus, cube, staff, orif, altar,
-  stair, lever, forge, seal, anya, cairn, tree, tower, chest). None for monsters, drops, stairs or
-  cave exits. `info::place_labels` places labels by rank (exit > wp > quest object/landmark >
-  shrine > well): above the marker, else below, right, left; a label with no free spot is
-  dropped, exit names are always drawn. A quest object and its landmark star get one tag.
+  the real tomb's mini orifice "orif". None for star markers (quest objects and landmark stars:
+  the star says enough, user request 2026-11-18), monsters, drops, stairs or cave exits.
+  `info::place_labels` places labels by rank (exit > wp > orifice > shrine > well): above the
+  marker, else below, right, left; a label with no free spot is dropped, exit names are always
+  drawn.
 - XP colouring (user request, 2026-11-18): exit labels and the info line's area name are grey
   (`info::LOW_XP_TEXT`) when the area's table monster level gives the character less than
   `xp::LOW_XP` = 25% experience, white otherwise; towns, unknown levels and a terrorized current

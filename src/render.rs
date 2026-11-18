@@ -385,51 +385,20 @@ pub fn quest_object(txt: u32) -> Option<&'static str> {
         .map(|&(_, label)| label)
 }
 
-/// Short map labels of the non-monster quest objects ([`QUEST_OBJECTS`]) and landmarks
-/// ([`LANDMARKS`]), keyed by their label: at most 5 letters. A quest object and the landmark star
-/// on the same spot share a tag, so [`draw_labels`] shows it once. Monster spots (superuniques,
-/// quest monsters, the summoner, Radament, the Smith, Coldworm) and stairs or cave exits (the exit
-/// label names them) have none. Shrines: [`crate::config::SHRINE_TAGS`].
-pub const MARKER_TAGS: &[(&str, &str)] = &[
-    ("horadric malus", "malus"),
-    ("horadric cube chest", "cube"),
-    ("horadric cube", "cube"),
-    ("horadric cube (W/E/S)", "cube"),
-    ("staff of kings chest", "staff"),
-    ("orifice", "orif"),
-    ("gidbinn altar", "altar"),
-    ("gidbinn", "altar"),
-    ("sewer stairs", "stair"),
-    ("sewer lever", "lever"),
-    ("hellforge", "forge"),
-    ("diablo seal", "seal"),
-    ("anya", "anya"),
-    ("cairn stones", "cairn"),
-    ("tree of inifuss", "tree"),
-    ("forgotten tower", "tower"),
-    ("tomb treasure", "chest"),
-];
-/// Waypoint and well labels.
+/// Waypoint, well and mini orifice labels. Star markers (quest objects and landmark stars) have
+/// no tag: the star says enough (user request, 2026-11-18). Monsters, drops, stairs and cave exits
+/// (the exit label names them) have none either. Shrines: [`crate::config::SHRINE_TAGS`].
 const WAYPOINT_TAG: &str = "wp";
 const WELL_TAG: &str = "well";
-
-/// The map label of a quest object or landmark label, if it has one ([`MARKER_TAGS`]).
-fn marker_tag_of(label: &str) -> Option<&'static str> {
-    MARKER_TAGS
-        .iter()
-        .find(|&&(l, _)| l == label)
-        .map(|&(_, tag)| tag)
-}
+const ORIFICE_TAG: &str = "orif";
 
 /// The map label of `marker` and its rank (lower wins a crowded spot; exit labels are rank 0):
-/// waypoint 1, quest object or landmark 2, shrine 3, well 4. `None` for monsters, drops, exits
-/// and the player.
+/// waypoint 1, mini orifice 2, shrine 3, well 4. `None` for stars, monsters, drops, exits and the
+/// player.
 fn marker_tag(marker: Marker) -> Option<(u8, &'static str)> {
     match marker {
         Marker::Waypoint => Some((1, WAYPOINT_TAG)),
-        Marker::QuestObject(label) | Marker::Landmark(label) => marker_tag_of(label).map(|t| (2, t)),
-        // The Orifice landmark shares the "orifice" quest object's tag.
-        Marker::Orifice => marker_tag_of("orifice").map(|t| (2, t)),
+        Marker::Orifice => Some((2, ORIFICE_TAG)),
         Marker::Shrine(code) => crate::config::SHRINE_TAGS.get(usize::from(code)).map(|&t| (3, t)),
         Marker::Well => Some((4, WELL_TAG)),
         _ => None,
@@ -1219,10 +1188,6 @@ fn render_rules(
     Ok(pm)
 }
 
-/// Px within which a second marker label with the same text is left out: a quest object and
-/// the landmark star of its room, a few tiles apart, get one label.
-const SAME_TAG_PX: f32 = 40.0;
-
 /// Half-side in px of a Tal Rasha's Tomb symbol on a Canyon exit: about a label's text height.
 const TOMB_HALF: f32 = 8.0;
 /// Half-side of the real tomb's symbol ([`Snapshot::staff_tomb`]), drawn bigger and gold.
@@ -1356,14 +1321,10 @@ fn draw_labels(pm: &mut Pixmap, view: View, font: &FontVec, snap: &Snapshot, tag
         .collect();
     // Stable: snapshot order within one rank.
     tags.sort_by_key(|t| t.0);
-    for (_, tag, colour, at) in tags {
-        let near = |&(body, _, (x, y), _): &(LabelBody, Rgba, (f32, f32), bool)| {
-            body == LabelBody::Text(tag) && (x - at.0).hypot(y - at.1) < SAME_TAG_PX
-        };
-        if !labels.iter().any(near) {
-            labels.push((LabelBody::Text(tag), colour, at, false));
-        }
-    }
+    labels.extend(
+        tags.into_iter()
+            .map(|(_, tag, colour, at)| (LabelBody::Text(tag), colour, at, false)),
+    );
     let specs: Vec<info::LabelSpec> = labels
         .iter()
         .map(|&(body, _, at, keep)| info::LabelSpec {
@@ -3791,34 +3752,12 @@ mod tests {
     }
 
     #[test]
-    fn marker_tags_are_short_unique_per_label_and_skip_monsters() {
-        let mut labels: Vec<&str> = MARKER_TAGS.iter().map(|&(l, _)| l).collect();
-        labels.sort_unstable();
-        labels.dedup();
-        assert_eq!(labels.len(), MARKER_TAGS.len(), "a label is listed twice");
-        for &(label, tag) in MARKER_TAGS {
-            assert!(!tag.is_empty() && tag.len() <= 5, "{label}: {tag:?}");
-        }
-        for &(_, label) in QUEST_OBJECTS {
-            assert!(
-                marker_tag_of(label).is_some(),
-                "quest object {label:?} has no tag"
-            );
-        }
-        for &(_, label) in QUEST_MONSTERS {
+    fn marker_tags_skip_stars_and_monsters() {
+        for &(_, label) in QUEST_OBJECTS.iter().chain(QUEST_MONSTERS) {
             assert_eq!(marker_tag(Marker::QuestObject(label)), None, "{label}");
         }
         for rule in LANDMARKS {
-            if let Some(tag) = marker_tag_of(rule.label) {
-                // "orifice" also names the quest object; the Orifice landmark is tagged by kind.
-                assert!(
-                    rule.confirmed && matches!(rule.style, LandmarkStyle::Star | LandmarkStyle::Orifice),
-                    "{tag}"
-                );
-            }
-        }
-        for label in ["summoner", "radament's lair", "smith (forge)"] {
-            assert_eq!(marker_tag(Marker::Landmark(label)), None, "{label} is a monster");
+            assert_eq!(marker_tag(Marker::Landmark(rule.label)), None, "{}", rule.label);
         }
         for m in [
             Marker::Exit,
@@ -3838,11 +3777,9 @@ mod tests {
     }
 
     #[test]
-    fn marker_tags_rank_waypoint_then_objects_then_shrines_then_wells() {
-        let rank = |m| marker_tag(m).map(|(r, _)| r);
+    fn marker_tags_rank_waypoint_then_orifice_then_shrines_then_wells() {
         assert_eq!(marker_tag(Marker::Waypoint), Some((1, "wp")));
-        assert_eq!(marker_tag(Marker::QuestObject("hellforge")), Some((2, "forge")));
-        assert_eq!(rank(Marker::Orifice), Some(2));
+        assert_eq!(marker_tag(Marker::Orifice), Some((2, "orif")));
         assert_eq!(marker_tag(Marker::Shrine(15)), Some((3, "EXP")));
         assert_eq!(marker_tag(Marker::Well), Some((4, "well")));
         assert_eq!(marker_tag(Marker::Shrine(99)), None, "unknown code");
