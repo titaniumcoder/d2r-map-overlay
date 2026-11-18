@@ -287,6 +287,13 @@ pub struct Player {
     /// weapon or items table. Set in `snapshot`, not kept in the JSON.
     #[serde(skip)]
     pub wsm: Option<i32>,
+    /// Base strength and dexterity (stats [`stat_list::STRENGTH`] / [`stat_list::DEXTERITY`]
+    /// of the player's base-only stat list, so without gear bonuses); `None` if unreadable.
+    /// The vendor panel checks store items' requirements against them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strength: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dexterity: Option<u32>,
 }
 
 /// The player's speed stats and elemental resistances as granted by gear (stat ids from
@@ -764,6 +771,10 @@ pub struct Equipped {
     /// `ItemData::FLAGS` runeword bit ([`item_data::FLAG_RUNEWORD`], live-verified).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub runeword: bool,
+    /// The item's own stat entries ([`Reader::item_stats`]): what the vendor panel compares
+    /// store items against ([`crate::gear_score`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stats: Vec<crate::gear_score::ItemStat>,
 }
 
 impl Equipped {
@@ -1421,6 +1432,8 @@ impl<M: ReadMem> Reader<'_, M> {
             build: Vec::new(),
             bis: None,
             wsm: None,
+            strength: self.stat(addr, stat_list::STRENGTH).ok().flatten(),
+            dexterity: self.stat(addr, stat_list::DEXTERITY).ok().flatten(),
         };
         Ok((player, level))
     }
@@ -1935,6 +1948,7 @@ impl<M: ReadMem> Reader<'_, M> {
             name,
             file_index: named_index,
             runeword,
+            stats: self.item_stats(addr, head.id),
         }
     }
 
@@ -2000,13 +2014,46 @@ impl<M: ReadMem> Reader<'_, M> {
             .zip(self.u32(item, unit::TXT).ok())
             .and_then(|(t, txt)| items::read_code(self.mem, t, txt))
             .map(items::code_text);
-        Some(crate::shop::shop_item(
-            code.as_deref(),
-            quality,
-            page,
-            prefix,
-            suffix,
-        ))
+        let mut entry = crate::shop::shop_item(code.as_deref(), quality, page, prefix, suffix);
+        if let Ok(id) = self.u32(item, unit::ID) {
+            entry.stats = self.item_stats(item, id);
+        }
+        Some(entry)
+    }
+
+    /// The stat entries of the item unit at `item` (unit id `id`): its stat-list chain
+    /// ([`unit::STATS`], then [`stat_list::NEXT`] while a list is still an item list owned by
+    /// `id`, as in [`Reader::accumulate_gear`]); the first list is the base list. Live
+    /// 2026-11-18 (owned items, level-4 amazon): the base list holds the rolled base defense
+    /// (31), damage (21/22, 23/24, 159/160) and durability, the next list the affixes; the
+    /// chain then runs into other owners' lists. Store items: same unit layout, assumed the
+    /// same chain (not yet seen live). Optional data: an unreadable list ends the walk.
+    fn item_stats(&self, item: u64, id: u32) -> Vec<crate::gear_score::ItemStat> {
+        let mut out = Vec::new();
+        let Some(mut list) = self.ptr(item, unit::STATS).unwrap_or(None) else {
+            return out;
+        };
+        for i in 0..8 {
+            let (Ok(ty), Ok(owner)) = (self.u32(list, 0x08), self.u32(list, 0x0C)) else {
+                break;
+            };
+            if ty != unit_table::ITEM || owner != id {
+                break;
+            }
+            let Ok(entries) = self.stat_entries(list) else {
+                break;
+            };
+            out.extend(
+                entries.into_iter().map(|(param, stat, raw)| {
+                    crate::gear_score::ItemStat::from_raw(param, stat, raw, i == 0)
+                }),
+            );
+            match self.u64(list, stat_list::NEXT) {
+                Ok(next) if next != 0 => list = next,
+                _ => break,
+            }
+        }
+        out
     }
 
     /// The item codes of what is socketed in the item at `addr`, in socket order: the

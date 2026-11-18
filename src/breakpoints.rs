@@ -186,6 +186,8 @@ mod tests {
             build: Vec::new(),
             bis: None,
             wsm: None,
+            strength: None,
+            dexterity: None,
         }
     }
 

@@ -684,6 +684,8 @@ mod tests {
                 build: vec![],
                 bis: None,
                 wsm: None,
+                strength: None,
+                dexterity: None,
             },
             equipped: vec![],
             merc_equipped: vec![],

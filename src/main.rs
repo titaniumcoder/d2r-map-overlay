@@ -3,12 +3,14 @@
 //! See `PLAN.md` for the architecture and milestones.
 
 mod affixes_data;
+mod bases_data;
 mod breakpoints;
 mod build;
 mod config;
 mod cows;
 mod game;
 mod game_file;
+mod gear_score;
 mod hypr;
 mod image;
 mod info;

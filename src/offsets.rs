@@ -398,6 +398,10 @@ pub mod stat_list {
     /// Stat id `level` (itemstatcost.txt): the character level on a player unit. Not yet
     /// live-verified; the reader also accepts the value shifted left by 8.
     pub const LEVEL: u16 = 12;
+    /// Stat ids `strength` and `dexterity` (itemstatcost.txt), plain values. Not yet
+    /// live-verified on the player's list.
+    pub const STRENGTH: u16 = 0;
+    pub const DEXTERITY: u16 = 2;
     /// Stat ids of the four elemental resistances as granted by gear (itemstatcost.txt; the txt
     /// interleaves fire/light/cold/poison with their max counterparts, so light is 41, cold 43).
     pub const RESIST_FIRE: u16 = 39;

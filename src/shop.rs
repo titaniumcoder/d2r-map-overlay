@@ -37,6 +37,10 @@ pub struct ShopItem {
     /// max(base `levelreq`, prefix `levelreq`, suffix `levelreq`); `None` when the base is
     /// unknown and no affix sets one.
     pub req_level: Option<u32>,
+    /// The item's stat entries (`game::Reader::item_stats`), for the comparison with the
+    /// worn gear ([`crate::gear_score`]); empty when unread.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stats: Vec<crate::gear_score::ItemStat>,
 }
 
 /// Names a store item from its code, quality, store tab and raw affix ids
@@ -74,6 +78,7 @@ pub fn shop_item(code: Option<&str>, quality: u32, page: u8, prefix_id: u16, suf
         base,
         name,
         req_level,
+        stats: Vec::new(),
     }
 }
 
@@ -169,6 +174,7 @@ mod tests {
             suffix: Some("of Frost".into()),
             name: "Coral Heavy Gloves of Frost".into(),
             req_level: Some(13),
+            stats: Vec::new(),
         };
         assert!(matches(&gloves, "Coral Heavy Gloves"));
         assert!(matches(&gloves, "heavy gloves of frost"));

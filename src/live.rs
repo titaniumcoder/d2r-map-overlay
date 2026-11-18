@@ -271,6 +271,8 @@ fn publish_dashboard(
         stash_owned: &snap.stash_names,
         skills: &snap.skills,
         shop: snap.shop.as_ref(),
+        strength: snap.player.strength,
+        dexterity: snap.player.dexterity,
         updated_at: now_secs(),
     }));
 }

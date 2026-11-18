@@ -631,6 +631,9 @@ pub struct LiveInfo<'a> {
     pub quests: &'a [u16],
     /// The vendor trade window open right now ([`crate::game::Snapshot::shop`]).
     pub shop: Option<&'a crate::shop::Shop>,
+    /// Base strength and dexterity ([`crate::game::Player::strength`]); `None` if unread.
+    pub strength: Option<u32>,
+    pub dexterity: Option<u32>,
     /// Unix seconds of the tick that produced this data.
     pub updated_at: u64,
 }
@@ -699,16 +702,31 @@ pub fn live_json(info: &LiveInfo) -> String {
 }
 
 /// The open trade window (`live_json`'s `shop` section), `null` when none is open:
-/// `{ "npc", "items": [{ "name", "quality", "tab", "req", "high", "slot", "count" }] }`.
+/// `{ "npc", "items": [{ "name", "quality", "tab", "req", "high", "slot", "better", "why",
+/// "count" }] }`.
 /// `tab` is `armor` / `weapons` / `misc` (the store page); `high` = the required level is
 /// above the character's; `slot` = the build slot whose piece the item is
-/// ([`shop_match`]), else `null`. Identical entries (same name, quality and tab: potions,
-/// scrolls) are listed once with their `count`.
+/// ([`shop_match`]), else `null`; `better` = its stats beat what is worn in its body slot
+/// ([`crate::gear_score::verdict`], `why` the biggest gains, else `null`). Identical entries
+/// (same name, quality and tab: potions, scrolls) are listed once with their `count`.
 fn shop_json(info: &LiveInfo) -> serde_json::Value {
+    use crate::gear_score::{Piece, verdict};
     let Some(shop) = info.shop else {
         return serde_json::Value::Null;
     };
     let lvl = info.char_level.map(u32::from);
+    let profile = score_profile(info);
+    let worn: Vec<(u8, Piece<'_>)> = info
+        .equipped_items
+        .iter()
+        .map(|e| {
+            let piece = Piece {
+                code: e.code.as_deref(),
+                stats: &e.stats,
+            };
+            (e.body, piece)
+        })
+        .collect();
     let mut items: Vec<(serde_json::Value, u32)> = Vec::new();
     for item in &shop.items {
         let tab = match item.page {
@@ -724,6 +742,16 @@ fn shop_json(info: &LiveInfo) -> serde_json::Value {
             "high": item.req_level.zip(lvl).is_some_and(|(req, lvl)| req > lvl),
             "slot": shop_match(item, info).map(|(slot, _)| slot),
         });
+        let piece = Piece {
+            code: item.code.as_deref(),
+            stats: &item.stats,
+        };
+        let why = verdict(piece, item.req_level, &worn, &profile);
+        let mut json = json;
+        if let Some(obj) = json.as_object_mut() {
+            obj.insert("better".into(), why.is_some().into());
+            obj.insert("why".into(), why.into());
+        }
         match items.iter_mut().find(|(j, _)| *j == json) {
             Some((_, count)) => *count += 1,
             None => items.push((json, 1)),
@@ -739,6 +767,75 @@ fn shop_json(info: &LiveInfo) -> serde_json::Value {
         })
         .collect();
     serde_json::json!({ "npc": shop.npc, "items": items })
+}
+
+/// What the vendor panel's stat comparison values for this character
+/// ([`crate::gear_score::Profile`]): its skills are the allocated ones plus the stage's skill
+/// plan; its weapon kind is the worn weapon's, else that of the best current weapon piece
+/// wearable at this level that names a base ([`crate::gear_score::piece_kind`]), else of any
+/// current piece naming one; strength and dexterity are the base
+/// values plus the worn gear's.
+fn score_profile(info: &LiveInfo) -> crate::gear_score::Profile {
+    use crate::gear_score::{Profile, is_caster, piece_kind, stat};
+    let gear = |id: u16| -> i32 {
+        info.equipped_items
+            .iter()
+            .flat_map(|e| &e.stats)
+            .filter(|s| s.id == id)
+            .map(|s| s.value)
+            .sum()
+    };
+    let mut skills: Vec<u16> = info.skills.points.iter().map(|&(id, _)| id).collect();
+    for target in info.build.map_or(&[][..], |b| b.skill_plan.as_slice()) {
+        let planned = crate::skills_data::SKILLS
+            .iter()
+            .find(|s| u32::from(s.class) == info.class && crate::info::same_name(s.name, &target.skill));
+        if let Some(s) = planned
+            && !skills.contains(&s.id)
+        {
+            skills.push(s.id);
+        }
+    }
+    let worn = info
+        .equipped_items
+        .iter()
+        .find(|e| e.body == 4)
+        .and_then(|e| crate::bases_data::base(e.code.as_deref()?))
+        .map(|b| b.kind);
+    // The best current weapon piece wearable now names the kind; any current one otherwise.
+    let planned = || {
+        let pieces: Vec<&str> = info
+            .bis?
+            .slots
+            .get("weapon")?
+            .iter()
+            .filter(|p| !outgrown(p, info))
+            .map(String::as_str)
+            .collect();
+        let wearable = |p: &&str| {
+            crate::info::piece_level(p)
+                .zip(info.char_level)
+                .is_none_or(|(req, lvl)| req <= u32::from(lvl))
+        };
+        let kind = |p: &str| piece_kind(crate::info::piece_name(p));
+        pieces
+            .iter()
+            .copied()
+            .filter(wearable)
+            .find_map(kind)
+            .or_else(|| pieces.iter().copied().find_map(kind))
+    };
+    let weapon = worn.or_else(planned);
+    let attribute = |base: Option<u32>, id: u16| Some(i32::try_from(base?).ok()? + gear(id));
+    Profile {
+        class: info.class,
+        level: info.char_level.map(u32::from),
+        strength: attribute(info.strength, stat::STRENGTH),
+        dexterity: attribute(info.dexterity, stat::DEXTERITY),
+        skills,
+        weapon,
+        caster: is_caster(info.class, weapon),
+    }
 }
 
 /// The build slot (`gloves`, `ring`, `merc helm`, …) and bare piece name of the first
@@ -2773,6 +2870,7 @@ mod tests {
                 name: None,
                 file_index: None,
                 runeword: false,
+                stats: Vec::new(),
             },
             // A finished runeword on a Crystal Sword: uncomparable.
             crate::game::Equipped {
@@ -2782,6 +2880,7 @@ mod tests {
                 name: None,
                 file_index: None,
                 runeword: true,
+                stats: Vec::new(),
             },
             // An identified Harlequin Crest: exact name and level.
             equipped_unique(2),
@@ -2884,6 +2983,7 @@ mod tests {
                 name: Some("Dwarf Star".to_owned()),
                 file_index: Some(274),
                 runeword: false,
+                stats: Vec::new(),
             },
             crate::game::Equipped {
                 body: 7,
@@ -2892,6 +2992,7 @@ mod tests {
                 name: None,
                 file_index: None,
                 runeword: false,
+                stats: Vec::new(),
             },
         ];
         let slots = [
@@ -2937,6 +3038,7 @@ mod tests {
                 name: None,
                 file_index: None,
                 runeword: false,
+                stats: Vec::new(),
             }];
             let gear = gear_grid(
                 &[("offhand", vec!["Spirit Monarch@35".to_owned()])],
@@ -3088,6 +3190,8 @@ mod tests {
             white_bases: &[],
             quests: &[],
             shop: None,
+            strength: None,
+            dexterity: None,
             updated_at: 1_700_000_000,
         }
     }
@@ -3127,6 +3231,8 @@ mod tests {
             white_bases: &[],
             quests: &[],
             shop: None,
+            strength: None,
+            dexterity: None,
             updated_at: 1_700_000_000,
         };
         gear_json(&info)
@@ -3141,6 +3247,7 @@ mod tests {
             name: Some("Harlequin Crest".to_owned()),
             file_index: Some(248),
             runeword: false,
+            stats: Vec::new(),
         }
     }
 
@@ -4082,6 +4189,8 @@ mod tests {
             white_bases: &[],
             quests: &[],
             shop: Some(&shop),
+            strength: None,
+            dexterity: None,
             updated_at: 1_700_000_000,
         };
         let json = shop_json(&info);
@@ -4124,6 +4233,184 @@ mod tests {
         assert_eq!(shop_json(&closed), serde_json::Value::Null);
     }
 
+    /// The `shop` section's items as `name|better|why` lines.
+    fn shop_better_rows(json: &serde_json::Value) -> Vec<String> {
+        let items = json.get("items").and_then(|i| i.as_array());
+        items.map_or_else(Vec::new, |items| {
+            items
+                .iter()
+                .map(|i| {
+                    let field = |k: &str| i.get(k).map_or_else(String::new, ToString::to_string);
+                    format!("{}|{}|{}", field("name"), field("better"), field("why"))
+                })
+                .collect()
+        })
+    }
+
+    /// A level-12 bow amazon wearing a Short Bow and one fire ring: the store's Long Bow and
+    /// a better ring are marked with why; a javelin (not her weapon kind), a ring below the
+    /// bar and a bow above her level are not; nothing joins the upgrade list.
+    #[test]
+    fn shop_marks_items_better_than_the_worn_ones() {
+        use crate::gear_score::{ItemStat, stat};
+        use crate::shop::shop_item;
+        let base = |id, value| ItemStat {
+            id,
+            param: 0,
+            value,
+            base: true,
+        };
+        let affix = |id, value| ItemStat {
+            id,
+            param: 0,
+            value,
+            base: false,
+        };
+        let worn_item = |body: u8, code: &str, stats: Vec<ItemStat>| crate::game::Equipped {
+            body,
+            quality: 2,
+            code: Some(code.to_owned()),
+            name: None,
+            file_index: None,
+            runeword: false,
+            stats,
+        };
+        let equipped_items = [
+            worn_item(
+                4,
+                "sbw",
+                vec![base(stat::MIN_DAMAGE_2H, 1), base(stat::MAX_DAMAGE_2H, 4)],
+            ),
+            worn_item(6, "rin", vec![affix(stat::RES_FIRE, 20)]),
+        ];
+        let with = |mut item: crate::shop::ShopItem, stats: Vec<ItemStat>| {
+            item.stats = stats;
+            item
+        };
+        let long_bow = vec![
+            base(stat::MIN_DAMAGE_2H, 3),
+            base(stat::MAX_DAMAGE_2H, 10),
+            affix(stat::RES_FIRE, 15),
+        ];
+        let shop = crate::shop::Shop {
+            npc_txt: 148,
+            npc: Some("Charsi".to_owned()),
+            items: vec![
+                with(shop_item(Some("lbw"), 2, 1, 0, 0), long_bow.clone()),
+                with(shop_item(Some("6lb"), 2, 1, 0, 0), long_bow),
+                with(
+                    shop_item(Some("jav"), 2, 1, 0, 0),
+                    vec![base(stat::THROW_MIN, 6), base(stat::THROW_MAX, 14)],
+                ),
+                with(
+                    shop_item(Some("rin"), 2, 3, 0, 0),
+                    vec![affix(stat::MAX_LIFE, 30)],
+                ),
+                with(shop_item(Some("rin"), 4, 3, 0, 0), vec![affix(stat::MAX_LIFE, 5)]),
+            ],
+        };
+        let info = LiveInfo {
+            player_name: "Fulmina",
+            class: 0,
+            char_level: Some(12),
+            difficulty: Some(0),
+            area: "Rogue Encampment",
+            blocks: &crate::render::TextBlocks::default(),
+            bis: None,
+            build: None,
+            equipped: &[],
+            equipped_items: &equipped_items,
+            owned: &[],
+            stash: &[],
+            stash_owned: &[],
+            skills: &EMPTY_SKILLS,
+            stage: None,
+            held_materials: &[],
+            white_bases: &[],
+            quests: &[],
+            shop: Some(&shop),
+            strength: Some(30),
+            dexterity: Some(40),
+            updated_at: 1_700_000_000,
+        };
+        let rows = shop_better_rows(&shop_json(&info));
+        assert_eq!(
+            rows,
+            [
+                r#""Long Bow"|true|"+15 fire res, +4 avg dmg""#,
+                r#""Shadow Bow"|false|null"#,
+                r#""Javelin"|false|null"#,
+                r#""Ring"|true|"+30 life""#,
+                r#""Ring"|false|null"#,
+            ]
+        );
+        assert!(upgrades_json(&info).is_empty(), "better items don't chime");
+    }
+
+    /// The weapon kind: the worn weapon's, else the best stage weapon piece wearable now.
+    #[test]
+    fn score_profile_takes_the_weapon_kind_from_gear_or_build() {
+        static CODELESS: [crate::game::Equipped; 1] = [crate::game::Equipped {
+            body: 4,
+            quality: 2,
+            code: None,
+            name: None,
+            file_index: None,
+            runeword: false,
+            stats: Vec::new(),
+        }];
+        let bis = crate::config::Bis {
+            build: "amazon leveling".to_owned(),
+            slots: BTreeMap::from([(
+                "weapon".to_owned(),
+                vec![
+                    "Titan's Revenge@42".to_owned(),
+                    "Javelin of Swiftness@26".to_owned(),
+                    "Hunter's Bow".to_owned(),
+                ],
+            )]),
+            merc_slots: BTreeMap::new(),
+        };
+        let info = |lvl: u8, equipped_items: &'static [crate::game::Equipped]| {
+            let profile = score_profile(&LiveInfo {
+                player_name: "Fulmina",
+                class: 0,
+                char_level: Some(lvl),
+                difficulty: Some(0),
+                area: "Rogue Encampment",
+                blocks: &crate::render::TextBlocks::default(),
+                bis: Some(&bis),
+                build: None,
+                equipped: &[],
+                equipped_items,
+                owned: &[],
+                stash: &[],
+                stash_owned: &[],
+                skills: &EMPTY_SKILLS,
+                stage: None,
+                held_materials: &[],
+                white_bases: &[],
+                quests: &[],
+                shop: None,
+                strength: None,
+                dexterity: None,
+                updated_at: 1_700_000_000,
+            });
+            (profile.weapon, profile.caster)
+        };
+        assert_eq!(
+            info(12, &[]),
+            (Some("bow"), false),
+            "the javelin piece needs level 26"
+        );
+        assert_eq!(info(30, &[]), (Some("jave"), false));
+        assert_eq!(
+            info(12, &CODELESS),
+            (Some("bow"), false),
+            "a worn weapon without a code"
+        );
+    }
+
     #[test]
     fn upgrades_list_wearable_owned_pieces_and_craftable_runewords() -> Result<()> {
         let build = guide_build();
@@ -4152,6 +4439,7 @@ mod tests {
             name: Some("Biggin's Bonnet".to_owned()),
             file_index: None,
             runeword: false,
+            stats: Vec::new(),
         }];
         let json = guide_json(&build, 6, &[], &[], &[], &owned, &worn)?;
         assert_eq!(keys(&json), Vec::<String>::new());
@@ -4188,6 +4476,7 @@ mod tests {
             name: Some(name.to_owned()),
             file_index: None,
             runeword: true,
+            stats: Vec::new(),
         }
     }
 
