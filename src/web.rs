@@ -2254,6 +2254,9 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .si.high { opacity: .4; }
 .si .sl { color: var(--good); font-size: 11px; font-weight: 400; }
 .si .lv { margin-left: auto; color: var(--faint); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.si { flex-wrap: wrap; }
+.si .bt { color: var(--gold); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.si .why { flex-basis: 100%; padding-left: 12px; color: var(--faint); font-size: 11px; font-weight: 400; line-height: 1.3; }
 .up .sl { color: var(--dim); font-size: 11.5px; } .up .why { color: var(--faint); font-size: 11.5px; }
 .stage { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin: 0 0 12px; padding: 8px 12px;
   background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); font-size: 13px; }
@@ -2595,17 +2598,21 @@ function recipes(list) {
   $("recipes").innerHTML = groups.join("");
 }
 // The open trade window: one column per store tab, the build's pieces first and bold (with
-// their slot), the ones above the character level dimmed.
+// their slot), then the items whose stats beat the worn ones ("▲ better" and why), the ones
+// above the character level dimmed.
 function shop(s) {
   $("shoppanel").hidden = !s;
   if (!s) { $("shop").innerHTML = ""; $("shopnpc").textContent = ""; return; }
-  $("shopnpc").textContent = `${s.npc || "trade window"} · bold ▲ = a piece of your build · faded = above your level`;
+  $("shopnpc").textContent = `${s.npc || "trade window"} · bold ▲ = a piece of your build · ▲ better = beats what you wear · faded = above your level`;
   const row = i => `<div class="si${i.slot ? " hit" : ""}${i.high ? " high" : ""}${i.quality === 4 ? " magic" : ""}">`
     + `<span>${esc(i.name)}${i.count > 1 ? ` ×${esc(i.count)}` : ""}</span>${i.slot ? `<span class="sl">${esc(i.slot)}</span>` : ""}`
-    + `${i.req ? `<span class="lv">lvl ${esc(i.req)}</span>` : ""}</div>`;
+    + `${i.better ? '<span class="bt">▲ better</span>' : ""}`
+    + `${i.req ? `<span class="lv">lvl ${esc(i.req)}</span>` : ""}`
+    + `${i.better && i.why ? `<span class="why">${esc(i.why)}</span>` : ""}</div>`;
   $("shop").innerHTML = [["armor", "Armor"], ["weapons", "Weapons"], ["misc", "Misc"]].map(([tab, title]) => {
     const list = (s.items || []).filter(i => i.tab === tab);
-    const sorted = list.filter(i => i.slot).concat(list.filter(i => !i.slot));
+    const rank = i => i.slot ? 0 : i.better ? 1 : 2;
+    const sorted = [0, 1, 2].flatMap(r => list.filter(i => rank(i) === r));
     return list.length ? `<div><h3 class="row-h">${title}</h3>${sorted.map(row).join("")}</div>` : "";
   }).join("") || '<div class="empty">nothing for sale</div>';
 }

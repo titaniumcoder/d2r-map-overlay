@@ -184,6 +184,12 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   `+0x55` page (0 inventory, 4 stash, 255 elsewhere; verified over 74 items). Store items: `+0x18` bit 0x2000, page = store tab,
   magic affix ids at `+0x48`/`+0x4E` (see "Vendor trade window"). Inventory = mode 0 + page 0.
 - Item stat list: unit `+0x88` → `+0x30` entries / `+0x38` count, entry {u16 layer, u16 id, u32 value}; sockets = 194.
+  Chain (live 2026-11-18, level-4 amazon, probe walking `stat_list::NEXT` while type 4 + owner = item id):
+  list 0 = BASE list: rolled base defense `31` (Hard Leather Armor 25 = max 24 + 1 with ED, Leather Gloves 4 =
+  max 3 + 1; a plain Cap 3), durability 72/73, damage pairs `21/22` one-handed, `23/24` two-handed (Short Bow
+  1/4), `159/160` thrown (Javelin 6/14 beside 21/22 = 1/5), quantity 70, attack speed 68 (signed: -5);
+  list 1 = affixes (ED% `16` on armour, res `39/41/43/45`, gold find 79, durability% 75); then the chain runs
+  into other owners' lists (stop there). So ED% applies to the base-list value; flat bonuses add after.
 - Valuables: research/valuables.json (67 rules, S/A/B, trade/twink) embedded; tiers per category in
   `~/.config/d2r-map-overlay/config.toml` (default S+A both; example: config.example.toml). Ground: ring by tier
   (S red, A orange, dashed = uncertain). Inventory keep list (dashboard; formerly green lines on the overlay): certain
@@ -343,6 +349,29 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   matches Coral Heavy Gloves of Frost, "Russet Heavy Boots of Haste" needs both) in the current stage's
   character or merc slots (outgrown pieces skipped) → bold ▲ with the slot, and an upgrade entry of kind
   `shop` (key `shop:<slot>:<piece>`, so it chimes once per build piece). Required level above clvl → faded.
+- **Stat comparison** (user request 2026-11-18, leveling help): each store item and each equipped item
+  carries its stat entries (`Reader::item_stats`, the chain above; store items assumed to chain the same
+  way, not yet seen live). `gear_score::verdict` scores an item for the character (class, clvl, base
+  str/dex `Player::strength/dexterity` (stats 0/2, unverified) + worn gear's, the allocated skills plus the
+  stage's skill plan, the weapon kind of the worn weapon else of the best wearable stage weapon piece,
+  caster = staff/wand/orb or a weaponless sorc/necro) and compares with the worn item in its body slot:
+  rings vs the worse ring, a two-hander vs weapon + off-hand, a one-hander vs the weapon, a shield not
+  at all under a two-hander, an empty slot = 0. Weights in `gear_score::WEIGHTS` (one table: +skills
+  large, planned skill tabs/skills large, avg weapon damage only for the used weapon kind and not for
+  casters, res, life, mana/FCR more for casters, IAS/FHR/FRW, defense and MF small), bar
+  `gear_score::MIN_GAIN` = 8 points. Unusable items (class, level, str/dex incl. requirements -%) are
+  never better. Live JSON per item: `better` + `why` (the three largest weighted gains, "+15 fire res,
+  +4 avg dmg"); the panel shows "▲ better" + why under the build pieces. NOT in `upgrades` (no chime).
+  Base slot/kind/class/str/dex: `src/bases_data.rs` (`research/gen_bases.py`). Not counted: set bonuses,
+  +damage from dexterity/strength, skill-based damage, the ethereal ×1.5 base damage/defense; the
+  replaced item's own +str/+dex still count toward requirements. Unverified: whether socketed
+  gems/runes' stats sit in the item's own chain (then they count), whether flat +min/+max damage is
+  written to all three damage pairs or only `21/22` (the score takes the largest affix value of the
+  three), the `>> 8` of life/mana. Known gap: the weapon and the swap weapon share body slot 4 and
+  `equipped_items` keeps the first one scanned, so the compared weapon (and the weapon kind) may be
+  the swap weapon.
+- [x] Stat comparison ("▲ better" in the Vendor panel): implemented 2026-11-18; NOT yet verified live
+  (store items' stat chains, player str/dex stats).
 - [x] Vendor panel: implemented 2026-11-18; verified live the same day on Fara (A2): ~65 store items decoded to sensible magic names ("Bronze Double Axe of Maiming", "Helm of the Jackal", "Shimmering Large Shield of Deflecting"), store affix words sit at the same offsets as owned items.
 
 ## Build definitions and BiS selection (2026-11-17)
