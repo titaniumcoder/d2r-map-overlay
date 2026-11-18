@@ -373,11 +373,13 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   Base slot/kind/class/str/dex: `src/bases_data.rs` (`research/gen_bases.py`). Not counted: set bonuses,
   +damage from dexterity/strength, skill-based damage, the ethereal ×1.5 base damage/defense; the
   replaced item's own +str/+dex still count toward requirements. Unverified: whether socketed
-  gems/runes' stats sit in the item's own chain (then they count), whether flat +min/+max damage is
-  written to all three damage pairs or only `21/22` (the score takes the largest affix value of the
-  three), the `>> 8` of life/mana. Known gap: the weapon and the swap weapon share body slot 4 and
-  `equipped_items` keeps the first one scanned, so the compared weapon (and the weapon kind) may be
-  the swap weapon.
+  gems/runes' stats sit in the item's own chain (then they count), the `>> 8` of life/mana (stamina
+  checked). Flat +min/+max: the score takes the largest affix value of the three pairs.
+  Live 2026-11-18 (`--dump`, Fulmina clvl 6): player str 27 / dex 28 read from stats 0/2
+  (plausible); the swap set sat in body slots 11/12 (Hunter's Bow 11, Javelin 4), so slot 4 was the
+  active weapon (one character, one weapon set seen: after a weapon swap slot 4 may hold the other set); flat damage lands on the weapon's own pair (Javelin +2 max on 22 and
+  160, Hunter's Bow +1 on 24 only); a belt's +10 stamina read 10 after `>> 8`; a magic ring's base list
+  is EMPTY (count 0) with its affixes in the next list (the reader must not stop at an empty list).
 - [x] Stat comparison ("▲ better" in the Vendor panel): implemented 2026-11-18; NOT yet verified live
   (store items' stat chains, player str/dex stats).
 - [x] Vendor panel: implemented 2026-11-18; verified live the same day on Fara (A2): ~65 store items decoded to sensible magic names ("Bronze Double Axe of Maiming", "Helm of the Jackal", "Shimmering Large Shield of Deflecting"), store affix words sit at the same offsets as owned items.

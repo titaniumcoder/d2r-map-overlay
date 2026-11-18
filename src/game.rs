@@ -2190,8 +2190,13 @@ impl<M: ReadMem> Reader<'_, M> {
 
     /// All `{layer, stat id, value}` entries of the stat list at `list` (a `StatList` address,
     /// not a unit: the entries sit at `stat_list::ENTRIES`, the count at `stat_list::COUNT`).
+    /// An empty list (count 0) is `Ok(vec![])` without touching its entries pointer: live
+    /// 2026-11-18 a magic ring's base list was empty and its affix list came next.
     fn stat_entries(&self, list: u64) -> Result<Vec<(u16, u16, u32)>> {
         let count = self.u64(list, stat_list::COUNT)?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
         if count > MAX_ITEM_STATS {
             bail!("stat list {list:#x}: {count} entries");
         }
@@ -3094,6 +3099,63 @@ mod tests {
             armour.required_level(),
             Some(43),
             "magic: the BASE item's levelreq (affixes can raise the real one)"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn item_stats_walk_past_an_empty_base_list() -> Result<()> {
+        // Live 2026-11-18: a magic ring's base list was empty (count 0, no entries) and its
+        // affixes (+5 fire res) sat in the next list; then the chain ran into another owner's.
+        let mut m = world()?;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        stored_item(
+            &mut m,
+            I1,
+            (40, 4, item_data::FLAG_IDENTIFIED, 0),
+            (1, 255),
+            &[],
+            0,
+        )?;
+        set_owner(&mut m, I1, BOB_ID)?;
+        set_body(&mut m, I1, 6)?;
+        let ring_id = u32::try_from(I1 >> 12)?;
+        let (base_list, affixes, entries, foreign) = (I1 + 0x600, I1 + 0x800, I1 + 0x900, I1 + 0xA00);
+        let list = |mem: &mut FakeMem, at: u64, owner: u32, entries: u64, count: u64, next: u64| {
+            put(
+                mem,
+                at,
+                0xE0,
+                &[
+                    (0x08, &unit_table::ITEM.to_le_bytes()),
+                    (0x0C, &owner.to_le_bytes()),
+                    (stat_list::ENTRIES, &entries.to_le_bytes()),
+                    (stat_list::COUNT, &count.to_le_bytes()),
+                    (stat_list::NEXT, &next.to_le_bytes()),
+                ],
+            )
+        };
+        // The empty base list: count 0 and a null entries pointer.
+        list(&mut m, base_list, ring_id, 0, 0, affixes)?;
+        list(&mut m, affixes, ring_id, entries, 1, foreign)?;
+        let mut b = Vec::new();
+        b.extend(0u16.to_le_bytes());
+        b.extend(stat_list::RESIST_FIRE.to_le_bytes());
+        b.extend(5u32.to_le_bytes());
+        m.add(entries, b);
+        list(&mut m, foreign, ring_id + 1, entries, 1, 0)?;
+
+        let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
+        let ring = s.equipped_items.first().context("ring")?;
+        assert_eq!(
+            ring.stats,
+            [crate::gear_score::ItemStat {
+                id: stat_list::RESIST_FIRE,
+                param: 0,
+                value: 5,
+                base: false,
+            }],
+            "the affix list after the empty base list, not the foreign list"
         );
         Ok(())
     }
