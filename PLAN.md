@@ -444,6 +444,16 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - **Dashboard "Where to go"**: the level-suggestion band is structured (`mlvl` + `bucket`:
   `below`/`equal`/`above` clvl, `info::LevelEntry` at the `live_json` layer, `level_lines_full` the
   source) and the panel lays it out in three labelled columns (user request, 2026-11-17).
+- **Recently played first** (user request, 2026-11-18): `played.json` in the data dir maps the
+  lowercased character name → `{name, t}` (unix secs last seen in a game; `src/played.rs`). The live
+  loop records the snapshot's player each tick, writing (temp file + rename) when the character
+  changes or at most once a minute. Seeded once when the file is missing from the D2R save dir in the
+  game's Proton prefix (`WINEPREFIX` from `/proc/<pid>/environ` → `drive_c/users/*/Saved Games/Diablo II
+  Resurrected`): mtime of `<Name><account digits>.ctlo` (online) / `<Name>.d2s` (offline). A corrupt
+  file is ignored (no order) and repaired by the next write. `GET /api/config` sorts characters by
+  `last_played` desc (stable: the never-seen keep config order) and the page shows "played … ago".
+  The dashboard has no other character list.
+- [x] Config page lists recently played characters first (2026-11-18).
 
 ## Overlay
 - Layer-shell surface, layer `overlay`, anchored top-right, default 400×400 (config), **empty input region** (click-through), no keyboard.

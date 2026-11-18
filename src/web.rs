@@ -429,10 +429,12 @@ fn respond_no_store(status: &str, content_type: &str, body: &str) -> String {
 fn api_config() -> String {
     let config = crate::config::load_from(&crate::config::default_path().unwrap_or_default());
     let gear = current_gear();
+    let played =
+        crate::played::default_path().map_or_else(crate::played::Played::new, |p| crate::played::load(&p));
     respond(
         "200 OK",
         "application/json",
-        &config_json(&config, &gear).to_string(),
+        &config_json(&config, &gear, &played).to_string(),
     )
 }
 
@@ -443,8 +445,8 @@ fn api_builds() -> String {
     respond("200 OK", "application/json", &builds_json(&config).to_string())
 }
 
-/// The config page's JSON ([`api_config`]), pure over the parsed config and the live gear
-/// state so tests need no file and no game.
+/// The config page's JSON ([`api_config`]), pure over the parsed config, the live gear
+/// state and the last-played times so tests need no file and no game.
 ///
 /// Each character carries:
 /// - `name`, and `build`: the selected build's slug as written in `[bis.<name>]` (`""` when
@@ -457,9 +459,17 @@ fn api_builds() -> String {
 ///   annotated with its required level, its ✓ (`tick`: `"worn"`/`"owned"`/`"stash"`/`null`,
 ///   [`crate::info::piece_tick`]), whether the equipped piece is already better (`better`,
 ///   [`crate::info::slot_equipped_better`]) and, for a runeword piece, its `runes` and
-///   `bases`.
+///   `bases`,
+/// - `last_played`: unix seconds the character was last seen in a game (`null` when never,
+///   [`crate::played`]).
+///
+/// Characters are listed most recently played first; those never seen follow in config order.
 #[must_use]
-fn config_json(config: &crate::config::Config, gear: &GearInfo) -> serde_json::Value {
+fn config_json(
+    config: &crate::config::Config,
+    gear: &GearInfo,
+    played: &crate::played::Played,
+) -> serde_json::Value {
     let damages = |name: &str| {
         config
             .damages_for_player(name, None, None)
@@ -484,7 +494,7 @@ fn config_json(config: &crate::config::Config, gear: &GearInfo) -> serde_json::V
             slot_tables_json(&resolved.merc_slots, &gear.merc_equipped, gear),
         ))
     };
-    let characters: Vec<_> = config
+    let mut names: Vec<_> = config
         .bis
         .keys()
         .chain(
@@ -496,7 +506,13 @@ fn config_json(config: &crate::config::Config, gear: &GearInfo) -> serde_json::V
                 // `bis` keys; the filter is also correct for programmatically built `Config`s.
                 .filter(|n| !config.bis.keys().any(|b| b.eq_ignore_ascii_case(n))),
         )
-        .map(|name| {
+        .map(|name| (name, played.get(&name.to_lowercase()).map(|e| e.t)))
+        .collect();
+    // Stable: equal times and the never-seen (`None`, last under `Reverse`) keep config order.
+    names.sort_by_key(|&(_, t)| std::cmp::Reverse(t));
+    let characters: Vec<_> = names
+        .into_iter()
+        .map(|(name, last_played)| {
             let (build, slots, merc_slots) = bis_named(name)
                 .unwrap_or_else(|| (String::new(), serde_json::json!({}), serde_json::json!({})));
             let build_name = config
@@ -509,6 +525,7 @@ fn config_json(config: &crate::config::Config, gear: &GearInfo) -> serde_json::V
                 "damages": damages(name),
                 "slots": slots,
                 "merc_slots": merc_slots,
+                "last_played": last_played,
             })
         })
         .collect();
@@ -2113,6 +2130,14 @@ function pieceHtml(p) {
     ? `<div class="rwhint">${esc(p.runes.join(" + "))} · ${esc((p.bases || []).join(", "))}</div>` : "";
   return `<div class="piece${strike}">${esc(p.name)}${esc(level)}${tick}</div>` + hint;
 }
+// "played 2 h ago" from unix seconds; "" when never seen.
+function playedAgo(t) {
+  if (t == null) return "";
+  const s = Math.max(0, Date.now() / 1000 - t);
+  const ago = s < 120 ? "just now" : s < 7200 ? `${Math.round(s / 60)} min ago`
+    : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`;
+  return ` <span class="hint" style="font-size:0.5em;font-weight:normal">played ${ago}</span>`;
+}
 // One slot table (slots or merc_slots) as an ordered read-only list.
 function slotsHtml(slots) {
   return SLOTS.filter(s => slots && slots[s] && slots[s].length)
@@ -2137,7 +2162,7 @@ async function load() {
     const sel = `<select class="build-select">${options()}</select>`;
     const buildName = c.build_name ? `<div class="hint">build: ${esc(c.build_name)}</div>` : "";
     const damages = (c.damages || []).length ? `<div class="hint">damages: ${esc(c.damages.join(", "))}</div>` : "";
-    div.innerHTML = `<h2>${esc(c.name)}</h2>`
+    div.innerHTML = `<h2>${esc(c.name)}${playedAgo(c.last_played)}</h2>`
       + `build: ${sel} <button class="save">Save</button>${buildName}${damages}`
       + `<h3>BiS</h3>` + slotsHtml(c.slots)
       + `<h3>Mercenary</h3>` + slotsHtml(c.merc_slots);
@@ -2829,10 +2854,58 @@ mod tests {
     }
 
     #[test]
+    fn config_json_lists_recently_played_first() {
+        let mut config = crate::config::Config::default();
+        for name in ["demonmaster", "elemental", "fulmina", "vex"] {
+            let bis = crate::config::Bis {
+                build: String::new(),
+                slots: BTreeMap::new(),
+                merc_slots: BTreeMap::new(),
+            };
+            config.bis.insert(name.to_owned(), bis);
+        }
+        let entry = |name: &str, t| {
+            (
+                name.to_lowercase(),
+                crate::played::Entry {
+                    name: name.to_owned(),
+                    t,
+                },
+            )
+        };
+        let played =
+            crate::played::Played::from([entry("Fulmina", 30), entry("Elemental", 20), entry("Other", 99)]);
+        let json = config_json(&config, &GearInfo::default(), &played);
+        let order: Vec<_> = json
+            .get("characters")
+            .and_then(|v| v.as_array())
+            .map_or_else(Vec::new, |cs| {
+                cs.iter().filter_map(|c| c.get("name")?.as_str()).collect()
+            });
+        assert_eq!(
+            order,
+            ["fulmina", "elemental", "demonmaster", "vex"],
+            "recent first, the never-seen in config order"
+        );
+        assert_eq!(
+            json.pointer("/characters/0/last_played"),
+            Some(&serde_json::json!(30))
+        );
+        assert_eq!(
+            json.pointer("/characters/3/last_played"),
+            Some(&serde_json::Value::Null)
+        );
+    }
+
+    #[test]
     fn config_json_resolves_the_selected_build() {
         // The resolved view: the selection-only character gets the build's display name,
         // damages and annotated pieces; a builds-only character rides along for its select.
-        let json = config_json(&resolved_config(), &GearInfo::default());
+        let json = config_json(
+            &resolved_config(),
+            &GearInfo::default(),
+            &crate::played::Played::new(),
+        );
         let chars = json
             .get("characters")
             .and_then(|v| v.as_array())
@@ -2879,7 +2952,7 @@ mod tests {
             equipped: vec![(4, 7)], // body slot 4 = weapon, quality 7 = unique
             merc_equipped: vec![],
         };
-        let json = config_json(&resolved_config(), &gear);
+        let json = config_json(&resolved_config(), &gear, &crate::played::Played::new());
         let char = json
             .pointer("/characters/0")
             .map_or(serde_json::Value::Null, Clone::clone);
@@ -2901,7 +2974,7 @@ mod tests {
             worn: vec!["Heart of the Oak".to_owned()],
             ..gear
         };
-        let json = config_json(&resolved_config(), &wearing);
+        let json = config_json(&resolved_config(), &wearing, &crate::played::Played::new());
         assert_eq!(
             json.pointer("/characters/0/slots/weapon/0/tick"),
             Some(&serde_json::json!("worn"))

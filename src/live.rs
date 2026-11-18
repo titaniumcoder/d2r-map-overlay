@@ -22,7 +22,8 @@ use crate::session::Session;
 use ab_glyph::FontVec;
 
 use crate::{
-    config, cows, game_file, image, info, items, journal, offset_cache, process, render, valuables, web,
+    config, cows, game_file, image, info, items, journal, offset_cache, played, process, render, valuables,
+    web,
 };
 
 /// Snapshot interval (~5 Hz).
@@ -302,6 +303,8 @@ fn follow_game(
     }
     let mut saver = game_file::Saver::new(state_path);
     let mut cow_stats = cows::Counter::open(cows::default_path(), journal::default_dir().as_deref());
+    // Last-played times for the config page's order (user request, 2026-11-18).
+    let mut last_played = played::Tracker::open(played::default_path(), || played::seed_from_process(pid));
     let mut dedup = Dedup::default();
     let mut items_table = ItemsTable::NotSearched;
     let mut quest_flags = QuestFlags::default();
@@ -322,6 +325,7 @@ fn follow_game(
                 // Before `apply` and the shrine filter: they drop monster presets and shrines
                 // the journal wants to see.
                 journal.observe(&snap);
+                last_played.record(&snap.player.name, now_secs(), Instant::now());
                 let update = session.apply(&mut snap);
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
                 // Damages: the character's own `[builds]` entry, else the selected build's,

@@ -28,6 +28,7 @@ mod objects_data;
 mod offset_cache;
 mod offsets;
 mod overlay;
+mod played;
 mod process;
 mod quests;
 mod render;
