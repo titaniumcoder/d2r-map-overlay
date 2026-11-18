@@ -134,6 +134,18 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   456–459 are "Tomb Cube W/E/S/N", the Halls of the Dead 3 cube chamber (459 confirmed with chest object 354).
   Use lvlprest names (blizzhackers/d2data lvlprest.json, `Def` = the Room2 preset id) before guessing patterns.
 
+## Tal Rasha's Tomb symbols (2026-11-18, user request)
+- The Canyon of the Magi (46) exits show each tomb's Horadric symbol instead of seven "Tal Rasha's Tomb" names
+  (src/tombs.rs, drawn by `render::draw_labels` in the exit's XP colour; the real tomb bigger, gold, with a star).
+- Mapping (level → symbol) is fixed per tomb: classic `data\global\ui\MENU\invps.DC6` has 7 frames, frame i =
+  tomb level 66+i (1.13c quest log draws frame `staff tomb − 66`, per troytt/diablo2-web
+  `kb/ui/d2client-quest-log-true-tomb-symbol-113c.md`). Extracted from the local d2data.mpq with research/mpq.py +
+  research/dc6.py: 66 pinwheel, 67 gate (square between posts), 68 crescent, 69 ring, 70 nested chevrons,
+  71 triangle in triangle, 72 ring over a crescent. Each tomb has its own entrance warp (lvlwarp 38..44 "Desert to
+  Tomb Tal 1..7" = levels.txt Canyon `Warp1..7` beside `Vis1..7` = 66..72), so the doorway symbol goes with the level.
+- Not yet checked in game: that the overlay's symbol matches the doorway's (needs a Canyon visit; compare with the
+  obelisks / Tab map).
+
 ## Flayer Jungle (78), 2026-11-15
 - 192 rooms in 9 large piece types (16 or 32 Room2 each): 534, 535, 538, 539, 565, 570, 574, 601, 602.
 - **601 = waypoint area** (player and waypoint object 237 inside it). **602 = Gidbinn altar candidate** (only other
@@ -158,6 +170,10 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 ## ActMisc, difficulty and seed lead (2026-11-15)
 - Player unit `+0x20` → act; **act `+0x70` → ActMisc** (older builds: +0x78, which now points into code).
 - ActMisc `+0x830` u16 = **difficulty**: 0 Normal and 1 Nightmare confirmed live (2026-11-15); Hell (2) still to see.
+- ActMisc `+0x120` u32 = **staff tomb level** (`dwStaffTombLevel`, the real Tal Rasha's Tomb, 66..72), from
+  jagarop/d2.re `D2R/IDA.h` `D2DrlgStrc` (same struct lists Difficulty at +0x830, matching ours). Live-verified
+  2026-11-18 once (Normal, research/tombprobe.py): 72, and the character had entered Duriel's Lair from tomb 72
+  (game.json `came_from`). Read as `Snapshot::staff_tomb` (only 66..=72 kept). Second game still to see.
 - Phase 2 lead: ActMisc `+0x840` and `+0x860` hold random-looking u32s (e.g. 3943813804 / 3154569827), where the
   seed-selector plugin says the generator stores {seed, 0x29A} and the derived value. Used directly as d2mapapi
   seeds they do **not** reproduce the Flayer Jungle (waypoint/altar positions differ) — likely encoded/derived.
@@ -473,7 +489,7 @@ Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each re
 - [x] **M1 reader** (verified live in Jail 1, 2026-11-14; fixture tests/fixtures/jail1-snapshot.json): `d2r-map-overlay --dump` prints one JSON snapshot. Validate against `research/rooms.py` / `presets.py` output in Jail 1 and Tower 5; confirm player chain `+0x150` and the elite flag bits.
 - [x] **M2 overlay**: draw a static snapshot file (no game needed) — layer-shell, click-through, iso render.
 - [x] **M3 live**: reader thread + Hyprland focus hide/show; ~5 Hz redraw.
-- [ ] **M4 markers**: classification tables, per-game accumulation, exit labels (exit labels done 2026-11-18, XP-coloured; marker labels 2026-11-18; not yet verified live).
+- [ ] **M4 markers**: classification tables, per-game accumulation, exit labels (exit labels done 2026-11-18, XP-coloured; marker labels 2026-11-18; Canyon tomb symbols + real tomb 2026-11-18; not yet verified live).
 - [x] **M4b item drops**: implemented 2026-11-14 (items table found live; static path verified with a gem). Quality values live-confirmed 2026-11-17: set (5) on quest item `qui` and small charm `sml`, unique (7) on quest item `spc` — all with `unique_index` 0 (unidentified/no name), consistent with the index-only-when-identified rule. Named drops confirmed from the journal 2026-11-18: identified dirk `dir` = unique row 40 The Diggler; `bsd`/`gts`/`brs` = set rows 13/14/15 Isenhart's Lightbrand/Parry/Case; `chn` = set row 26 Cathan's Mesh.
 - [ ] **Cleanup**: remove D2RMH exe/launcher (`~/.local/bin/d2rmh`); keep classic 1.13c files for phase 2.
 - [x] **Map toggle** (2026-11-18): `SIGUSR1` hides/shows the map; key binding left to the user's Hyprland config.

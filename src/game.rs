@@ -180,6 +180,10 @@ pub struct Snapshot {
     /// 0 Normal, 1 Nightmare, 2 Hell; `None` if unreadable (and in old fixtures).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<u8>,
+    /// The real Tal Rasha's Tomb of this game (level 66..=72, [`crate::tombs`]), read in Act 2;
+    /// `None` elsewhere, if unreadable, and in old fixtures. Left out of the JSON when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staff_tomb: Option<u32>,
     /// The level is a Terror Zone ([`is_terrorized`] over the live monsters). The session keeps
     /// it set for the level for the rest of the game, once seen. Left out of the JSON when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -960,6 +964,7 @@ pub fn snapshot(
     let held_materials = stash::held_materials(mine.iter().map(|(item, _)| item));
     let white_bases = stash::white_bases(mine.iter().map(|(item, _)| item));
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
+    let staff_tomb = player.act.and_then(|a| r.staff_tomb(a.0));
     let terrorized = is_terrorized(&monsters);
     let skills = r.skills(chosen.addr.0, player.class);
     // Vendors stand in towns only; elsewhere the monsters' inventories aren't walked.
@@ -996,6 +1001,7 @@ pub fn snapshot(
         held_materials,
         white_bases,
         difficulty,
+        staff_tomb,
         terrorized,
         cows: None,
         trail: Vec::new(),
@@ -1546,6 +1552,14 @@ impl<M: ReadMem> Reader<'_, M> {
     fn difficulty(&self, act_addr: u64) -> Option<u8> {
         let misc = self.ptr(act_addr, act::MISC).ok().flatten()?;
         difficulty_from_raw(self.u16(misc, act_misc::DIFFICULTY).ok()?)
+    }
+
+    /// The real Tal Rasha's Tomb via act → `ActMisc`, like [`Reader::difficulty`]; `None` unless
+    /// it is a tomb level (outside Act 2 the field is 0).
+    fn staff_tomb(&self, act_addr: u64) -> Option<u32> {
+        let misc = self.ptr(act_addr, act::MISC).ok().flatten()?;
+        let level = self.u32(misc, act_misc::STAFF_TOMB_LEVEL).ok()?;
+        crate::tombs::TOMB_LEVELS.contains(&level).then_some(level)
     }
 
     fn presets(&mut self, room: u64, pos: RoomPos, out: &mut Vec<Preset>) {
@@ -4782,6 +4796,32 @@ mod tests {
             )?;
             let s = snapshot(&m, TABLE, None, None, None)?;
             assert_eq!(s.difficulty, want, "raw {raw}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn staff_tomb_via_act_misc() -> Result<()> {
+        const ACT_MISC: u64 = 0x23_0000;
+        let mut m = world()?;
+        assert_eq!(snapshot(&m, TABLE, None, None, None)?.staff_tomb, None);
+        put(&mut m, ACT, 0x80, &[(act::MISC, &ACT_MISC.to_le_bytes())])?;
+        // Only tomb levels count: 0 (outside Act 2) and other ids are `None`.
+        for (raw, want) in [
+            (72u32, Some(72)),
+            (66, Some(66)),
+            (0, None),
+            (65, None),
+            (73, None),
+        ] {
+            put(
+                &mut m,
+                ACT_MISC,
+                0x840,
+                &[(act_misc::STAFF_TOMB_LEVEL, &raw.to_le_bytes())],
+            )?;
+            let s = snapshot(&m, TABLE, None, None, None)?;
+            assert_eq!(s.staff_tomb, want, "raw {raw}");
         }
         Ok(())
     }

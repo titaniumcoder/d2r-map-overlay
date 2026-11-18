@@ -221,6 +221,11 @@ pub mod act {
 pub mod act_misc {
     /// u16 difficulty: 0 Normal, 1 Nightmare, 2 Hell. Live-verified 2026-11-15 (Normal only).
     pub const DIFFICULTY: u64 = 0x830;
+    /// u32 level id of the real Tal Rasha's Tomb (66..=72, the one with the orifice), set in
+    /// Act 2 (`dwStaffTombLevel`). D2R layout from jagarop/d2.re `D2R/IDA.h` (`D2DrlgStrc`
+    /// +0x120, beside Difficulty +0x830). Live-verified 2026-11-18 (one Normal game): 72, and
+    /// the character had entered Duriel's Lair from tomb 72.
+    pub const STAFF_TOMB_LEVEL: u64 = 0x120;
 }
 
 /// The client's quest flags of the current game: a `.data` global points to a `BitBuffer`

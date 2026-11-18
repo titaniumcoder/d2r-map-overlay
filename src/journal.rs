@@ -663,6 +663,7 @@ mod tests {
             held_materials: vec![],
             white_bases: vec![],
             difficulty: None,
+            staff_tomb: None,
             terrorized: false,
             cows: None,
             trail: vec![],

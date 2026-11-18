@@ -38,6 +38,7 @@ mod skills_data;
 mod stash;
 #[cfg(test)]
 mod testutil;
+mod tombs;
 mod valuables;
 mod weapons_data;
 mod web;

@@ -13,7 +13,7 @@ use crate::game::{Bounds, Monster, Preset, PresetKind, Room, RoomRect, Snapshot}
 use crate::items::{CharmSize, DropKind, GemColour};
 use crate::offsets::monster_data;
 use crate::valuables::Tier;
-use crate::{info, session, xp};
+use crate::{info, session, tombs, xp};
 
 /// Exit labels in an area that gives experience ([`draw_labels`]).
 const LABEL_TEXT: [u8; 4] = [255, 255, 255, 255];
@@ -1223,21 +1223,128 @@ fn render_rules(
 /// the landmark star of its room, a few tiles apart, get one label.
 const SAME_TAG_PX: f32 = 40.0;
 
+/// Half-side in px of a Tal Rasha's Tomb symbol on a Canyon exit: about a label's text height.
+const TOMB_HALF: f32 = 8.0;
+/// Half-side of the real tomb's symbol ([`Snapshot::staff_tomb`]), drawn bigger and gold.
+const REAL_TOMB_HALF: f32 = 11.0;
+/// Stroke width of a tomb symbol's lines; the real tomb's is wider.
+const TOMB_STROKE: f32 = 2.0;
+const REAL_TOMB_STROKE: f32 = 2.5;
+/// Radius of the gold star beside the real tomb's symbol, and its gap to the symbol.
+const REAL_TOMB_STAR: f32 = 5.0;
+const REAL_TOMB_STAR_GAP: f32 = 3.0;
+
+/// What a map label shows: text, or a tomb's symbol in place of the seven identical
+/// "Tal Rasha's Tomb" names (`real`: the tomb with the orifice).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LabelBody<'a> {
+    Text(&'a str),
+    Tomb { symbol: tombs::Symbol, real: bool },
+}
+
+/// The box a tomb symbol label takes, as [`info::LabelSize`]: the symbol's square plus 2 px
+/// on each side for its stroke and outline, and the star for the real tomb. Nothing below the baseline.
+fn tomb_label_size(real: bool) -> info::LabelSize {
+    let (half, star) = if real {
+        (REAL_TOMB_HALF, REAL_TOMB_STAR.mul_add(2.0, REAL_TOMB_STAR_GAP))
+    } else {
+        (TOMB_HALF, 0.0)
+    };
+    info::LabelSize {
+        width: half.mul_add(2.0, 4.0) + star,
+        ascent: half.mul_add(2.0, 4.0),
+        descent: 0.0,
+    }
+}
+
+/// Draws a tomb's symbol in `colour` with a dark outline at the pen position and baseline
+/// [`info::place_labels`] gave it ([`tomb_label_size`]); the real tomb's gets a gold star after it.
+fn draw_tomb_label(
+    pm: &mut Pixmap,
+    symbol: tombs::Symbol,
+    real: bool,
+    colour: Rgba,
+    (pen, baseline): (f32, f32),
+) {
+    let (half, width) = if real {
+        (REAL_TOMB_HALF, REAL_TOMB_STROKE)
+    } else {
+        (TOMB_HALF, TOMB_STROKE)
+    };
+    let (cx, cy) = (pen + 2.0 + half, baseline - 2.0 - half);
+    let round = |width| Stroke {
+        width,
+        line_cap: LineCap::Round,
+        line_join: LineJoin::Round,
+        ..Stroke::default()
+    };
+    let glyph = symbol.glyph(cx, cy, half);
+    // All outlines first, so no outline covers a neighbouring stroke's colour.
+    if let Some(lines) = &glyph.lines {
+        pm.stroke_path(
+            lines,
+            &paint(MARKER_OUTLINE),
+            &round(width + 2.0),
+            Transform::identity(),
+            None,
+        );
+    }
+    if let Some(fill) = &glyph.solid {
+        pm.stroke_path(
+            fill,
+            &paint(MARKER_OUTLINE),
+            &round(2.0),
+            Transform::identity(),
+            None,
+        );
+    }
+    if let Some(lines) = &glyph.lines {
+        pm.stroke_path(lines, &paint(colour), &round(width), Transform::identity(), None);
+    }
+    if let Some(fill) = &glyph.solid {
+        solid(pm, fill, colour);
+    }
+    let star_x = half.mul_add(2.0, pen + 4.0) + REAL_TOMB_STAR_GAP + REAL_TOMB_STAR;
+    if real && let Some(star) = marker_path(Shape::Star, star_x, cy, REAL_TOMB_STAR) {
+        pm.stroke_path(
+            &star,
+            &paint(MARKER_OUTLINE),
+            &round(3.0),
+            Transform::identity(),
+            None,
+        );
+        solid(pm, &star, LANDMARK_GOLD);
+    }
+}
+
 /// The map labels: the target area names of the level's exits ([`exit_labels`]), grey where the
-/// character gets almost no experience ([`xp::is_low`]), white otherwise; then the short tags of
-/// `tagged` markers ([`marker_tag`]) in [`marker_label_colour`]. Where labels would overlap,
-/// [`info::place_labels`] moves or drops the lower-ranked one; exit labels are always drawn.
+/// character gets almost no experience ([`xp::is_low`]), white otherwise; a Tal Rasha's Tomb
+/// exit shows the tomb's symbol ([`tombs::symbol`]) in that colour instead, except the real
+/// tomb's ([`Snapshot::staff_tomb`]): bigger and gold (over grey too) with a star. Then the short tags of `tagged` markers ([`marker_tag`]) in
+/// [`marker_label_colour`]. Where labels would overlap, [`info::place_labels`] moves or drops
+/// the lower-ranked one; exit labels are always drawn.
 fn draw_labels(pm: &mut Pixmap, view: View, font: &FontVec, snap: &Snapshot, tagged: &[(Marker, f32, f32)]) {
-    let mut labels: Vec<(String, Rgba, (f32, f32), bool)> = exit_labels(snap)
+    let names: Vec<(u32, String, f64, f64)> = exit_labels(snap)
         .into_iter()
         .map(|(id, x, y)| {
             let name = info::level_name(id).map_or_else(|| format!("Level {id}"), str::to_owned);
-            let colour = if xp::is_low(id, snap.difficulty, snap.player.char_level) {
+            (id, name, x, y)
+        })
+        .collect();
+    let mut labels: Vec<(LabelBody, Rgba, (f32, f32), bool)> = names
+        .iter()
+        .map(|(id, name, x, y)| {
+            let real = snap.staff_tomb == Some(*id);
+            let colour = if real {
+                LANDMARK_GOLD
+            } else if xp::is_low(*id, snap.difficulty, snap.player.char_level) {
                 info::LOW_XP_TEXT
             } else {
                 LABEL_TEXT
             };
-            (name, colour, view.to_screen(x, y), true)
+            let body =
+                tombs::symbol(*id).map_or(LabelBody::Text(name), |symbol| LabelBody::Tomb { symbol, real });
+            (body, colour, view.to_screen(*x, *y), true)
         })
         .collect();
     let mut tags: Vec<(u8, &str, Rgba, (f32, f32))> = tagged
@@ -1250,27 +1357,32 @@ fn draw_labels(pm: &mut Pixmap, view: View, font: &FontVec, snap: &Snapshot, tag
     // Stable: snapshot order within one rank.
     tags.sort_by_key(|t| t.0);
     for (_, tag, colour, at) in tags {
-        let near = |&(ref text, _, (x, y), _): &(String, Rgba, (f32, f32), bool)| {
-            text == tag && (x - at.0).hypot(y - at.1) < SAME_TAG_PX
+        let near = |&(body, _, (x, y), _): &(LabelBody, Rgba, (f32, f32), bool)| {
+            body == LabelBody::Text(tag) && (x - at.0).hypot(y - at.1) < SAME_TAG_PX
         };
         if !labels.iter().any(near) {
-            labels.push((tag.to_owned(), colour, at, false));
+            labels.push((LabelBody::Text(tag), colour, at, false));
         }
     }
     let specs: Vec<info::LabelSpec> = labels
         .iter()
-        .map(|(text, _, at, keep)| info::LabelSpec {
-            size: info::label_size(font, text),
-            at: *at,
-            keep: *keep,
+        .map(|&(body, _, at, keep)| info::LabelSpec {
+            size: match body {
+                LabelBody::Text(text) => info::label_size(font, text),
+                LabelBody::Tomb { real, .. } => tomb_label_size(real),
+            },
+            at,
+            keep,
         })
         .collect();
     let bottom = map_height(pm.height(), Some(font));
     #[allow(clippy::cast_precision_loss, reason = "canvas widths are far below 2^24")]
     let spots = info::place_labels(&specs, pm.width() as f32, bottom as f32);
-    for ((text, colour, _, _), spot) in labels.iter().zip(spots) {
-        if let Some(spot) = spot {
-            info::draw_label(pm, font, *colour, text, spot);
+    for (&(body, colour, _, _), spot) in labels.iter().zip(spots) {
+        match (body, spot) {
+            (LabelBody::Text(text), Some(spot)) => info::draw_label(pm, font, colour, text, spot),
+            (LabelBody::Tomb { symbol, real }, Some(spot)) => draw_tomb_label(pm, symbol, real, colour, spot),
+            (_, None) => {}
         }
     }
 }
@@ -1851,6 +1963,7 @@ mod tests {
             held_materials: vec![],
             white_bases: vec![],
             difficulty: None,
+            staff_tomb: None,
             terrorized: false,
             cows: None,
             trail: vec![],
@@ -3081,6 +3194,109 @@ mod tests {
             Some(&(29, 150.0, 110.0)),
             "on the exit tile"
         );
+    }
+
+    /// The canvas box `[x0, y0, x1, y1]` of the pixels `hit` picks in the map area, and their
+    /// count; `None` if there are none.
+    fn ink_box(pm: &Pixmap, rows: u32, hit: impl Fn([u8; 4]) -> bool) -> Result<Option<([u32; 4], u32)>> {
+        let mut found: Option<([u32; 4], u32)> = None;
+        for y in 0..rows {
+            for x in 0..pm.width() {
+                if hit(rgba(pm, x, y)?) {
+                    let ([x0, y0, x1, y1], n) = found.unwrap_or(([x, y, x, y], 0));
+                    found = Some(([x0.min(x), y0.min(y), x1.max(x), y1.max(y)], n + 1));
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    fn is_gold(p: [u8; 4]) -> bool {
+        p[3] >= 250 && p[0] >= 240 && (180..=215).contains(&p[1]) && p[2] <= 70
+    }
+
+    /// One room in the Canyon of the Magi linking to tomb level `tomb`, clvl 15 (full xp there).
+    fn canyon_exit(tomb: u32) -> Snapshot {
+        let mut snap = empty_snapshot(120, 120);
+        snap.level.id = 46;
+        snap.level.rooms = vec![room(100, 100, true)];
+        snap.room_links = vec![RoomLink {
+            from_room: RoomPos { x: 100, y: 100 },
+            to_level_id: tomb,
+            to_room: RoomPos { x: 0, y: 0 },
+        }];
+        snap.difficulty = Some(0);
+        snap.player.char_level = Some(15);
+        snap
+    }
+
+    #[test]
+    fn tomb_exits_show_a_symbol_not_the_name() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let (w, h) = (400, 400);
+        let pm = render_with(&canyon_exit(69), w, h, Some(font))?;
+        let (b, n) = ink_box(&pm, map_height(h, Some(font)), is_text_white)?.context("no white symbol")?;
+        // "Tal Rasha's Tomb" would be some 100 px wide; the ring is TOMB_HALF * 2 plus its stroke.
+        assert!(
+            n >= 20 && b[2] - b[0] <= 20 && b[3] - b[1] <= 20,
+            "{n} px in {b:?}"
+        );
+        assert!(
+            ink_box(&pm, map_height(h, Some(font)), is_gold)?.is_none(),
+            "not the real tomb"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_real_tomb_is_gold_with_a_star() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let (w, h) = (400, 400);
+        let rows = map_height(h, Some(font));
+        let mut snap = canyon_exit(69);
+        snap.staff_tomb = Some(69);
+        let pm = render_with(&snap, w, h, Some(font))?;
+        let (b, n) = ink_box(&pm, rows, is_gold)?.context("no gold symbol")?;
+        // The bigger ring and the star beside it.
+        assert!(n >= 60 && b[2] - b[0] >= 30, "{n} px in {b:?}");
+        assert!(ink_box(&pm, rows, is_text_white)?.is_none(), "drawn white too");
+        // Another tomb's exit stays white.
+        snap.staff_tomb = Some(70);
+        let pm = render_with(&snap, w, h, Some(font))?;
+        assert!(ink_box(&pm, rows, is_gold)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn tomb_symbols_draw_distinct_glyphs() -> Result<()> {
+        let mut masks: Vec<(tombs::Symbol, Vec<bool>)> = Vec::new();
+        for id in tombs::TOMB_LEVELS {
+            let symbol = tombs::symbol(id).context("tomb without symbol")?;
+            let mut pm = Pixmap::new(40, 40).context("pixmap")?;
+            draw_tomb_label(&mut pm, symbol, false, LABEL_TEXT, (10.0, 30.0));
+            let mask: Vec<bool> = pm
+                .pixels()
+                .iter()
+                .map(|p| p.alpha() >= 128 && p.red() >= 200)
+                .collect();
+            let ink = mask.iter().filter(|&&on| on).count();
+            assert!(ink >= 15, "{symbol:?}: {ink} px");
+            for (other, seen) in &masks {
+                let differ = mask.iter().zip(seen).filter(|(a, b)| a != b).count();
+                assert!(
+                    differ >= 10,
+                    "{symbol:?} looks like {other:?} ({differ} px differ)"
+                );
+            }
+            masks.push((symbol, mask));
+        }
+        Ok(())
     }
 
     #[test]
