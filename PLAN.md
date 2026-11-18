@@ -405,6 +405,7 @@ Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each re
 - [ ] **M4 markers**: classification tables, per-game accumulation, exit labels.
 - [ ] **M4b item drops**: implemented 2026-11-14 (items table found live; static path verified with a gem). Quality values live-confirmed 2026-11-17: set (5) on quest item `qui` and small charm `sml`, unique (7) on quest item `spc` — all with `unique_index` 0 (unidentified/no name), consistent with the index-only-when-identified rule. Ticked once a named unique/set drop shows a nonzero index.
 - [ ] **Cleanup**: remove D2RMH exe/launcher (`~/.local/bin/d2rmh`); keep classic 1.13c files for phase 2.
+- [ ] **Backlog: buff tracker** (user, 2026-11-18: "later"): dashboard Buffs panel — active states from the state bits at stat list `+0xB30`, the buff's own stat list (tagged with its state id) for values like Cyclone Armor's remaining absorb or Feral Rage stacks, and a countdown from the list's expiry frame vs the game frame counter (counter not yet found). Needs one recorded session.
 - [ ] **Phase 2 (separate plan)**: map seed RE → d2mapapi-backed full markers from entry.
 
 ## Verification
