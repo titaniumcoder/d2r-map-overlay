@@ -10,9 +10,9 @@ the research JSON changes. Per-build settings (display name, class, damages, sta
 live in BUILDS below, keyed by the source file's stem (`druid-leveling.source` counts as
 `druid-leveling`).
 
-- `--leveling` (Tornado endgame): the leveling guide's post-respec plan (level 38-75) and its
-  tips for those levels are merged in front of the endgame plan; that guide's respec IS the
-  switch into this stage.
+- `--leveling` (Tornado / Lightning Fury endgame): the leveling guide's post-respec plan
+  (level 38-75) and its tips for those levels are merged in front of the endgame plan; that
+  guide's respec IS the switch into this stage (its `respec_note` in BUILDS is the switch note).
 - `--prerequisites` (the stage before a manual switch): the next stage's `prerequisites`
   become this stage's `switch_note`.
 
@@ -41,6 +41,8 @@ BUILDS = {
         name="Druid Leveling", cls="druid", damages=["fire", "physical"], default=True,
         next="druid tornado", switch_level=38, auto_switch=False,
         notes="Maxroll Druid Leveling (Teo1904): Firestorm / Molten Boulder / Fissure to level 38, then respec to Tornado + Hurricane (next stage).",
+        respec_note=("respec to Tornado + Hurricane before Nightmare Mephisto (~level 38, as early as NM Act 2): "
+                     "Tornado 15, Hurricane 9, Cyclone Armor 14, 1 each in Arctic Blast and Twister"),
     ),
     "druid-tornado": dict(
         name="Druid Tornado", cls="druid", damages=["physical", "cold"],
@@ -50,6 +52,20 @@ BUILDS = {
     "druid-fissure": dict(
         name="Druid Fissure", cls="druid", damages=["fire", "physical"],
         notes="Maxroll Fissure Druid (endgame): Starter + Standard setups; Magic Find, Ubers and Gear Options items fold as alternatives. Only once the gear is near-perfect.",
+    ),
+    # The leveling guide respecs into Lightning Fury on entering Act 4 Nightmare and calls level 38
+    # the earliest for it (its Summary says 32+; the detailed stage and the planner say 38).
+    "amazon-leveling": dict(
+        name="Amazon Leveling", cls="amazon", damages=["fire", "poison"], default=True,
+        next="lightning fury", switch_level=38, auto_switch=False,
+        notes="Maxroll Amazon Leveling (Teo1904): Poison Javelin / Exploding Arrow to level 38, then respec to Lightning Fury + Charged Strike (next stage).",
+        respec_note=("respec to Lightning Fury + Charged Strike on entering Act 4 Nightmare (level 38, the earliest per the guide): "
+                     "Charged Strike 19, Lightning Fury 9, Pierce 5, 1 each in Dodge, Avoid, Evade and the prerequisites "
+                     "(Jab, Power Strike, Poison Javelin, Lightning Bolt, Plague Javelin, Critical Strike, Penetrate)"),
+    ),
+    "amazon-lightning-fury": dict(
+        name="Lightning Fury", cls="amazon", damages=["lightning", "physical"],
+        notes="Maxroll Lightning Fury Amazon (endgame): Starter + Standard setups; Magic Find, Ubers and Gear Options items fold as alternatives. Levels 38-75 follow the leveling guide's post-respec plan.",
     ),
 }
 
@@ -325,12 +341,6 @@ def stats_lines(sp):
     return [f"{name.replace('_', ' ')}: {v['rule']}" for name, v in sp.items() if isinstance(v, dict) and v.get("rule")]
 
 
-def switch_note_leveling(d):
-    r = d["respec"]
-    return ("respec to Tornado + Hurricane before Nightmare Mephisto (~level 38, as early as NM Act 2): "
-            "Tornado 15, Hurricane 9, Cyclone Armor 14, 1 each in Arctic Blast and Twister")
-
-
 def switch_note_prereq(p):
     lvl = p.get("character_level")
     lvl = lvl.get("minimum") if isinstance(lvl, dict) else lvl
@@ -383,10 +393,13 @@ def main(argv):
     if "--leveling" in opts:
         # The leveling guide's late gear (its runewords and magic pieces from level 13 on) is
         # what the character wears when it switches here at ~38: the low-level end of each
-        # slot. Pieces this guide lists too move to the end; the others are appended.
+        # slot. Pieces this guide lists too move to the end; the others are appended. Only its
+        # stage gear ('lvl a-b' setups): its Gear Options alternatives would push this guide's
+        # own picks (Raven Frost, Highlord's Wrath, ...) to the end.
         lev = json.load(open(opts["--leveling"], encoding="utf-8"))
         late = [i for i in lev["items"]
                 if i.get("kind") in ("runeword", "magic", "unique", "set")
+                and str(i.get("setup", "")).startswith("lvl")
                 and not str(i.get("setup", "")).startswith("lvl 1-")]
         late.sort(key=lambda i: -(i.get("req_level") or 0))
         names = {i["name"] for i in late} | {"Insight"}
@@ -434,7 +447,9 @@ def main(argv):
             pre = [e for e in sp["entries"] if "respec" not in e["stage"]]
             plan, _ = expand_plan(pre, stem, known)
             if "respec" in d:
-                switch_note = switch_note_leveling(d)
+                switch_note = cfg.get("respec_note", "")
+                if not switch_note:
+                    problems.append(f"{stem}: source has a respec but BUILDS has no respec_note")
         elif isinstance(sp, dict):
             if "--leveling" in opts:
                 lev = json.load(open(opts["--leveling"], encoding="utf-8"))
