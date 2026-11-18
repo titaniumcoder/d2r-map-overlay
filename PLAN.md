@@ -432,6 +432,14 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - Exit labels (2026-11-18): each linked level's name in 12 px outlined text above its exit (on the
   tile exit preset of the linking room, else the room's centre; on the border triangle for
   walk-through borders); `render::exit_labels`.
+- Marker labels (user request, 2026-11-18): short tags beside non-monster markers in the marker's
+  colour lifted 35% toward white (`render::marker_label_colour`): waypoint "wp", well "well",
+  shrines a 3-capital tag per type (`config::SHRINE_TAGS`, listed in `config.example.toml`),
+  quest objects and landmarks ≤5 letters (`render::MARKER_TAGS`: malus, cube, staff, orif, altar,
+  stair, lever, forge, seal, anya, cairn, tree, tower, chest). None for monsters, drops, stairs or
+  cave exits. `info::place_labels` places labels by rank (exit > wp > quest object/landmark >
+  shrine > well): above the marker, else below, right, left; a label with no free spot is
+  dropped, exit names are always drawn. A quest object and its landmark star get one tag.
 - XP colouring (user request, 2026-11-18): exit labels and the info line's area name are grey
   (`info::LOW_XP_TEXT`) when the area's table monster level gives the character less than
   `xp::LOW_XP` = 25% experience, white otherwise; towns, unknown levels and a terrorized current
@@ -460,7 +468,7 @@ Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each re
 - [x] **M1 reader** (verified live in Jail 1, 2026-11-14; fixture tests/fixtures/jail1-snapshot.json): `d2r-map-overlay --dump` prints one JSON snapshot. Validate against `research/rooms.py` / `presets.py` output in Jail 1 and Tower 5; confirm player chain `+0x150` and the elite flag bits.
 - [x] **M2 overlay**: draw a static snapshot file (no game needed) — layer-shell, click-through, iso render.
 - [x] **M3 live**: reader thread + Hyprland focus hide/show; ~5 Hz redraw.
-- [ ] **M4 markers**: classification tables, per-game accumulation, exit labels (exit labels done 2026-11-18, XP-coloured; not yet verified live).
+- [ ] **M4 markers**: classification tables, per-game accumulation, exit labels (exit labels done 2026-11-18, XP-coloured; marker labels 2026-11-18; not yet verified live).
 - [x] **M4b item drops**: implemented 2026-11-14 (items table found live; static path verified with a gem). Quality values live-confirmed 2026-11-17: set (5) on quest item `qui` and small charm `sml`, unique (7) on quest item `spc` — all with `unique_index` 0 (unidentified/no name), consistent with the index-only-when-identified rule. Named drops confirmed from the journal 2026-11-18: identified dirk `dir` = unique row 40 The Diggler; `bsd`/`gts`/`brs` = set rows 13/14/15 Isenhart's Lightbrand/Parry/Case; `chn` = set row 26 Cathan's Mesh.
 - [ ] **Cleanup**: remove D2RMH exe/launcher (`~/.local/bin/d2rmh`); keep classic 1.13c files for phase 2.
 - [x] **Map toggle** (2026-11-18): `SIGUSR1` hides/shows the map; key binding left to the user's Hyprland config.

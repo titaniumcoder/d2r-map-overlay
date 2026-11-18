@@ -852,33 +852,108 @@ pub fn fit_plain(font: &FontVec, text: &str, max_width: f32) -> String {
     text.to_owned()
 }
 
-/// Map label text size in px (exit target names).
+/// Map label text size in px (exit target names, marker tags).
 const LABEL_PX: f32 = 12.0;
-/// Px between a label's baseline and the centre of the marker it names.
+/// Px between a label's baseline and the centre of the marker it names (label above it).
 const LABEL_RAISE: f32 = 7.0;
+/// Px between a marker's centre and the near edge of a label beside it.
+const LABEL_SIDE: f32 = 8.0;
 
-/// Draws `text` as a map label in `colour` with the info line's dark outline, centred above
-/// (`cx`, `cy`) and pushed inside the canvas above `bottom` (the map area's height in px, so
-/// labels stay off the info line) so it isn't clipped at the edges.
-pub fn draw_label(
-    pm: &mut Pixmap,
-    font: &FontVec,
-    colour: [u8; 4],
-    text: &str,
-    (cx, cy): (f32, f32),
-    bottom: u32,
-) {
-    let width = text_width_at(font, LABEL_PX, text);
+/// The box a map label's text takes: `width` px wide, `ascent` px above its baseline and
+/// `-descent` px below it (`descent` is negative, as ab-glyph gives it).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LabelSize {
+    pub width: f32,
+    pub ascent: f32,
+    pub descent: f32,
+}
+
+/// The [`LabelSize`] of `text` set as a map label in `font`.
+pub fn label_size(font: &FontVec, text: &str) -> LabelSize {
     let scaled = font.as_scaled(PxScale::from(LABEL_PX));
-    let (ascent, descent) = (scaled.ascent(), scaled.descent());
-    // +1/+2: room for the outline.
-    let right = f32_px(pm.width()) - width - 2.0;
-    let pen = (cx - width / 2.0).min(right).max(1.0);
-    // `descent` is negative: the lowest baseline keeps the descenders and outline above `bottom`.
-    let baseline = (cy - LABEL_RAISE)
-        .min(f32_px(bottom) + descent - 1.0)
-        .max(ascent + 1.0);
-    draw_outlined(pm, font, LABEL_PX, colour, text, (pen, baseline), false);
+    LabelSize {
+        width: text_width_at(font, LABEL_PX, text),
+        ascent: scaled.ascent(),
+        descent: scaled.descent(),
+    }
+}
+
+/// One map label for [`place_labels`]: its size, the canvas centre of the marker it names, and
+/// whether it is drawn (above its marker) even when every spot overlaps a label placed earlier.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LabelSpec {
+    pub size: LabelSize,
+    pub at: (f32, f32),
+    pub keep: bool,
+}
+
+/// Places map `labels`, highest priority first, on a `canvas_w` px wide canvas above `bottom` (the
+/// map area's height, so labels stay off the info line). Each goes to the first spot around its
+/// marker (above, below, right, left), pushed inside the canvas edges, whose box overlaps no label
+/// placed before it. A label with no free spot is dropped (`None`), unless it is `keep`: then it
+/// goes above its marker anyway. Returns each label's pen position and baseline, in input order.
+pub fn place_labels(labels: &[LabelSpec], canvas_w: f32, bottom: f32) -> Vec<Option<(f32, f32)>> {
+    let mut taken: Vec<[f32; 4]> = Vec::new();
+    labels
+        .iter()
+        .map(|l| {
+            let spots = [0, 1, 2, 3].map(|slot| label_spot(l, slot, canvas_w, bottom));
+            let free = spots.into_iter().find(|&s| {
+                let b = label_box(l.size, s);
+                !taken.iter().any(|t| boxes_overlap(*t, b))
+            });
+            let spot = free.or_else(|| l.keep.then_some(spots[0]))?;
+            taken.push(label_box(l.size, spot));
+            Some(spot)
+        })
+        .collect()
+}
+
+/// Pen position and baseline of `l` in spot `slot` (0 above its marker, 1 below, 2 right, 3 left),
+/// pushed inside the canvas.
+fn label_spot(l: &LabelSpec, slot: u8, canvas_w: f32, bottom: f32) -> (f32, f32) {
+    let LabelSize {
+        width,
+        ascent,
+        descent,
+    } = l.size;
+    let (cx, cy) = l.at;
+    // Above: the box's bottom edge sits `LABEL_RAISE + descent` px above the centre; below
+    // mirrors it. Beside: the box is centred on the marker's height.
+    let beside = cy + f32::midpoint(ascent, descent);
+    let (pen, baseline) = match slot {
+        0 => (cx - width / 2.0, cy - LABEL_RAISE),
+        1 => (cx - width / 2.0, cy + LABEL_RAISE + descent + ascent),
+        2 => (cx + LABEL_SIDE, beside),
+        _ => (cx - LABEL_SIDE - width, beside),
+    };
+    // +1/+2: room for the outline. The lowest baseline keeps the descenders and outline above
+    // `bottom`.
+    (
+        pen.min(canvas_w - width - 2.0).max(1.0),
+        baseline.min(bottom + descent - 1.0).max(ascent + 1.0),
+    )
+}
+
+/// The canvas box `[x0, y0, x1, y1]` a label of `size` at (`pen`, `baseline`) covers, outline
+/// included.
+fn label_box(size: LabelSize, (pen, baseline): (f32, f32)) -> [f32; 4] {
+    [
+        pen - 1.0,
+        baseline - size.ascent,
+        pen + size.width + 1.0,
+        baseline - size.descent + 1.0,
+    ]
+}
+
+fn boxes_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
+}
+
+/// Draws `text` as a map label in `colour` with the info line's dark outline, at the pen position
+/// and baseline [`place_labels`] gave it.
+pub fn draw_label(pm: &mut Pixmap, font: &FontVec, colour: [u8; 4], text: &str, at: (f32, f32)) {
+    draw_outlined(pm, font, LABEL_PX, colour, text, at, false);
 }
 
 /// Draws `c` at `size` px in `colour` with the info line's dark 1 px outline, its ink box centred
@@ -1048,6 +1123,78 @@ const fn f32_px(v: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A two-letter label ("wp"): narrow enough for all four spots around one marker to be free.
+    const SIZE: LabelSize = LabelSize {
+        width: 12.0,
+        ascent: 11.0,
+        descent: -3.0,
+    };
+
+    fn spec(at: (f32, f32), keep: bool) -> LabelSpec {
+        LabelSpec { size: SIZE, at, keep }
+    }
+
+    fn placed_box(at: Option<(f32, f32)>) -> Option<[f32; 4]> {
+        at.map(|a| label_box(SIZE, a))
+    }
+
+    #[test]
+    fn a_crowded_label_moves_below_then_beside_its_marker() {
+        let at = (200.0, 200.0);
+        let got = place_labels(
+            &[spec(at, true), spec(at, false), spec(at, false), spec(at, false)],
+            400.0,
+            400.0,
+        );
+        let boxes: Vec<[f32; 4]> = got.iter().filter_map(|&a| placed_box(a)).collect();
+        let &[above, below, right, left] = boxes.as_slice() else {
+            unreachable!("above, below, right and left are all free: {got:?}");
+        };
+        assert!(above[3] <= 200.0 && below[1] >= 200.0, "{above:?} {below:?}");
+        assert!(right[0] > 200.0 && left[2] < 200.0, "{right:?} {left:?}");
+        for (i, a) in boxes.iter().enumerate() {
+            for b in boxes.iter().skip(i + 1) {
+                assert!(!boxes_overlap(*a, *b), "{a:?} overlaps {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_label_with_no_free_spot_is_dropped_unless_kept() {
+        let at = (200.0, 200.0);
+        let got = place_labels(&[spec(at, true); 4], 400.0, 400.0);
+        assert!(got.iter().all(Option::is_some), "four spots: {got:?}");
+        let mut labels = vec![spec(at, true); 4];
+        labels.push(spec(at, false));
+        labels.push(spec(at, true));
+        let got = place_labels(&labels, 400.0, 400.0);
+        assert_eq!(got.get(4), Some(&None), "lower-ranked label dropped");
+        assert_eq!(
+            got.get(5),
+            got.first(),
+            "kept label falls back to above its marker"
+        );
+        // A label far away is unaffected.
+        let far = spec((50.0, 50.0), false);
+        let got = place_labels(&[spec(at, true), far], 400.0, 400.0);
+        assert_eq!(got.get(1), Some(&Some(label_spot(&far, 0, 400.0, 400.0))));
+    }
+
+    #[test]
+    fn labels_stay_inside_the_canvas_and_above_the_bottom() {
+        let got = place_labels(
+            &[spec((398.0, 2.0), false), spec((1.0, 399.0), false)],
+            400.0,
+            300.0,
+        );
+        for b in got.iter().map(|&a| placed_box(a)) {
+            assert!(
+                b.is_some_and(|[x0, y0, x1, y1]| x0 >= 0.0 && y0 >= 0.0 && x1 <= 400.0 && y1 <= 300.0),
+                "{b:?}"
+            );
+        }
+    }
 
     #[test]
     fn worn_beats_owned_beats_stash() {

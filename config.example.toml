@@ -17,6 +17,10 @@ twink = ["S", "A"]
 # health exchange, mana exchange, armor, combat, resist fire, resist cold, resist lightning,
 # resist poison, skill, mana recharge, stamina, experience, enirhs, portal, gem, fire, monster,
 # exploding, poison. Unknown names are reported and ignored. show = [] shows none.
+# Map labels by type: REF refilling, HLT health, MNA mana, HEX health exchange, MEX mana exchange,
+# ARM armor, CMB combat, RFI resist fire, RCO resist cold, RLI resist lightning, RPO resist poison,
+# SKL skill, MRC mana recharge, STA stamina, EXP experience, ENI enirhs, POR portal, GEM gem,
+# FIR fire, MON monster, XPL exploding, POI poison (NON none).
 show = ["refilling", "skill", "stamina", "gem", "monster"]
 # Of those, types shown in Normal only (hidden in Nightmare and Hell).
 normal_only = ["stamina"]

@@ -45,6 +45,34 @@ pub const SHRINE_NAMES: [&str; 23] = [
     "poison",
 ];
 
+/// The map label of each shrine type, by shrines.txt code like [`SHRINE_NAMES`]: three capital
+/// letters, one per type. Listed in `config.example.toml`'s `[shrines]` comment.
+pub const SHRINE_TAGS: [&str; 23] = [
+    "NON", // none
+    "REF", // refilling
+    "HLT", // health
+    "MNA", // mana
+    "HEX", // health exchange
+    "MEX", // mana exchange
+    "ARM", // armor
+    "CMB", // combat
+    "RFI", // resist fire
+    "RCO", // resist cold
+    "RLI", // resist lightning
+    "RPO", // resist poison
+    "SKL", // skill
+    "MRC", // mana recharge
+    "STA", // stamina
+    "EXP", // experience
+    "ENI", // enirhs
+    "POR", // portal
+    "GEM", // gem
+    "FIR", // fire
+    "MON", // monster
+    "XPL", // exploding
+    "POI", // poison
+];
+
 /// The `BiS` slot names, in display order (amulet, rings, body, helm, hands, feet, belt,
 /// weapons; user's order, 2026-11-17).
 pub const SLOT_NAMES: [&str; 11] = [
@@ -1337,6 +1365,21 @@ mod tests {
         assert_eq!(class_id("Warlock"), Some(7));
         assert_eq!(class_id("8"), None);
         assert_eq!(class_id("monk"), None);
+    }
+
+    #[test]
+    fn shrine_tags_are_three_capitals_one_per_type() {
+        assert_eq!(SHRINE_TAGS.len(), SHRINE_NAMES.len());
+        for tag in SHRINE_TAGS {
+            assert!(
+                tag.len() == 3 && tag.bytes().all(|b| b.is_ascii_uppercase()),
+                "{tag:?}"
+            );
+        }
+        let mut sorted = SHRINE_TAGS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), SHRINE_TAGS.len(), "tags repeat");
     }
 
     #[test]

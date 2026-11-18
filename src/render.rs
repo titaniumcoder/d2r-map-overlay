@@ -15,7 +15,7 @@ use crate::offsets::monster_data;
 use crate::valuables::Tier;
 use crate::{info, session, xp};
 
-/// Exit labels in an area that gives experience ([`draw_exit_labels`]).
+/// Exit labels in an area that gives experience ([`draw_labels`]).
 const LABEL_TEXT: [u8; 4] = [255, 255, 255, 255];
 
 /// Object txt ids of waypoints: every waypoint row of classic objects.txt. Live-verified: 119
@@ -383,6 +383,57 @@ pub fn quest_object(txt: u32) -> Option<&'static str> {
         .iter()
         .find(|&&(id, _)| id == txt)
         .map(|&(_, label)| label)
+}
+
+/// Short map labels of the non-monster quest objects ([`QUEST_OBJECTS`]) and landmarks
+/// ([`LANDMARKS`]), keyed by their label: at most 5 letters. A quest object and the landmark star
+/// on the same spot share a tag, so [`draw_labels`] shows it once. Monster spots (superuniques,
+/// quest monsters, the summoner, Radament, the Smith, Coldworm) and stairs or cave exits (the exit
+/// label names them) have none. Shrines: [`crate::config::SHRINE_TAGS`].
+pub const MARKER_TAGS: &[(&str, &str)] = &[
+    ("horadric malus", "malus"),
+    ("horadric cube chest", "cube"),
+    ("horadric cube", "cube"),
+    ("horadric cube (W/E/S)", "cube"),
+    ("staff of kings chest", "staff"),
+    ("orifice", "orif"),
+    ("gidbinn altar", "altar"),
+    ("gidbinn", "altar"),
+    ("sewer stairs", "stair"),
+    ("sewer lever", "lever"),
+    ("hellforge", "forge"),
+    ("diablo seal", "seal"),
+    ("anya", "anya"),
+    ("cairn stones", "cairn"),
+    ("tree of inifuss", "tree"),
+    ("forgotten tower", "tower"),
+    ("tomb treasure", "chest"),
+];
+/// Waypoint and well labels.
+const WAYPOINT_TAG: &str = "wp";
+const WELL_TAG: &str = "well";
+
+/// The map label of a quest object or landmark label, if it has one ([`MARKER_TAGS`]).
+fn marker_tag_of(label: &str) -> Option<&'static str> {
+    MARKER_TAGS
+        .iter()
+        .find(|&&(l, _)| l == label)
+        .map(|&(_, tag)| tag)
+}
+
+/// The map label of `marker` and its rank (lower wins a crowded spot; exit labels are rank 0):
+/// waypoint 1, quest object or landmark 2, shrine 3, well 4. `None` for monsters, drops, exits
+/// and the player.
+fn marker_tag(marker: Marker) -> Option<(u8, &'static str)> {
+    match marker {
+        Marker::Waypoint => Some((1, WAYPOINT_TAG)),
+        Marker::QuestObject(label) | Marker::Landmark(label) => marker_tag_of(label).map(|t| (2, t)),
+        // The Orifice landmark shares the "orifice" quest object's tag.
+        Marker::Orifice => marker_tag_of("orifice").map(|t| (2, t)),
+        Marker::Shrine(code) => crate::config::SHRINE_TAGS.get(usize::from(code)).map(|&t| (3, t)),
+        Marker::Well => Some((4, WELL_TAG)),
+        _ => None,
+    }
 }
 
 /// Monster flag bits for superunique (0x02), champion (0x04) and unique/boss (0x08); minion is 0x10.
@@ -1099,9 +1150,13 @@ fn render_rules(
         line_join: LineJoin::Round,
         ..Stroke::default()
     };
+    let mut tagged: Vec<(Marker, f32, f32)> = Vec::new();
     for (marker, x, y) in markers_with(snap, rules) {
         let (colour, size, shape) = marker.style();
         let (cx, cy) = view.to_screen(x, y);
+        if marker_tag(marker).is_some() {
+            tagged.push((marker, cx, cy));
+        }
         let Some(dot) = marker_outline(marker, shape, cx, cy, size) else {
             continue;
         };
@@ -1158,25 +1213,78 @@ fn render_rules(
         }
     }
     if let Some(font) = font {
-        draw_exit_labels(&mut pm, view, font, snap);
+        draw_labels(&mut pm, view, font, snap, &tagged);
         draw_info_line(&mut pm, font, snap);
     }
     Ok(pm)
 }
 
-/// The target area names of the level's exits ([`exit_labels`]), grey where the character gets
-/// almost no experience ([`xp::is_low`]), white otherwise.
-fn draw_exit_labels(pm: &mut Pixmap, view: View, font: &FontVec, snap: &Snapshot) {
-    for (id, x, y) in exit_labels(snap) {
-        let name = info::level_name(id).map_or_else(|| format!("Level {id}"), str::to_owned);
-        let colour = if xp::is_low(id, snap.difficulty, snap.player.char_level) {
-            info::LOW_XP_TEXT
-        } else {
-            LABEL_TEXT
+/// Px within which a second marker label with the same text is left out: a quest object and
+/// the landmark star of its room, a few tiles apart, get one label.
+const SAME_TAG_PX: f32 = 40.0;
+
+/// The map labels: the target area names of the level's exits ([`exit_labels`]), grey where the
+/// character gets almost no experience ([`xp::is_low`]), white otherwise; then the short tags of
+/// `tagged` markers ([`marker_tag`]) in [`marker_label_colour`]. Where labels would overlap,
+/// [`info::place_labels`] moves or drops the lower-ranked one; exit labels are always drawn.
+fn draw_labels(pm: &mut Pixmap, view: View, font: &FontVec, snap: &Snapshot, tagged: &[(Marker, f32, f32)]) {
+    let mut labels: Vec<(String, Rgba, (f32, f32), bool)> = exit_labels(snap)
+        .into_iter()
+        .map(|(id, x, y)| {
+            let name = info::level_name(id).map_or_else(|| format!("Level {id}"), str::to_owned);
+            let colour = if xp::is_low(id, snap.difficulty, snap.player.char_level) {
+                info::LOW_XP_TEXT
+            } else {
+                LABEL_TEXT
+            };
+            (name, colour, view.to_screen(x, y), true)
+        })
+        .collect();
+    let mut tags: Vec<(u8, &str, Rgba, (f32, f32))> = tagged
+        .iter()
+        .filter_map(|&(m, cx, cy)| {
+            let (rank, tag) = marker_tag(m)?;
+            Some((rank, tag, marker_label_colour(m.style().0), (cx, cy)))
+        })
+        .collect();
+    // Stable: snapshot order within one rank.
+    tags.sort_by_key(|t| t.0);
+    for (_, tag, colour, at) in tags {
+        let near = |&(ref text, _, (x, y), _): &(String, Rgba, (f32, f32), bool)| {
+            text == tag && (x - at.0).hypot(y - at.1) < SAME_TAG_PX
         };
-        let bottom = map_height(pm.height(), Some(font));
-        info::draw_label(pm, font, colour, &name, view.to_screen(x, y), bottom);
+        if !labels.iter().any(near) {
+            labels.push((tag.to_owned(), colour, at, false));
+        }
     }
+    let specs: Vec<info::LabelSpec> = labels
+        .iter()
+        .map(|(text, _, at, keep)| info::LabelSpec {
+            size: info::label_size(font, text),
+            at: *at,
+            keep: *keep,
+        })
+        .collect();
+    let bottom = map_height(pm.height(), Some(font));
+    #[allow(clippy::cast_precision_loss, reason = "canvas widths are far below 2^24")]
+    let spots = info::place_labels(&specs, pm.width() as f32, bottom as f32);
+    for ((text, colour, _, _), spot) in labels.iter().zip(spots) {
+        if let Some(spot) = spot {
+            info::draw_label(pm, font, *colour, text, spot);
+        }
+    }
+}
+
+/// A marker label's colour: the marker's fill blended 35 % toward white, so dark fills (the
+/// monster shrine's dark red) still read on the dark outline and every tag stays apart from the
+/// white exit names.
+fn marker_label_colour([r, g, b, _]: Rgba) -> Rgba {
+    let lift = |c: u8| {
+        let c = u16::from(c);
+        // At most 255: (c * 65 + 255 * 35) / 100 with c <= 255.
+        u8::try_from((c * 65 + 255 * 35) / 100).unwrap_or(u8::MAX)
+    };
+    [lift(r), lift(g), lift(b), 255]
 }
 
 /// The info line at the bottom of the frame. A terrorized level's monster levels follow the
@@ -3464,6 +3572,104 @@ mod tests {
                 Marker::Drop(DropKind::Unique),
             ]
         );
+    }
+
+    #[test]
+    fn marker_tags_are_short_unique_per_label_and_skip_monsters() {
+        let mut labels: Vec<&str> = MARKER_TAGS.iter().map(|&(l, _)| l).collect();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), MARKER_TAGS.len(), "a label is listed twice");
+        for &(label, tag) in MARKER_TAGS {
+            assert!(!tag.is_empty() && tag.len() <= 5, "{label}: {tag:?}");
+        }
+        for &(_, label) in QUEST_OBJECTS {
+            assert!(
+                marker_tag_of(label).is_some(),
+                "quest object {label:?} has no tag"
+            );
+        }
+        for &(_, label) in QUEST_MONSTERS {
+            assert_eq!(marker_tag(Marker::QuestObject(label)), None, "{label}");
+        }
+        for rule in LANDMARKS {
+            if let Some(tag) = marker_tag_of(rule.label) {
+                // "orifice" also names the quest object; the Orifice landmark is tagged by kind.
+                assert!(
+                    rule.confirmed && matches!(rule.style, LandmarkStyle::Star | LandmarkStyle::Orifice),
+                    "{tag}"
+                );
+            }
+        }
+        for label in ["summoner", "radament's lair", "smith (forge)"] {
+            assert_eq!(marker_tag(Marker::Landmark(label)), None, "{label} is a monster");
+        }
+        for m in [
+            Marker::Exit,
+            Marker::Entry,
+            Marker::Special(None),
+            Marker::Monster,
+            Marker::Elite,
+            Marker::Superunique,
+            Marker::Boss,
+            Marker::Merc,
+            Marker::Player,
+            Marker::Worm,
+            Marker::Drop(DropKind::Unique),
+        ] {
+            assert_eq!(marker_tag(m), None, "{m:?}");
+        }
+    }
+
+    #[test]
+    fn marker_tags_rank_waypoint_then_objects_then_shrines_then_wells() {
+        let rank = |m| marker_tag(m).map(|(r, _)| r);
+        assert_eq!(marker_tag(Marker::Waypoint), Some((1, "wp")));
+        assert_eq!(marker_tag(Marker::QuestObject("hellforge")), Some((2, "forge")));
+        assert_eq!(rank(Marker::Orifice), Some(2));
+        assert_eq!(marker_tag(Marker::Shrine(15)), Some((3, "EXP")));
+        assert_eq!(marker_tag(Marker::Well), Some((4, "well")));
+        assert_eq!(marker_tag(Marker::Shrine(99)), None, "unknown code");
+    }
+
+    /// Glyph ink of `c`: mostly opaque and, premultiplied, close to `c`.
+    fn tinted(p: Rgba, c: Rgba) -> bool {
+        p[3] >= 200
+            && p.iter()
+                .zip(c)
+                .take(3)
+                .all(|(&got, want)| (u32::from(want) * u32::from(p[3]) / 255).abs_diff(u32::from(got)) <= 30)
+    }
+
+    #[test]
+    fn shrine_and_well_tags_are_drawn_above_their_markers() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let mut snap = empty_snapshot(120, 120);
+        snap.level.rooms = vec![room(100, 100, true)];
+        snap.shrines = vec![shrine_at(12, 110, 110)];
+        let (w, h) = (400, 400);
+        let colour = marker_label_colour(Marker::Shrine(12).style().0);
+        let at = |snap: &Snapshot| {
+            let view = View::fit(level_bounds(snap), w, map_height(h, Some(font)));
+            view.to_screen(110.0, 110.0)
+        };
+        let (cx, cy) = at(&snap);
+        let pm = render_with(&snap, w, h, Some(font))?;
+        let ink = count_near(&pm, (cx, cy - 12.0), 14.0, |p| tinted(p, colour))?;
+        assert!(ink >= 10, "SKL tag: {ink} px");
+        // A well on the same spot: the shrine outranks it, so the well's tag moves or drops and
+        // never covers the shrine's.
+        snap.wells = vec![well_at(110, 110)];
+        let pm = render_with(&snap, w, h, Some(font))?;
+        let again = count_near(&pm, (cx, cy - 12.0), 14.0, |p| tinted(p, colour))?;
+        assert_eq!(again, ink, "shrine tag unchanged");
+        let well = marker_label_colour(WELL_CYAN);
+        let well_ink = count_near(&pm, (cx, cy), 40.0, |p| tinted(p, well))?;
+        assert!(well_ink >= 5, "well tag moved, not dropped: {well_ink} px");
+        Ok(())
     }
 
     #[test]
