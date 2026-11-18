@@ -2,12 +2,20 @@
 //!
 //! Thin on purpose: all drawing happens in [`crate::render`]; this module only owns the surface,
 //! maps/unmaps it as [`Msg`]s arrive, and copies pixels into a shm buffer. Runs until killed (Ctrl+C).
+//!
+//! `SIGUSR1` toggles the map off and on (user request, 2026-11-18): the surface has no keyboard,
+//! so a compositor key binding sends the signal, e.g. `pkill -USR1 -x d2r-map-overlay`. Only the
+//! surface hides; the reader and the dashboard go on. Every start is visible.
+
+use std::io::{ErrorKind, Read};
+use std::os::unix::net::UnixStream;
 
 use anyhow::{Context, Result, bail};
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, Region};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
-use smithay_client_toolkit::reexports::calloop::EventLoop;
 use smithay_client_toolkit::reexports::calloop::channel::{self, Channel};
+use smithay_client_toolkit::reexports::calloop::generic::Generic;
+use smithay_client_toolkit::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
 use smithay_client_toolkit::reexports::client::protocol::{wl_output, wl_shm, wl_surface};
@@ -46,6 +54,15 @@ pub enum Msg {
 /// # Errors
 /// Fails without a Wayland session, without the wlr layer-shell protocol, or on a Wayland protocol error.
 pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
+    // First, so a hotkey pressed during start-up doesn't hit SIGUSR1's default action (terminate).
+    // A signal handler may do almost nothing safely, so signal-hook's handler only writes a byte
+    // to this socket pair; the loop wakes on the read end and toggles here, on its own thread.
+    let (toggles, on_signal) = UnixStream::pair().context("creating the SIGUSR1 socket pair")?;
+    toggles
+        .set_nonblocking(true)
+        .context("making the SIGUSR1 socket non-blocking")?;
+    signal_hook::low_level::pipe::register(signal_hook::consts::SIGUSR1, on_signal)
+        .context("registering the SIGUSR1 handler")?;
     let conn = Connection::connect_to_env().context("connecting to the Wayland compositor")?;
     let (globals, queue) = registry_queue_init(&conn).context("listing Wayland globals")?;
     let qh = queue.handle();
@@ -104,6 +121,32 @@ pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
         })
         .map_err(|e| e.error)
         .context("adding the message channel to the event loop")?;
+    event_loop
+        .handle()
+        .insert_source(
+            Generic::new(toggles, Interest::READ, Mode::Level),
+            |_, toggles, overlay: &mut Overlay| {
+                // One byte per signal; bytes of signals that arrived together are read at once.
+                let mut buf = [0u8; 64];
+                // `&UnixStream` implements `Read`; calloop only hands out a shared reference.
+                loop {
+                    match (&**toggles).read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => (0..n).for_each(|_| overlay.toggle()),
+                        Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(PostAction::Continue),
+                        Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                        Err(e) => {
+                            eprintln!("SIGUSR1 toggle off: {e}");
+                            break;
+                        }
+                    }
+                }
+                // EOF or a hard error: the level-triggered source would fire forever.
+                Ok(PostAction::Remove)
+            },
+        )
+        .map_err(|e| e.error)
+        .context("adding the SIGUSR1 socket to the event loop")?;
 
     while !overlay.closed {
         event_loop
@@ -122,10 +165,16 @@ pub fn rgba_to_argb8888(rgba: &[u8], out: &mut [u8]) {
 
 /// Whether the overlay should be on screen; pure, so the combinations are unit-tested.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "four independent inputs, not a state machine"
+)]
 struct Visibility {
     focused: bool,
     has_frame: bool,
     hidden: bool,
+    /// Switched off by the user (`SIGUSR1`); stays off through frames and focus changes.
+    user_hidden: bool,
 }
 
 impl Visibility {
@@ -141,7 +190,7 @@ impl Visibility {
     }
 
     const fn visible(self) -> bool {
-        self.focused && self.has_frame && !self.hidden
+        self.focused && self.has_frame && !self.hidden && !self.user_hidden
     }
 }
 
@@ -221,6 +270,16 @@ impl Overlay {
             self.frame = Some(frame);
             self.dirty = true;
         }
+        self.sync();
+    }
+
+    /// Flips the user's on/off switch (one `SIGUSR1`), logs the new state and syncs the surface.
+    fn toggle(&mut self) {
+        self.vis.user_hidden = !self.vis.user_hidden;
+        eprintln!(
+            "SIGUSR1: map {}",
+            if self.vis.user_hidden { "hidden" } else { "shown" }
+        );
         self.sync();
     }
 
@@ -425,6 +484,22 @@ mod tests {
         assert!(!v.visible(), "refocus doesn't undo a hide");
         v.on_msg(&frame()?);
         assert!(v.visible(), "a new frame ends the hide");
+        Ok(())
+    }
+
+    #[test]
+    fn the_user_switch_hides_through_frames_and_focus() -> Result<()> {
+        let mut v = Visibility::default();
+        v.on_msg(&Msg::Focus(true));
+        v.on_msg(&frame()?);
+        v.user_hidden = true;
+        assert!(!v.visible(), "switched off");
+        v.on_msg(&frame()?);
+        v.on_msg(&Msg::Focus(false));
+        v.on_msg(&Msg::Focus(true));
+        assert!(!v.visible(), "new frames and refocus don't undo the switch");
+        v.user_hidden = false;
+        assert!(v.visible(), "switched back on");
         Ok(())
     }
 

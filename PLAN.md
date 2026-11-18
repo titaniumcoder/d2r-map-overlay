@@ -443,6 +443,12 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   24+ (grey up to clvl 15). The clvl 70+ penalty (976…5/1024) is the same everywhere and left out
   of the colouring (it would grey every area from clvl 86). No D2R patch is known to change this.
 - Visible only while the Hyprland active window class is `steam_app_battlenet` with title `Diablo II: Resurrected`.
+- User toggle (user request, 2026-11-18): `SIGUSR1` flips a "hidden by user" switch
+  (`overlay::Visibility::user_hidden`); the reader and dashboard go on; a restart starts visible.
+  signal-hook's self-pipe handler (safe, process-wide, so no thread can take the signal's default
+  terminate action) writes a byte to a socket pair the calloop loop watches; each byte toggles and
+  logs `SIGUSR1: map hidden|shown`. Hotkey: `pkill -USR1 -x d2r-map-overlay` (comm is exactly the
+  15-char name); suggested binding SUPER+CTRL+M (SUPER+SHIFT+M is Omarchy's Music), see README.
 
 ## Permissions
 Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each release build the user runs
@@ -457,6 +463,7 @@ Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each re
 - [ ] **M4 markers**: classification tables, per-game accumulation, exit labels (exit labels done 2026-11-18, XP-coloured; not yet verified live).
 - [x] **M4b item drops**: implemented 2026-11-14 (items table found live; static path verified with a gem). Quality values live-confirmed 2026-11-17: set (5) on quest item `qui` and small charm `sml`, unique (7) on quest item `spc` — all with `unique_index` 0 (unidentified/no name), consistent with the index-only-when-identified rule. Named drops confirmed from the journal 2026-11-18: identified dirk `dir` = unique row 40 The Diggler; `bsd`/`gts`/`brs` = set rows 13/14/15 Isenhart's Lightbrand/Parry/Case; `chn` = set row 26 Cathan's Mesh.
 - [ ] **Cleanup**: remove D2RMH exe/launcher (`~/.local/bin/d2rmh`); keep classic 1.13c files for phase 2.
+- [x] **Map toggle** (2026-11-18): `SIGUSR1` hides/shows the map; key binding left to the user's Hyprland config.
 - [ ] **Backlog: buff tracker** (user, 2026-11-18: "later"): dashboard Buffs panel — active states from the state bits at stat list `+0xB30`, the buff's own stat list (tagged with its state id) for values like Cyclone Armor's remaining absorb or Feral Rage stacks, and a countdown from the list's expiry frame vs the game frame counter (counter not yet found). Needs one recorded session.
 - [ ] **Phase 2 (separate plan)**: map seed RE → d2mapapi-backed full markers from entry.
 

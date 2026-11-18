@@ -49,6 +49,23 @@ target/release/d2r-map-overlay            # live overlay
 target/release/d2r-map-overlay --dump     # print one JSON snapshot of the game state
 ```
 
+### Hiding the map with a key
+
+The overlay takes no keyboard input (it is click-through), so it toggles on `SIGUSR1`: each signal
+hides or shows the map, while the reader and the web dashboard keep running. Every start is visible.
+Bind a compositor key that the game never sees, for example SUPER+CTRL+M:
+
+```sh
+pkill -USR1 -x d2r-map-overlay      # the command to bind
+```
+
+- Omarchy (`~/.config/hypr/bindings.lua`):
+  `o.bind("SUPER + CTRL + M", "Toggle D2R map", "pkill -USR1 -x d2r-map-overlay")`
+- Plain `hyprland.conf`: `bind = SUPER CTRL, M, exec, pkill -USR1 -x d2r-map-overlay`
+
+`-x` matches the process name exactly (`d2r-map-overlay` is exactly the 15-character limit of a
+process name). Don't use `pkill -f`, which matches any command line containing the text.
+
 Optional configuration lives in `~/.config/d2r-map-overlay/config.toml`. See
 [`config.example.toml`](config.example.toml) for:
 
