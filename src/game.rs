@@ -110,15 +110,16 @@ pub struct Snapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned_names: Vec<String>,
     /// One name per runeword copy the player has outside the shared stash (worn, carried,
-    /// cubed, privately stashed) or the mercenary wears, duplicates kept: the Recipes panel
+    /// cubed, privately stashed) or the mercenary wears (solo games only: see
+    /// [`Snapshot::merc_worn`]), duplicates kept: the Recipes panel
     /// keeps a runeword recipe until every slot of the stage that wants it can be filled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runeword_copies: Vec<String>,
-    /// Display names of the identified unique/set items the mercenary wears, one per item
-    /// (any merc's in a multiplayer game: see the PLAN.md "Merc gear" caveat):
+    /// Display names of the identified unique/set items the mercenary wears, one per item:
     /// they count as owned for a stage switch and the farm list
     /// ([`crate::stash::Holdings`]), but not in [`Snapshot::owned_names`] (the `BiS` ✓ of the
-    /// character's own pieces).
+    /// character's own pieces). Empty when other players are in the game: their mercs' gear
+    /// can't be told from the local player's own merc's (PLAN.md, "Merc gear caveat").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub merc_worn: Vec<String>,
     /// The shared-stash tabs as read this snapshot. Empty once the tab units vanish (stash UI
@@ -865,6 +866,26 @@ pub fn worn_names(items: &[Equipped]) -> Vec<String> {
     items.iter().filter_map(|e| e.name.clone()).collect()
 }
 
+/// The chosen player's runeword copies and the merc's worn uniques/sets
+/// ([`Snapshot::runeword_copies`], [`Snapshot::merc_worn`]). Merc gear can't be tied to the
+/// local player's own merc (PLAN.md, "Merc gear caveat"): with other players in the game it
+/// may be theirs, so it counts only when `solo`.
+fn held_copies(scan: &ItemScan, player: u32, solo: bool) -> (Vec<String>, Vec<String>) {
+    let owners: &[u32] = if solo {
+        &[player, item_data::NO_OWNER]
+    } else {
+        &[player]
+    };
+    let copies = owners
+        .iter()
+        .filter_map(|id| scan.runeword_copies.get(id))
+        .flatten()
+        .cloned()
+        .collect();
+    let merc_worn = if solo { scan.merc_worn.clone() } else { Vec::new() };
+    (copies, merc_worn)
+}
+
 /// Reads all live player candidates (unit table, `PLAYER` type); unreadable ones warn.
 fn player_candidates<M: ReadMem>(r: &mut Reader<'_, M>, unit_table: u64) -> Vec<Candidate> {
     let mut candidates = Vec::new();
@@ -972,12 +993,15 @@ pub fn snapshot(
     let merc_equipped = scan.merc_equipped.clone();
     let equipped_items = scan.equipped_items.get(&chosen.id).cloned().unwrap_or_default();
     let owned_names = scan.owned_names.get(&chosen.id).cloned().unwrap_or_default();
-    let runeword_copies: Vec<String> = [chosen.id, item_data::NO_OWNER]
+    // Solo = one distinct player name: a stale duplicate unit of the same player (same name)
+    // must not make a solo game look like a group game.
+    let solo = candidates
         .iter()
-        .filter_map(|id| scan.runeword_copies.get(id))
-        .flatten()
-        .cloned()
-        .collect();
+        .map(|c| c.name.as_str())
+        .collect::<HashSet<_>>()
+        .len()
+        == 1;
+    let (runeword_copies, merc_worn) = held_copies(&scan, chosen.id, solo);
 
     let LevelWalk {
         mut level,
@@ -1026,7 +1050,7 @@ pub fn snapshot(
         equipped_items,
         owned_names,
         runeword_copies,
-        merc_worn: scan.merc_worn,
+        merc_worn,
         stash,
         stash_names,
         player_candidates: candidates,
@@ -1895,8 +1919,8 @@ impl<M: ReadMem> Reader<'_, M> {
             // private stash): the `BiS` list marks owned pieces with a ✓. The mercenary's worn
             // runewords (owner `NO_OWNER`, equipped) count as copies only, its worn uniques
             // and sets go to their own list. CAVEAT (PLAN.md, "Merc gear"): nothing ties such
-            // an item to the local player's own merc, so in a multiplayer game another
-            // player's merc's gear counts too, if its item units are in this client.
+            // an item to the local player's own merc, so [`snapshot`] drops both when other
+            // players are in the game.
             let item_owner = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok());
             let merc_worn = item_owner == Some(item_data::NO_OWNER) && self.equipped_slot(&head).is_some();
             if let Some(owner) = item_owner
@@ -3085,9 +3109,15 @@ mod tests {
         Ok(())
     }
 
+    /// [`world`] with Alice's unit made stale (null act): Bob is the only player in the game.
+    fn solo_bob(m: &mut FakeMem) -> Result<()> {
+        unit(m, P_ALICE, 0, 3, PD_ALICE, 0, PATH_ALICE, 0)
+    }
+
     #[test]
     fn merc_worn_uniques_are_listed_apart_from_the_players() -> Result<()> {
         let mut m = world()?;
+        solo_bob(&mut m)?;
         let id = item_data::FLAG_IDENTIFIED;
         unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
         // The mercenary's identified unique helm (Shako, unique row 248) and an unidentified
@@ -3112,12 +3142,64 @@ mod tests {
             "the merc's piece isn't Bob's own"
         );
         assert_eq!(s.holdings().count("Harlequin Crest"), 1);
+        assert_eq!(s.player_candidates.len(), 1, "solo");
+        Ok(())
+    }
+
+    #[test]
+    fn merc_gear_is_ignored_with_other_players_in_the_game() -> Result<()> {
+        let mut m = world()?;
+        let id = item_data::FLAG_IDENTIFIED;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        // A merc-worn identified Shako and a merc-worn runeword (Leaf over Tir/Ral): with
+        // Alice in the game too, either may be her merc's.
+        stored_item(&mut m, I1, (40, 7, id, 248), (1, 255), &[], I2)?;
+        set_owner(&mut m, I1, item_data::NO_OWNER)?;
+        set_body(&mut m, I1, 1)?;
+        stored_item(
+            &mut m,
+            I2,
+            (40, 2, id | item_data::FLAG_RUNEWORD, 0),
+            (1, 255),
+            &[],
+            0,
+        )?;
+        set_owner(&mut m, I2, item_data::NO_OWNER)?;
+        set_body(&mut m, I2, 3)?;
+        let (rune_tir, rune_ral) = (0x80_7000, 0x80_8000);
+        stored_item(&mut m, rune_tir, (41, 2, 0, 0), (6, 255), &[], 0)?;
+        stored_item(&mut m, rune_ral, (42, 2, 0, 0), (6, 255), &[], 0)?;
+        let sockets = chain_items(&mut m, &[rune_tir, rune_ral])?;
+        tab_inventory(&mut m, INV0, item_data::NO_OWNER, sockets)?;
+        patch(&mut m, I2, UNIT_SIZE, unit::INVENTORY, &INV0.to_le_bytes())?;
+        base_items_table(&mut m)?;
+
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        assert_eq!(s.player_candidates.len(), 2, "Alice and Bob");
+        assert!(s.merc_worn.is_empty(), "{:?}", s.merc_worn);
+        assert!(s.runeword_copies.is_empty(), "{:?}", s.runeword_copies);
+        assert_eq!(s.holdings().count("Harlequin Crest"), 0);
+        assert_eq!(s.holdings().count("Leaf"), 0);
+        assert_eq!(
+            s.merc_equipped,
+            vec![(1, 7), (3, 2)],
+            "the merc slot display is untouched"
+        );
+
+        // The same gear with Bob alone in the game counts.
+        solo_bob(&mut m)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        assert_eq!(s.merc_worn, ["Harlequin Crest"]);
+        assert_eq!(s.runeword_copies, ["Leaf"]);
+        assert_eq!(s.holdings().count("Harlequin Crest"), 1);
+        assert_eq!(s.holdings().count("Leaf"), 1);
         Ok(())
     }
 
     #[test]
     fn equipped_items_are_enriched_with_code_name_and_row() -> Result<()> {
         let mut m = world()?;
+        solo_bob(&mut m)?; // the merc's runeword copy counts only when solo
         let id = item_data::FLAG_IDENTIFIED;
         unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
         // Bob's equipped helm: an identified Shako (unique row 248, lvl req 62).

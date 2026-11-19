@@ -433,7 +433,7 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   hint), `[[recipes]]` (runeword/craft/cube/socket/upgrade; dashboard Recipes panel with ✓ from the
   shared materials + `Snapshot.held_materials`, bases via `white_bases`), `[[tips]]` by level range and
   `stats_plan`. Generated from the guide research JSON by `research/gen_build.py`.
-- **Merc gear caveat (2026-11-19, open)**: merc-worn items are recognised only as
+- **Merc gear caveat (2026-11-19, mitigated)**: merc-worn items are recognised only as
   `ItemData::OWNER == NO_OWNER` + a `BODY` slot; nothing links an item to the local player's OWN
   merc. The item side has no verified owner-unit/inventory pointer (classic `pOwnerInventory`, D2R
   offset unknown), and the merc unit can't be identified: the `MonsterData +0x04` owner-id
@@ -441,7 +441,12 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   where other players' gear is in the client, their mercs' gear likely is too and would count in
   `runeword_copies`, `merc_worn` and `merc_equipped` — the farm status and a `switch_requires`
   group can be satisfied by someone else's merc, and the played.json latch makes such a switch
-  stick. To verify: in a 2-player game, read each monster unit's `Inventory` (unit `+0x90`):
+  stick. **Chosen mitigation (user decision 2026-11-19): ignore merc gear while other players
+  are in the game.** `game::snapshot` keeps `merc_worn` and the merc's (`NO_OWNER`) runeword
+  copies only when exactly one live player unit is a candidate; with more, both are empty, so
+  neither the farm list nor a stage switch (`stash::Holdings`) can be satisfied by merc gear.
+  `merc_equipped` (the gear grid's merc slots) is left as is: display only. To lift the
+  mitigation for good, verify: in a 2-player game, read each monster unit's `Inventory` (unit `+0x90`):
   its `inventory::OWNER_ID` (`+0x48`) and its `FIRST_ITEM` chain (`+0x10`, next at
   `ItemData +0xB0`) — if the hired merc's inventory chains its worn items and names the hiring
   player, collect merc gear by walking the merc of the chosen player instead.
