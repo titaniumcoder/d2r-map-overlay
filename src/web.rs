@@ -2676,7 +2676,7 @@ details.help summary { cursor: pointer; color: var(--faint); }
   font-variant-numeric: tabular-nums; }
 .sk .mb { position: absolute; bottom: 3px; right: 5px; font-size: 10px; font-weight: 700; color: var(--accent); letter-spacing: .06em; }
 
-/* Guide: upgrades banner, tips, skill targets, recipes */
+/* Guide: upgrades banner, skill targets, recipes */
 .bell { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; color: var(--faint);
   font-size: 13px; line-height: 1; padding: 4px 9px; cursor: pointer; filter: grayscale(1); opacity: .6; }
 .bell.on { color: var(--gold); border-color: var(--gold); filter: none; opacity: 1; }
@@ -2699,9 +2699,6 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .si .bt { color: var(--gold); font-size: 11px; font-weight: 700; white-space: nowrap; }
 .si .why { flex-basis: 100%; padding-left: 12px; color: var(--faint); font-size: 11px; font-weight: 400; line-height: 1.3; }
 .up .sl { color: var(--dim); font-size: 11.5px; } .up .why { color: var(--faint); font-size: 11.5px; }
-.tips { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel2); }
-.tips h3 { margin: 0 0 4px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
-.tips ul { margin: 0; padding-left: 18px; font-size: 12.5px; } .tips li { margin: 2px 0; }
 .targets.stats li { background: rgba(122,140,255,.07); border-color: rgba(122,140,255,.3); }
 .sk .tg { display: block; font-size: 10.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
 .sk.under { opacity: 1; border-color: rgba(212,154,58,.8); } .sk.under .tg { color: var(--accent); font-weight: 650; }
@@ -2775,8 +2772,6 @@ Each card is a slot. The dashed box shows what is equipped (name and required le
 ▲ / green outline = an upgrade you can wear now, faded = above the level gate (character level + 5), struck through = already beaten by what you wear.
 ✓ = owned, ✓ stash = in the shared stash. A runeword the reader can't decode shows as “runeword (unnamed)”. The Swap card mirrors the active weapon set.
 </details>
-<div id="tips"></div>
-<ul class="targets" id="targets"></ul>
 <ul class="targets stats" id="statsplan"></ul>
 <div class="gear" id="gear"></div>
 <div id="mercbox"><h3 class="row-h">Mercenary · charms · sockets</h3>
@@ -2876,11 +2871,7 @@ function slotCard(title, eqHtml, pieces) {
 function gear(g) {
   g = g || {};
   $("buildname").textContent = g.build || "";
-  $("targets").innerHTML = (g.targets || []).map(t => `<li>${esc(t)}</li>`).join("");
   $("statsplan").innerHTML = (g.stats_plan || []).map(t => `<li>stats ${esc(t)}</li>`).join("");
-  const tips = g.tips || [];
-  $("tips").innerHTML = tips.length
-    ? `<div class="tips"><h3>Guide tips for your level</h3><ul>${tips.map(t => `<li>${esc(t.text)}</li>`).join("")}</ul></div>` : "";
   $("gear").innerHTML = (g.columns || []).map(col => {
     const eq = (col.equipped || []).map(e => {
       const unknown = !e.name || e.name === "(unknown)";
@@ -3105,7 +3096,7 @@ function shop(s) {
 function render(r) {
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
-    for (const id of ["guide", "levels", "gear", "merc", "extras", "targets", "statsplan", "tips", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
+    for (const id of ["guide", "levels", "gear", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
     shop(null);
