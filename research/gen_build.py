@@ -13,6 +13,9 @@ live in BUILDS below, keyed by the source file's stem (`druid-leveling.source` c
 - `--leveling` (Tornado / Lightning Fury endgame): the leveling guide's post-respec plan
   (level 38-75) and its tips for those levels are merged in front of the endgame plan; that
   guide's respec IS the switch into this stage (its `respec_note` in BUILDS is the switch note).
+- BUILDS `switch_requires` (Summoner Druid: Raven Frost): items that must be owned before the
+  switch to `next`; emitted as a top-level `switch_requires = [...]` after `auto_switch`, only
+  when set.
 - `--prerequisites` (the stage before a manual switch): the next stage's `prerequisites`
   become this stage's `switch_note`.
 - `skill_plan.respec_after_leveling` (Blizzard Sorceress): with `--leveling`, a second respec
@@ -32,18 +35,22 @@ import sys
 # Per-build settings by source stem. `next` is the next stage's slug (lowercased name).
 BUILDS = {
     # Agent-computed from the D2R game tables, not from a guide (user, 2026-11-19: "guides are
-    # practically all out of date"). Summoner to 40, then a reset into Fury (werewolf).
-    "summoner-druid-leveling": dict(
-        name="Summoner Druid Leveling", cls="druid", damages=["physical", "cold"], default=True,
-        next="fury druid", switch_level=40, auto_switch=True,
-        notes="Summoner Druid to level 40 (Ravens, Spirit Wolves, Dire Wolves, Grizzly), then a skill reset into Fury (next stage). Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
-        respec_note=("respec to Fury at level 40 (Akara's free reset): Fury 20, Lycanthropy 12 (300 s form), Werewolf 7, "
-                     "Feral Rage 3, Rabies 1, Oak Sage 1 = 44 points (Normal quests + Nightmare Den of Evil); "
-                     "swap to the Fury starter kit (Black in a 3-socket Flail, Ancients' Pledge, Stealth)"),
+    # practically all out of date"). A complete summoner 1-99 (user: "he can be summoner till 99
+    # if he doesn't find what he needs"); the switch into Fury (werewolf) is possible from 75 and
+    # only with Raven Frost.
+    "summoner-druid": dict(
+        name="Summoner Druid", cls="druid", damages=["physical", "cold"], default=True,
+        next="fury druid", switch_level=75, auto_switch=True, switch_requires=["Raven Frost"],
+        notes="Summoner Druid 1-99 (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Oak Sage). From level 75, once Raven Frost is found, an optional skill reset into Fury (next stage); without it the summoner goes on to 99. Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
+        respec_note=("optional, from level 75 once Raven Frost is found: respec to Fury at Akara (free reset of any difficulty "
+                     "whose Den of Evil reward is unused): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20 (460 s form), "
+                     "Rabies 1, Oak Sage 5 = 86 points (74 levels + 12 quest points, Normal/Nightmare/Hell); keep Raven Frost, "
+                     "Jalal's Mane, Smoke and String of Ears on, swap the Spirit sword for Ribcracker (or Lawbringer + "
+                     "Ancients' Pledge) and Bloodfist for Laying of Hands"),
     ),
     "fury-druid": dict(
         name="Fury Druid", cls="druid", damages=["physical"],
-        notes="Fury Werewolf from the skill reset at 40; standard = the user's core (Ribcracker, Lawbringer, Fortitude, Smoke, Bulwark, Jalal's Mane, Laying of Hands, Raven Frost). Durations, breakpoints and skill order computed from the D2R game tables, not from a guide.",
+        notes="Fury Werewolf from the optional skill reset at 75 (Summoner Druid with Raven Frost); standard = the user's core (Ribcracker, Lawbringer, Fortitude, Smoke, Bulwark, Jalal's Mane, Laying of Hands, Raven Frost). Durations, breakpoints and skill order computed from the D2R game tables, not from a guide.",
     ),
     # The leveling guide respecs into Blizzard at level 26, after the Normal Throne waves and
     # before entering Nightmare. This sorceress is the account's magic-find farmer (user, 2026-11-19).
@@ -504,6 +511,8 @@ def main(argv):
     if cfg.get("next"):
         L += [f"next = {q(cfg['next'])}", f"switch_level = {cfg['switch_level']}",
               f"auto_switch = {'true' if cfg['auto_switch'] else 'false'}"]
+        if cfg.get("switch_requires"):
+            L.append("switch_requires = [" + ", ".join(q(x) for x in cfg["switch_requires"]) + "]")
         if switch_note:
             L.append(f"switch_note = {q(switch_note)}")
     if stats:
