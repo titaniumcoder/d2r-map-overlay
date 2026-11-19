@@ -228,6 +228,7 @@ fn load_for_drawing(path: &str, config: &config::Config) -> Result<game::Snapsho
             Some(snap.player.class),
             snap.player.char_level,
             &owns,
+            None,
         )
         .to_vec();
     Ok(snap)

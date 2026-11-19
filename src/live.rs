@@ -357,15 +357,26 @@ fn follow_game(
                 // Damages: the character's own `[builds]` entry, else the selected build's,
                 // else its class's. `BiS`: inline slots when present, else the selected
                 // build's (user decision, 2026-11-17). A stage's `switch_requires` items count
-                // when owned by this character or in the shared stash.
+                // when owned by this character or in the shared stash, or when the character
+                // reached the stage before (played.json): the shared stash is unread each new
+                // game until opened, and a switch is one-way.
                 let (class, level) = (Some(snap.player.class), snap.player.char_level);
                 let (owned, stashed) = (&snap.owned_names, &snap.stash_names);
                 let owns = |item: &str| config::owns_item(item, owned, stashed);
+                let name = snap.player.name.as_str();
+                let reached = last_played.reached(name);
                 let build = config
-                    .damages_for_player(&snap.player.name, class, level, &owns)
+                    .damages_for_player(name, class, level, &owns, reached)
                     .to_vec();
-                let stage = config.stage(&snap.player.name, class, level, &owns);
-                let bis = config.resolved_bis(&snap.player.name, class, level, &owns);
+                let stage = config.stage(name, class, level, &owns, reached);
+                let bis = config.resolved_bis(name, class, level, &owns, reached);
+                // Remember a stage further along (or off the remembered one's chain, e.g. a new
+                // selection); never one behind it (a level not yet read, an earlier stage).
+                if let Some(stage) = stage
+                    && !reached.is_some_and(|reached| config.leads_to(stage.slug, reached))
+                {
+                    last_played.reach(name, stage.slug);
+                }
                 (snap.player.build, snap.player.bis) = (build, bis);
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);

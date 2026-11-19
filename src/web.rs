@@ -534,8 +534,8 @@ fn config_json(
             let class = seen.and_then(|e| e.class);
             // No live data here: level unknown and nothing owned, so no automatic switch.
             let owns = crate::config::owns_nothing;
-            let stage = config.stage(&key, class, None, &owns);
-            let resolved = config.resolved_bis(&key, class, None, &owns);
+            let stage = config.stage(&key, class, None, &owns, None);
+            let resolved = config.resolved_bis(&key, class, None, &owns, None);
             let (slots, merc_slots) = resolved.map_or_else(
                 || (serde_json::json!({}), serde_json::json!({})),
                 |bis| {
@@ -549,7 +549,7 @@ fn config_json(
                 .and_then(|c| usize::try_from(c).ok())
                 .and_then(|c| crate::config::CLASS_NAMES.get(c));
             let damages: Vec<_> = config
-                .damages_for_player(&key, class, None, &owns)
+                .damages_for_player(&key, class, None, &owns, None)
                 .iter()
                 .map(|d| d.name())
                 .collect();
@@ -2686,11 +2686,6 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .si .bt { color: var(--gold); font-size: 11px; font-weight: 700; white-space: nowrap; }
 .si .why { flex-basis: 100%; padding-left: 12px; color: var(--faint); font-size: 11px; font-weight: 400; line-height: 1.3; }
 .up .sl { color: var(--dim); font-size: 11.5px; } .up .why { color: var(--faint); font-size: 11.5px; }
-.stage { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin: 0 0 12px; padding: 8px 12px;
-  background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); font-size: 13px; }
-.stage .lbl { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
-.stage b { color: var(--gold); } .stage .cond { color: var(--dim); } .stage .arrow { color: var(--faint); }
-.stage .ok { color: var(--good); } .stage .no { color: var(--bad); }
 .tips { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel2); }
 .tips h3 { margin: 0 0 4px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
 .tips ul { margin: 0; padding-left: 18px; font-size: 12.5px; } .tips li { margin: 2px 0; }
@@ -2760,7 +2755,6 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
 </div></div>
 <div class="upbar" id="upgrades" hidden></div>
 <div class="wrap">
-<div class="stage" id="stage" hidden></div>
 <section class="panel full" id="shoppanel" hidden><h2>Vendor <span class="sub" id="shopnpc"></span></h2><div class="shop" id="shop"></div></section>
 <section class="panel full"><h2>Gear <span class="sub" id="buildname"></span></h2>
 <details class="help"><summary>How to read this</summary>
@@ -2960,24 +2954,6 @@ function sell(r) {
   $("sell").innerHTML = all.map(e => `<div class="line" style="color:${col(e.colour)}">${esc(e.text)}</div>`).join("")
     || '<div class="empty">nothing to sell or keep right now</div>';
 }
-// The guide stage strip: current stage, the next one and how it starts.
-function stage(st) {
-  const el = $("stage");
-  el.hidden = !st;
-  if (!st) { el.innerHTML = ""; return; }
-  const via = st.class_default ? ' <span class="badge">class default</span>' : "";
-  let next = "";
-  if (st.next) {
-    const at = st.next.level != null ? `level ${esc(st.next.level)}+` : "when the guide says so";
-    // The items the switch also waits for, each ✓ owned (character or shared stash) / ✗ not.
-    const reqs = (st.next.requires || []).map(r => ` + ${esc(r.name)} `
-      + (r.owned ? '<span class="ok">✓</span>' : '<span class="no">✗</span>')).join("");
-    next = `<span class="arrow">→</span> next: <b>${esc(st.next.name)}</b> <span class="cond">`
-      + (st.next.auto ? `starts automatically at level ${esc(st.next.level)}${reqs}`
-        : `guide: ${esc(st.next.note || at)}${reqs} → switch on <a href="/config">/config</a>`) + "</span>";
-  }
-  el.innerHTML = `<span class="lbl">Guide stage</span> <b>${esc(st.name)}</b>${via} ${next}`;
-}
 // Upgrade chime: the bell toggles it (the click is the user gesture browsers need before audio
 // may play); the choice is remembered. A new upgrade key since the last frame chimes once; the
 // first frame after loading only records the keys.
@@ -3120,7 +3096,6 @@ function render(r) {
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
     shop(null);
-    stage(null);
     // The upgrade keys stay remembered: coming back from the menu must not chime again.
     $("upgrades").hidden = true;
     $("skillsum").textContent = "";
@@ -3137,7 +3112,6 @@ function render(r) {
   document.title = `${r.offline ? "(offline) " : ""}${p.name}${p.level != null ? " L" + p.level : ""} · ${r.area || "?"} — D2R Dashboard`;
   guide(r.guide);
   levels(r.levels);
-  stage(r.stage);
   upgrades(r.upgrades, p.name);
   shop(r.shop);
   gear(r.gear);
@@ -3265,6 +3239,7 @@ mod tests {
                 name: name.to_owned(),
                 t,
                 class,
+                stage: None,
             },
         )
     }

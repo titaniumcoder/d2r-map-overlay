@@ -5,7 +5,10 @@
 //! the live player each tick and merges that one entry into the file (via a temp file and a
 //! rename), only when the character changed or at most every [`WRITE_INTERVAL`]. The config
 //! page can [`remove`] a character; the tracker never writes back entries it only read, so a
-//! removed character returns only when it is played again. Without the file (first start) it
+//! removed character returns only when it is played again. Each entry also keeps the guide
+//! stage the character last reached ([`Tracker::reach`]), so a switch whose required items sat
+//! in the shared stash (unread until the stash is opened each game) stays switched. Without
+//! the file (first start) it
 //! is seeded from D2R's own save directory in the Proton prefix: online characters leave
 //! `<Name><account digits>.ctlo` (key bindings, rewritten on leaving a game), offline ones
 //! `<Name>.d2s`; their modification
@@ -39,6 +42,10 @@ pub struct Entry {
     /// known from the save files or from a file written before the class was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub class: Option<u32>,
+    /// The slug of the guide stage the character last reached live ([`Tracker::reach`]);
+    /// `None` before one was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
 }
 
 /// Lowercased character name → last sighting.
@@ -128,6 +135,7 @@ fn seed_from_saves(dir: &Path) -> Played {
             name: name.to_owned(),
             t,
             class: None,
+            stage: None,
         });
         slot.t = slot.t.max(t);
     }
@@ -241,12 +249,18 @@ impl Tracker {
         if self.current.as_ref().is_some_and(|(k, _)| *k != key) {
             self.save();
         }
+        // The stage reached: kept from memory for the same character, else from the file.
+        let stage = match self.current.take() {
+            Some((k, entry)) if k == key => entry.stage,
+            _ => self.stored_stage(&key),
+        };
         self.current = Some((
             key.clone(),
             Entry {
                 name: name.to_owned(),
                 t,
                 class,
+                stage,
             },
         ));
         if self
@@ -260,6 +274,36 @@ impl Tracker {
         self.save();
     }
 
+    /// The guide stage `name` (any case) has reached, if recorded: what [`Tracker::record`]
+    /// last read or [`Tracker::reach`] set for the current character.
+    #[must_use]
+    pub fn reached(&self, name: &str) -> Option<&str> {
+        self.current
+            .as_ref()
+            .filter(|(key, _)| *key == name.to_lowercase())
+            .and_then(|(_, entry)| entry.stage.as_deref())
+    }
+
+    /// Records that the current character `name` reached stage `slug` and saves at once when
+    /// that is news. Ignored unless `name` is the character last [`Tracker::record`]ed.
+    pub fn reach(&mut self, name: &str, slug: &str) {
+        let Some((key, entry)) = self.current.as_mut() else {
+            return;
+        };
+        if *key != name.to_lowercase() || entry.stage.as_deref() == Some(slug) {
+            return;
+        }
+        entry.stage = Some(slug.to_owned());
+        self.save();
+    }
+
+    /// `key`'s stage as stored in the file.
+    fn stored_stage(&self, key: &str) -> Option<String> {
+        let path = self.path.as_deref()?;
+        let _guard = FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+        read(path)?.remove(key)?.stage
+    }
+
     /// Merges the current entry into the file as it is on disk now (a corrupt file is
     /// replaced by the entry alone).
     fn save(&mut self) {
@@ -269,11 +313,17 @@ impl Tracker {
         let result = {
             let _guard = FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
             let mut played = read(path).unwrap_or_default();
-            let class = entry.class.or_else(|| played.get(key).and_then(|old| old.class));
+            let old = played.get(key);
+            let class = entry.class.or_else(|| old.and_then(|old| old.class));
+            let stage = entry
+                .stage
+                .clone()
+                .or_else(|| old.and_then(|old| old.stage.clone()));
             played.insert(
                 key.clone(),
                 Entry {
                     class,
+                    stage,
                     ..entry.clone()
                 },
             );
@@ -360,6 +410,7 @@ mod tests {
                     name: "Vex".to_owned(),
                     t: 5,
                     class: None,
+                    stage: None,
                 },
             )])
         };
@@ -374,6 +425,7 @@ mod tests {
                 name: "Fulmina".to_owned(),
                 t: 9,
                 class: Some(1),
+                stage: None,
             })
         );
         // A second open reads the file, not the seed.
@@ -384,10 +436,47 @@ mod tests {
                     name: "X".to_owned(),
                     t: 1,
                     class: None,
+                    stage: None,
                 },
             )])
         });
         assert_eq!(load(&path), loaded);
+        Ok(())
+    }
+
+    #[test]
+    fn the_reached_stage_is_kept_and_survives_a_restart() -> Result<()> {
+        let dir = temp_dir("played-stage")?;
+        let path = dir.join("played.json");
+        let t0 = Instant::now();
+        let mut tracker = Tracker::open(Some(path.clone()), Played::new);
+        tracker.record("Vex", Some(5), 1, t0);
+        assert_eq!(tracker.reached("vex"), None);
+        tracker.reach("Fulmina", "fury druid");
+        assert_eq!(tracker.reached("Vex"), None, "only the current character");
+        tracker.reach("Vex", "fury druid");
+        assert_eq!(tracker.reached("VEX"), Some("fury druid"));
+        assert_eq!(
+            load(&path).get("vex").and_then(|e| e.stage.clone()).as_deref(),
+            Some("fury druid"),
+            "saved at once, without waiting for the write interval"
+        );
+        // Later sightings keep it, also across another character and a restart.
+        tracker.record("Vex", Some(5), 2, t0 + WRITE_INTERVAL);
+        tracker.record("Fulmina", None, 3, t0 + WRITE_INTERVAL);
+        assert_eq!(tracker.reached("Fulmina"), None);
+        let mut restarted = Tracker::open(Some(path.clone()), Played::new);
+        restarted.record("Vex", None, 4, t0);
+        assert_eq!(restarted.reached("Vex"), Some("fury druid"));
+        assert_eq!(load(&path).get("vex").map(|e| (e.t, e.class)), Some((4, Some(5))));
+        // The config page's delete drops it with the entry.
+        assert!(remove(&path, "vex")?);
+        let mut fresh = Tracker::open(Some(path.clone()), Played::new);
+        fresh.record("Vex", None, 5, t0);
+        assert_eq!(fresh.reached("Vex"), None);
+        // An older file without the field still loads.
+        fs::write(&path, r#"{"vex":{"name":"Vex","t":1}}"#)?;
+        assert_eq!(load(&path).get("vex").map(|e| e.stage.clone()), Some(None));
         Ok(())
     }
 
@@ -435,6 +524,7 @@ mod tests {
                     name: "X".to_owned(),
                     t: 1,
                     class: None,
+                    stage: None,
                 },
             )])
         });

@@ -538,9 +538,12 @@ impl Config {
     /// The character's current guide stage: the selected build (else its class's default),
     /// followed along `next` while the stage switches automatically (`auto_switch`), the
     /// character `level` has reached `switch_level` and `owns` every `switch_requires` item
-    /// (see [`owns_item`]). A `next` that is already part of the chain stops it (cycle guard).
-    /// `class`/`level` are `None` where unknown (the config page, which passes
-    /// [`owns_nothing`]): no class default, no automatic switch.
+    /// (see [`owns_item`]). The items count as owned, too, for a switch into a stage the
+    /// character has `reached` before or into one leading there ([`Config::leads_to`]): the
+    /// shared stash is unread until opened each game, and a switch is one-way. A `next` that
+    /// is already part of the chain stops it (cycle guard). `class`/`level` are `None` where
+    /// unknown (the config page, which passes [`owns_nothing`] and no `reached`): no class
+    /// default, no automatic switch.
     #[must_use]
     pub fn stage(
         &self,
@@ -548,6 +551,7 @@ impl Config {
         class: Option<u32>,
         level: Option<u8>,
         owns: &dyn Fn(&str) -> bool,
+        reached: Option<&str>,
     ) -> Option<Stage<'_>> {
         let (start, class_default) = match self.selected(name) {
             Some(selected) => (selected, false),
@@ -567,7 +571,8 @@ impl Config {
                     .switch_level
                     .zip(level)
                     .is_some_and(|(switch, level)| level >= switch)
-                && build.switch_requires.iter().all(|item| owns(item));
+                && (build.switch_requires.iter().all(|item| owns(item))
+                    || reached.is_some_and(|reached| self.leads_to(next_slug, reached)));
             if !due || chain.contains(&next_slug) {
                 break;
             }
@@ -582,9 +587,30 @@ impl Config {
         })
     }
 
+    /// Whether stage `to` is `from` or comes after it along the builds' `next` links (cycles
+    /// stop the walk).
+    #[must_use]
+    pub fn leads_to(&self, from: &str, to: &str) -> bool {
+        let mut seen = Vec::new();
+        let mut slug = from;
+        loop {
+            if slug == to {
+                return true;
+            }
+            if seen.contains(&slug) {
+                return false;
+            }
+            seen.push(slug);
+            match self.build_defs.get(slug).and_then(|b| b.next.as_deref()) {
+                Some(next) => slug = next,
+                None => return false,
+            }
+        }
+    }
+
     /// The character's `BiS` resolved over the build files: its inline slots when it has any,
-    /// else the current stage's slots ([`Config::stage`], `owns` as there; else none — a
-    /// build file may omit slots).
+    /// else the current stage's slots ([`Config::stage`], `owns`/`reached` as there; else
+    /// none — a build file may omit slots).
     #[must_use]
     pub fn resolved_bis(
         &self,
@@ -592,13 +618,14 @@ impl Config {
         class: Option<u32>,
         level: Option<u8>,
         owns: &dyn Fn(&str) -> bool,
+        reached: Option<&str>,
     ) -> Option<Bis> {
         if let Some(bis) = self.bis.get(&name.to_lowercase())
             && (!bis.slots.is_empty() || !bis.merc_slots.is_empty())
         {
             return Some(bis.clone());
         }
-        let def = self.stage(name, class, level, owns)?.build;
+        let def = self.stage(name, class, level, owns, reached)?.build;
         Some(Bis {
             build: def.name.clone(),
             slots: def.slots.clone(),
@@ -607,8 +634,9 @@ impl Config {
     }
 
     /// The character's damage types, primary first: its own `[builds]` entry, else the current
-    /// stage's damages ([`Config::stage`], `owns` as there), else its class's (`class` as
-    /// charstats row id; `None` where the caller doesn't know a class, e.g. the config page).
+    /// stage's damages ([`Config::stage`], `owns`/`reached` as there), else its class's
+    /// (`class` as charstats row id; `None` where the caller doesn't know a class, e.g. the
+    /// config page).
     #[must_use]
     pub fn damages_for_player(
         &self,
@@ -616,11 +644,12 @@ impl Config {
         class: Option<u32>,
         level: Option<u8>,
         owns: &dyn Fn(&str) -> bool,
+        reached: Option<&str>,
     ) -> &[Damage] {
         if let Some(damages) = self.builds.names.get(&name.to_lowercase()) {
             return damages;
         }
-        if let Some(stage) = self.stage(name, class, level, owns)
+        if let Some(stage) = self.stage(name, class, level, owns, reached)
             && !stage.build.damages.is_empty()
         {
             return &stage.build.damages;
@@ -1148,37 +1177,37 @@ mod tests {
              [builds.class]\ndruid = [\"physical\"]\n4 = [\"physical\"]\nbard = [\"fire\"]\n",
         )?;
         assert_eq!(
-            c.damages_for_player("Vex", Some(6), None, &owns_nothing),
+            c.damages_for_player("Vex", Some(6), None, &owns_nothing, None),
             [Lightning, Fire, Physical],
             "deduped, in order"
         );
         assert_eq!(
-            c.damages_for_player("vex", Some(1), None, &owns_nothing),
+            c.damages_for_player("vex", Some(1), None, &owns_nothing, None),
             [Lightning, Fire, Physical],
             "name in any case"
         );
         assert_eq!(
-            c.damages_for_player("Other", Some(5), None, &owns_nothing),
+            c.damages_for_player("Other", Some(5), None, &owns_nothing, None),
             [Cold],
             "own entry beats the class"
         );
         assert_eq!(
-            c.damages_for_player("Bear", Some(5), None, &owns_nothing),
+            c.damages_for_player("Bear", Some(5), None, &owns_nothing, None),
             [Physical],
             "class by name"
         );
         assert_eq!(
-            c.damages_for_player("Barb", Some(4), None, &owns_nothing),
+            c.damages_for_player("Barb", Some(4), None, &owns_nothing, None),
             [Physical],
             "class by id"
         );
         assert_eq!(
-            c.damages_for_player("Sorc", Some(1), None, &owns_nothing),
+            c.damages_for_player("Sorc", Some(1), None, &owns_nothing, None),
             [] as [Damage; 0],
             "nothing configured"
         );
         assert_eq!(
-            c.damages_for_player("Sorc", None, None, &owns_nothing),
+            c.damages_for_player("Sorc", None, None, &owns_nothing, None),
             [] as [Damage; 0],
             "no class known: still no damages"
         );
@@ -1318,7 +1347,7 @@ mod tests {
         );
         // Selection-only: the build's slots and damages come through.
         let resolved = config
-            .resolved_bis("DEMONmaster", None, None, &owns_nothing)
+            .resolved_bis("DEMONmaster", None, None, &owns_nothing, None)
             .ok_or_else(|| anyhow!("unresolved"))?;
         assert_eq!(resolved.build, "Blood Boil", "the display name, not the slug");
         assert_eq!(
@@ -1326,7 +1355,7 @@ mod tests {
             Some(&["Heart of the Oak@55".to_owned()][..])
         );
         assert_eq!(
-            config.damages_for_player("DEMONmaster", None, None, &owns_nothing),
+            config.damages_for_player("DEMONmaster", None, None, &owns_nothing, None),
             [Damage::Physical, Damage::Fire],
             "the build's damages"
         );
@@ -1341,7 +1370,7 @@ mod tests {
             .names
             .insert("demonmaster".to_owned(), vec![Damage::Fire]);
         let resolved = config
-            .resolved_bis("demonmaster", None, None, &owns_nothing)
+            .resolved_bis("demonmaster", None, None, &owns_nothing, None)
             .ok_or_else(|| anyhow!("unresolved"))?;
         assert!(
             !resolved.slots.contains_key("weapon"),
@@ -1352,14 +1381,18 @@ mod tests {
             Some(&["Stealth@17".to_owned()][..])
         );
         assert_eq!(
-            config.damages_for_player("demonmaster", Some(7), None, &owns_nothing),
+            config.damages_for_player("demonmaster", Some(7), None, &owns_nothing, None),
             [Damage::Fire]
         );
         // No bis entry at all: no resolved BiS, only the class fallback for damages.
-        assert!(config.resolved_bis("other", None, None, &owns_nothing).is_none());
+        assert!(
+            config
+                .resolved_bis("other", None, None, &owns_nothing, None)
+                .is_none()
+        );
         config.builds.classes.insert(7, vec![Damage::Lightning]);
         assert_eq!(
-            config.damages_for_player("other", Some(7), None, &owns_nothing),
+            config.damages_for_player("other", Some(7), None, &owns_nothing, None),
             [Damage::Lightning]
         );
         // A selected build that doesn't exist resolves to nothing.
@@ -1371,9 +1404,13 @@ mod tests {
                 merc_slots: BTreeMap::new(),
             },
         );
-        assert!(config.resolved_bis("ghost", None, None, &owns_nothing).is_none());
+        assert!(
+            config
+                .resolved_bis("ghost", None, None, &owns_nothing, None)
+                .is_none()
+        );
         assert_eq!(
-            config.damages_for_player("ghost", None, None, &owns_nothing),
+            config.damages_for_player("ghost", None, None, &owns_nothing, None),
             [] as [Damage; 0]
         );
         Ok(())
@@ -1480,7 +1517,7 @@ mod tests {
     #[test]
     fn stage_follows_the_auto_chain_by_level() -> Result<()> {
         let config = druid_chain();
-        let stage = |level| config.stage("NewDruid", Some(5), level, &owns_nothing);
+        let stage = |level| config.stage("NewDruid", Some(5), level, &owns_nothing, None);
         // No selection: the class default; below the switch level it stays.
         let s = stage(Some(37)).ok_or_else(|| anyhow!("no stage"))?;
         assert_eq!((s.slug, s.class_default), ("leveling", true));
@@ -1505,19 +1542,23 @@ mod tests {
         // Other classes and an unknown class get no default.
         assert!(
             config
-                .stage("NewDruid", Some(1), Some(50), &owns_nothing)
+                .stage("NewDruid", Some(1), Some(50), &owns_nothing, None)
                 .is_none()
         );
-        assert!(config.stage("NewDruid", None, Some(50), &owns_nothing).is_none());
+        assert!(
+            config
+                .stage("NewDruid", None, Some(50), &owns_nothing, None)
+                .is_none()
+        );
         // The stage drives the BiS and the damages.
         assert_eq!(
             config
-                .resolved_bis("x", Some(5), Some(40), &owns_nothing)
+                .resolved_bis("x", Some(5), Some(40), &owns_nothing, None)
                 .map(|b| b.build),
             Some("Tornado".to_owned())
         );
         assert_eq!(
-            config.damages_for_player("x", Some(5), Some(40), &owns_nothing),
+            config.damages_for_player("x", Some(5), Some(40), &owns_nothing, None),
             [Damage::Fire]
         );
         Ok(())
@@ -1550,7 +1591,7 @@ mod tests {
         let slug = |level, owned: &[String], stash: &[String]| {
             let owns = |item: &str| owns_item(item, owned, stash);
             config
-                .stage("NewDruid", Some(5), Some(level), &owns)
+                .stage("NewDruid", Some(5), Some(level), &owns, None)
                 .map(|s| s.slug)
                 .ok_or_else(|| anyhow!("no stage"))
         };
@@ -1580,7 +1621,7 @@ mod tests {
         // Without live data (the config page) a requirement is never met.
         assert_eq!(
             config
-                .stage("NewDruid", Some(5), Some(90), &owns_nothing)
+                .stage("NewDruid", Some(5), Some(90), &owns_nothing, None)
                 .map(|s| s.slug),
             Some("leveling")
         );
@@ -1588,10 +1629,47 @@ mod tests {
         let owns = |item: &str| owns_item(item, &raven, &[]);
         assert_eq!(
             config
-                .resolved_bis("x", Some(5), Some(40), &owns)
+                .resolved_bis("x", Some(5), Some(40), &owns, None)
                 .map(|b| b.build),
             Some("Tornado".to_owned())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_reached_stage_latches_its_required_items() -> Result<()> {
+        let mut config = druid_chain();
+        for (slug, auto) in [("leveling", true), ("tornado", true)] {
+            if let Some(b) = config.build_defs.get_mut(slug) {
+                b.auto_switch = auto;
+                b.switch_requires = vec!["Raven Frost".to_owned()];
+            }
+        }
+        let slug = |level, reached| {
+            config
+                .stage("NewDruid", Some(5), Some(level), &owns_nothing, reached)
+                .map(|s| s.slug)
+                .ok_or_else(|| anyhow!("no stage"))
+        };
+        assert_eq!(slug(38, None)?, "leveling", "items missing, nothing reached");
+        assert_eq!(
+            slug(38, Some("tornado"))?,
+            "tornado",
+            "reached: the items count as owned"
+        );
+        // A later stage reached latches every switch on the way there.
+        assert_eq!(slug(38, Some("fissure"))?, "fissure");
+        // The level is still checked.
+        assert_eq!(slug(37, Some("fissure"))?, "leveling");
+        // A remembered stage off the chain latches nothing.
+        assert_eq!(slug(38, Some("other"))?, "leveling");
+        assert!(config.leads_to("leveling", "fissure") && config.leads_to("tornado", "tornado"));
+        assert!(!config.leads_to("fissure", "leveling"), "only forwards");
+        // A cycle ends the walk.
+        if let Some(b) = config.build_defs.get_mut("fissure") {
+            b.next = Some("leveling".to_owned());
+        }
+        assert!(!config.leads_to("leveling", "missing"));
         Ok(())
     }
 
@@ -1608,7 +1686,7 @@ mod tests {
             },
         );
         let s = config
-            .stage("Bear", Some(5), Some(90), &owns_nothing)
+            .stage("Bear", Some(5), Some(90), &owns_nothing, None)
             .ok_or_else(|| anyhow!("no stage"))?;
         assert_eq!((s.slug, s.class_default, s.next), ("fissure", false, None));
         // A cycle (fissure → leveling, all automatic) stops before repeating a stage and
@@ -1623,7 +1701,7 @@ mod tests {
             b.next = Some("leveling".to_owned());
         }
         let s = config
-            .stage("Other", Some(5), Some(60), &owns_nothing)
+            .stage("Other", Some(5), Some(60), &owns_nothing, None)
             .ok_or_else(|| anyhow!("no stage"))?;
         assert_eq!(
             s.slug, "fissure",
@@ -1636,7 +1714,7 @@ mod tests {
         }
         assert_eq!(
             config
-                .stage("Other", Some(5), Some(60), &owns_nothing)
+                .stage("Other", Some(5), Some(60), &owns_nothing, None)
                 .and_then(|s| s.next),
             None
         );
