@@ -2128,7 +2128,8 @@ impl<M: ReadMem> Reader<'_, M> {
 
     /// The stat entries of the item unit at `item` (unit id `id`): its stat-list chain
     /// ([`unit::STATS`], then [`stat_list::NEXT`] while a list is still an item list owned by
-    /// `id`, as in [`Reader::accumulate_gear`]); the first list is the base list. Live
+    /// `id`); the first list is the base list. Runeword and socket stats are not in this
+    /// chain (see [`Reader::accumulate_gear`], which reads the aggregated array). Live
     /// 2026-11-18 (owned items, level-4 amazon): the base list holds the rolled base defense
     /// (31), damage (21/22, 23/24, 159/160) and durability, the next list the affixes; the
     /// chain then runs into other owners' lists. Store items: same unit layout, assumed the
@@ -2256,43 +2257,41 @@ impl<M: ReadMem> Reader<'_, M> {
         }
     }
 
-    /// Adds the speed/resist stats of `item`'s stat-list chain (base list at `unit::STATS`, then
-    /// the affix lists chained by `stat_list::NEXT` while they still belong to the item) to
-    /// `acc`. The chain is verified live (2026-11-17): an equipped armour's affix list carried
-    /// its res; lists of other owners end the walk.
+    /// Adds the speed/resist stats of `item` to `acc`, from its top stat list's aggregated
+    /// array ([`stat_list::FULL_ENTRIES`]): base, affixes, runeword and socketed runes/gems,
+    /// each counted once. Live 2026-11-19: walking the owner-matching chain instead missed every
+    /// runeword and socket stat (they hang off the socketed items' own lists and a runeword list
+    /// outside that chain), so Ancients' Pledge added no resists. A top list without
+    /// [`stat_list::FLAG_FULL_STATS`] adds nothing (never seen live).
     fn accumulate_gear(&self, item: u64, head: &UnitHead, acc: &mut SpeedStats) {
-        let Some(mut list) = self.ptr(item, unit::STATS).unwrap_or(None) else {
+        let Some(list) = self.ptr(item, unit::STATS).unwrap_or(None) else {
             return;
         };
-        for _ in 0..8 {
-            let (Some(ty), Some(owner)) = (self.u32(list, 0x08).ok(), self.u32(list, 0x0C).ok()) else {
-                return;
-            };
-            if ty != unit_table::ITEM || owner != head.id {
-                return;
-            }
-            for (_, id, value) in self.stat_entries(list).unwrap_or_default() {
-                let value = plain_stat_from_raw(value);
-                match id {
-                    stat_list::RESIST_FIRE => acc.res_fire = acc.res_fire.saturating_add(value),
-                    stat_list::RESIST_COLD => acc.res_cold = acc.res_cold.saturating_add(value),
-                    stat_list::RESIST_LIGHTNING => {
-                        acc.res_lightning = acc.res_lightning.saturating_add(value);
-                    }
-                    stat_list::RESIST_POISON => acc.res_poison = acc.res_poison.saturating_add(value),
-                    stat_list::IAS => acc.ias = acc.ias.saturating_add(value),
-                    stat_list::FHR => acc.fhr = acc.fhr.saturating_add(value),
-                    stat_list::FCR => acc.fcr = acc.fcr.saturating_add(value),
-                    _ => {}
+        let owned = matches!(
+            (self.u32(list, 0x08), self.u32(list, 0x0C), self.u32(list, stat_list::FLAGS)),
+            (Ok(ty), Ok(owner), Ok(flags))
+                if ty == unit_table::ITEM && owner == head.id && flags & stat_list::FLAG_FULL_STATS != 0
+        );
+        if !owned {
+            return;
+        }
+        let entries = self
+            .stat_array(list, stat_list::FULL_ENTRIES, stat_list::FULL_COUNT)
+            .unwrap_or_default();
+        for (_, id, value) in entries {
+            let value = plain_stat_from_raw(value);
+            match id {
+                stat_list::RESIST_FIRE => acc.res_fire = acc.res_fire.saturating_add(value),
+                stat_list::RESIST_COLD => acc.res_cold = acc.res_cold.saturating_add(value),
+                stat_list::RESIST_LIGHTNING => {
+                    acc.res_lightning = acc.res_lightning.saturating_add(value);
                 }
+                stat_list::RESIST_POISON => acc.res_poison = acc.res_poison.saturating_add(value),
+                stat_list::IAS => acc.ias = acc.ias.saturating_add(value),
+                stat_list::FHR => acc.fhr = acc.fhr.saturating_add(value),
+                stat_list::FCR => acc.fcr = acc.fcr.saturating_add(value),
+                _ => {}
             }
-            let Some(next) = self.u64(list, stat_list::NEXT).ok() else {
-                return;
-            };
-            if next == 0 {
-                return;
-            }
-            list = next;
         }
     }
 
@@ -2301,14 +2300,20 @@ impl<M: ReadMem> Reader<'_, M> {
     /// An empty list (count 0) is `Ok(vec![])` without touching its entries pointer: live
     /// 2026-11-18 a magic ring's base list was empty and its affix list came next.
     fn stat_entries(&self, list: u64) -> Result<Vec<(u16, u16, u32)>> {
-        let count = self.u64(list, stat_list::COUNT)?;
+        self.stat_array(list, stat_list::ENTRIES, stat_list::COUNT)
+    }
+
+    /// The `{layer, stat id, value}` array whose pointer sits at `list + entries_at` and whose
+    /// u64 count at `list + count_at` ([`stat_list::ENTRIES`] or [`stat_list::FULL_ENTRIES`]).
+    fn stat_array(&self, list: u64, entries_at: u64, count_at: u64) -> Result<Vec<(u16, u16, u32)>> {
+        let count = self.u64(list, count_at)?;
         if count == 0 {
             return Ok(Vec::new());
         }
         if count > MAX_ITEM_STATS {
             bail!("stat list {list:#x}: {count} entries");
         }
-        let entries = self.ptr_req(list, stat_list::ENTRIES, "stat entries")?;
+        let entries = self.ptr_req(list, entries_at, "stat entries")?;
         let len = usize::try_from(count * stat_list::STAT_SIZE)?;
         let bytes = self
             .mem
@@ -3329,6 +3334,120 @@ mod tests {
             armour.required_level(),
             Some(43),
             "magic: the BASE item's levelreq (affixes can raise the real one)"
+        );
+        Ok(())
+    }
+
+    /// Writes `{layer 0, id, value}` stat entries at `at`.
+    fn entries(mem: &mut FakeMem, at: u64, stats: &[(u16, u32)]) {
+        let mut b = Vec::new();
+        for &(id, value) in stats {
+            b.extend(0u16.to_le_bytes());
+            b.extend(id.to_le_bytes());
+            b.extend(value.to_le_bytes());
+        }
+        mem.add(at, b);
+    }
+
+    #[test]
+    fn gear_stats_come_from_the_aggregated_array_once() -> Result<()> {
+        // Live 2026-11-19: Ancients' Pledge's resists sat only in its top list's aggregated
+        // array (+0xE8); the chained list after it is a socketed rune's (another item id) and
+        // repeats the rune's poison res, which must not count twice.
+        let mut m = world()?;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        // (top list, owner id, flags, full entries + count, next list)
+        let list = |mem: &mut FakeMem, at: u64, owner: u32, flags: u32, full: (u64, u64), next: u64| {
+            put(
+                mem,
+                at,
+                0x100,
+                &[
+                    (0x08, &unit_table::ITEM.to_le_bytes()),
+                    (0x0C, &owner.to_le_bytes()),
+                    (stat_list::FLAGS, &flags.to_le_bytes()),
+                    (stat_list::NEXT, &next.to_le_bytes()),
+                    (stat_list::FULL_ENTRIES, &full.0.to_le_bytes()),
+                    (stat_list::FULL_COUNT, &full.1.to_le_bytes()),
+                ],
+            )
+        };
+        // Bob's shield (body 5): the runeword's resists and FCR, with the rune's list chained.
+        stored_item(
+            &mut m,
+            I1,
+            (40, 2, item_data::FLAG_RUNEWORD, 0),
+            (1, 255),
+            &[],
+            I2,
+        )?;
+        set_owner(&mut m, I1, BOB_ID)?;
+        set_body(&mut m, I1, 5)?;
+        let shield_id = u32::try_from(I1 >> 12)?;
+        let (full, rune_list, rune_full) = (I1 + 0x900, I1 + 0xA00, I1 + 0xB00);
+        list(
+            &mut m,
+            I1 + 0x600,
+            shield_id,
+            stat_list::FLAG_FULL_STATS,
+            (full, 6),
+            rune_list,
+        )?;
+        entries(
+            &mut m,
+            full,
+            &[
+                (31, 25),
+                (stat_list::RESIST_FIRE, 48),
+                (stat_list::RESIST_LIGHTNING, 48),
+                (stat_list::RESIST_COLD, 43),
+                (stat_list::RESIST_POISON, 48),
+                (stat_list::FCR, 25),
+            ],
+        );
+        list(
+            &mut m,
+            rune_list,
+            shield_id + 99,
+            stat_list::FLAG_FULL_STATS,
+            (rune_full, 1),
+            0,
+        )?;
+        entries(&mut m, rune_full, &[(stat_list::RESIST_POISON, 35)]);
+        // Bob's ring (body 6): a top list without the full-stats flag adds nothing.
+        stored_item(
+            &mut m,
+            I2,
+            (40, 4, item_data::FLAG_IDENTIFIED, 0),
+            (1, 255),
+            &[],
+            0,
+        )?;
+        set_owner(&mut m, I2, BOB_ID)?;
+        set_body(&mut m, I2, 6)?;
+        let ring_full = I2 + 0x900;
+        list(
+            &mut m,
+            I2 + 0x600,
+            u32::try_from(I2 >> 12)?,
+            0x40,
+            (ring_full, 1),
+            0,
+        )?;
+        entries(&mut m, ring_full, &[(stat_list::FHR, 10)]);
+
+        let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
+        assert_eq!(
+            s.player.speed,
+            Some(SpeedStats {
+                fcr: 25,
+                res_fire: 48,
+                res_cold: 43,
+                res_lightning: 48,
+                res_poison: 48,
+                ..SpeedStats::default()
+            }),
+            "no FHR from the unflagged ring, no second Tal"
         );
         Ok(())
     }

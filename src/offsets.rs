@@ -425,6 +425,21 @@ pub mod stat_list {
     /// stats are readable by walking this chain per item — the player's own `+0x88` list is
     /// BASE-ONLY (level/strength/…, no item stats).
     pub const NEXT: u64 = 0xD0;
+    /// u32 list flags. [`FLAG_FULL_STATS`] marks an extended list (an item's or unit's top list)
+    /// that also carries the aggregated [`FULL_ENTRIES`] array.
+    pub const FLAGS: u64 = 0x1C;
+    /// Live 2026-11-19: set on the top list (`unit + 0x88`) of all 168 item units read (worn,
+    /// carried, stashed, socketed runes, the merc's); the chained affix lists have 0x40 instead.
+    pub const FLAG_FULL_STATS: u32 = 0x8000_0000;
+    /// ptr / u64 count of the list's aggregated stat array (same entry layout as [`ENTRIES`]):
+    /// the item's base + affix lists, its runeword list and its socketed runes/gems/jewels,
+    /// summed with modifiers applied (ED% on defence and damage). Live 2026-11-19 (druid,
+    /// level 22): Ancients' Pledge (Ral Ort Tal in a shield) read fire/light/cold/poison
+    /// 48/48/43/48 here while its owner-matching chain had no resists at all; a Stealth read
+    /// FCR/FHR 25 and poison 30 (Tal). On items without sockets or runeword it equals the chain
+    /// sum (162 of 168 items compared).
+    pub const FULL_ENTRIES: u64 = 0xE8;
+    pub const FULL_COUNT: u64 = 0xF0;
     /// The unit's state bitfield: [`STATE_FLAG_DWORDS`] little-endian u32, state `n` is bit
     /// `n % 32` of dword `n / 32` (states.txt rows). Live 2026-11-15 on monsters (Moo Moo Farm,
     /// terrorized): all 24 cows had [`super::state::DESECRATED`] set here, the player and the

@@ -161,7 +161,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   stats live on the ITEMS: each item has a base list (defence, durability, requirements) at unit +0x88
   and a **magic-affix list chained at StatList +0xD0** (each list's `+0x08/+0x0C` = owner (unit type,
   unit id); the affix list's owner is the item). Verified: the equipped items' affix sums equal the
-  character screen exactly (res 6/9/8/7, fire/light/cold/poison). `ItemData::OWNER` (+0x0C) separates the
+  character screen exactly (res 6/9/8/7, fire/light/cold/poison; no runewords then — see "Aggregated item
+  stats" for why the gear sums now read the top list's `+0xE8` array). `ItemData::OWNER` (+0x0C) separates the
   player's gear from the mercenary's (merc items carry `NO_OWNER`, and two body slots were the merc's
   duplicate armour/weapon). The overlay therefore sums gear stats over equipped items and carried charms
   (charm codes cm1/cm2/cm3) per owner. Monsters keep full lists at +0x88 (a mob's list had its
@@ -206,6 +207,21 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   1/4), `159/160` thrown (Javelin 6/14 beside 21/22 = 1/5), quantity 70, attack speed 68 (signed: -5);
   list 1 = affixes (ED% `16` on armour, res `39/41/43/45`, gold find 79, durability% 75); then the chain runs
   into other owners' lists (stop there). So ED% applies to the base-list value; flat bonuses add after.
+- **Aggregated item stats** (live 2026-11-19, level-22 druid, Normal; probes rwprobe.py/fullcheck.py run
+  from the scratchpad, logic as research/itemstats.py): the owner-matching chain above MISSES runeword and
+  socket stats. A socketed item's top list (`unit + 0x88`) chains next to the first socketed rune's own lists
+  (other item id), then a type-3 list; the runeword's own stats are in no list of that chain. But every
+  item's top list has flag `0x80000000` at `+0x1C` (`stat_list::FLAG_FULL_STATS`; chained affix lists have
+  `0x40`) and an **aggregated array at `+0xE8` ptr / `+0xF0` count** (`+0xF8` capacity), entry layout as
+  `+0x30`: base + affixes + runeword + socketed runes, modifiers applied (Ancients' Pledge defense 17 → 25,
+  Stoutnail damage 7/12 → 14/24 with its 100% ED; ED itself not listed). Ancients' Pledge (Ral Ort Tal):
+  fire/light/cold/poison 48/48/43/48; Stealth (Tal Eth): poison 30, FCR/FHR/FRW 25, dex 6, stamina 15, mana
+  regen 15, MDR 3. A socketed rune's own top list holds its slot-specific stat (Tal in armour: poison 30, in a
+  shield 35; Eth: mana regen 15). Over 168 item units (worn, inventory, stash, the merc's) all had the flag;
+  162 had array == chain sum for res/IAS/FHR/FCR, the 6 different ones all runewords/socketed.
+  `Reader::accumulate_gear` (guide res and breakpoints) reads only this array (each stat once); `item_stats`
+  (vendor/gear score, needs base vs affix) still walks the chain. Other list fields seen: `+0x00` owner unit
+  (affix lists), `+0x78` the parent item's top list (on a rune's list), `+0x68/+0x70` sibling links (unused).
 - Valuables: research/valuables.json (67 rules, S/A/B, trade/twink) embedded; tiers per category in
   `~/.config/d2r-map-overlay/config.toml` (default S+A both; example: config.example.toml). Ground: ring by tier
   (S red, A orange, dashed = uncertain). Inventory keep list (dashboard; formerly green lines on the overlay): certain
