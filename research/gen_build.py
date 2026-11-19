@@ -31,13 +31,6 @@ import sys
 
 # Per-build settings by source stem. `next` is the next stage's slug (lowercased name).
 BUILDS = {
-    "druid-leveling": dict(
-        name="Druid Leveling", cls="druid", damages=["fire", "physical"],
-        next="druid tornado", switch_level=38, auto_switch=True,
-        notes="Maxroll Druid Leveling (Teo1904): Firestorm / Molten Boulder / Fissure to level 38, then respec to Tornado + Hurricane (next stage).",
-        respec_note=("respec to Tornado + Hurricane before Nightmare Mephisto (~level 38, as early as NM Act 2): "
-                     "Tornado 15, Hurricane 9, Cyclone Armor 14, 1 each in Arctic Blast and Twister"),
-    ),
     # Agent-computed from the D2R game tables, not from a guide (user, 2026-11-19: "guides are
     # practically all out of date"). Summoner to 40, then a reset into Fury (werewolf).
     "summoner-druid-leveling": dict(
