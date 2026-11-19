@@ -1,16 +1,20 @@
 //! When each character was last played, so the config page lists the recent ones first.
 //!
 //! `played.json` in the data dir maps the lowercased character name to its display name and
-//! the unix time it was last seen in a game. [`Tracker`] records the live player each tick and
-//! writes the file via a temp file and a rename, only when the character changed or at most
-//! every [`WRITE_INTERVAL`]. Without the file (first start) it is seeded from D2R's own save
-//! directory in the Proton prefix: online characters leave `<Name><account digits>.ctlo`
-//! (key bindings, rewritten on leaving a game), offline ones `<Name>.d2s`; their modification
+//! the unix time it was last seen in a game (and its class, when seen live). [`Tracker`] records
+//! the live player each tick and merges that one entry into the file (via a temp file and a
+//! rename), only when the character changed or at most every [`WRITE_INTERVAL`]. The config
+//! page can [`remove`] a character; the tracker never writes back entries it only read, so a
+//! removed character returns only when it is played again. Without the file (first start) it
+//! is seeded from D2R's own save directory in the Proton prefix: online characters leave
+//! `<Name><account digits>.ctlo` (key bindings, rewritten on leaving a game), offline ones
+//! `<Name>.d2s`; their modification
 //! times are the recency. A missing or corrupt file only means no order: the page then keeps
 //! the config order.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use std::{fs, io};
 
@@ -20,6 +24,10 @@ use serde::{Deserialize, Serialize};
 /// Least time between two writes for the same character.
 pub const WRITE_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Serialises every read-modify-write of the file: the live loop's [`Tracker`] and the web
+/// thread's [`remove`] must not both start from the same old map.
+static FILE_WRITE: Mutex<()> = Mutex::new(());
+
 /// One character's last sighting.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
@@ -27,6 +35,10 @@ pub struct Entry {
     pub name: String,
     /// Unix seconds.
     pub t: u64,
+    /// The class id (charstats row, see [`crate::config::CLASS_NAMES`]); `None` when only
+    /// known from the save files or from a file written before the class was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<u32>,
 }
 
 /// Lowercased character name → last sighting.
@@ -115,6 +127,7 @@ fn seed_from_saves(dir: &Path) -> Played {
         let slot = played.entry(name.to_lowercase()).or_insert_with(|| Entry {
             name: name.to_owned(),
             t,
+            class: None,
         });
         slot.t = slot.t.max(t);
     }
@@ -152,10 +165,34 @@ pub fn seed_from_process(pid: u32) -> Played {
         .map_or_else(Played::new, |dir| seed_from_saves(&dir))
 }
 
-/// The last-played times and their file, fed by the live loop.
+/// Removes `name` (any case) from the file at `path`; `Ok(false)` when it wasn't there (a
+/// missing file stays missing, so the next start still seeds).
+///
+/// # Errors
+/// Fails when the file can't be written.
+pub fn remove(path: &Path, name: &str) -> Result<bool> {
+    // A poisoned lock still guards the file; the map is re-read from disk anyway.
+    let _guard = FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(mut played) = read(path) else {
+        return Ok(false);
+    };
+    let before = played.len();
+    played.retain(|key, entry| !key.eq_ignore_ascii_case(name) && !entry.name.eq_ignore_ascii_case(name));
+    if played.len() == before {
+        return Ok(false);
+    }
+    write(path, &played)?;
+    Ok(true)
+}
+
+/// The live player's last sighting and the file it is merged into, fed by the live loop.
+///
+/// Only the character seen in this game is held in memory; each save re-reads the file and
+/// replaces just that entry, so a character [`remove`]d from the page meanwhile stays removed.
 #[derive(Debug)]
 pub struct Tracker {
-    played: Played,
+    /// The lowercased key and entry of the character last recorded.
+    current: Option<(String, Entry)>,
     /// `None`: no data dir, nothing is saved.
     path: Option<PathBuf>,
     /// The key and time of the last write.
@@ -165,11 +202,11 @@ pub struct Tracker {
 }
 
 impl Tracker {
-    /// Loads `path`; if it doesn't exist, takes `seed()` and writes it at once (so the seed
-    /// runs only once).
+    /// Opens the tracker for `path`; if the file doesn't exist, takes `seed()` and writes it at
+    /// once (so the seed runs only once).
     pub fn open(path: Option<PathBuf>, seed: impl FnOnce() -> Played) -> Self {
         let mut tracker = Self {
-            played: Played::new(),
+            current: None,
             path,
             last_write: None,
             failed: false,
@@ -177,41 +214,41 @@ impl Tracker {
         let Some(path) = tracker.path.as_deref() else {
             return tracker;
         };
-        if let Some(played) = read(path) {
-            tracker.played = played;
-        } else {
-            tracker.played = seed();
+        let _guard = FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+        if read(path).is_none() {
+            let seeded = seed();
             // An empty seed isn't written: the next start tries again (a `record` writes the
             // file anyway).
-            if !tracker.played.is_empty() {
-                let names: Vec<_> = tracker.played.values().map(|e| e.name.as_str()).collect();
+            if !seeded.is_empty() {
+                let names: Vec<_> = seeded.values().map(|e| e.name.as_str()).collect();
                 eprintln!("played: seeded from the save files: {names:?}");
-                tracker.save();
+                let result = write(path, &seeded);
+                tracker.report(result);
             }
         }
         tracker
     }
 
-    /// Notes `name` as seen at unix time `t` (ignored unless [`plausible_name`]); writes when the character differs from the last
-    /// write's or [`WRITE_INTERVAL`] passed since it (`now`). An empty name is ignored.
-    pub fn record(&mut self, name: &str, t: u64, now: Instant) {
+    /// Notes `name` of class id `class` as seen at unix time `t` (ignored unless
+    /// [`plausible_name`]); writes when the character differs from the last write's or
+    /// [`WRITE_INTERVAL`] passed since it (`now`).
+    pub fn record(&mut self, name: &str, class: Option<u32>, t: u64, now: Instant) {
         if !plausible_name(name) {
             return;
         }
         let key = name.to_lowercase();
-        if let Some(entry) = self.played.get_mut(&key)
-            && entry.name == name
-        {
-            entry.t = t;
-        } else {
-            self.played.insert(
-                key.clone(),
-                Entry {
-                    name: name.to_owned(),
-                    t,
-                },
-            );
+        // A switch first saves the previous character's unsaved last sighting.
+        if self.current.as_ref().is_some_and(|(k, _)| *k != key) {
+            self.save();
         }
+        self.current = Some((
+            key.clone(),
+            Entry {
+                name: name.to_owned(),
+                t,
+                class,
+            },
+        ));
         if self
             .last_write
             .as_ref()
@@ -223,11 +260,31 @@ impl Tracker {
         self.save();
     }
 
+    /// Merges the current entry into the file as it is on disk now (a corrupt file is
+    /// replaced by the entry alone).
     fn save(&mut self) {
-        let Some(path) = self.path.as_deref() else {
+        let (Some(path), Some((key, entry))) = (self.path.as_deref(), self.current.as_ref()) else {
             return;
         };
-        if let Err(e) = write(path, &self.played)
+        let result = {
+            let _guard = FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut played = read(path).unwrap_or_default();
+            let class = entry.class.or_else(|| played.get(key).and_then(|old| old.class));
+            played.insert(
+                key.clone(),
+                Entry {
+                    class,
+                    ..entry.clone()
+                },
+            );
+            write(path, &played)
+        };
+        self.report(result);
+    }
+
+    /// Logs the first failed write only.
+    fn report(&mut self, result: Result<()>) {
+        if let Err(e) = result
             && !std::mem::replace(&mut self.failed, true)
         {
             eprintln!("played: {e:#} (not saved; further errors not shown)");
@@ -253,11 +310,11 @@ mod tests {
     fn implausible_names_are_not_recorded() {
         let mut tracker = Tracker::open(None, Played::new);
         for name in ["", "X", "Fulmina\u{1}", "ThisNameIsWayTooLong", "Vex2"] {
-            tracker.record(name, 1, Instant::now());
+            tracker.record(name, None, 1, Instant::now());
         }
-        assert!(tracker.played.is_empty());
-        tracker.record("Blood-Boil_x", 1, Instant::now());
-        assert_eq!(tracker.played.len(), 1);
+        assert!(tracker.current.is_none());
+        tracker.record("Blood-Boil_x", None, 1, Instant::now());
+        assert!(tracker.current.is_some());
     }
 
     #[test]
@@ -302,24 +359,35 @@ mod tests {
                 Entry {
                     name: "Vex".to_owned(),
                     t: 5,
+                    class: None,
                 },
             )])
         };
         let mut tracker = Tracker::open(Some(path.clone()), seed);
         assert!(path.exists(), "the seed is written at once");
-        tracker.record("Fulmina", 9, Instant::now());
+        tracker.record("Fulmina", Some(1), 9, Instant::now());
         let loaded = load(&path);
         assert_eq!(loaded.get("vex").map(|e| e.t), Some(5));
         assert_eq!(
             loaded.get("fulmina"),
             Some(&Entry {
                 name: "Fulmina".to_owned(),
-                t: 9
+                t: 9,
+                class: Some(1),
             })
         );
         // A second open reads the file, not the seed.
-        let again = Tracker::open(Some(path), Played::new);
-        assert_eq!(again.played, loaded);
+        let _again = Tracker::open(Some(path.clone()), || {
+            Played::from([(
+                "x".to_owned(),
+                Entry {
+                    name: "X".to_owned(),
+                    t: 1,
+                    class: None,
+                },
+            )])
+        });
+        assert_eq!(load(&path), loaded);
         Ok(())
     }
 
@@ -329,26 +397,26 @@ mod tests {
         let path = dir.join("played.json");
         let mut tracker = Tracker::open(Some(path.clone()), Played::new);
         let t0 = Instant::now();
-        tracker.record("Vex", 1, t0);
-        tracker.record("Vex", 2, t0 + WRITE_INTERVAL / 2);
+        tracker.record("Vex", None, 1, t0);
+        tracker.record("Vex", None, 2, t0 + WRITE_INTERVAL / 2);
         assert_eq!(
             load(&path).get("vex").map(|e| e.t),
             Some(1),
             "same character waits"
         );
-        tracker.record("Fulmina", 3, t0 + WRITE_INTERVAL / 2);
+        tracker.record("Fulmina", None, 3, t0 + WRITE_INTERVAL / 2);
         assert_eq!(
             load(&path).get("vex").map(|e| e.t),
             Some(2),
             "a switch writes at once"
         );
-        tracker.record("Fulmina", 4, t0 + WRITE_INTERVAL);
+        tracker.record("Fulmina", None, 4, t0 + WRITE_INTERVAL);
         assert_eq!(
             load(&path).get("fulmina").map(|e| e.t),
             Some(3),
             "within the interval"
         );
-        tracker.record("Fulmina", 5, t0 + WRITE_INTERVAL * 2);
+        tracker.record("Fulmina", None, 5, t0 + WRITE_INTERVAL * 2);
         assert_eq!(load(&path).get("fulmina").map(|e| e.t), Some(5));
         Ok(())
     }
@@ -366,16 +434,67 @@ mod tests {
                 Entry {
                     name: "X".to_owned(),
                     t: 1,
+                    class: None,
                 },
             )])
         });
-        assert!(tracker.played.is_empty(), "a corrupt file is not a missing one");
-        tracker.record("Vex", 7, Instant::now());
+        assert_eq!(
+            fs::read_to_string(&path)?,
+            "{not json",
+            "a corrupt file is not a missing one"
+        );
+        tracker.record("Vex", None, 7, Instant::now());
         assert_eq!(
             load(&path).get("vex").map(|e| e.t),
             Some(7),
             "the next write repairs it"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_removed_character_is_not_written_back_from_memory() -> Result<()> {
+        let dir = temp_dir("played-remove")?;
+        let path = dir.join("played.json");
+        let mut tracker = Tracker::open(Some(path.clone()), Played::new);
+        let t0 = Instant::now();
+        tracker.record("Vex", Some(5), 1, t0);
+        tracker.record("Fulmina", None, 2, t0);
+        assert!(remove(&path, "VEX")?, "any case");
+        assert!(!remove(&path, "vex")?, "already gone");
+        // Fulmina is still played: its next save keeps Vex removed.
+        tracker.record("Fulmina", None, 3, t0 + WRITE_INTERVAL);
+        let played = load(&path);
+        assert_eq!(played.keys().collect::<Vec<_>>(), ["fulmina"]);
+        assert_eq!(played.get("fulmina").map(|e| e.t), Some(3));
+        // Played again: back.
+        tracker.record("Vex", None, 4, t0 + WRITE_INTERVAL);
+        assert_eq!(
+            load(&path).get("vex").map(|e| (e.t, e.class)),
+            Some((4, None)),
+            "a removed character's class is gone with it"
+        );
+        // Removing everything leaves an empty file, so the save-file seed doesn't return.
+        remove(&path, "vex")?;
+        remove(&path, "fulmina")?;
+        assert!(load(&path).is_empty() && path.exists());
+        assert!(!remove(&dir.join("missing.json"), "vex")?);
+        Ok(())
+    }
+
+    #[test]
+    fn the_class_is_kept_and_old_files_still_parse() -> Result<()> {
+        let dir = temp_dir("played-class")?;
+        fs::create_dir_all(&dir)?;
+        let path = dir.join("played.json");
+        fs::write(&path, r#"{"vex": {"name": "Vex", "t": 1}}"#)?;
+        assert_eq!(load(&path).get("vex").map(|e| e.class), Some(None));
+        let mut tracker = Tracker::open(Some(path.clone()), Played::new);
+        tracker.record("Vex", Some(5), 2, Instant::now());
+        assert_eq!(load(&path).get("vex").map(|e| e.class), Some(Some(5)));
+        // A sighting without a class keeps the recorded one.
+        tracker.record("Vex", None, 3, Instant::now() + WRITE_INTERVAL);
+        assert_eq!(load(&path).get("vex").map(|e| (e.t, e.class)), Some((3, Some(5))));
         Ok(())
     }
 }

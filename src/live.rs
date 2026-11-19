@@ -346,7 +346,12 @@ fn follow_game(
                 // Before `apply` and the shrine filter: they drop monster presets and shrines
                 // the journal wants to see.
                 journal.observe(&snap);
-                last_played.record(&snap.player.name, now_secs(), Instant::now());
+                last_played.record(
+                    &snap.player.name,
+                    Some(snap.player.class),
+                    now_secs(),
+                    Instant::now(),
+                );
                 let update = session.apply(&mut snap);
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
                 // Damages: the character's own `[builds]` entry, else the selected build's,

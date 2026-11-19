@@ -486,13 +486,8 @@ pub struct Stage<'a> {
 }
 
 impl Config {
-    /// The build definition the character's `[bis]` entry selects, if it names one that exists.
-    #[must_use]
-    pub fn selected_build(&self, name: &str) -> Option<&Build> {
-        self.selected(name).map(|(_, b)| b)
-    }
-
-    /// [`Config::selected_build`] with its slug.
+    /// The build definition (with its slug) the character's `[bis]` entry selects, if it names
+    /// one that exists.
     fn selected(&self, name: &str) -> Option<(&str, &Build)> {
         let slug = self.bis.get(&name.to_lowercase())?.build.trim().to_lowercase();
         self.build_defs

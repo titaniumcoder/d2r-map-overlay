@@ -157,31 +157,69 @@ fn mark_offline(json: &str) -> Option<String> {
 /// Writes the `[bis.<name>]` build selection into `text` (comment-preserving): `Some(slug)`
 /// sets `build = "<slug>"` and creates the `[bis]`/`[bis.<name>]` tables when missing;
 /// `None` removes the selection again — the `build` key, and the whole entry when that leaves
-/// it empty. `None` (the return) when `text` is not valid TOML or the `bis` entry is not a
-/// table: the save would silently do nothing, so the caller must answer the browser with an
-/// error instead.
+/// it empty (nothing to clear is no change). The name matches case-insensitively and every
+/// spelling present is written (`[bis.Fulmina]` and `[bis.fulmina]` both, so they can't
+/// disagree; [`crate::config::parse`] lowercases the keys). `None` (the return) when `text` is
+/// not valid TOML or the `bis` entry is not a table: the save would silently do nothing, so
+/// the caller must answer the browser with an error instead.
 #[must_use]
 pub fn set_bis_selection(text: &str, name: &str, build: Option<&str>) -> Option<String> {
     let mut doc = text.parse::<DocumentMut>().ok()?;
+    if build.is_some() && doc.get("bis").is_none() {
+        doc.insert("bis", toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+    let Some(bis) = doc.get_mut("bis") else {
+        // Clearing without any `[bis]`: nothing to do.
+        return Some(doc.to_string());
+    };
+    let bis = bis.as_table_mut()?;
+    let mut keys = matching_keys(bis.iter().map(|(k, _)| k), name);
     if let Some(slug) = build {
-        if doc.get("bis").is_none() {
-            doc.insert("bis", toml_edit::Item::Table(toml_edit::Table::new()));
-        }
-        let bis = doc.get_mut("bis").and_then(|b| b.as_table_mut())?;
-        if !bis.contains_key(name) {
+        if keys.is_empty() {
             bis.insert(name, toml_edit::Item::Table(toml_edit::Table::new()));
+            keys.push(name.to_owned());
         }
-        let entry = bis.get_mut(name).and_then(|e| e.as_table_mut())?;
-        entry["build"] = toml_edit::value(slug);
-    } else if let Some(bis) = doc.get_mut("bis").and_then(|b| b.as_table_mut()) {
-        let Some(entry) = bis.get_mut(name).and_then(|e| e.as_table_mut()) else {
-            // Same contract as the set path: a non-table `[bis.<name>]` would silently no-op,
-            // so the caller must answer the browser with an error instead.
-            return None;
-        };
-        entry.remove("build");
-        if entry.is_empty() {
-            bis.remove(name);
+        for key in &keys {
+            let entry = bis.get_mut(key).and_then(|e| e.as_table_mut())?;
+            entry["build"] = toml_edit::value(slug);
+        }
+    } else {
+        for key in &keys {
+            // Same contract as the set path: a non-table `[bis.<name>]` would silently no-op.
+            let entry = bis.get_mut(key).and_then(|e| e.as_table_mut())?;
+            entry.remove("build");
+            if entry.is_empty() {
+                bis.remove(key);
+            }
+        }
+    }
+    Some(doc.to_string())
+}
+
+/// The keys equal to `name` ignoring case (as [`crate::config::parse`] folds them).
+fn matching_keys<'a>(keys: impl Iterator<Item = &'a str>, name: &str) -> Vec<String> {
+    let name = name.to_lowercase();
+    keys.filter(|k| k.to_lowercase() == name)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Removes character `name` from `text` (comment-preserving, case-insensitive): every
+/// `[bis.<name>]` table (with its slot sub-tables) and its `[builds]` damage entry. The
+/// `[builds.class]` table is never an entry (only damage lists are removed). `None` when
+/// `text` is not valid TOML.
+#[must_use]
+pub fn remove_character(text: &str, name: &str) -> Option<String> {
+    let mut doc = text.parse::<DocumentMut>().ok()?;
+    if let Some(bis) = doc.get_mut("bis").and_then(toml_edit::Item::as_table_like_mut) {
+        for key in matching_keys(bis.iter().map(|(k, _)| k), name) {
+            bis.remove(&key);
+        }
+    }
+    if let Some(builds) = doc.get_mut("builds").and_then(toml_edit::Item::as_table_like_mut) {
+        let entries = builds.iter().filter(|(_, v)| v.is_array()).map(|(k, _)| k);
+        for key in matching_keys(entries, name) {
+            builds.remove(&key);
         }
     }
     Some(doc.to_string())
@@ -279,6 +317,7 @@ fn handle(stream: TcpStream) {
                 return;
             }
             ("POST", "/api/bis") => api_bis(&String::from_utf8_lossy(&body)),
+            ("POST", "/api/character/delete") => api_character_delete(&String::from_utf8_lossy(&body)),
             _ => respond("404 Not Found", "text/plain", "not found\n"),
         },
     };
@@ -308,9 +347,9 @@ fn html_page(path: &str) -> String {
     }
 }
 
-/// The form page (see `config_page` for the embedded source).
+/// The form page (see [`CONFIG_PAGE`] for the embedded source).
 fn page() -> String {
-    respond("200 OK", "text/html", config_page())
+    respond("200 OK", "text/html", CONFIG_PAGE)
 }
 
 /// `200 OK` with the latest live snapshot's JSON verbatim (published by `live`), or
@@ -448,14 +487,19 @@ fn api_builds() -> String {
 /// The config page's JSON ([`api_config`]), pure over the parsed config, the live gear
 /// state and the last-played times so tests need no file and no game.
 ///
-/// Each character carries:
-/// - `name`, and `build`: the selected build's slug as written in `[bis.<name>]` (`""` when
-///   none),
-/// - `build_name`: the selected build's display name (`null` when none or unknown),
-/// - `damages`: the resolved damage types (character-level `[builds]` entry, else the
-///   selected build's), as lowercased names,
+/// Every character is listed once (names compared ignoring case): those in the config
+/// (`[bis.<name>]` selections and `[builds]` damage entries) and every one in `played`. Each
+/// carries:
+/// - `name`: the played display name, else the config's (lowercased) name,
+/// - `class`: the class name when the tracker saw it live (`null` otherwise),
+/// - `build`: the selected build's slug as written in `[bis.<name>]` (`""` when none),
+/// - `build_name`: the shown build's display name — the selection, else the class default
+///   when the class is known (`null` when neither),
+/// - `class_default`: whether `build_name` is the class default rather than a selection,
+/// - `damages`: the resolved damage types (character-level `[builds]` entry, else the shown
+///   build's, else the class's), as lowercased names,
 /// - `slots`/`merc_slots`: the resolved per-slot piece lists — inline slots when the config
-///   has any, else the selected build's ([`crate::config::Config::resolved_bis`]) — each piece
+///   has any, else the shown build's ([`crate::config::Config::resolved_bis`]) — each piece
 ///   annotated with its required level, its ✓ (`tick`: `"worn"`/`"owned"`/`"stash"`/`null`,
 ///   [`crate::info::piece_tick`]), whether the equipped piece is already better (`better`,
 ///   [`crate::info::slot_equipped_better`]) and, for a runeword piece, its `runes` and
@@ -470,65 +514,60 @@ fn config_json(
     gear: &GearInfo,
     played: &crate::played::Played,
 ) -> serde_json::Value {
-    let damages = |name: &str| {
-        config
-            .damages_for_player(name, None, None)
-            .iter()
-            .map(|d| d.name())
-            .collect::<Vec<_>>()
-    };
-    // The resolved `BiS` view plus the selection as written (the slug the page's select
-    // sets back; `resolved_bis` reports the display name, not the slug).
-    let bis_named = |name: &str| {
-        let resolved = config
-            .resolved_bis(name, None, None)
-            .unwrap_or_else(|| crate::config::Bis {
-                build: String::new(),
-                slots: BTreeMap::new(),
-                merc_slots: BTreeMap::new(),
-            });
-        let build = config.bis.get(name).map_or(String::new(), |b| b.build.clone());
-        Some((
-            build,
-            slot_tables_json(&resolved.slots, &gear.equipped, gear),
-            slot_tables_json(&resolved.merc_slots, &gear.merc_equipped, gear),
-        ))
-    };
-    let mut names: Vec<_> = config
+    // Lowercased names, config order first, each once.
+    let mut keys: Vec<String> = Vec::new();
+    for name in config
         .bis
         .keys()
-        .chain(
-            config
-                .builds
-                .names
-                .keys()
-                // Case-insensitive: [`crate::config::parse`] lowercases both `builds` names and
-                // `bis` keys; the filter is also correct for programmatically built `Config`s.
-                .filter(|n| !config.bis.keys().any(|b| b.eq_ignore_ascii_case(n))),
-        )
-        .map(|name| (name, played.get(&name.to_lowercase()).map(|e| e.t)))
-        .collect();
-    // Stable: equal times and the never-seen (`None`, last under `Reverse`) keep config order.
-    names.sort_by_key(|&(_, t)| std::cmp::Reverse(t));
-    let characters: Vec<_> = names
+        .chain(config.builds.names.keys())
+        .chain(played.keys())
+    {
+        let key = name.to_lowercase();
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    let mut characters: Vec<_> = keys
         .into_iter()
-        .map(|(name, last_played)| {
-            let (build, slots, merc_slots) = bis_named(name)
-                .unwrap_or_else(|| (String::new(), serde_json::json!({}), serde_json::json!({})));
-            let build_name = config
-                .selected_build(name)
-                .map_or(serde_json::Value::Null, |def| serde_json::json!(def.name));
-            serde_json::json!({
-                "name": name,
-                "build": build,
-                "build_name": build_name,
-                "damages": damages(name),
+        .map(|key| {
+            let seen = played.get(&key);
+            let class = seen.and_then(|e| e.class);
+            let stage = config.stage(&key, class, None);
+            let resolved = config.resolved_bis(&key, class, None);
+            let (slots, merc_slots) = resolved.map_or_else(
+                || (serde_json::json!({}), serde_json::json!({})),
+                |bis| {
+                    (
+                        slot_tables_json(&bis.slots, &gear.equipped, gear),
+                        slot_tables_json(&bis.merc_slots, &gear.merc_equipped, gear),
+                    )
+                },
+            );
+            let class_name = class
+                .and_then(|c| usize::try_from(c).ok())
+                .and_then(|c| crate::config::CLASS_NAMES.get(c));
+            let damages: Vec<_> = config
+                .damages_for_player(&key, class, None)
+                .iter()
+                .map(|d| d.name())
+                .collect();
+            let json = serde_json::json!({
+                "name": seen.map_or(key.as_str(), |e| e.name.as_str()),
+                "class": class_name,
+                "build": config.bis.get(&key).map_or("", |b| b.build.as_str()),
+                "build_name": stage.map(|s| s.build.name.as_str()),
+                "class_default": stage.is_some_and(|s| s.class_default),
+                "damages": damages,
                 "slots": slots,
                 "merc_slots": merc_slots,
-                "last_played": last_played,
-            })
+                "last_played": seen.map(|e| e.t),
+            });
+            (seen.map(|e| e.t), json)
         })
         .collect();
+    // Stable: equal times and the never-seen (`None`, last under `Reverse`) keep config order.
+    characters.sort_by_key(|&(t, _)| std::cmp::Reverse(t));
+    let characters: Vec<_> = characters.into_iter().map(|(_, json)| json).collect();
     serde_json::json!({ "characters": characters })
 }
 
@@ -2283,18 +2322,56 @@ fn api_bis(body: &str) -> String {
     save_config(|text| set_bis_selection(text, name, build))
 }
 
+/// `POST /api/character/delete` with `{"name": …}`: forgets the character — its last-played
+/// entry ([`crate::played::remove`]) and, in `config.toml`, every `[bis.<name>]` table and its
+/// `[builds]` damage entry ([`remove_character`]), all case-insensitively. D2R's own save
+/// files are never touched; playing the character again brings it back.
+fn api_character_delete(body: &str) -> String {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return respond("400 Bad Request", "text/plain", "bad json\n");
+    };
+    let Some(name) = json
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    else {
+        return respond("400 Bad Request", "text/plain", "name required\n");
+    };
+    // Config first: a failed config edit leaves played.json untouched, so a 500 deletes nothing.
+    // A played-only character needs no config edit; without a config file there is none.
+    if crate::config::default_path().is_some_and(|p| p.exists()) {
+        let response = save_config(|text| remove_character(text, name));
+        if !response.starts_with("HTTP/1.1 200") {
+            return response;
+        }
+    }
+    if let Some(path) = crate::played::default_path()
+        && let Err(e) = crate::played::remove(&path, name)
+    {
+        return respond("500 Internal Server Error", "text/plain", &format!("{e:#}\n"));
+    }
+    respond("200 OK", "application/json", "{\"saved\": true}")
+}
+
 /// The config page's HTML (a single string: no assets, no framework). The user picks a build
 /// per character (selection-only config); the gear itself is agent-authored and shown
 /// read-only, annotated with the live ✓ and strike-through.
-const fn config_page() -> &'static str {
-    r#"<!doctype html>
+const CONFIG_PAGE: &str = r#"<!doctype html>
 <html><head><meta charset="utf-8"><title>d2r-map-overlay config</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%231a1815'/%3E%3Cpath%20d='M16%204%2028%2016%2016%2028%204%2016Z'%20fill='%232b2721'%20stroke='%23c8a85a'%20stroke-width='3'%20stroke-linejoin='round'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='4'%20fill='%23ff6b3d'/%3E%3C/svg%3E">
 <style>
 body { font-family: sans-serif; background: #1a1a1a; color: #ddd; margin: 2em; }
 input, select { background: #2a2a2a; color: #eee; border: 1px solid #555; padding: 4px; }
 button { padding: 4px 10px; }
-.char { border: 1px solid #444; padding: 1em; margin-bottom: 1em; }
+.char { border: 1px solid #444; padding: 0 1em; margin-bottom: 0.6em; }
+.char[open] { padding-bottom: 1em; }
+.char > summary { cursor: pointer; padding: 0.6em 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4em 0.8em; }
+.char > summary .cname { font-size: 1.25em; font-weight: bold; color: #eee; }
+.char > summary .meta { color: #aaa; font-size: 0.9em; }
+.char > summary .del { margin-left: auto; }
+.del { background: #2a2a2a; color: #c99; border: 1px solid #644; }
+.del.armed { background: #7a1f1f; color: #fff; border-color: #c44; }
 .piece { margin: 2px 0; }
 .hint { color: #9c9; font-size: 0.85em; }
 .rwhint { color: #888; font-size: 0.8em; margin-left: 1.5em; }
@@ -2303,10 +2380,13 @@ button { padding: 4px 10px; }
 .better { text-decoration: line-through; color: #777; }
 </style></head><body>
 <h1>d2r-map-overlay config &nbsp; <a style="font-size:0.6em" href="/">live dashboard →</a></h1>
-<p class="hint">Pick a build per character. The gear lists live in
+<p class="hint">Every character in the config or seen in a game is listed (click a name to
+expand it). Delete forgets a character here (its build selection and last-played time; D2R's
+save files are not touched; playing it again brings it back). Pick a build per character. The gear lists live in
 <code>~/.config/d2r-map-overlay/builds/*.toml</code> (agent-authored) and are shown read-only:
 ✓ = owned (identified set/unique pieces), ✓(stash) = in the shared stash, struck through =
 the equipped piece is already better.</p>
+<div id="err" style="color:#f77"></div>
 <div id="chars"></div>
 <h2>Add character</h2>
 <input id="newname" placeholder="character name"> <select id="newbuild"></select>
@@ -2336,8 +2416,21 @@ function playedAgo(t) {
   const s = Math.max(0, Date.now() / 1000 - t);
   const ago = s < 120 ? "just now" : s < 7200 ? `${Math.round(s / 60)} min ago`
     : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`;
-  return ` <span class="hint" style="font-size:0.5em;font-weight:normal">played ${ago}</span>`;
+  return `played ${ago}`;
 }
+// Open/closed per lowercased name, remembered in localStorage (may be unavailable).
+const OPEN_KEY = "d2r-config-open";
+function openStates() {
+  try { return JSON.parse(localStorage.getItem(OPEN_KEY) || "{}") || {}; } catch (e) { return {}; }
+}
+function rememberOpen(name, open) {
+  try {
+    const states = openStates();
+    states[name.toLowerCase()] = open;
+    localStorage.setItem(OPEN_KEY, JSON.stringify(states));
+  } catch (e) { /* not remembered */ }
+}
+function capitalize(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 // One slot table (slots or merc_slots) as an ordered read-only list.
 function slotsHtml(slots) {
   return SLOTS.filter(s => slots && slots[s] && slots[s].length)
@@ -2353,24 +2446,56 @@ async function load() {
   const root = document.getElementById("chars");
   root.innerHTML = "";
   document.getElementById("newbuild").innerHTML = options();
-  for (const c of cfg.characters || []) {
-    const div = document.createElement("div");
+  const states = openStates();
+  (cfg.characters || []).forEach((c, i) => {
+    const div = document.createElement("details");
     div.className = "char";
     // The character name goes in a data attribute, not in classes/ids: names with spaces would
     // otherwise break the selectors.
     div.dataset.name = c.name;
+    // Collapsed by default except the most recently played one (the list is ordered by it).
+    const remembered = states[c.name.toLowerCase()];
+    div.open = remembered != null ? remembered : (i === 0 && c.last_played != null);
     const sel = `<select class="build-select">${options()}</select>`;
-    const buildName = c.build_name ? `<div class="hint">build: ${esc(c.build_name)}</div>` : "";
+    const shown = c.build_name
+      ? (c.class_default ? `class default: ${esc(c.build_name)}` : esc(c.build_name))
+      : "no build selected";
+    const meta = [c.class ? esc(capitalize(c.class)) : "", shown, playedAgo(c.last_played)]
+      .filter(Boolean).join(" · ");
     const damages = (c.damages || []).length ? `<div class="hint">damages: ${esc(c.damages.join(", "))}</div>` : "";
-    div.innerHTML = `<h2>${esc(c.name)}${playedAgo(c.last_played)}</h2>`
-      + `build: ${sel} <button class="save">Save</button>${buildName}${damages}`
+    div.innerHTML = `<summary><span class="cname">${esc(c.name)}</span><span class="meta">${meta}</span>`
+      + `<button class="del" type="button">delete</button></summary>`
+      + `build: ${sel} <button class="save">Save</button>${damages}`
       + `<h3>BiS</h3>` + slotsHtml(c.slots)
       + `<h3>Mercenary</h3>` + slotsHtml(c.merc_slots);
     const select = div.querySelector(".build-select");
     select.value = c.build || "";
     div.querySelector(".save").addEventListener("click", () => saveBis(c.name, select.value));
+    div.addEventListener("toggle", () => rememberOpen(c.name, div.open));
+    const del = div.querySelector(".del");
+    let disarm = null;
+    del.addEventListener("click", ev => {
+      // Inside the summary: don't toggle the section.
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!del.classList.contains("armed")) {
+        del.classList.add("armed");
+        del.textContent = "really delete?";
+        del.title = "a character in the current game comes back within a minute";
+        disarm = setTimeout(() => { del.classList.remove("armed"); del.textContent = "delete"; }, 4000);
+        return;
+      }
+      clearTimeout(disarm);
+      deleteChar(c.name);
+    });
     root.appendChild(div);
-  }
+  });
+}
+// Forgets the character (config entries and last-played time), then reloads the list.
+async function deleteChar(name) {
+  const r = await fetch("/api/character/delete", {method: "POST", body: JSON.stringify({name})});
+  if (!r.ok) { document.getElementById("err").textContent = `delete failed: ${await r.text()}`; }
+  load();
 }
 // Posts ONLY the `[bis.<name>]` build selection; an empty value clears it.
 async function saveBis(name, build) {
@@ -2384,8 +2509,7 @@ async function addChar() {
 }
 load();
 </script></body></html>
-"#
-}
+"#;
 
 /// The live dashboard page (a single string: no assets, no framework), dark-themed. Layout:
 /// a sticky character bar with the breakpoint chips, the gear grid (equipped piece on top of
@@ -3117,8 +3241,30 @@ mod tests {
         config
     }
 
+    /// A played entry keyed by its lowercased name.
+    fn played_entry(name: &str, t: u64, class: Option<u32>) -> (String, crate::played::Entry) {
+        (
+            name.to_lowercase(),
+            crate::played::Entry {
+                name: name.to_owned(),
+                t,
+                class,
+            },
+        )
+    }
+
+    fn names_of(json: &serde_json::Value) -> Vec<String> {
+        json.get("characters")
+            .and_then(|v| v.as_array())
+            .map_or_else(Vec::new, |cs| {
+                cs.iter()
+                    .filter_map(|c| Some(c.get("name")?.as_str()?.to_owned()))
+                    .collect()
+            })
+    }
+
     #[test]
-    fn config_json_lists_recently_played_first() {
+    fn config_json_lists_every_character_once_recently_played_first() {
         let mut config = crate::config::Config::default();
         for name in ["demonmaster", "elemental", "fulmina", "vex"] {
             let bis = crate::config::Bis {
@@ -3128,37 +3274,120 @@ mod tests {
             };
             config.bis.insert(name.to_owned(), bis);
         }
-        let entry = |name: &str, t| {
-            (
-                name.to_lowercase(),
-                crate::played::Entry {
-                    name: name.to_owned(),
-                    t,
-                },
-            )
-        };
-        let played =
-            crate::played::Played::from([entry("Fulmina", 30), entry("Elemental", 20), entry("Other", 99)]);
+        // A `[builds]`-only character, and one in both tables (listed once).
+        config.builds.names.insert("hork".to_owned(), vec![Damage::Fire]);
+        config.builds.names.insert("vex".to_owned(), vec![Damage::Cold]);
+        let played = crate::played::Played::from([
+            played_entry("Fulmina", 30, None),
+            played_entry("Elemental", 20, None),
+            played_entry("Other", 99, None),
+        ]);
         let json = config_json(&config, &GearInfo::default(), &played);
-        let order: Vec<_> = json
-            .get("characters")
-            .and_then(|v| v.as_array())
-            .map_or_else(Vec::new, |cs| {
-                cs.iter().filter_map(|c| c.get("name")?.as_str()).collect()
-            });
         assert_eq!(
-            order,
-            ["fulmina", "elemental", "demonmaster", "vex"],
-            "recent first, the never-seen in config order"
+            names_of(&json),
+            ["Other", "Fulmina", "Elemental", "demonmaster", "vex", "hork"],
+            "recent first with played display names, the never-seen in config order"
         );
         assert_eq!(
             json.pointer("/characters/0/last_played"),
-            Some(&serde_json::json!(30))
+            Some(&serde_json::json!(99))
+        );
+        assert_eq!(
+            json.pointer("/characters/0/build_name"),
+            Some(&serde_json::Value::Null),
+            "played-only: no build selected"
         );
         assert_eq!(
             json.pointer("/characters/3/last_played"),
             Some(&serde_json::Value::Null)
         );
+        assert_eq!(
+            json.pointer("/characters/4/damages"),
+            Some(&serde_json::json!(["cold"]))
+        );
+    }
+
+    #[test]
+    fn config_json_shows_the_class_default_of_a_played_class() {
+        let mut config = resolved_config();
+        if let Some(def) = config.build_defs.get_mut("blood boil") {
+            def.class = Some(7);
+            def.default_for_class = true;
+        }
+        let played = crate::played::Played::from([
+            played_entry("Warly", 10, Some(7)),
+            played_entry("Amy", 5, Some(0)),
+            played_entry("Demonmaster", 1, Some(7)),
+        ]);
+        let json = config_json(&config, &GearInfo::default(), &played);
+        assert_eq!(names_of(&json), ["Warly", "Amy", "Demonmaster"]);
+        let field = |i: usize, key: &str| {
+            json.pointer(&format!("/characters/{i}/{key}"))
+                .cloned()
+                .unwrap_or_default()
+        };
+        assert_eq!(field(0, "class"), serde_json::json!("warlock"));
+        assert_eq!(field(0, "build"), serde_json::json!(""));
+        assert_eq!(field(0, "build_name"), serde_json::json!("Blood Boil"));
+        assert_eq!(field(0, "class_default"), serde_json::json!(true));
+        assert_eq!(
+            json.pointer("/characters/0/slots/weapon/0/name"),
+            Some(&serde_json::json!("Heart of the Oak"))
+        );
+        assert_eq!(field(1, "class"), serde_json::json!("amazon"));
+        assert_eq!(field(1, "build_name"), serde_json::Value::Null);
+        assert_eq!(field(2, "build"), serde_json::json!("blood boil"));
+        assert_eq!(field(2, "class_default"), serde_json::json!(false), "a selection");
+    }
+
+    #[test]
+    fn remove_character_drops_every_spelling_and_keeps_the_rest() -> Result<()> {
+        let text = "# top comment\n\
+            [builds]\nFulmina = [\"lightning\"]\n# damages\nvex = [\"cold\"] # vex trailing\n\
+            [builds.class]\nfulmina = [\"fire\"]\nsorceress = [\"cold\"]\n\n\
+            # demon comment\n[bis.Demonmaster]\nbuild = \"blood boil\"\n\n\
+            [bis.Fulmina]\nbuild = \"a\"\n\n[bis.fulmina]\nbuild = \"b\"\n\
+            [bis.fulmina.slots]\nweapon = [\"Insight@27\"]\n\n\
+            # vex comment\n[bis.Vex]\nbuild = \"c\"\n";
+        let out = remove_character(text, "FULMINA").ok_or_else(|| anyhow!("no edit"))?;
+        for kept in [
+            "# top comment",
+            "# damages",
+            "# vex trailing",
+            "# demon comment",
+            "# vex comment",
+        ] {
+            assert!(out.contains(kept), "{kept} kept: {out}");
+        }
+        assert!(!out.to_lowercase().contains("bis.fulmina"), "{out}");
+        assert!(!out.contains("Insight"), "{out}");
+        let (config, _) = config::parse(&out)?;
+        assert_eq!(config.bis.keys().collect::<Vec<_>>(), ["demonmaster", "vex"]);
+        assert_eq!(config.builds.names.keys().collect::<Vec<_>>(), ["vex"]);
+        assert_eq!(config.builds.classes.len(), 1, "the class table is untouched");
+        assert!(
+            out.contains("fulmina = [\"fire\"]"),
+            "not a character entry: {out}"
+        );
+        // Nothing to remove: unchanged; invalid TOML: an error.
+        assert_eq!(remove_character(text, "nobody").as_deref(), Some(text));
+        assert_eq!(remove_character("[bis", "x"), None);
+        Ok(())
+    }
+
+    #[test]
+    fn set_bis_selection_writes_every_spelling() -> Result<()> {
+        let text = "[bis.Fulmina]\nbuild = \"a\"\n[bis.fulmina]\nbuild = \"b\"\n";
+        let out = set_bis_selection(text, "FULMINA", Some("c")).ok_or_else(|| anyhow!("no edit"))?;
+        assert_eq!(out.matches("build = \"c\"").count(), 2, "{out}");
+        let out = set_bis_selection(&out, "Fulmina", None).ok_or_else(|| anyhow!("no edit"))?;
+        assert_eq!(out, "", "{out}");
+        // Clearing a character that has no entry is no change, not an error.
+        assert_eq!(
+            set_bis_selection("[bis.Vex]\nbuild = \"x\"\n", "Other", None).as_deref(),
+            Some("[bis.Vex]\nbuild = \"x\"\n")
+        );
+        Ok(())
     }
 
     #[test]
@@ -5077,7 +5306,7 @@ mod tests {
             page.contains("<link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg")
         };
         assert!(page_link(DASHBOARD_HEAD), "dashboard links the icon");
-        assert!(page_link(config_page()), "config page links the icon");
+        assert!(page_link(CONFIG_PAGE), "config page links the icon");
         // The inline copy is the served SVG, percent-encoded.
         let encoded = FAVICON_SVG
             .replace('#', "%23")
