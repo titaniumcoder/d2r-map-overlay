@@ -31,16 +31,6 @@ import sys
 
 # Per-build settings by source stem. `next` is the next stage's slug (lowercased name).
 BUILDS = {
-    "blood-boil": dict(
-        name="Blood Boil", cls="warlock", damages=["physical", "fire"], default=True,
-        header=[
-            "# Source: Maxroll Blood Boil Warlock guide ({url}, {author}, updated {updated})",
-            "# + Maxroll D2Planner profiles; stats from the planner game data. Generated 2026-11-17 from",
-            "# blood-boil.source.json next to this file. Setups: starter (lvl ~75 guide variant), standard",
-            "# (lvl 99 endgame), alternative (Gear Options table / Magic Find variant).",
-        ],
-        notes="Maxroll Blood Boil Warlock S16 (MacroBioBoi): Starter + Standard setups, Gear Options alternatives, Magic Find variant.",
-    ),
     "druid-leveling": dict(
         name="Druid Leveling", cls="druid", damages=["fire", "physical"],
         next="druid tornado", switch_level=38, auto_switch=True,
@@ -58,32 +48,9 @@ BUILDS = {
                      "Feral Rage 3, Rabies 1, Oak Sage 1 = 44 points (Normal quests + Nightmare Den of Evil); "
                      "swap to the Fury starter kit (Black in a 3-socket Flail, Ancients' Pledge, Stealth)"),
     ),
-    "druid-tornado": dict(
-        name="Druid Tornado", cls="druid", damages=["physical", "cold"],
-        next="druid fissure", switch_level=75, auto_switch=False,
-        notes="Maxroll Tornado Hurricane Druid (endgame): Starter + Standard setups, Gear Options alternatives. Levels 38-75 follow the leveling guide's post-respec plan.",
-    ),
-    "druid-fissure": dict(
-        name="Druid Fissure", cls="druid", damages=["fire", "physical"],
-        notes="Maxroll Fissure Druid (endgame): Starter + Standard setups; Magic Find, Ubers and Gear Options items fold as alternatives. Only once the gear is near-perfect.",
-    ),
     "fury-druid": dict(
         name="Fury Druid", cls="druid", damages=["physical"],
         notes="Fury Werewolf from the skill reset at 40; standard = the user's core (Ribcracker, Lawbringer, Fortitude, Smoke, Bulwark, Jalal's Mane, Laying of Hands, Raven Frost). Durations, breakpoints and skill order computed from the D2R game tables, not from a guide.",
-    ),
-    # The leveling guide respecs into Lightning Fury on entering Act 4 Nightmare and calls level 38
-    # the earliest for it (its Summary says 32+; the detailed stage and the planner say 38).
-    "amazon-leveling": dict(
-        name="Amazon Leveling", cls="amazon", damages=["fire", "poison"], default=True,
-        next="lightning fury", switch_level=38, auto_switch=True,
-        notes="Maxroll Amazon Leveling (Teo1904): Poison Javelin / Exploding Arrow to level 38, then respec to Lightning Fury + Charged Strike (next stage).",
-        respec_note=("respec to Lightning Fury + Charged Strike on entering Act 4 Nightmare (level 38, the earliest per the guide): "
-                     "Charged Strike 19, Lightning Fury 9, Pierce 5, 1 each in Dodge, Avoid, Evade and the prerequisites "
-                     "(Jab, Power Strike, Poison Javelin, Lightning Bolt, Plague Javelin, Critical Strike, Penetrate)"),
-    ),
-    "amazon-lightning-fury": dict(
-        name="Lightning Fury", cls="amazon", damages=["lightning", "physical"],
-        notes="Maxroll Lightning Fury Amazon (endgame): Starter + Standard setups; Magic Find, Ubers and Gear Options items fold as alternatives. Levels 38-75 follow the leveling guide's post-respec plan.",
     ),
     # The leveling guide respecs into Blizzard at level 26, after the Normal Throne waves and
     # before entering Nightmare. This sorceress is the account's magic-find farmer (user, 2026-11-19).
