@@ -1427,7 +1427,7 @@ impl<M: ReadMem> Reader<'_, M> {
                         .and_then(|d| self.u32(d, item_data::QUANTITY).ok());
                     let mut entry = stash::stash_item(&item, quantity);
                     // A runeword goes by its name (the `BiS` ✓ and the stash panel).
-                    if let Some(word) = self.runeword_name(addr, item.flags, items_table) {
+                    if let Some(word) = self.runeword_name(addr, &head, item.flags, items_table) {
                         entry.name = word;
                     }
                     items.push(entry);
@@ -1942,7 +1942,7 @@ impl<M: ReadMem> Reader<'_, M> {
                     }
                 } else {
                     let flags = head.unit_data.and_then(|d| self.u32(d, item_data::FLAGS).ok());
-                    if let Some(name) = flags.and_then(|f| self.runeword_name(addr, f, items_table)) {
+                    if let Some(name) = flags.and_then(|f| self.runeword_name(addr, &head, f, items_table)) {
                         scan.runeword_copies.entry(owner).or_default().push(name.clone());
                         if !merc_worn {
                             push_unique_name(scan.owned_names.entry(owner).or_default(), name);
@@ -2045,7 +2045,7 @@ impl<M: ReadMem> Reader<'_, M> {
         let name = valuables::unique_set_name_parts(quality, flags, file_index).map(str::to_owned);
         let named_index = if name.is_some() { file_index } else { None };
         let runeword = flags & item_data::FLAG_RUNEWORD != 0;
-        let name = name.or_else(|| self.runeword_name(addr, flags, items_table));
+        let name = name.or_else(|| self.runeword_name(addr, head, flags, items_table));
         Equipped {
             body: slot,
             quality,
@@ -2164,10 +2164,19 @@ impl<M: ReadMem> Reader<'_, M> {
     /// The runeword name of the item at `addr` (flags `flags`): `None` unless it carries the
     /// [`item_data::FLAG_RUNEWORD`] bit and its socketed runes ([`Reader::socketed_codes`])
     /// spell a known runeword ([`stash::runeword_by_runes`]). Live 2026-11-18 on worn items.
-    fn runeword_name(&self, addr: u64, flags: u32, items_table: Option<u64>) -> Option<String> {
+    /// The base's item code picks between runewords sharing their runes ("Hustle (weapon)"
+    /// vs "Hustle (armor)").
+    fn runeword_name(
+        &self,
+        addr: u64,
+        head: &UnitHead,
+        flags: u32,
+        items_table: Option<u64>,
+    ) -> Option<String> {
         let table = items_table.filter(|_| flags & item_data::FLAG_RUNEWORD != 0)?;
         let runes = self.socketed_codes(addr, table);
-        stash::runeword_by_runes(&runes).map(|w| w.name.to_owned())
+        let base = items::read_code(self.mem, table, head.txt).map(items::code_text);
+        stash::runeword_by_runes(&runes, base.as_deref()).map(|w| w.name.to_owned())
     }
 
     /// The item codes of what is socketed in the item at `addr`, in socket order: the

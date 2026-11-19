@@ -99,8 +99,11 @@ fn rune_number(code: &str) -> Option<u8> {
 
 /// The runeword spelled by the rune `codes` in socket order (`["r07", "r05"]` (Tal Eth) →
 /// Stealth); `None` when a code isn't a rune or no runeword has exactly that sequence.
+/// When several runewords share the runes (Shael Ko Eld is "Hustle (armor)" and
+/// "Hustle (weapon)"), the one whose bases fit the item code `base` wins; without a code
+/// (or no fit) the first in table order.
 #[must_use]
-pub fn runeword_by_runes(codes: &[String]) -> Option<&'static Runeword> {
+pub fn runeword_by_runes(codes: &[String], base: Option<&str>) -> Option<&'static Runeword> {
     let names = codes
         .iter()
         .map(|c| {
@@ -109,7 +112,32 @@ pub fn runeword_by_runes(codes: &[String]) -> Option<&'static Runeword> {
                 .copied()
         })
         .collect::<Option<Vec<&str>>>()?;
-    RUNEWORDS.iter().find(|w| w.runes == names.as_slice())
+    let mut matches = RUNEWORDS.iter().filter(|w| w.runes == names.as_slice());
+    let first = matches.next()?;
+    let fits = |w: &Runeword| base.is_some_and(|code| base_fits(w, code));
+    if fits(first) {
+        return Some(first);
+    }
+    Some(matches.find(|w| fits(w)).unwrap_or(first))
+}
+
+/// The armour-side item-type groups of [`Runeword::bases`] (every other group in the table
+/// is a weapon group: "weapons", "axes", "missile weapons", ...).
+const ARMOR_GROUPS: [&str; 7] = [
+    "armor",
+    "auric shields",
+    "grimoires",
+    "helms",
+    "paladin shields",
+    "shields",
+    "voodoo heads",
+];
+
+/// Whether runeword `word` can be made in the base with item code `code`, coarsely: a weapon
+/// (a weapons.txt code) needs a weapon group, anything else an armour group.
+fn base_fits(word: &Runeword, code: &str) -> bool {
+    let weapon = crate::weapons_data::name(code).is_some();
+    word.bases.iter().any(|b| ARMOR_GROUPS.contains(b) != weapon)
 }
 
 /// The required character level of runeword `word`'s runes: the highest rune `levelreq`
@@ -388,31 +416,66 @@ mod tests {
     }
 
     #[test]
+    fn shared_runes_pick_the_runeword_that_fits_the_base() {
+        let hustle = ["r13", "r18", "r02"].map(str::to_owned); // Shael Ko Eld
+        let name = |base| runeword_by_runes(&hustle, base).map(|w| w.name);
+        assert_eq!(name(Some("7la")), Some("Hustle (weapon)"), "Feral Axe");
+        assert_eq!(name(Some("utp")), Some("Hustle (armor)"), "Archon Plate");
+        assert_eq!(name(None), Some("Hustle (armor)"), "no code: table order");
+    }
+
+    #[test]
+    fn qualified_runeword_names_count_only_their_base() {
+        let id = item_data::FLAG_IDENTIFIED;
+        let tabs = [StashTab {
+            kind: TabKind::Page(1),
+            items: vec![StashItem {
+                runeword: true,
+                ..item("Hustle (armor)", item_data::QUALITY_NORMAL, id)
+            }],
+        }];
+        let copies = vec!["Hustle (weapon)".to_owned()];
+        let holdings = Holdings {
+            stash: &tabs,
+            owned: &copies,
+            runeword_copies: &copies,
+            merc_worn: &[],
+        };
+        assert_eq!(holdings.copies("Hustle (weapon)", None), (0, 1), "weapon only");
+        assert_eq!(holdings.copies("Hustle (armor)", None), (1, 0), "armour only");
+        assert_eq!(holdings.count("Hustle"), 2, "bare: both");
+    }
+
+    #[test]
     fn rune_sequences_name_their_runeword_in_socket_order() {
         let codes = |c: &[&str]| c.iter().map(|&s| s.to_owned()).collect::<Vec<_>>();
         // Live 2026-11-18: Elemental's body armour held r07 r05, the staff r03 r08.
-        let stealth = runeword_by_runes(&codes(&["r07", "r05"]));
+        let stealth = runeword_by_runes(&codes(&["r07", "r05"]), None);
         assert_eq!(stealth.map(|w| w.name), Some("Stealth"));
         assert_eq!(stealth.and_then(runes_level), Some(17), "Tal 17 > Eth 15");
-        let leaf = runeword_by_runes(&codes(&["r03", "r08"]));
+        let leaf = runeword_by_runes(&codes(&["r03", "r08"]), None);
         assert_eq!(leaf.map(|w| w.name), Some("Leaf"));
         assert_eq!(leaf.and_then(runes_level), Some(19));
         assert_eq!(
-            runeword_by_runes(&codes(&["r08", "r09", "r07"])).map(|w| w.name),
+            runeword_by_runes(&codes(&["r08", "r09", "r07"]), None).map(|w| w.name),
             Some("Ancient's Pledge")
         );
-        assert_eq!(runeword_by_runes(&codes(&["r05", "r07"])), None, "order matters");
         assert_eq!(
-            runeword_by_runes(&codes(&["r07"])),
+            runeword_by_runes(&codes(&["r05", "r07"]), None),
+            None,
+            "order matters"
+        );
+        assert_eq!(
+            runeword_by_runes(&codes(&["r07"]), None),
             None,
             "a prefix is no runeword"
         );
         assert_eq!(
-            runeword_by_runes(&codes(&["r07", "gcv"])),
+            runeword_by_runes(&codes(&["r07", "gcv"]), None),
             None,
             "a gem is no rune"
         );
-        assert_eq!(runeword_by_runes(&[]), None);
+        assert_eq!(runeword_by_runes(&[], None), None);
         // Hel's levelreq is 0, so Authority (Hel Shael Ral) needs Shael's 29.
         assert_eq!(
             crate::runewords_data::lookup("Authority").and_then(runes_level),

@@ -56,7 +56,7 @@ BUILDS = {
                 "Voice of Reason", "Wisdom", "Wrath"]),
             dict(label="Powerful weapon", any=[
                 "Ribcracker", "Buriza-Do Kyanon", "Tomb Reaver", "Grief", "Beast",
-                "Breath of the Dying", "Eternity", "Oath", "Unbending Will", "Hustle"]),
+                "Breath of the Dying", "Eternity", "Oath", "Unbending Will", "Hustle (weapon)"]),
             "Harmony",
             dict(label="Physical immunes", any=["Lawbringer"], count=2),
             "Smoke",

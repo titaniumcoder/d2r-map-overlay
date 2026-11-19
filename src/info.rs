@@ -406,6 +406,8 @@ pub fn piece_level(piece: &str) -> Option<u32> {
 /// Whether two item names are the same piece: ASCII case, surrounding spaces and
 /// apostrophes are ignored, since the game data spells "Ancient's Pledge" and the builds
 /// "Ancients' Pledge". The one name comparison for runewords, worn and owned pieces.
+/// A trailing qualifier on one side only is ignored too: a bare "Hustle" is the same piece
+/// as "Hustle (weapon)" and "Hustle (armor)", while those two stay different.
 #[must_use]
 pub fn same_name(a: &str, b: &str) -> bool {
     let bare = |s: &str| {
@@ -415,7 +417,13 @@ pub fn same_name(a: &str, b: &str) -> bool {
             .map(|c| c.to_ascii_lowercase())
             .collect::<Vec<char>>()
     };
-    bare(a) == bare(b)
+    let unqualified = |s: &str| {
+        s.trim()
+            .strip_suffix(')')
+            .and_then(|s| s.rsplit_once(" ("))
+            .map(|(name, _)| bare(name))
+    };
+    bare(a) == bare(b) || unqualified(a) == Some(bare(b)) || unqualified(b) == Some(bare(a))
 }
 
 /// The bare piece name of a `BiS` piece string (`"Insight@27"` → `"Insight"`); shared by the
@@ -1217,6 +1225,9 @@ mod tests {
         assert!(same_name("Ancient's Pledge", "Ancients' Pledge"));
         assert!(same_name(" leaf", "Leaf"));
         assert!(!same_name("Lea", "Leaf"));
+        assert!(same_name("Hustle (weapon)", "hustle"), "bare matches either base");
+        assert!(same_name("Hustle", "Hustle (armor)"));
+        assert!(!same_name("Hustle (weapon)", "Hustle (armor)"));
         assert_eq!(piece_level("Ancients' Pledge"), Some(21), "builds' spelling");
         assert_eq!(
             piece_tick("Ancients' Pledge", &[], &["Ancient's Pledge".to_owned()], &[]),
