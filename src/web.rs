@@ -2760,8 +2760,8 @@ function stash(r) {
   }).join("");
   const m = r.stash_materials || {};
   // The runes the farm list's runewords still need (by "<Rune> Rune" stack name): those stacks
-  // get the ⚑ marker, a tooltip naming the runewords and stash/need when short; needed runes
-  // the stash lacks are added greyed as 0/need.
+  // get the ⚑ marker, a tooltip naming the runewords and have/need when the character's runes
+  // (stash and held) fall short; needed runes the stash lacks are added greyed.
   const farmRunes = new Map(((r.farm && r.farm.runes) || []).map(f => [f.rune + " Rune", f]));
   const runeNo = s => parseInt(String(s.code || "").slice(1), 10) || 99;
   const runeList = (m.runes || []).slice();
@@ -2772,10 +2772,12 @@ function stash(r) {
   const stacks = (list, cls) => (list || []).map(s => {
     const f = cls === "rune" ? farmRunes.get(s.name) : null;
     if (!f) return `<span class="stk ${cls}" title="${esc(s.code || "")}"><span class="nm">${esc(s.name)}</span><span class="q">${esc(s.qty)}</span></span>`;
-    const short = (s.qty || 0) < f.need;
+    // Short only when the character's own runes (held ones too) don't cover the need.
+    const short = f.have < f.need;
     const tip = `farm: ${f.for.join(", ")} · need ${f.need} · have ${f.have} (shared stash ${f.stash})`;
+    const q = short ? `${esc(f.have)}/${esc(f.need)}` : s.absent ? `${esc(f.have)} held` : esc(s.qty);
     return `<span class="stk ${cls} farm${short ? " short" : ""}${s.absent ? " absent" : ""}" title="${esc(tip)}"><span class="nm">${esc(s.name)}</span>`
-      + `<span class="q">${short ? `${esc(s.qty || 0)}/${esc(f.need)}` : esc(s.qty)}</span></span>`;
+      + `<span class="q">${q}</span></span>`;
   }).join("");
   const group = (title, list, cls) => list && list.length
     ? `<div><h3>${title}</h3><div class="stacks">${stacks(list, cls)}</div></div>` : "";
@@ -2941,7 +2943,7 @@ function farm(f) {
     const done = items.filter(i => i.status === "done").length;
     const cards = items.map(i => {
       const n = i.count > 1 ? ` ${esc(i.stashed)}/${esc(i.count)}` : "";
-      const carried = i.status !== "done" && i.carried ? `<div class="cr">carried here: ${esc(i.carried)} · put in the shared stash</div>` : "";
+      const carried = i.status !== "done" && i.carried ? `<div class="cr">on this character: ${esc(i.carried)} · put in the shared stash</div>` : "";
       const runes = (i.runes || []).length
         ? `<div class="rn">${i.runes.map(x => `<span class="${esc(x.status)}">${esc(x.rune)} ${x.status === "have" ? "✓" : esc(x.have) + "/" + esc(x.need)}</span>`).join("")}</div>` : "";
       const bases = (i.bases || []).length ? `<div class="bs">${esc(i.bases.join(", "))}</div>` : "";

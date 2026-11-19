@@ -351,15 +351,21 @@ pub fn farm_path_for(config_path: &Path) -> PathBuf {
         .map_or_else(|| PathBuf::from("farm.toml"), |p| p.join("farm.toml"))
 }
 
-/// Loads the farm list at `path`. Missing: empty, silently. Unreadable or invalid: one message
-/// on stderr, then empty (no panel). Warnings are reported too.
+/// Loads the farm list at `path` for the start: [`try_load_farm`], an error giving no list.
 pub fn load_farm(path: &Path) -> Vec<FarmGroup> {
+    try_load_farm(path).unwrap_or_default()
+}
+
+/// Reads the farm list at `path`. Missing: `Some` empty list, silently. Unreadable or invalid:
+/// one message on stderr and `None`, so a hot reload can keep the list it has (a half-written
+/// file must not blank the panel). Warnings are reported too.
+pub fn try_load_farm(path: &Path) -> Option<Vec<FarmGroup>> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Some(Vec::new()),
         Err(e) => {
-            eprintln!("farm {}: {e}; no farm list", path.display());
-            return Vec::new();
+            eprintln!("farm {}: {e}", path.display());
+            return None;
         }
     };
     match parse_farm(&text) {
@@ -367,11 +373,11 @@ pub fn load_farm(path: &Path) -> Vec<FarmGroup> {
             for w in warnings {
                 eprintln!("farm {}: {w}", path.display());
             }
-            groups
+            Some(groups)
         }
         Err(e) => {
-            eprintln!("farm {}: invalid, no farm list:\n{e}", path.display());
-            Vec::new()
+            eprintln!("farm {}: invalid:\n{e}", path.display());
+            None
         }
     }
 }

@@ -178,11 +178,12 @@ fn builds_state(dir: &Path) -> Option<Vec<(String, SystemTime)>> {
     Some(state)
 }
 
-/// Hot-reloads `config` when `config.toml` or its `builds/` directory changed on disk (webapp
-/// edits, hand edits, agent-authored build files). A failed reload (unreadable, invalid TOML)
-/// logs and keeps the current config, so a half-written or broken file can never blank the
-/// overlay's settings; the watched state is still recorded, so the error is logged once per
-/// change, not once per tick.
+/// Hot-reloads `config` when `config.toml`, its `builds/` directory or the `farm.toml` next to
+/// it changed on disk (webapp edits, hand edits, agent-authored build and farm files). A failed
+/// reload (unreadable, invalid TOML) logs and keeps the current config (and the current farm
+/// list: a farm.toml error keeps the old list, only a removed file empties it), so a
+/// half-written or broken file can never blank the overlay's settings; the watched state is
+/// still recorded, so the error is logged once per change, not once per tick.
 fn check_reload(config: &mut config::Config, config_path: Option<&std::path::Path>, watched: &mut Watched) {
     let Some(path) = config_path else { return };
     let now = Watched::now(config_path);
@@ -193,8 +194,13 @@ fn check_reload(config: &mut config::Config, config_path: Option<&std::path::Pat
     *watched = now;
     // The farm list stands on its own: a broken or missing config.toml still reloads it.
     if farm_changed {
-        config.farm = config::load_farm(&config::farm_path_for(path));
-        eprintln!("farm list reloaded ({} groups)", config.farm.len());
+        match config::try_load_farm(&config::farm_path_for(path)) {
+            Some(farm) => {
+                config.farm = farm;
+                eprintln!("farm list reloaded ({} groups)", config.farm.len());
+            }
+            None => eprintln!("farm list: keeping the current one"),
+        }
     }
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -800,6 +806,48 @@ mod tests {
         std::fs::remove_file(&farm)?;
         check_reload(&mut cfg, Some(&path), &mut watched);
         assert_eq!(cfg.farm, []);
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_farm_toml_keeps_the_old_list() -> Result<()> {
+        let dir = crate::testutil::temp_dir("farm-invalid")?;
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "")?;
+        let farm = config::farm_path_for(&path);
+        let touch = |secs: u64| -> Result<()> {
+            let at = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+            std::fs::File::options()
+                .write(true)
+                .open(&farm)?
+                .set_modified(at)?;
+            Ok(())
+        };
+        std::fs::write(
+            &farm,
+            "[[farm]]\nfor = \"B\"\nitems = [{ name = \"Smoke\", kind = \"runeword\" }]\n",
+        )?;
+        touch(1_000)?;
+        let mut cfg = config::load_from(&path);
+        assert_eq!(cfg.farm.len(), 1);
+        let mut watched = Watched::now(Some(&path));
+        // Half-written: the old list stays.
+        std::fs::write(&farm, "[[farm]]\nfor = \"B\"\nitems = [{ name = \"Sm")?;
+        touch(2_000)?;
+        check_reload(&mut cfg, Some(&path), &mut watched);
+        assert_eq!(cfg.farm.first().map(|g| g.items.len()), Some(1), "old list kept");
+        // An unknown kind is invalid too.
+        std::fs::write(
+            &farm,
+            "[[farm]]\nfor = \"B\"\nitems = [{ name = \"Smoke\", kind = \"rune\" }]\n",
+        )?;
+        touch(3_000)?;
+        check_reload(&mut cfg, Some(&path), &mut watched);
+        assert_eq!(cfg.farm.len(), 1, "old list kept");
+        // The initial load of an invalid file: no list.
+        assert_eq!(config::load_from(&path).farm, []);
         std::fs::remove_dir_all(&dir)?;
         Ok(())
     }
