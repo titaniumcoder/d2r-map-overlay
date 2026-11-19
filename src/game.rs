@@ -866,6 +866,17 @@ pub fn worn_names(items: &[Equipped]) -> Vec<String> {
     items.iter().filter_map(|e| e.name.clone()).collect()
 }
 
+/// Whether the game is solo: one distinct player name among the candidates (a stale duplicate
+/// unit of the same player must not make a solo game look like a group game).
+fn is_solo(candidates: &[Candidate]) -> bool {
+    candidates
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect::<HashSet<_>>()
+        .len()
+        == 1
+}
+
 /// The chosen player's runeword copies and the merc's worn uniques/sets
 /// ([`Snapshot::runeword_copies`], [`Snapshot::merc_worn`]). Merc gear can't be tied to the
 /// local player's own merc (PLAN.md, "Merc gear caveat"): with other players in the game it
@@ -993,15 +1004,7 @@ pub fn snapshot(
     let merc_equipped = scan.merc_equipped.clone();
     let equipped_items = scan.equipped_items.get(&chosen.id).cloned().unwrap_or_default();
     let owned_names = scan.owned_names.get(&chosen.id).cloned().unwrap_or_default();
-    // Solo = one distinct player name: a stale duplicate unit of the same player (same name)
-    // must not make a solo game look like a group game.
-    let solo = candidates
-        .iter()
-        .map(|c| c.name.as_str())
-        .collect::<HashSet<_>>()
-        .len()
-        == 1;
-    let (runeword_copies, merc_worn) = held_copies(&scan, chosen.id, solo);
+    let (runeword_copies, merc_worn) = held_copies(&scan, chosen.id, is_solo(&candidates));
 
     let LevelWalk {
         mut level,
@@ -3144,6 +3147,17 @@ mod tests {
         assert_eq!(s.holdings().count("Harlequin Crest"), 1);
         assert_eq!(s.player_candidates.len(), 1, "solo");
         Ok(())
+    }
+
+    #[test]
+    fn a_duplicate_unit_of_the_same_player_is_still_solo() {
+        let unit = |addr, id, name: &str| Candidate {
+            addr: Addr(addr),
+            id,
+            name: name.to_owned(),
+        };
+        assert!(is_solo(&[unit(1, 7, "Farmer"), unit(2, 9, "Farmer")]));
+        assert!(!is_solo(&[unit(1, 7, "Farmer"), unit(2, 9, "Fulmina")]));
     }
 
     #[test]
