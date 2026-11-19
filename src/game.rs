@@ -315,7 +315,8 @@ pub struct Player {
 }
 
 /// The player's speed stats and elemental resistances as granted by gear (stat ids from
-/// itemstatcost.txt, summed over the equipped items' affix lists and carried charms;
+/// itemstatcost.txt, summed over the equipped items' and carried charms' aggregated stat arrays
+/// (`stat_list::FULL_ENTRIES`: base, affixes, runeword and socketed runes/gems);
 /// difficulty penalties are NOT included — they are applied when the guide displays them).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SpeedStats {
@@ -467,9 +468,13 @@ struct ItemScan {
     stored: Vec<Stored>,
     stash_owners: OwnerVotes,
     inventory_owners: OwnerVotes,
-    /// Speed/resist stats summed over each owner's equipped items and carried charms (the
-    /// guide's numbers; the player's own stat list is base-only, no item stats).
+    /// Speed/resist stats summed over each owner's equipped items and carried charms, from each
+    /// item's aggregated stat array (the guide's numbers; the player's own stat list is
+    /// base-only, no item stats).
     gear: HashMap<u32, SpeedStats>,
+    /// True once an item without the aggregated array fell back to the chain walk (warned once
+    /// per scan, see [`Reader::accumulate_gear`]).
+    gear_fallback_warned: bool,
     /// The equipped weapon's WSM per owner (the guide's IAS note).
     weapons: HashMap<u32, i32>,
     /// Display names of identified unique/set items per owning candidate (equipped, carried,
@@ -1915,7 +1920,14 @@ impl<M: ReadMem> Reader<'_, M> {
             if let Some(owner) = self.gear_owner(&head, page, items_table)
                 && candidates.contains(&owner)
             {
-                self.accumulate_gear(addr, &head, scan.gear.entry(owner).or_default());
+                let fell_back = self.accumulate_gear(addr, &head, scan.gear.entry(owner).or_default());
+                if fell_back && !scan.gear_fallback_warned {
+                    scan.gear_fallback_warned = true;
+                    self.warn(format!(
+                        "item {addr:#x}: stat list without the aggregated array, gear stats from \
+                         the chain walk (runeword/socket stats missing)"
+                    ));
+                }
                 self.capture_weapon_wsm(&head, owner, items_table, &mut scan.weapons);
             }
             // Owned identified unique/set items and runewords (worn, carried, cubed or in the
@@ -2258,26 +2270,45 @@ impl<M: ReadMem> Reader<'_, M> {
     }
 
     /// Adds the speed/resist stats of `item` to `acc`, from its top stat list's aggregated
-    /// array ([`stat_list::FULL_ENTRIES`]): base, affixes, runeword and socketed runes/gems,
-    /// each counted once. Live 2026-11-19: walking the owner-matching chain instead missed every
-    /// runeword and socket stat (they hang off the socketed items' own lists and a runeword list
-    /// outside that chain), so Ancients' Pledge added no resists. A top list without
-    /// [`stat_list::FLAG_FULL_STATS`] adds nothing (never seen live).
-    fn accumulate_gear(&self, item: u64, head: &UnitHead, acc: &mut SpeedStats) {
+    /// array ([`stat_list::FULL_ENTRIES`]): base, affixes, runeword and socketed runes/gems.
+    /// Live 2026-11-19: walking the owner-matching chain instead missed every runeword and
+    /// socket stat (they hang off the socketed items' own lists and a runeword list outside that
+    /// chain), so Ancients' Pledge added no resists. A top list without
+    /// [`stat_list::FLAG_FULL_STATS`] (never seen live) falls back to that chain walk (base
+    /// list, then [`stat_list::NEXT`] while the list is still this item's); returns true then,
+    /// so the caller can warn.
+    fn accumulate_gear(&self, item: u64, head: &UnitHead, acc: &mut SpeedStats) -> bool {
         let Some(list) = self.ptr(item, unit::STATS).unwrap_or(None) else {
-            return;
+            return false;
         };
-        let owned = matches!(
-            (self.u32(list, 0x08), self.u32(list, 0x0C), self.u32(list, stat_list::FLAGS)),
-            (Ok(ty), Ok(owner), Ok(flags))
-                if ty == unit_table::ITEM && owner == head.id && flags & stat_list::FLAG_FULL_STATS != 0
-        );
-        if !owned {
-            return;
+        let own = |list: u64| {
+            matches!(
+                (self.u32(list, 0x08), self.u32(list, 0x0C)),
+                (Ok(ty), Ok(owner)) if ty == unit_table::ITEM && owner == head.id
+            )
+        };
+        if !own(list) {
+            return false;
         }
-        let entries = self
-            .stat_array(list, stat_list::FULL_ENTRIES, stat_list::FULL_COUNT)
-            .unwrap_or_default();
+        let flags = self.u32(list, stat_list::FLAGS).unwrap_or(0);
+        let (entries, fell_back) = if flags & stat_list::FLAG_FULL_STATS != 0 {
+            let full = self.stat_array(list, stat_list::FULL_ENTRIES, stat_list::FULL_COUNT);
+            (full.unwrap_or_default(), false)
+        } else {
+            let mut entries = Vec::new();
+            let mut cur = list;
+            for _ in 0..8 {
+                if !own(cur) {
+                    break;
+                }
+                entries.extend(self.stat_entries(cur).unwrap_or_default());
+                match self.u64(cur, stat_list::NEXT) {
+                    Ok(next) if next != 0 => cur = next,
+                    _ => break,
+                }
+            }
+            (entries, true)
+        };
         for (_, id, value) in entries {
             let value = plain_stat_from_raw(value);
             match id {
@@ -2293,6 +2324,7 @@ impl<M: ReadMem> Reader<'_, M> {
                 _ => {}
             }
         }
+        fell_back
     }
 
     /// All `{layer, stat id, value}` entries of the stat list at `list` (a `StatList` address,
@@ -3349,53 +3381,52 @@ mod tests {
         mem.add(at, b);
     }
 
+    /// An item stat list at `at` owned by item `owner`: `flags`, its own entries
+    /// (pointer, count), the aggregated array (pointer, count) and the next list.
+    fn item_list(
+        mem: &mut FakeMem,
+        at: u64,
+        owner: u32,
+        flags: u32,
+        own: (u64, u64),
+        full: (u64, u64),
+        next: u64,
+    ) -> Result<()> {
+        put(
+            mem,
+            at,
+            0x100,
+            &[
+                (0x08, &unit_table::ITEM.to_le_bytes()),
+                (0x0C, &owner.to_le_bytes()),
+                (stat_list::FLAGS, &flags.to_le_bytes()),
+                (stat_list::ENTRIES, &own.0.to_le_bytes()),
+                (stat_list::COUNT, &own.1.to_le_bytes()),
+                (stat_list::NEXT, &next.to_le_bytes()),
+                (stat_list::FULL_ENTRIES, &full.0.to_le_bytes()),
+                (stat_list::FULL_COUNT, &full.1.to_le_bytes()),
+            ],
+        )
+    }
+
     #[test]
-    fn gear_stats_come_from_the_aggregated_array_once() -> Result<()> {
+    fn gear_stats_read_the_aggregated_array() -> Result<()> {
         // Live 2026-11-19: Ancients' Pledge's resists sat only in its top list's aggregated
-        // array (+0xE8); the chained list after it is a socketed rune's (another item id) and
-        // repeats the rune's poison res, which must not count twice.
+        // array (+0xE8); the list chained after it is a socketed rune's (another item id).
         let mut m = world()?;
+        let full = stat_list::FLAG_FULL_STATS;
         unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
-        // (top list, owner id, flags, full entries + count, next list)
-        let list = |mem: &mut FakeMem, at: u64, owner: u32, flags: u32, full: (u64, u64), next: u64| {
-            put(
-                mem,
-                at,
-                0x100,
-                &[
-                    (0x08, &unit_table::ITEM.to_le_bytes()),
-                    (0x0C, &owner.to_le_bytes()),
-                    (stat_list::FLAGS, &flags.to_le_bytes()),
-                    (stat_list::NEXT, &next.to_le_bytes()),
-                    (stat_list::FULL_ENTRIES, &full.0.to_le_bytes()),
-                    (stat_list::FULL_COUNT, &full.1.to_le_bytes()),
-                ],
-            )
-        };
-        // Bob's shield (body 5): the runeword's resists and FCR, with the rune's list chained.
-        stored_item(
-            &mut m,
-            I1,
-            (40, 2, item_data::FLAG_RUNEWORD, 0),
-            (1, 255),
-            &[],
-            I2,
-        )?;
+        // Bob's runeword shield (body 5).
+        let rw = item_data::FLAG_RUNEWORD;
+        stored_item(&mut m, I1, (40, 2, rw, 0), (1, 255), &[], I2)?;
         set_owner(&mut m, I1, BOB_ID)?;
         set_body(&mut m, I1, 5)?;
         let shield_id = u32::try_from(I1 >> 12)?;
-        let (full, rune_list, rune_full) = (I1 + 0x900, I1 + 0xA00, I1 + 0xB00);
-        list(
-            &mut m,
-            I1 + 0x600,
-            shield_id,
-            stat_list::FLAG_FULL_STATS,
-            (full, 6),
-            rune_list,
-        )?;
+        let (arr, rune_list, rune_arr) = (I1 + 0x900, I1 + 0xA00, I1 + 0xB00);
+        item_list(&mut m, I1 + 0x600, shield_id, full, (0, 0), (arr, 6), rune_list)?;
         entries(
             &mut m,
-            full,
+            arr,
             &[
                 (31, 25),
                 (stat_list::RESIST_FIRE, 48),
@@ -3405,49 +3436,71 @@ mod tests {
                 (stat_list::FCR, 25),
             ],
         );
-        list(
-            &mut m,
-            rune_list,
-            shield_id + 99,
-            stat_list::FLAG_FULL_STATS,
-            (rune_full, 1),
-            0,
-        )?;
-        entries(&mut m, rune_full, &[(stat_list::RESIST_POISON, 35)]);
-        // Bob's ring (body 6): a top list without the full-stats flag adds nothing.
-        stored_item(
-            &mut m,
-            I2,
-            (40, 4, item_data::FLAG_IDENTIFIED, 0),
-            (1, 255),
-            &[],
-            0,
-        )?;
+        item_list(&mut m, rune_list, shield_id + 99, full, (0, 0), (rune_arr, 1), 0)?;
+        entries(&mut m, rune_arr, &[(stat_list::RESIST_POISON, 35)]);
+        // Bob's ring (body 6) without the flag: the chain walk (empty base list, affix list),
+        // stopping at another owner's list.
+        let id = item_data::FLAG_IDENTIFIED;
+        stored_item(&mut m, I2, (40, 4, id, 0), (1, 255), &[], 0)?;
         set_owner(&mut m, I2, BOB_ID)?;
         set_body(&mut m, I2, 6)?;
-        let ring_full = I2 + 0x900;
-        list(
+        let ring_id = u32::try_from(I2 >> 12)?;
+        let (affixes, affix_entries, foreign) = (I2 + 0x900, I2 + 0xA00, I2 + 0xB00);
+        item_list(&mut m, I2 + 0x600, ring_id, 0x40, (0, 0), (0, 0), affixes)?;
+        item_list(
             &mut m,
-            I2 + 0x600,
-            u32::try_from(I2 >> 12)?,
+            affixes,
+            ring_id,
             0x40,
-            (ring_full, 1),
-            0,
+            (affix_entries, 1),
+            (0, 0),
+            foreign,
         )?;
-        entries(&mut m, ring_full, &[(stat_list::FHR, 10)]);
+        entries(&mut m, affix_entries, &[(stat_list::FHR, 10)]);
+        item_list(&mut m, foreign, ring_id + 1, 0x40, (affix_entries, 1), (0, 0), 0)?;
 
         let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
-        assert_eq!(
-            s.player.speed,
-            Some(SpeedStats {
-                fcr: 25,
-                res_fire: 48,
-                res_cold: 43,
-                res_lightning: 48,
-                res_poison: 48,
-                ..SpeedStats::default()
-            }),
-            "no FHR from the unflagged ring, no second Tal"
+        let expected = SpeedStats {
+            fcr: 25,
+            fhr: 10,
+            res_fire: 48,
+            res_cold: 43,
+            res_lightning: 48,
+            res_poison: 48,
+            ..SpeedStats::default()
+        };
+        assert_eq!(s.player.speed, Some(expected));
+        let fallbacks = s.warnings.iter().filter(|w| w.contains("chain walk")).count();
+        assert_eq!(fallbacks, 1, "{:?}", s.warnings);
+        Ok(())
+    }
+
+    #[test]
+    fn a_carried_charm_counts_once() -> Result<()> {
+        // A cm1 in Bob's inventory (page 0, body 0): its poison res is in the base list, the
+        // affix list and the aggregated array; only the array counts.
+        let mut m = world()?;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        let id = item_data::FLAG_IDENTIFIED;
+        let page = item_data::PAGE_INVENTORY;
+        stored_item(&mut m, I1, (43, 4, id, 0), (item_mode::STORED, page), &[], 0)?;
+        set_owner(&mut m, I1, BOB_ID)?;
+        let charm_id = u32::try_from(I1 >> 12)?;
+        let (poison, affixes, arr) = (I1 + 0x900, I1 + 0xA00, I1 + 0xB00);
+        let full = stat_list::FLAG_FULL_STATS;
+        item_list(&mut m, I1 + 0x600, charm_id, full, (poison, 1), (arr, 1), affixes)?;
+        item_list(&mut m, affixes, charm_id, 0x40, (poison, 1), (0, 0), 0)?;
+        entries(&mut m, poison, &[(stat_list::RESIST_POISON, 11)]);
+        entries(&mut m, arr, &[(stat_list::RESIST_POISON, 11)]);
+        base_items_table(&mut m)?;
+
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let speed = s.player.speed.context("Bob's gear stats")?;
+        assert_eq!(speed.res_poison, 11);
+        assert!(
+            s.warnings.iter().all(|w| !w.contains("chain walk")),
+            "{:?}",
+            s.warnings
         );
         Ok(())
     }
@@ -4141,11 +4194,19 @@ mod tests {
         Ok(())
     }
 
-    /// Items table with `crs` (Crystal Sword) at row 30 and `uap` (Shako) at row 40.
+    /// Items table with `crs` (Crystal Sword) at row 30, `uap` (Shako) at row 40, the runes
+    /// `r03`/`r08` at 41/42 and `cm1` (small charm) at 43.
     fn base_items_table(mem: &mut FakeMem) -> Result<()> {
         let stride = usize::try_from(crate::offsets::items_txt::STRIDE)?;
         let mut b = vec![0u8; 50 * stride];
-        for (row, code) in [(30, b"crs "), (40, b"uap "), (41, b"r03 "), (42, b"r08 ")] {
+        let rows = [
+            (30, b"crs "),
+            (40, b"uap "),
+            (41, b"r03 "),
+            (42, b"r08 "),
+            (43, b"cm1 "),
+        ];
+        for (row, code) in rows {
             b.get_mut(row * stride..row * stride + 4)
                 .context("row in table")?
                 .copy_from_slice(code);

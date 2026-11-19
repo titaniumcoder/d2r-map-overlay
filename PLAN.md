@@ -219,7 +219,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   regen 15, MDR 3. A socketed rune's own top list holds its slot-specific stat (Tal in armour: poison 30, in a
   shield 35; Eth: mana regen 15). Over 168 item units (worn, inventory, stash, the merc's) all had the flag;
   162 had array == chain sum for res/IAS/FHR/FCR, the 6 different ones all runewords/socketed.
-  `Reader::accumulate_gear` (guide res and breakpoints) reads only this array (each stat once); `item_stats`
+  `Reader::accumulate_gear` (guide res and breakpoints) reads only this array (each stat once); a top list
+  without the flag (never seen) falls back to the old chain walk with one warning per scan; `item_stats`
   (vendor/gear score, needs base vs affix) still walks the chain. Other list fields seen: `+0x00` owner unit
   (affix lists), `+0x78` the parent item's top list (on a rune's list), `+0x68/+0x70` sibling links (unused).
 - Valuables: research/valuables.json (67 rules, S/A/B, trade/twink) embedded; tiers per category in
