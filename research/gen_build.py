@@ -13,9 +13,10 @@ live in BUILDS below, keyed by the source file's stem (`druid-leveling.source` c
 - `--leveling` (Tornado / Lightning Fury endgame): the leveling guide's post-respec plan
   (level 38-75) and its tips for those levels are merged in front of the endgame plan; that
   guide's respec IS the switch into this stage (its `respec_note` in BUILDS is the switch note).
-- BUILDS `switch_requires` (Summoner Druid: Raven Frost): items that must be owned before the
-  switch to `next`; emitted as a top-level `switch_requires = [...]` after `auto_switch`, only
-  when set.
+- BUILDS `switch_requires` (Summoner Druid: the Fury switch conditions): item groups that must
+  all be met before the switch to `next`; each entry is a plain name (a group of one) or a dict
+  {label, any, count?} (met when the copies owned of `any` sum to `count`, default 1), emitted as
+  a top-level `switch_requires = [...]` (strings, inline tables) after `auto_switch`, only when set.
 - `--prerequisites` (the stage before a manual switch): the next stage's `prerequisites`
   become this stage's `switch_note`.
 - `skill_plan.respec_after_leveling` (Blizzard Sorceress): with `--leveling`, a second respec
@@ -37,16 +38,40 @@ BUILDS = {
     # Agent-computed from the D2R game tables, not from a guide (user, 2026-11-19: "guides are
     # practically all out of date"). A complete summoner 1-99 (user: "he can be summoner till 99
     # if he doesn't find what he needs"); the switch into Fury (werewolf) is possible from 75 and
-    # only with Raven Frost.
+    # only with the switch gear in switch_requires.
     "summoner-druid": dict(
         name="Summoner Druid", cls="druid", damages=["physical", "cold"], default=True,
-        next="fury druid", switch_level=75, auto_switch=True, switch_requires=["Raven Frost"],
-        notes="Summoner Druid 1-99 (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Oak Sage). From level 75, once Raven Frost is found, an optional skill reset into Fury (next stage); without it the summoner goes on to 99. Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
-        respec_note=("optional, from level 75 once Raven Frost is found: respec to Fury at Akara (free reset of any difficulty "
+        next="fury druid", switch_level=75, auto_switch=True,
+        # The user's conditions for the Fury switch (2026-11-19). "Cannot Be Frozen" and the merc
+        # helm group are computed from d2data: every unique/set item (base props) and complete
+        # runeword with the `nofreeze` / `lifesteal` property; items of another class's item type
+        # (itemtypes.json `Class`) are out: Arreat's Face, Demonhorn's Edge (barbarian), Cerebus'
+        # Bite (druid pelt, a merc can't wear class items). No circlet has life steal.
+        switch_requires=[
+            dict(label="Cannot Be Frozen", any=[
+                "Raven Frost", "Darksight Helm", "Duriel's Shell", "Hawkmail", "Kira's Guardian",
+                "Lava Gout", "Rune Master", "Sureshrill Frost", "The Gladiator's Bane",
+                "The Jade Tan Do", "The Spirit Shroud", "Tyrael's Might", "Death's Guard",
+                "Horazon's Legacy", "Trang-Oul's Girth", "Eternity", "Hearth", "Rhyme",
+                "Voice of Reason", "Wisdom", "Wrath"]),
+            dict(label="Powerful weapon", any=[
+                "Ribcracker", "Buriza-Do Kyanon", "Tomb Reaver", "Grief", "Beast",
+                "Breath of the Dying", "Eternity", "Oath", "Unbending Will", "Hustle"]),
+            "Harmony",
+            dict(label="Physical immunes", any=["Lawbringer"], count=2),
+            "Smoke",
+            dict(label="Merc helm with life leech", any=[
+                "Andariel's Visage", "Crown of Thieves", "Isenhart's Horns", "Stealskull",
+                "Tal Rasha's Horadric Crest", "Undead Crown", "Vampire Gaze", "Wormskull", "Bulwark"]),
+        ],
+        notes="Summoner Druid 1-99 (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Oak Sage). From level 75 an optional skill reset into Fury (next stage), only once the switch gear is owned: a Cannot Be Frozen item, a powerful weapon, Harmony, two Lawbringers, Smoke and a life-leech merc helm; without it the summoner goes on to 99. Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
+        respec_note=("optional, from level 75 once the switch gear is owned (Cannot Be Frozen item, powerful weapon such as "
+                     "Ribcracker or Grief, Harmony for speed on weapon swap, 2x Lawbringer for physical immunes, Smoke for the "
+                     "merc, a life-leech merc helm): respec to Fury at Akara (free reset of any difficulty "
                      "whose Den of Evil reward is unused): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20 (460 s form), "
-                     "Rabies 1, Oak Sage 5 = 86 points (74 levels + 12 quest points, Normal/Nightmare/Hell); keep Raven Frost, "
-                     "Jalal's Mane, Smoke and String of Ears on, swap the Spirit sword for Ribcracker (or Lawbringer + "
-                     "Ancients' Pledge) and Bloodfist for Laying of Hands"),
+                     "Rabies 1, Oak Sage 5 = 86 points (74 levels + 12 quest points, Normal/Nightmare/Hell); keep the Cannot "
+                     "Be Frozen item, Jalal's Mane and String of Ears on, swap the Spirit sword for the powerful weapon and "
+                     "Bloodfist for Laying of Hands"),
     ),
     "fury-druid": dict(
         name="Fury Druid", cls="druid", damages=["physical"],
@@ -87,6 +112,17 @@ problems = []
 
 def q(s):
     return json.dumps(s, ensure_ascii=False)
+
+
+def req_group(g):
+    """One `switch_requires` entry: a plain name, or an inline table for a dict
+    {label, any, count?} (count omitted when absent, the overlay's default is 1)."""
+    if isinstance(g, str):
+        return q(g)
+    parts = [f"label = {q(g['label'])}", "any = [" + ", ".join(q(x) for x in g["any"]) + "]"]
+    if "count" in g:
+        parts.append(f"count = {int(g['count'])}")
+    return "{ " + ", ".join(parts) + " }"
 
 
 def class_skills(cls):
@@ -512,7 +548,7 @@ def main(argv):
         L += [f"next = {q(cfg['next'])}", f"switch_level = {cfg['switch_level']}",
               f"auto_switch = {'true' if cfg['auto_switch'] else 'false'}"]
         if cfg.get("switch_requires"):
-            L.append("switch_requires = [" + ", ".join(q(x) for x in cfg["switch_requires"]) + "]")
+            L.append("switch_requires = [" + ", ".join(req_group(x) for x in cfg["switch_requires"]) + "]")
         if switch_note:
             L.append(f"switch_note = {q(switch_note)}")
     if stats:
