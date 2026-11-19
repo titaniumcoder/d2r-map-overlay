@@ -42,11 +42,21 @@ BUILDS = {
         notes="Maxroll Blood Boil Warlock S16 (MacroBioBoi): Starter + Standard setups, Gear Options alternatives, Magic Find variant.",
     ),
     "druid-leveling": dict(
-        name="Druid Leveling", cls="druid", damages=["fire", "physical"], default=True,
+        name="Druid Leveling", cls="druid", damages=["fire", "physical"],
         next="druid tornado", switch_level=38, auto_switch=False,
         notes="Maxroll Druid Leveling (Teo1904): Firestorm / Molten Boulder / Fissure to level 38, then respec to Tornado + Hurricane (next stage).",
         respec_note=("respec to Tornado + Hurricane before Nightmare Mephisto (~level 38, as early as NM Act 2): "
                      "Tornado 15, Hurricane 9, Cyclone Armor 14, 1 each in Arctic Blast and Twister"),
+    ),
+    # Agent-computed from the D2R game tables, not from a guide (user, 2026-11-19: "guides are
+    # practically all out of date"). Summoner to 40, then a reset into Fury (werewolf).
+    "summoner-druid-leveling": dict(
+        name="Summoner Druid Leveling", cls="druid", damages=["physical", "cold"], default=True,
+        next="fury druid", switch_level=40, auto_switch=False,
+        notes="Summoner Druid to level 40 (Ravens, Spirit Wolves, Dire Wolves, Grizzly), then a skill reset into Fury (next stage). Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
+        respec_note=("respec to Fury at level 40 (Akara's free reset): Fury 20, Lycanthropy 12 (300 s form), Werewolf 7, "
+                     "Feral Rage 3, Rabies 1, Oak Sage 1 = 44 points (Normal quests + Nightmare Den of Evil); "
+                     "swap to the Fury starter kit (Black in a 3-socket Flail, Ancients' Pledge, Stealth)"),
     ),
     "druid-tornado": dict(
         name="Druid Tornado", cls="druid", damages=["physical", "cold"],
@@ -56,6 +66,10 @@ BUILDS = {
     "druid-fissure": dict(
         name="Druid Fissure", cls="druid", damages=["fire", "physical"],
         notes="Maxroll Fissure Druid (endgame): Starter + Standard setups; Magic Find, Ubers and Gear Options items fold as alternatives. Only once the gear is near-perfect.",
+    ),
+    "fury-druid": dict(
+        name="Fury Druid", cls="druid", damages=["physical"],
+        notes="Fury Werewolf from the skill reset at 40; standard = the user's core (Ribcracker, Lawbringer, Fortitude, Smoke, Bulwark, Jalal's Mane, Laying of Hands, Raven Frost). Durations, breakpoints and skill order computed from the D2R game tables, not from a guide.",
     ),
     # The leveling guide respecs into Lightning Fury on entering Act 4 Nightmare and calls level 38
     # the earliest for it (its Summary says 32+; the detailed stage and the planner say 38).
