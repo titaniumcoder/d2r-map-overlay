@@ -220,9 +220,16 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   shield 35; Eth: mana regen 15). Over 168 item units (worn, inventory, stash, the merc's) all had the flag;
   162 had array == chain sum for res/IAS/FHR/FCR, the 6 different ones all runewords/socketed.
   `Reader::accumulate_gear` (guide res and breakpoints) reads only this array (each stat once); a top list
-  without the flag (never seen) falls back to the old chain walk with one warning per scan; `item_stats`
-  (vendor/gear score, needs base vs affix) still walks the chain. Other list fields seen: `+0x00` owner unit
-  (affix lists), `+0x78` the parent item's top list (on a rune's list), `+0x68/+0x70` sibling links (unused).
+  without the flag (never seen) falls back to the old chain walk with one warning per scan. `item_stats`
+  (worn and store items for the vendor "better" mark / `gear_score`) reads the same array too, through
+  `ItemStat::from_totals`: the score's base × (100 + ED%) / 100 + flat rule only needs the base/affix split
+  for defense and damage, and the array already has them enhanced (rare boots 6 + 23% ED → 7) and lists no
+  ED%, so defense and the damage pairs the base list carries come in as base values, ED% entries are dropped
+  (never double-counted) and a damage stat the base list lacks (flat bonus written to every pair) is
+  dropped so a two-hander stays two-handed. Fallback without the flag: the chain walk (split kept), silent.
+  Effect (druid, caster weights): Ancients' Pledge scores 1.7 → 189.5, Stealth 3.2 → 93.7.
+  Other list fields seen: `+0x00` owner unit (affix lists), `+0x78` the parent item's top list (on a rune's
+  list), `+0x68/+0x70` sibling links (unused).
 - Valuables: research/valuables.json (67 rules, S/A/B, trade/twink) embedded; tiers per category in
   `~/.config/d2r-map-overlay/config.toml` (default S+A both; example: config.example.toml). Ground: ring by tier
   (S red, A orange, dashed = uncertain). Inventory keep list (dashboard; formerly green lines on the overlay): certain

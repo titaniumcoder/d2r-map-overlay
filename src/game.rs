@@ -821,8 +821,8 @@ pub struct Equipped {
     /// `ItemData::FLAGS` runeword bit ([`item_data::FLAG_RUNEWORD`], live-verified).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub runeword: bool,
-    /// The item's own stat entries ([`Reader::item_stats`]): what the vendor panel compares
-    /// store items against ([`crate::gear_score`]).
+    /// The item's full stat entries ([`Reader::item_stats`]: base, affixes, runeword, sockets):
+    /// what the vendor panel compares store items against ([`crate::gear_score`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stats: Vec<crate::gear_score::ItemStat>,
 }
@@ -2138,19 +2138,39 @@ impl<M: ReadMem> Reader<'_, M> {
         Some(entry)
     }
 
-    /// The stat entries of the item unit at `item` (unit id `id`): its stat-list chain
-    /// ([`unit::STATS`], then [`stat_list::NEXT`] while a list is still an item list owned by
-    /// `id`); the first list is the base list. Runeword and socket stats are not in this
-    /// chain (see [`Reader::accumulate_gear`], which reads the aggregated array). Live
-    /// 2026-11-18 (owned items, level-4 amazon): the base list holds the rolled base defense
-    /// (31), damage (21/22, 23/24, 159/160) and durability, the next list the affixes; the
-    /// chain then runs into other owners' lists. Store items: same unit layout, assumed the
-    /// same chain (not yet seen live). Optional data: an unreadable list ends the walk.
+    /// The stat entries of the item unit at `item` (unit id `id`), for the gear score. Its top
+    /// stat list ([`unit::STATS`]) normally carries the aggregated array
+    /// ([`stat_list::FULL_ENTRIES`], flag [`stat_list::FLAG_FULL_STATS`]): base, affixes,
+    /// runeword and socketed runes/gems, each once, ED% already applied; it is read through
+    /// [`crate::gear_score::ItemStat::from_totals`], which needs the base list's stat ids (the
+    /// top list's own entries) to pick the damage pairs the base carries. Live 2026-11-19 (worn,
+    /// carried, stash and merc items: all had the flag; store items assumed the same).
+    ///
+    /// Fallback without the flag (never seen live): the stat-list chain (the top list = base
+    /// list, then [`stat_list::NEXT`] while a list is still an item list owned by `id`), which
+    /// misses runeword and socket stats. Live 2026-11-18 (level-4 amazon): the base list holds
+    /// the rolled base defense (31), damage (21/22, 23/24, 159/160) and durability, the next
+    /// list the affixes; the chain then runs into other owners' lists. Optional data: an
+    /// unreadable list ends the walk.
     fn item_stats(&self, item: u64, id: u32) -> Vec<crate::gear_score::ItemStat> {
         let mut out = Vec::new();
         let Some(mut list) = self.ptr(item, unit::STATS).unwrap_or(None) else {
             return out;
         };
+        let own = matches!(
+            (self.u32(list, 0x08), self.u32(list, 0x0C)),
+            (Ok(ty), Ok(owner)) if ty == unit_table::ITEM && owner == id
+        );
+        let flags = self.u32(list, stat_list::FLAGS).unwrap_or(0);
+        if own
+            && flags & stat_list::FLAG_FULL_STATS != 0
+            && let Ok(full) = self.stat_array(list, stat_list::FULL_ENTRIES, stat_list::FULL_COUNT)
+            // An unreadable base list would drop every damage stat: walk the chain instead.
+            && let Ok(base) = self.stat_entries(list)
+        {
+            let base_ids: Vec<u16> = base.into_iter().map(|(_, stat, _)| stat).collect();
+            return crate::gear_score::ItemStat::from_totals(&full, &base_ids);
+        }
         for i in 0..8 {
             let (Ok(ty), Ok(owner)) = (self.u32(list, 0x08), self.u32(list, 0x0C)) else {
                 break;
@@ -3472,6 +3492,33 @@ mod tests {
         assert_eq!(s.player.speed, Some(expected));
         let fallbacks = s.warnings.iter().filter(|w| w.contains("chain walk")).count();
         assert_eq!(fallbacks, 1, "{:?}", s.warnings);
+        // The vendor comparison sees the same full stats: the shield's runeword resists and
+        // its enhanced defense as the base value (no ED left to apply), not the rune's list.
+        let stats = |body: u8| {
+            s.equipped_items
+                .iter()
+                .find(|e| e.body == body)
+                .map_or_default(|e| e.stats.clone())
+        };
+        let stat = |id: u16, value: i32, base: bool| crate::gear_score::ItemStat {
+            id,
+            param: 0,
+            value,
+            base,
+        };
+        assert_eq!(
+            stats(5),
+            [
+                stat(31, 25, true),
+                stat(stat_list::RESIST_FIRE, 48, false),
+                stat(stat_list::RESIST_LIGHTNING, 48, false),
+                stat(stat_list::RESIST_COLD, 43, false),
+                stat(stat_list::RESIST_POISON, 48, false),
+                stat(stat_list::FCR, 25, false),
+            ]
+        );
+        // The ring without the flag: the chain walk's affix list.
+        assert_eq!(stats(6), [stat(stat_list::FHR, 10, false)]);
         Ok(())
     }
 

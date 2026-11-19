@@ -9,6 +9,11 @@
 //! Short Bow `23/24` = 1/4, Javelin `21/22` = 1/5 and `159/160` = 6/14, Hard Leather Armor
 //! `31` = 25), the affix lists the modifiers (ED% `16` on armor, `17/18` on weapons, res,
 //! +skills, flat damage …). ED% applies to the base value only; flat bonuses add after.
+//! That split is all the scoring needs it for. Normally the reader takes the item's
+//! aggregated array instead ([`ItemStat::from_totals`], live 2026-11-19): every stat once,
+//! including runeword and socketed runes (the chain misses those), defense and damage already
+//! enhanced; it comes in as base defense/damage with no ED% left, so the same formula yields
+//! the totals unchanged.
 //!
 //! Slot rule ([`verdict`]): a store item is compared with the item worn in its body slot
 //! (an empty slot scores 0). Rings: against the worse of the two rings. A two-handed weapon:
@@ -24,8 +29,9 @@ use crate::bases_data::{self, Base};
 use crate::skills_data;
 
 /// One stat-list entry of an item: `{u16 param (the "layer"), u16 stat id, u32 value}`,
-/// with the value made plain ([`ItemStat::from_raw`]) and whether it came from the item's
-/// base list (the first list of its chain) or an affix list.
+/// with the value made plain ([`ItemStat::from_raw`]) and whether it is a base value that
+/// ED% scales (from the base list, or a defense/damage total from [`ItemStat::from_totals`])
+/// or a modifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemStat {
     /// itemstatcost.txt row.
@@ -35,7 +41,8 @@ pub struct ItemStat {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub param: u16,
     pub value: i32,
-    /// From the base list (rolled base defense/damage, durability), not an affix.
+    /// A base value (rolled base defense/damage, durability; or an aggregated defense/damage
+    /// total), not a modifier.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub base: bool,
 }
@@ -62,6 +69,41 @@ impl ItemStat {
             value,
             base,
         }
+    }
+
+    /// The stats of an item's aggregated array (`(param, id, raw)` entries: base, affixes,
+    /// runeword and socketed runes, each once, ED% already applied; live 2026-11-19: Stoutnail
+    /// 7/12 → 14/24 with its 100% ED, rare boots defense 6 → 7 with 23% ED, ED itself not
+    /// listed), shaped for the score's base × ED% + flat rule so nothing counts twice:
+    /// defense and the damage pairs the item's base list carries (`base_ids`) become `base`
+    /// values; ED% entries are dropped (applied already); a damage stat the base list lacks
+    /// is dropped too (a flat bonus the game writes to every pair: its amount is already in
+    /// the pair the base carries, and keeping it would make a two-hander look one-handed).
+    #[must_use]
+    pub fn from_totals(entries: &[(u16, u16, u32)], base_ids: &[u16]) -> Vec<Self> {
+        const DAMAGE: [u16; 6] = [
+            stat::MIN_DAMAGE,
+            stat::MAX_DAMAGE,
+            stat::MIN_DAMAGE_2H,
+            stat::MAX_DAMAGE_2H,
+            stat::THROW_MIN,
+            stat::THROW_MAX,
+        ];
+        const ED: [u16; 3] = [
+            stat::DEFENSE_PERCENT,
+            stat::MAX_DAMAGE_PERCENT,
+            stat::MIN_DAMAGE_PERCENT,
+        ];
+        entries
+            .iter()
+            .filter_map(|&(param, id, raw)| {
+                let damage = DAMAGE.contains(&id);
+                if ED.contains(&id) || (damage && !base_ids.contains(&id)) {
+                    return None;
+                }
+                Some(Self::from_raw(param, id, raw, damage || id == stat::DEFENSE))
+            })
+            .collect()
     }
 }
 
@@ -651,6 +693,97 @@ mod tests {
         ];
         assert!((avg_damage(&jav, "jave", false, 0) - 10.0).abs() < 1e-9);
         assert!((avg_damage(&jav, "spea", false, 0) - 3.0).abs() < 1e-9);
+    }
+
+    /// The live Stoutnail's aggregated array (2026-11-19): vit 7, damage 14/24 (base 7/12
+    /// with its 100% ED applied, ED itself not listed), MDR 2, durability, AR 4.
+    const STOUTNAIL: [(u16, u16, u32); 7] = [
+        (0, 3, 7),
+        (0, 21, 14),
+        (0, 22, 24),
+        (0, 35, 2),
+        (0, 72, 19),
+        (0, 73, 19),
+        (0, 78, 4),
+    ];
+
+    /// The druid of 2026-11-19: level 22, Summon/Elemental caster wielding a club.
+    fn druid() -> Profile {
+        Profile {
+            class: 5,
+            level: Some(22),
+            weapon: Some("club"),
+            caster: true,
+            ..Profile::default()
+        }
+    }
+
+    #[test]
+    fn aggregated_totals_do_not_apply_ed_twice() {
+        // Stoutnail: the chain gives base 7/12 + 100% ED, the array 14/24 already enhanced.
+        let chain = [
+            base(stat::MIN_DAMAGE, 7),
+            base(stat::MAX_DAMAGE, 12),
+            st(stat::MAX_DAMAGE_PERCENT, 100),
+            st(stat::MIN_DAMAGE_PERCENT, 100),
+        ];
+        let base_ids = [21, 22, 72, 73];
+        let totals = ItemStat::from_totals(&STOUTNAIL, &base_ids);
+        assert!((avg_damage(&chain, "club", false, 5) - 19.0).abs() < 1e-9);
+        assert!((avg_damage(&totals, "club", false, 5) - 19.0).abs() < 1e-9);
+        // An ED entry in the array would be applied already: dropped, not counted again.
+        let mut with_ed = STOUTNAIL.to_vec();
+        with_ed.extend([
+            (0, stat::MAX_DAMAGE_PERCENT, 100),
+            (0, stat::MIN_DAMAGE_PERCENT, 100),
+        ]);
+        let totals = ItemStat::from_totals(&with_ed, &base_ids);
+        assert!((avg_damage(&totals, "club", false, 5) - 19.0).abs() < 1e-9);
+        // Live rare boots: base defense 6 + 23% ED → 7 in the array, which is the defense.
+        let boots = ItemStat::from_totals(&[(0, 31, 7), (0, 16, 23)], &[31, 72, 73]);
+        let who = bowazon();
+        let defense = parts(piece("mbl", &boots), &who).get(&Part::Defense).copied();
+        assert_eq!(defense, Some(7.0));
+        // A staff (base 2H pair only) with +3 damage written to every pair: the 1H residue is
+        // dropped, so a barbarian still swings it two-handed (avg 23, not 3).
+        let staff = [(0, 21, 3), (0, 22, 3), (0, 23, 13), (0, 24, 33)];
+        let staff = ItemStat::from_totals(&staff, &[23, 24]);
+        assert!((avg_damage(&staff, "staf", true, 4) - 23.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_worn_runeword_counts_with_its_runeword_and_rune_stats() {
+        let who = druid();
+        // Live Ancients' Pledge (Kite Shield): the chain saw base defense 17 and AR 8 only;
+        // the aggregated array has the runeword's 50% ED applied (25) and its resists.
+        let chain = [base(stat::ATTACK_RATING, 8), base(stat::DEFENSE, 17)];
+        let full = [
+            (0, 20, 8),
+            (0, 31, 25),
+            (0, 39, 48),
+            (0, 41, 48),
+            (0, 43, 43),
+            (0, 45, 48),
+            (0, 72, 30),
+            (0, 73, 30),
+            (0, 114, 10),
+            (0, 194, 3),
+        ];
+        let pledge = ItemStat::from_totals(&full, &[20, 31, 72, 73, 194]);
+        let points = |stats: &[ItemStat]| score(&parts(piece("kit", stats), &who), &who);
+        assert!((points(&chain) - 1.7).abs() < 1e-9);
+        assert!((points(&pledge) - 189.5).abs() < 1e-9);
+        // A store shield with 25 fire and 25 lightning res: "better" than the chain's view,
+        // not than the full runeword.
+        let store = [
+            base(stat::DEFENSE, 20),
+            st(stat::RES_FIRE, 25),
+            st(stat::RES_LIGHTNING, 25),
+        ];
+        let worn_chain = [(5, piece("kit", &chain))];
+        assert!(verdict(piece("kit", &store), Some(0), &worn_chain, &who).is_some());
+        let worn_full = [(5, piece("kit", &pledge))];
+        assert_eq!(verdict(piece("kit", &store), Some(0), &worn_full, &who), None);
     }
 
     #[test]
