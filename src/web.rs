@@ -532,8 +532,10 @@ fn config_json(
         .map(|key| {
             let seen = played.get(&key);
             let class = seen.and_then(|e| e.class);
-            let stage = config.stage(&key, class, None);
-            let resolved = config.resolved_bis(&key, class, None);
+            // No live data here: level unknown and nothing owned, so no automatic switch.
+            let owns = crate::config::owns_nothing;
+            let stage = config.stage(&key, class, None, &owns);
+            let resolved = config.resolved_bis(&key, class, None, &owns);
             let (slots, merc_slots) = resolved.map_or_else(
                 || (serde_json::json!({}), serde_json::json!({})),
                 |bis| {
@@ -547,7 +549,7 @@ fn config_json(
                 .and_then(|c| usize::try_from(c).ok())
                 .and_then(|c| crate::config::CLASS_NAMES.get(c));
             let damages: Vec<_> = config
-                .damages_for_player(&key, class, None)
+                .damages_for_player(&key, class, None, &owns)
                 .iter()
                 .map(|d| d.name())
                 .collect();
@@ -758,7 +760,9 @@ pub fn live_json(info: &LiveInfo) -> String {
             info.skills,
             info.build.map_or(&[][..], |b| b.skill_plan.as_slice()),
         ),
-        "stage": stage_json(info.stage.as_ref()),
+        "stage": stage_json(info.stage.as_ref(), &|item| {
+            crate::config::owns_item(item, info.owned, info.stash_owned)
+        }),
         "recipes": recipes_json(info),
         "upgrades": upgrades_json(info),
         "shop": shop_json(info),
@@ -932,8 +936,10 @@ fn shop_match(item: &crate::shop::ShopItem, info: &LiveInfo) -> Option<(String, 
 }
 
 /// The guide stage (`live_json`'s `stage` section): `{ "slug", "name", "class_default",
-/// "next": { "slug", "name", "level", "auto", "note" } | null }`, `null` without a build.
-fn stage_json(stage: Option<&crate::config::Stage>) -> serde_json::Value {
+/// "next": { "slug", "name", "level", "auto", "note", "requires": [{ "name", "owned" }] } |
+/// null }`, `null` without a build. `requires` lists the current stage's `switch_requires`
+/// items with `owns`' verdict ([`crate::config::owns_item`]).
+fn stage_json(stage: Option<&crate::config::Stage>, owns: &dyn Fn(&str) -> bool) -> serde_json::Value {
     let Some(stage) = stage else {
         return serde_json::Value::Null;
     };
@@ -944,6 +950,12 @@ fn stage_json(stage: Option<&crate::config::Stage>) -> serde_json::Value {
             "level": stage.build.switch_level,
             "auto": stage.build.auto_switch,
             "note": stage.build.switch_note,
+            "requires": stage
+                .build
+                .switch_requires
+                .iter()
+                .map(|item| serde_json::json!({ "name": item, "owned": owns(item) }))
+                .collect::<Vec<_>>(),
         })
     });
     serde_json::json!({
@@ -2678,6 +2690,7 @@ details.help summary { cursor: pointer; color: var(--faint); }
   background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); font-size: 13px; }
 .stage .lbl { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
 .stage b { color: var(--gold); } .stage .cond { color: var(--dim); } .stage .arrow { color: var(--faint); }
+.stage .ok { color: var(--good); } .stage .no { color: var(--bad); }
 .tips { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel2); }
 .tips h3 { margin: 0 0 4px; font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
 .tips ul { margin: 0; padding-left: 18px; font-size: 12.5px; } .tips li { margin: 2px 0; }
@@ -2956,9 +2969,12 @@ function stage(st) {
   let next = "";
   if (st.next) {
     const at = st.next.level != null ? `level ${esc(st.next.level)}+` : "when the guide says so";
+    // The items the switch also waits for, each ✓ owned (character or shared stash) / ✗ not.
+    const reqs = (st.next.requires || []).map(r => ` + ${esc(r.name)} `
+      + (r.owned ? '<span class="ok">✓</span>' : '<span class="no">✗</span>')).join("");
     next = `<span class="arrow">→</span> next: <b>${esc(st.next.name)}</b> <span class="cond">`
-      + (st.next.auto ? `starts automatically at level ${esc(st.next.level)}`
-        : `guide: ${esc(st.next.note || at)} → switch on <a href="/config">/config</a>`) + "</span>";
+      + (st.next.auto ? `starts automatically at level ${esc(st.next.level)}${reqs}`
+        : `guide: ${esc(st.next.note || at)}${reqs} → switch on <a href="/config">/config</a>`) + "</span>";
   }
   el.innerHTML = `<span class="lbl">Guide stage</span> <b>${esc(st.name)}</b>${via} ${next}`;
 }
@@ -5265,6 +5281,7 @@ mod tests {
             switch_level: Some(38),
             auto_switch: false,
             switch_note: Some("you have Spirit".to_owned()),
+            switch_requires: vec!["Raven Frost".to_owned(), "Enigma".to_owned()],
             ..config::Build::default()
         };
         let tornado = config::Build {
@@ -5277,11 +5294,15 @@ mod tests {
             class_default: true,
             next: Some(("tornado", &tornado)),
         };
+        let owns = |item: &str| item == "Raven Frost";
         assert_eq!(
-            stage_json(Some(&stage)),
+            stage_json(Some(&stage), &owns),
             serde_json::json!({
                 "slug": "leveling", "name": "Leveling", "class_default": true,
-                "next": { "slug": "tornado", "name": "Tornado", "level": 38, "auto": false, "note": "you have Spirit" },
+                "next": {
+                    "slug": "tornado", "name": "Tornado", "level": 38, "auto": false, "note": "you have Spirit",
+                    "requires": [{ "name": "Raven Frost", "owned": true }, { "name": "Enigma", "owned": false }],
+                },
             })
         );
         let last = config::Build {
@@ -5294,10 +5315,10 @@ mod tests {
             ..stage
         };
         assert_eq!(
-            stage_json(Some(&stage)).get("next"),
+            stage_json(Some(&stage), &owns).get("next"),
             Some(&serde_json::Value::Null)
         );
-        assert_eq!(stage_json(None), serde_json::Value::Null);
+        assert_eq!(stage_json(None, &owns), serde_json::Value::Null);
     }
 
     #[test]

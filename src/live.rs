@@ -356,13 +356,17 @@ fn follow_game(
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
                 // Damages: the character's own `[builds]` entry, else the selected build's,
                 // else its class's. `BiS`: inline slots when present, else the selected
-                // build's (user decision, 2026-11-17).
-                snap.player.build = config
-                    .damages_for_player(&snap.player.name, Some(snap.player.class), snap.player.char_level)
-                    .to_vec();
+                // build's (user decision, 2026-11-17). A stage's `switch_requires` items count
+                // when owned by this character or in the shared stash.
                 let (class, level) = (Some(snap.player.class), snap.player.char_level);
-                let stage = config.stage(&snap.player.name, class, level);
-                snap.player.bis = config.resolved_bis(&snap.player.name, class, level);
+                let (owned, stashed) = (&snap.owned_names, &snap.stash_names);
+                let owns = |item: &str| config::owns_item(item, owned, stashed);
+                let build = config
+                    .damages_for_player(&snap.player.name, class, level, &owns)
+                    .to_vec();
+                let stage = config.stage(&snap.player.name, class, level, &owns);
+                let bis = config.resolved_bis(&snap.player.name, class, level, &owns);
+                (snap.player.build, snap.player.bis) = (build, bis);
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }

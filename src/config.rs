@@ -137,6 +137,10 @@ pub struct Build {
     pub auto_switch: bool,
     /// The guide's advice for the switch (respec, prerequisites).
     pub switch_note: Option<String>,
+    /// Items the automatic switch waits for besides the level (`switch_requires =
+    /// ["Raven Frost"]`): unique/set display names or runeword names, each owned by the
+    /// account (see [`owns_item`]). Empty: the level alone decides.
+    pub switch_requires: Vec<String>,
     /// Cumulative hard-point targets, in the guide's order (`[[skill_plan]]`).
     pub skill_plan: Vec<SkillTarget>,
     /// The recipes the guide uses (`[[recipes]]`: runewords, crafts, cube recipes …).
@@ -343,6 +347,32 @@ pub fn parse_farm(text: &str) -> Result<(Vec<FarmGroup>, Vec<String>), toml::de:
     Ok((groups, warnings))
 }
 
+/// Whether `name` is a unique, set (table name or display override) or runeword name, for
+/// load-time warnings about item names that can never match.
+fn item_name_known(name: &str) -> bool {
+    let same = |n: &str| crate::info::same_name(n, name);
+    crate::runewords_data::lookup(name).is_some()
+        || crate::item_names_data::UNIQUE_NAMES.iter().any(|(_, n)| same(n))
+        || crate::item_names_data::SET_NAMES.iter().any(|(_, n)| same(n))
+        || crate::item_names_data::DISPLAY_NAMES.iter().any(|(_, n)| same(n))
+}
+
+/// Whether the account owns `item` (a [`Build::switch_requires`] name): among the played
+/// character's `owned` names (worn, carried, cubed, personally stashed uniques, sets and
+/// runewords: [`crate::game::Snapshot::owned_names`]) or the shared stash's `stash` names
+/// ([`crate::game::Snapshot::stash_names`]), matched like the farm list ([`crate::info::same_name`]).
+#[must_use]
+pub fn owns_item(item: &str, owned: &[String], stash: &[String]) -> bool {
+    owned.iter().chain(stash).any(|n| crate::info::same_name(n, item))
+}
+
+/// The ownership test of callers without live data (the config page, `level` unknown):
+/// nothing is owned, so a `switch_requires` is never met.
+#[must_use]
+pub const fn owns_nothing(_item: &str) -> bool {
+    false
+}
+
 /// The `farm.toml` next to the config file at `config_path`.
 #[must_use]
 pub fn farm_path_for(config_path: &Path) -> PathBuf {
@@ -506,12 +536,19 @@ impl Config {
     }
 
     /// The character's current guide stage: the selected build (else its class's default),
-    /// followed along `next` while the stage switches automatically (`auto_switch`) and the
-    /// character `level` has reached `switch_level`. A `next` that is already part of the
-    /// chain stops it (cycle guard). `class`/`level` are `None` where unknown (the config
-    /// page): no class default, no automatic switch.
+    /// followed along `next` while the stage switches automatically (`auto_switch`), the
+    /// character `level` has reached `switch_level` and `owns` every `switch_requires` item
+    /// (see [`owns_item`]). A `next` that is already part of the chain stops it (cycle guard).
+    /// `class`/`level` are `None` where unknown (the config page, which passes
+    /// [`owns_nothing`]): no class default, no automatic switch.
     #[must_use]
-    pub fn stage(&self, name: &str, class: Option<u32>, level: Option<u8>) -> Option<Stage<'_>> {
+    pub fn stage(
+        &self,
+        name: &str,
+        class: Option<u32>,
+        level: Option<u8>,
+        owns: &dyn Fn(&str) -> bool,
+    ) -> Option<Stage<'_>> {
         let (start, class_default) = match self.selected(name) {
             Some(selected) => (selected, false),
             None => (class.and_then(|c| self.class_default(c))?, true),
@@ -529,7 +566,8 @@ impl Config {
                 && build
                     .switch_level
                     .zip(level)
-                    .is_some_and(|(switch, level)| level >= switch);
+                    .is_some_and(|(switch, level)| level >= switch)
+                && build.switch_requires.iter().all(|item| owns(item));
             if !due || chain.contains(&next_slug) {
                 break;
             }
@@ -545,16 +583,22 @@ impl Config {
     }
 
     /// The character's `BiS` resolved over the build files: its inline slots when it has any,
-    /// else the current stage's slots ([`Config::stage`]; else none — a build file may omit
-    /// slots).
+    /// else the current stage's slots ([`Config::stage`], `owns` as there; else none — a
+    /// build file may omit slots).
     #[must_use]
-    pub fn resolved_bis(&self, name: &str, class: Option<u32>, level: Option<u8>) -> Option<Bis> {
+    pub fn resolved_bis(
+        &self,
+        name: &str,
+        class: Option<u32>,
+        level: Option<u8>,
+        owns: &dyn Fn(&str) -> bool,
+    ) -> Option<Bis> {
         if let Some(bis) = self.bis.get(&name.to_lowercase())
             && (!bis.slots.is_empty() || !bis.merc_slots.is_empty())
         {
             return Some(bis.clone());
         }
-        let def = self.stage(name, class, level)?.build;
+        let def = self.stage(name, class, level, owns)?.build;
         Some(Bis {
             build: def.name.clone(),
             slots: def.slots.clone(),
@@ -563,14 +607,20 @@ impl Config {
     }
 
     /// The character's damage types, primary first: its own `[builds]` entry, else the current
-    /// stage's damages ([`Config::stage`]), else its class's (`class` as charstats row id;
-    /// `None` where the caller doesn't know a class, e.g. the config page).
+    /// stage's damages ([`Config::stage`], `owns` as there), else its class's (`class` as
+    /// charstats row id; `None` where the caller doesn't know a class, e.g. the config page).
     #[must_use]
-    pub fn damages_for_player(&self, name: &str, class: Option<u32>, level: Option<u8>) -> &[Damage] {
+    pub fn damages_for_player(
+        &self,
+        name: &str,
+        class: Option<u32>,
+        level: Option<u8>,
+        owns: &dyn Fn(&str) -> bool,
+    ) -> &[Damage] {
         if let Some(damages) = self.builds.names.get(&name.to_lowercase()) {
             return damages;
         }
-        if let Some(stage) = self.stage(name, class, level)
+        if let Some(stage) = self.stage(name, class, level, owns)
             && !stage.build.damages.is_empty()
         {
             return &stage.build.damages;
@@ -726,6 +776,7 @@ struct RawBuild {
     switch_level: Option<u8>,
     auto_switch: bool,
     switch_note: String,
+    switch_requires: Vec<String>,
     skill_plan: Vec<SkillTarget>,
     recipes: Vec<Recipe>,
     tips: Vec<RawTip>,
@@ -779,6 +830,14 @@ fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de::Err
     }
     let next = raw.next.trim().to_lowercase();
     let switch_note = raw.switch_note.trim().to_owned();
+    let switch_requires = clean_pieces(&raw.switch_requires);
+    for item in &switch_requires {
+        if !item_name_known(item) {
+            warnings.push(format!(
+                "{label}: switch_requires names unknown item {item:?} (kept, but it can never be owned)"
+            ));
+        }
+    }
     Ok((
         name.to_lowercase(),
         Build {
@@ -806,6 +865,7 @@ fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de::Err
             switch_level: raw.switch_level,
             auto_switch: raw.auto_switch,
             switch_note: (!switch_note.is_empty()).then_some(switch_note),
+            switch_requires,
             skill_plan: raw.skill_plan,
             recipes: raw.recipes,
             tips,
@@ -1088,37 +1148,37 @@ mod tests {
              [builds.class]\ndruid = [\"physical\"]\n4 = [\"physical\"]\nbard = [\"fire\"]\n",
         )?;
         assert_eq!(
-            c.damages_for_player("Vex", Some(6), None),
+            c.damages_for_player("Vex", Some(6), None, &owns_nothing),
             [Lightning, Fire, Physical],
             "deduped, in order"
         );
         assert_eq!(
-            c.damages_for_player("vex", Some(1), None),
+            c.damages_for_player("vex", Some(1), None, &owns_nothing),
             [Lightning, Fire, Physical],
             "name in any case"
         );
         assert_eq!(
-            c.damages_for_player("Other", Some(5), None),
+            c.damages_for_player("Other", Some(5), None, &owns_nothing),
             [Cold],
             "own entry beats the class"
         );
         assert_eq!(
-            c.damages_for_player("Bear", Some(5), None),
+            c.damages_for_player("Bear", Some(5), None, &owns_nothing),
             [Physical],
             "class by name"
         );
         assert_eq!(
-            c.damages_for_player("Barb", Some(4), None),
+            c.damages_for_player("Barb", Some(4), None, &owns_nothing),
             [Physical],
             "class by id"
         );
         assert_eq!(
-            c.damages_for_player("Sorc", Some(1), None),
+            c.damages_for_player("Sorc", Some(1), None, &owns_nothing),
             [] as [Damage; 0],
             "nothing configured"
         );
         assert_eq!(
-            c.damages_for_player("Sorc", None, None),
+            c.damages_for_player("Sorc", None, None, &owns_nothing),
             [] as [Damage; 0],
             "no class known: still no damages"
         );
@@ -1258,7 +1318,7 @@ mod tests {
         );
         // Selection-only: the build's slots and damages come through.
         let resolved = config
-            .resolved_bis("DEMONmaster", None, None)
+            .resolved_bis("DEMONmaster", None, None, &owns_nothing)
             .ok_or_else(|| anyhow!("unresolved"))?;
         assert_eq!(resolved.build, "Blood Boil", "the display name, not the slug");
         assert_eq!(
@@ -1266,7 +1326,7 @@ mod tests {
             Some(&["Heart of the Oak@55".to_owned()][..])
         );
         assert_eq!(
-            config.damages_for_player("DEMONmaster", None, None),
+            config.damages_for_player("DEMONmaster", None, None, &owns_nothing),
             [Damage::Physical, Damage::Fire],
             "the build's damages"
         );
@@ -1281,7 +1341,7 @@ mod tests {
             .names
             .insert("demonmaster".to_owned(), vec![Damage::Fire]);
         let resolved = config
-            .resolved_bis("demonmaster", None, None)
+            .resolved_bis("demonmaster", None, None, &owns_nothing)
             .ok_or_else(|| anyhow!("unresolved"))?;
         assert!(
             !resolved.slots.contains_key("weapon"),
@@ -1292,14 +1352,14 @@ mod tests {
             Some(&["Stealth@17".to_owned()][..])
         );
         assert_eq!(
-            config.damages_for_player("demonmaster", Some(7), None),
+            config.damages_for_player("demonmaster", Some(7), None, &owns_nothing),
             [Damage::Fire]
         );
         // No bis entry at all: no resolved BiS, only the class fallback for damages.
-        assert!(config.resolved_bis("other", None, None).is_none());
+        assert!(config.resolved_bis("other", None, None, &owns_nothing).is_none());
         config.builds.classes.insert(7, vec![Damage::Lightning]);
         assert_eq!(
-            config.damages_for_player("other", Some(7), None),
+            config.damages_for_player("other", Some(7), None, &owns_nothing),
             [Damage::Lightning]
         );
         // A selected build that doesn't exist resolves to nothing.
@@ -1311,8 +1371,11 @@ mod tests {
                 merc_slots: BTreeMap::new(),
             },
         );
-        assert!(config.resolved_bis("ghost", None, None).is_none());
-        assert_eq!(config.damages_for_player("ghost", None, None), [] as [Damage; 0]);
+        assert!(config.resolved_bis("ghost", None, None, &owns_nothing).is_none());
+        assert_eq!(
+            config.damages_for_player("ghost", None, None, &owns_nothing),
+            [] as [Damage; 0]
+        );
         Ok(())
     }
 
@@ -1417,7 +1480,7 @@ mod tests {
     #[test]
     fn stage_follows_the_auto_chain_by_level() -> Result<()> {
         let config = druid_chain();
-        let stage = |level| config.stage("NewDruid", Some(5), level);
+        let stage = |level| config.stage("NewDruid", Some(5), level, &owns_nothing);
         // No selection: the class default; below the switch level it stays.
         let s = stage(Some(37)).ok_or_else(|| anyhow!("no stage"))?;
         assert_eq!((s.slug, s.class_default), ("leveling", true));
@@ -1440,14 +1503,95 @@ mod tests {
             "unknown level: no switch"
         );
         // Other classes and an unknown class get no default.
-        assert!(config.stage("NewDruid", Some(1), Some(50)).is_none());
-        assert!(config.stage("NewDruid", None, Some(50)).is_none());
+        assert!(
+            config
+                .stage("NewDruid", Some(1), Some(50), &owns_nothing)
+                .is_none()
+        );
+        assert!(config.stage("NewDruid", None, Some(50), &owns_nothing).is_none());
         // The stage drives the BiS and the damages.
         assert_eq!(
-            config.resolved_bis("x", Some(5), Some(40)).map(|b| b.build),
+            config
+                .resolved_bis("x", Some(5), Some(40), &owns_nothing)
+                .map(|b| b.build),
             Some("Tornado".to_owned())
         );
-        assert_eq!(config.damages_for_player("x", Some(5), Some(40)), [Damage::Fire]);
+        assert_eq!(
+            config.damages_for_player("x", Some(5), Some(40), &owns_nothing),
+            [Damage::Fire]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn switch_requires_parses_and_warns_about_unknown_items() -> Result<()> {
+        let (_, def, warnings) = parse_build(
+            "name = \"Summoner\"\nnext = \"fury\"\nswitch_level = 75\nauto_switch = true\n\
+             switch_requires = [\" Raven Frost \", \"\", \"Enigma\", \"Ravenfrsot\"]\n",
+        )?;
+        assert_eq!(
+            def.switch_requires,
+            ["Raven Frost", "Enigma", "Ravenfrsot"],
+            "trimmed, blanks dropped"
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings.iter().all(|w| w.contains("Ravenfrsot")), "{warnings:?}");
+        let (_, def, _) = parse_build("name = \"B\"\n")?;
+        assert_eq!(def.switch_requires, [] as [String; 0]);
+        Ok(())
+    }
+
+    #[test]
+    fn stage_switch_waits_for_required_items() -> Result<()> {
+        let mut config = druid_chain();
+        if let Some(b) = config.build_defs.get_mut("leveling") {
+            b.switch_requires = vec!["Raven Frost".to_owned()];
+        }
+        let slug = |level, owned: &[String], stash: &[String]| {
+            let owns = |item: &str| owns_item(item, owned, stash);
+            config
+                .stage("NewDruid", Some(5), Some(level), &owns)
+                .map(|s| s.slug)
+                .ok_or_else(|| anyhow!("no stage"))
+        };
+        let raven = ["Raven Frost".to_owned()];
+        assert_eq!(slug(37, &raven, &[])?, "leveling", "below the level, item or not");
+        assert_eq!(slug(38, &[], &[])?, "leveling", "at the level without the item");
+        assert_eq!(
+            slug(38, &["Enigma".to_owned()], &[])?,
+            "leveling",
+            "another item doesn't count"
+        );
+        assert_eq!(
+            slug(38, &raven, &[])?,
+            "tornado",
+            "carried, worn or personally stashed"
+        );
+        assert_eq!(
+            slug(38, &[], &["ravenfrost".to_owned()])?,
+            "leveling",
+            "whole names only"
+        );
+        assert_eq!(
+            slug(38, &[], &["raven frost".to_owned()])?,
+            "tornado",
+            "in the shared stash"
+        );
+        // Without live data (the config page) a requirement is never met.
+        assert_eq!(
+            config
+                .stage("NewDruid", Some(5), Some(90), &owns_nothing)
+                .map(|s| s.slug),
+            Some("leveling")
+        );
+        // The BiS and damages follow the same stage.
+        let owns = |item: &str| owns_item(item, &raven, &[]);
+        assert_eq!(
+            config
+                .resolved_bis("x", Some(5), Some(40), &owns)
+                .map(|b| b.build),
+            Some("Tornado".to_owned())
+        );
         Ok(())
     }
 
@@ -1464,7 +1608,7 @@ mod tests {
             },
         );
         let s = config
-            .stage("Bear", Some(5), Some(90))
+            .stage("Bear", Some(5), Some(90), &owns_nothing)
             .ok_or_else(|| anyhow!("no stage"))?;
         assert_eq!((s.slug, s.class_default, s.next), ("fissure", false, None));
         // A cycle (fissure → leveling, all automatic) stops before repeating a stage and
@@ -1479,7 +1623,7 @@ mod tests {
             b.next = Some("leveling".to_owned());
         }
         let s = config
-            .stage("Other", Some(5), Some(60))
+            .stage("Other", Some(5), Some(60), &owns_nothing)
             .ok_or_else(|| anyhow!("no stage"))?;
         assert_eq!(
             s.slug, "fissure",
@@ -1491,7 +1635,9 @@ mod tests {
             b.next = Some("missing".to_owned());
         }
         assert_eq!(
-            config.stage("Other", Some(5), Some(60)).and_then(|s| s.next),
+            config
+                .stage("Other", Some(5), Some(60), &owns_nothing)
+                .and_then(|s| s.next),
             None
         );
         Ok(())
