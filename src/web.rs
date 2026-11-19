@@ -684,7 +684,7 @@ pub struct LiveInfo<'a> {
     /// The character's skill allocation, shown as the class's three skill trees.
     pub skills: &'a crate::game::Skills,
     /// The character's guide stage ([`crate::config::Config::stage`]; `None` without a
-    /// build): the stage strip, and `build` is its build.
+    /// build): `live_json`'s `stage` section (not rendered), and `build` is its build.
     pub stage: Option<crate::config::Stage<'a>>,
     /// Runes and gems held outside the shared materials tab ([`crate::game::Snapshot`]).
     pub held_materials: &'a [(String, u32)],
@@ -2310,7 +2310,9 @@ fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
 
 /// `POST /api/bis` with `{"name": …, "build": "<slug>"}` — `"build": null`, `""` or omitted
 /// clears the selection: writes ONLY the `[bis.<name>]` `build` value into `config.toml` (the
-/// gear itself lives in the agent-authored `builds/*.toml`; the webapp doesn't edit it).
+/// gear itself lives in the agent-authored `builds/*.toml`; the webapp doesn't edit it). Then
+/// forgets the stage the character reached ([`crate::played::clear_stage`]): an explicit
+/// selection wins over the stage latch, which restarts from it.
 fn api_bis(body: &str) -> String {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
         return respond("400 Bad Request", "text/plain", "bad json\n");
@@ -2331,7 +2333,17 @@ fn api_bis(body: &str) -> String {
             );
         }
     };
-    save_config(|text| set_bis_selection(text, name, build))
+    let response = save_config(|text| set_bis_selection(text, name, build));
+    if !response.starts_with("HTTP/1.1 200") {
+        return response;
+    }
+    // The selection is saved either way; a failed reset only leaves the old latch in place.
+    if let Some(path) = crate::played::default_path()
+        && let Err(e) = crate::played::clear_stage(&path, name)
+    {
+        eprintln!("web: selection saved, but the reached stage of {name} wasn't reset: {e:#}");
+    }
+    response
 }
 
 /// `POST /api/character/delete` with `{"name": …}`: forgets the character — its last-played
@@ -2663,7 +2675,7 @@ details.help summary { cursor: pointer; color: var(--faint); }
   font-variant-numeric: tabular-nums; }
 .sk .mb { position: absolute; bottom: 3px; right: 5px; font-size: 10px; font-weight: 700; color: var(--accent); letter-spacing: .06em; }
 
-/* Guide: upgrades banner, stage strip, tips, skill targets, recipes */
+/* Guide: upgrades banner, tips, skill targets, recipes */
 .bell { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; color: var(--faint);
   font-size: 13px; line-height: 1; padding: 4px 9px; cursor: pointer; filter: grayscale(1); opacity: .6; }
 .bell.on { color: var(--gold); border-color: var(--gold); filter: none; opacity: 1; }

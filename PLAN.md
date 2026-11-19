@@ -416,7 +416,9 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - **Guide stages (2026-11-17, druid)**: a build file may also carry `class`, `default_for_class` (a
   character without a `[bis]` selection gets its class default), a stage chain `next` / `switch_level` /
   `auto_switch` / `switch_note` (`Config::stage`: selected build, else class default, then follow `next`
-  while `auto_switch` and clvl ≥ `switch_level`; cycle-guarded; the user chose all-manual switches),
+  while `auto_switch` and clvl ≥ `switch_level` and every `switch_requires` item (unique/set/runeword
+  name) is owned by the character or in the shared stash, or the stage was reached before (the
+  `played.json` `stage` latch); cycle-guarded),
   `[[skill_plan]]` cumulative hard-point targets (skills panel: yours / guide-now → final, next-point
   hint), `[[recipes]]` (runeword/craft/cube/socket/upgrade; dashboard Recipes panel with ✓ from the
   shared materials + `Snapshot.held_materials`, bases via `white_bases`), `[[tips]]` by level range and
@@ -445,7 +447,10 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   `below`/`equal`/`above` clvl, `info::LevelEntry` at the `live_json` layer, `level_lines_full` the
   source) and the panel lays it out in three labelled columns (user request, 2026-11-17).
 - **Recently played first** (user request, 2026-11-18): `played.json` in the data dir maps the
-  lowercased character name → `{name, t}` (unix secs last seen in a game; `src/played.rs`). The live
+  lowercased character name → `{name, t, class?, stage?}` (unix secs last seen in a game; `src/played.rs`).
+  `stage` is the guide stage slug the character last reached live: it latches a `switch_requires`
+  switch (the shared stash is unread each game until opened). The file is its source of truth; the
+  config page's delete and a new `POST /api/bis` selection clear it while the overlay runs. The live
   loop records the snapshot's player each tick, writing (temp file + rename) when the character
   changes or at most once a minute. Seeded once when the file is missing from the D2R save dir in the
   game's Proton prefix (`WINEPREFIX` from `/proc/<pid>/environ` → `drive_c/users/*/Saved Games/Diablo II

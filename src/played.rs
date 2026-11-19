@@ -5,18 +5,22 @@
 //! the live player each tick and merges that one entry into the file (via a temp file and a
 //! rename), only when the character changed or at most every [`WRITE_INTERVAL`]. The config
 //! page can [`remove`] a character; the tracker never writes back entries it only read, so a
-//! removed character returns only when it is played again. Each entry also keeps the guide
-//! stage the character last reached ([`Tracker::reach`]), so a switch whose required items sat
-//! in the shared stash (unread until the stash is opened each game) stays switched. Without
-//! the file (first start) it
-//! is seeded from D2R's own save directory in the Proton prefix: online characters leave
-//! `<Name><account digits>.ctlo` (key bindings, rewritten on leaving a game), offline ones
-//! `<Name>.d2s`; their modification
-//! times are the recency. A missing or corrupt file only means no order: the page then keeps
-//! the config order.
+//! removed character returns only when it is played again.
+//!
+//! Each entry also keeps the guide stage the character last reached ([`Tracker::reach`]), so a
+//! switch whose required items sat in the shared stash (unread until the stash is opened each
+//! game) stays switched. The file is that latch's source of truth: the tracker never writes its
+//! in-memory copy back, and re-reads it after the config page's [`remove`] or [`clear_stage`]
+//! (a new build selection), so both reset it while the overlay runs.
+//!
+//! Without the file (first start) it is seeded from D2R's own save directory in the Proton
+//! prefix: online characters leave `<Name><account digits>.ctlo` (key bindings, rewritten on
+//! leaving a game), offline ones `<Name>.d2s`; their modification times are the recency. A
+//! missing or corrupt file only means no order: the page then keeps the config order.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use std::{fs, io};
@@ -30,6 +34,10 @@ pub const WRITE_INTERVAL: Duration = Duration::from_secs(60);
 /// Serialises every read-modify-write of the file: the live loop's [`Tracker`] and the web
 /// thread's [`remove`] must not both start from the same old map.
 static FILE_WRITE: Mutex<()> = Mutex::new(());
+
+/// Bumped by every edit outside the tracker ([`remove`], [`clear_stage`]): a [`Tracker`] that
+/// synced an older count re-reads its character's stage from the file.
+static OUTSIDE_EDITS: AtomicU64 = AtomicU64::new(0);
 
 /// One character's last sighting.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,6 +198,31 @@ pub fn remove(path: &Path, name: &str) -> Result<bool> {
         return Ok(false);
     }
     write(path, &played)?;
+    OUTSIDE_EDITS.fetch_add(1, Ordering::SeqCst);
+    Ok(true)
+}
+
+/// Forgets the guide stage `name` (any case) reached, so the stage chain restarts from a new
+/// build selection; `Ok(false)` when none was stored.
+///
+/// # Errors
+/// Fails when the file can't be written.
+pub fn clear_stage(path: &Path, name: &str) -> Result<bool> {
+    let _guard = FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(mut played) = read(path) else {
+        return Ok(false);
+    };
+    let mut cleared = false;
+    for (key, entry) in &mut played {
+        if key.eq_ignore_ascii_case(name) || entry.name.eq_ignore_ascii_case(name) {
+            cleared |= entry.stage.take().is_some();
+        }
+    }
+    if !cleared {
+        return Ok(false);
+    }
+    write(path, &played)?;
+    OUTSIDE_EDITS.fetch_add(1, Ordering::SeqCst);
     Ok(true)
 }
 
@@ -207,6 +240,8 @@ pub struct Tracker {
     last_write: Option<(String, Instant)>,
     /// A write failed already: later failures are not logged again.
     failed: bool,
+    /// The [`OUTSIDE_EDITS`] count the current entry's stage was read at.
+    synced: u64,
 }
 
 impl Tracker {
@@ -218,6 +253,7 @@ impl Tracker {
             path,
             last_write: None,
             failed: false,
+            synced: 0,
         };
         let Some(path) = tracker.path.as_deref() else {
             return tracker;
@@ -249,11 +285,14 @@ impl Tracker {
         if self.current.as_ref().is_some_and(|(k, _)| *k != key) {
             self.save();
         }
-        // The stage reached: kept from memory for the same character, else from the file.
+        // The stage reached: from memory for the same character unless the file was edited
+        // outside meanwhile, else from the file (memory only without one).
+        let edits = OUTSIDE_EDITS.load(Ordering::SeqCst);
         let stage = match self.current.take() {
-            Some((k, entry)) if k == key => entry.stage,
+            Some((k, entry)) if k == key && (edits == self.synced || self.path.is_none()) => entry.stage,
             _ => self.stored_stage(&key),
         };
+        self.synced = edits;
         self.current = Some((
             key.clone(),
             Entry {
@@ -294,7 +333,7 @@ impl Tracker {
             return;
         }
         entry.stage = Some(slug.to_owned());
-        self.save();
+        self.save_with(Some(slug));
     }
 
     /// `key`'s stage as stored in the file.
@@ -305,9 +344,15 @@ impl Tracker {
     }
 
     /// Merges the current entry into the file as it is on disk now (a corrupt file is
-    /// replaced by the entry alone).
+    /// replaced by the entry alone), keeping the file's stage.
     fn save(&mut self) {
-        let (Some(path), Some((key, entry))) = (self.path.as_deref(), self.current.as_ref()) else {
+        self.save_with(None);
+    }
+
+    /// [`Tracker::save`], storing stage `reached` when given; otherwise the file's stage stays
+    /// (the file is the latch's source of truth) and becomes the in-memory one.
+    fn save_with(&mut self, reached: Option<&str>) {
+        let (Some(path), Some((key, entry))) = (self.path.as_deref(), self.current.as_mut()) else {
             return;
         };
         let result = {
@@ -315,15 +360,13 @@ impl Tracker {
             let mut played = read(path).unwrap_or_default();
             let old = played.get(key);
             let class = entry.class.or_else(|| old.and_then(|old| old.class));
-            let stage = entry
-                .stage
-                .clone()
+            entry.stage = reached
+                .map(str::to_owned)
                 .or_else(|| old.and_then(|old| old.stage.clone()));
             played.insert(
                 key.clone(),
                 Entry {
                     class,
-                    stage,
                     ..entry.clone()
                 },
             );
@@ -477,6 +520,68 @@ mod tests {
         // An older file without the field still loads.
         fs::write(&path, r#"{"vex":{"name":"Vex","t":1}}"#)?;
         assert_eq!(load(&path).get("vex").map(|e| e.stage.clone()), Some(None));
+        Ok(())
+    }
+
+    #[test]
+    fn a_delete_resets_the_stage_of_the_running_tracker() -> Result<()> {
+        let dir = temp_dir("played-stage-delete")?;
+        let path = dir.join("played.json");
+        let t0 = Instant::now();
+        let mut tracker = Tracker::open(Some(path.clone()), Played::new);
+        tracker.record("Vex", Some(5), 1, t0);
+        tracker.reach("Vex", "fury druid");
+        assert!(remove(&path, "Vex")?);
+        // Still the same game: the next sighting re-reads the file and doesn't resurrect it.
+        tracker.record("Vex", Some(5), 2, t0);
+        assert_eq!(tracker.reached("Vex"), None);
+        tracker.record("Vex", Some(5), 3, t0 + WRITE_INTERVAL);
+        assert_eq!(
+            load(&path).get("vex").map(|e| (e.t, e.stage.clone())),
+            Some((3, None))
+        );
+        // A save never writes the in-memory copy back, even without a re-read in between.
+        tracker.reach("Vex", "fury druid");
+        fs::write(&path, r#"{"vex":{"name":"Vex","t":3}}"#)?;
+        tracker.save();
+        assert_eq!(load(&path).get("vex").map(|e| e.stage.clone()), Some(None));
+        assert_eq!(tracker.reached("Vex"), None, "memory follows the file");
+        Ok(())
+    }
+
+    #[test]
+    fn a_new_selection_clears_the_stage() -> Result<()> {
+        let dir = temp_dir("played-stage-clear")?;
+        let path = dir.join("played.json");
+        let t0 = Instant::now();
+        let mut tracker = Tracker::open(Some(path.clone()), Played::new);
+        tracker.record("Vex", Some(5), 1, t0);
+        assert!(!clear_stage(&path, "vex")?, "nothing stored yet");
+        tracker.reach("Vex", "fury druid");
+        tracker.record("Fulmina", Some(1), 1, t0);
+        tracker.reach("Fulmina", "nova");
+        tracker.record("Vex", Some(5), 2, t0);
+        assert!(clear_stage(&path, "VEX")?, "any case");
+        let played = load(&path);
+        assert_eq!(
+            played.get("vex").map(|e| (e.t, e.stage.clone())),
+            Some((2, None)),
+            "entry kept"
+        );
+        assert_eq!(
+            played.get("fulmina").and_then(|e| e.stage.as_deref()),
+            Some("nova"),
+            "other characters keep theirs"
+        );
+        tracker.record("Vex", Some(5), 3, t0);
+        assert_eq!(tracker.reached("Vex"), None, "the running tracker sees it");
+        // The chain restarts and records again.
+        tracker.reach("Vex", "summoner");
+        assert_eq!(
+            load(&path).get("vex").and_then(|e| e.stage.clone()).as_deref(),
+            Some("summoner")
+        );
+        assert!(!clear_stage(&dir.join("missing.json"), "vex")?);
         Ok(())
     }
 
