@@ -114,7 +114,8 @@ pub struct Snapshot {
     /// keeps a runeword recipe until every slot of the stage that wants it can be filled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runeword_copies: Vec<String>,
-    /// Display names of the identified unique/set items the mercenary wears, one per item:
+    /// Display names of the identified unique/set items the mercenary wears, one per item
+    /// (any merc's in a multiplayer game: see the PLAN.md "Merc gear" caveat):
     /// they count as owned for a stage switch and the farm list
     /// ([`crate::stash::Holdings`]), but not in [`Snapshot::owned_names`] (the `BiS` ✓ of the
     /// character's own pieces).
@@ -1893,7 +1894,9 @@ impl<M: ReadMem> Reader<'_, M> {
             // Owned identified unique/set items and runewords (worn, carried, cubed or in the
             // private stash): the `BiS` list marks owned pieces with a ✓. The mercenary's worn
             // runewords (owner `NO_OWNER`, equipped) count as copies only, its worn uniques
-            // and sets go to their own list.
+            // and sets go to their own list. CAVEAT (PLAN.md, "Merc gear"): nothing ties such
+            // an item to the local player's own merc, so in a multiplayer game another
+            // player's merc's gear counts too, if its item units are in this client.
             let item_owner = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok());
             let merc_worn = item_owner == Some(item_data::NO_OWNER) && self.equipped_slot(&head).is_some();
             if let Some(owner) = item_owner

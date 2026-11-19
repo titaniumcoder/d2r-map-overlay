@@ -428,11 +428,23 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   warn (kept), an empty `any` warns and drops the group, `count = 0` warns and becomes 1, a table
   without `label` is labelled "A / B". The live JSON's `stage.next.requires` is
   `[{label, count, have, met, any: [{name, owned}]}]` (no dashboard code reads it since the stage
-  strip went),
+  strip went). Build files also carry
   `[[skill_plan]]` cumulative hard-point targets (skills panel: yours / guide-now → final, next-point
   hint), `[[recipes]]` (runeword/craft/cube/socket/upgrade; dashboard Recipes panel with ✓ from the
   shared materials + `Snapshot.held_materials`, bases via `white_bases`), `[[tips]]` by level range and
   `stats_plan`. Generated from the guide research JSON by `research/gen_build.py`.
+- **Merc gear caveat (2026-11-19, open)**: merc-worn items are recognised only as
+  `ItemData::OWNER == NO_OWNER` + a `BODY` slot; nothing links an item to the local player's OWN
+  merc. The item side has no verified owner-unit/inventory pointer (classic `pOwnerInventory`, D2R
+  offset unknown), and the merc unit can't be identified: the `MonsterData +0x04` owner-id
+  hypothesis never fired (`merc` journal events 2026-11-14..19: none). So in a multiplayer game,
+  where other players' gear is in the client, their mercs' gear likely is too and would count in
+  `runeword_copies`, `merc_worn` and `merc_equipped` — the farm status and a `switch_requires`
+  group can be satisfied by someone else's merc, and the played.json latch makes such a switch
+  stick. To verify: in a 2-player game, read each monster unit's `Inventory` (unit `+0x90`):
+  its `inventory::OWNER_ID` (`+0x48`) and its `FIRST_ITEM` chain (`+0x10`, next at
+  `ItemData +0xB0`) — if the hired merc's inventory chains its worn items and names the hiring
+  player, collect merc gear by walking the merc of the chosen player instead.
 - **Upgrades + chime**: `upgrades` in the live JSON = owned/stash pieces of the current stage wearable now
   and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
   are all owned. The page chimes (WebAudio, 🔔 toggle) when a key appears that this character hasn't had.

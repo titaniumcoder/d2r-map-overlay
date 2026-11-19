@@ -845,13 +845,34 @@ struct RawBuild {
 }
 
 /// A `switch_requires` entry as written: an item name, or `{ label, any = [...], count }`.
-/// `untagged`: serde tries the variants in order, so a TOML string becomes `Item` and an inline
-/// table `Group`.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+/// Deserialized by hand rather than `#[serde(untagged)]`: untagged hides why a table failed
+/// ("did not match any variant"), while handing the table to [`RawSwitchAny`] keeps serde's
+/// own message (unknown field, missing field `any`).
+#[derive(Debug)]
 enum RawSwitchGroup {
     Item(String),
     Group(RawSwitchAny),
+}
+
+impl<'de> Deserialize<'de> for RawSwitchGroup {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        /// Picks the form by what the TOML holds: a string or a table.
+        struct Form;
+        impl<'de> serde::de::Visitor<'de> for Form {
+            type Value = RawSwitchGroup;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an item name or a table { label, any = [...], count }")
+            }
+            fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<Self::Value, E> {
+                Ok(RawSwitchGroup::Item(name.to_owned()))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                RawSwitchAny::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(RawSwitchGroup::Group)
+            }
+        }
+        deserializer.deserialize_any(Form)
+    }
 }
 
 /// The table form of a [`RawSwitchGroup`].
@@ -1727,11 +1748,19 @@ mod tests {
             "{warnings:?}"
         );
         assert!(warnings.iter().any(|w| w.contains("Ravenfrsot")), "{warnings:?}");
-        // A table with an unknown key or without `any` is an error, not silently a group.
-        assert!(
-            parse_build("name = \"B\"\nswitch_requires = [{ label = \"X\", anyy = [\"Grief\"] }]\n").is_err()
-        );
-        assert!(parse_build("name = \"B\"\nswitch_requires = [{ label = \"X\" }]\n").is_err());
+        // A table with an unknown key or without `any` is an error naming the problem, not
+        // silently a group.
+        let error = |requires: &str| {
+            parse_build(&format!("name = \"B\"\nswitch_requires = [{requires}]\n"))
+                .err()
+                .map_or_else(String::new, |e| e.to_string())
+        };
+        let unknown = error("{ label = \"X\", anyy = [\"Grief\"] }");
+        assert!(unknown.contains("unknown field `anyy`"), "{unknown}");
+        let missing = error("{ label = \"X\" }");
+        assert!(missing.contains("missing field `any`"), "{missing}");
+        let number = error("42");
+        assert!(number.contains("an item name or a table"), "{number}");
         Ok(())
     }
 
