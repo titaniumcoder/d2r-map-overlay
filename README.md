@@ -72,6 +72,7 @@ Optional configuration lives in `~/.config/d2r-map-overlay/config.toml`. See
 - which valuables are highlighted
 - which shrines are shown
 - per-character builds for the area colouring
+- `farm.toml`: a cross-character farm list for a planned build (the dashboard's Farm list panel)
 
 ## How it works (short)
 

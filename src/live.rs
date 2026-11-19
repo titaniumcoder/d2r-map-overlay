@@ -144,6 +144,8 @@ fn modified_at(path: &std::path::Path) -> Option<std::time::SystemTime> {
 struct Watched {
     config: Option<SystemTime>,
     builds: Option<Vec<(String, SystemTime)>>,
+    /// `farm.toml`'s mtime (next to `config.toml`; `None` while it doesn't exist).
+    farm: Option<SystemTime>,
 }
 
 impl Watched {
@@ -154,6 +156,9 @@ impl Watched {
             builds: config_path
                 .map(config::builds_dir_for)
                 .and_then(|dir| builds_state(&dir)),
+            farm: config_path
+                .map(config::farm_path_for)
+                .and_then(|p| modified_at(&p)),
         }
     }
 }
@@ -184,7 +189,13 @@ fn check_reload(config: &mut config::Config, config_path: Option<&std::path::Pat
     if *watched == now {
         return;
     }
+    let farm_changed = watched.farm != now.farm;
     *watched = now;
+    // The farm list stands on its own: a broken or missing config.toml still reloads it.
+    if farm_changed {
+        config.farm = config::load_farm(&config::farm_path_for(path));
+        eprintln!("farm list reloaded ({} groups)", config.farm.len());
+    }
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) => {
@@ -198,6 +209,8 @@ fn check_reload(config: &mut config::Config, config_path: Option<&std::path::Pat
                 eprintln!("config {}: {w}", path.display());
             }
             loaded.build_defs = config::load_builds(&config::builds_dir_for(path));
+            // Already up to date (reloaded above on its own change): no second parse or log.
+            loaded.farm = std::mem::take(&mut config.farm);
             eprintln!("config reloaded from {}", path.display());
             *config = loaded;
         }
@@ -244,12 +257,13 @@ fn find_table(pid: u32, mem: &ProcMem, cache: Option<&Path>) -> Option<u64> {
 }
 
 /// Publishes one tick's dashboard JSON ([`web::live_json`]) from the snapshot, the dashboard's
-/// text blocks, the guide stage and the quest flags.
+/// text blocks, the guide stage, the quest flags and the farm list.
 fn publish_dashboard(
     snap: &game::Snapshot,
     blocks: &render::TextBlocks,
     stage: Option<config::Stage<'_>>,
     quests: &[u16],
+    farm: &[config::FarmGroup],
 ) {
     web::publish_live(web::live_json(&web::LiveInfo {
         player_name: &snap.player.name,
@@ -265,6 +279,7 @@ fn publish_dashboard(
         held_materials: &snap.held_materials,
         white_bases: &snap.white_bases,
         quests,
+        farm,
         equipped: &snap.equipped,
         equipped_items: &snap.equipped_items,
         owned: &snap.owned_names,
@@ -366,7 +381,7 @@ fn follow_game(
                     merc_equipped: snap.merc_equipped.clone(),
                 });
                 let quests = quest_flags.read(pid, mem, update.new_game);
-                publish_dashboard(&snap, &blocks, stage, quests);
+                publish_dashboard(&snap, &blocks, stage, quests, &config.farm);
                 if let Some((tabs, items)) = update.stash_captured {
                     eprintln!("shared stash captured: {tabs} tabs, {items} items");
                     journal.stash(true, tabs, items);
@@ -746,5 +761,46 @@ mod tests {
         assert!(is_permission_denied(&e));
         let e = anyhow::Error::from(io::Error::from(io::ErrorKind::NotFound)).context("opening mem");
         assert!(!is_permission_denied(&e));
+    }
+
+    #[test]
+    fn farm_list_hot_reloads_even_with_a_broken_config() -> Result<()> {
+        let dir = crate::testutil::temp_dir("farm-reload")?;
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[valuables]\ntrade = [\"S\"]\n")?;
+        let farm = config::farm_path_for(&path);
+        let mut cfg = config::load_from(&path);
+        let mut watched = Watched::now(Some(&path));
+        // Explicit mtimes: two writes in the same filesystem tick would look unchanged.
+        let touch = |file: &Path, secs: u64| -> Result<()> {
+            let at = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+            std::fs::File::options()
+                .write(true)
+                .open(file)?
+                .set_modified(at)?;
+            Ok(())
+        };
+        std::fs::write(
+            &farm,
+            "[[farm]]\nfor = \"B\"\nitems = [{ name = \"Smoke\", kind = \"runeword\" }]\n",
+        )?;
+        touch(&farm, 1_000)?;
+        check_reload(&mut cfg, Some(&path), &mut watched);
+        assert_eq!(cfg.farm.len(), 1, "a new farm.toml is picked up");
+        assert_eq!(cfg.valuables.trade, vec![crate::valuables::Tier::S]);
+        // A broken config.toml keeps the rest of the config but still reloads the farm list.
+        std::fs::write(&path, "[valuables\n")?;
+        std::fs::write(&farm, "[[farm]]\nfor = \"B\"\nitems = []\n")?;
+        touch(&farm, 2_000)?;
+        check_reload(&mut cfg, Some(&path), &mut watched);
+        assert_eq!(cfg.farm.first().map(|g| g.items.len()), Some(0));
+        assert_eq!(cfg.valuables.trade, vec![crate::valuables::Tier::S]);
+        // Removed: no list.
+        std::fs::remove_file(&farm)?;
+        check_reload(&mut cfg, Some(&path), &mut watched);
+        assert_eq!(cfg.farm, []);
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
     }
 }

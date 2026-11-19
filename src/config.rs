@@ -7,6 +7,9 @@
 //! Build definitions live in `builds/<slug>.toml` next to `config.toml`, one build per file,
 //! authored by the agent (not edited in the webapp); the config only *selects* one per
 //! character via `[bis.<name>] build = "<slug>"` (user decision, 2026-11-17).
+//!
+//! The cross-character farm list lives in `farm.toml` next to `config.toml`, agent-authored
+//! too ([`load_farm`]); it is loaded with the config and hot-reloaded with it.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -240,6 +243,137 @@ pub struct Config {
     /// The agent-authored build definitions from `builds/*.toml`, keyed by lowercased build
     /// name — the `slug` a `[bis.<name>]` `build` selection refers to (see [`load_builds`]).
     pub build_defs: BTreeMap<String, Build>,
+    /// The cross-character farm list from `farm.toml` next to `config.toml` (see
+    /// [`load_farm`]); empty when the file is missing or invalid.
+    pub farm: Vec<FarmGroup>,
+}
+
+/// One `[[farm]]` group of `farm.toml` (agent-authored, the app only reads it): the gear a
+/// planned build (`for`) needs, farmed with other characters.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FarmGroup {
+    /// The planned build's name (`for = "Fury Druid"`; `for` is a Rust keyword).
+    #[serde(rename = "for")]
+    pub target: String,
+    pub items: Vec<FarmItem>,
+}
+
+/// One farm-list entry: an item by display name (unique/set) or runeword name.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FarmItem {
+    pub name: String,
+    pub kind: FarmKind,
+    /// How many copies the build needs (default 1; two Lawbringers for two weapon slots).
+    #[serde(default = "one")]
+    pub count: u32,
+}
+
+/// What kind of item a [`FarmItem`] names: which table its name comes from and how its
+/// copies are counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FarmKind {
+    Runeword,
+    Unique,
+    Set,
+}
+
+impl FarmKind {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Runeword => "runeword",
+            Self::Unique => "unique",
+            Self::Set => "set",
+        }
+    }
+}
+
+/// serde's `default = "..."` needs a function path.
+const fn one() -> u32 {
+    1
+}
+
+/// `farm.toml` as written.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawFarm {
+    farm: Vec<FarmGroup>,
+}
+
+/// Parses `farm.toml`'s text, with warnings about names not in the game tables (kept: a typo
+/// shows as forever missing, the warning says why) and a `count` of 0 (read as 1).
+/// # Errors
+/// Fails on invalid TOML, unknown keys, an unknown `kind` or wrongly typed values.
+pub fn parse_farm(text: &str) -> Result<(Vec<FarmGroup>, Vec<String>), toml::de::Error> {
+    let mut groups = toml::from_str::<RawFarm>(text)?.farm;
+    let mut warnings = Vec::new();
+    for group in &mut groups {
+        for item in &mut group.items {
+            if item.count == 0 {
+                warnings.push(format!(
+                    "{}: {:?} has count 0; read as 1",
+                    group.target, item.name
+                ));
+                item.count = 1;
+            }
+            let same = |n: &str| crate::info::same_name(n, &item.name);
+            // Uniques and sets by their in-game name: the table's, or its display override
+            // (`DISPLAY_NAMES` covers both kinds; this is only a warning).
+            let shown = || crate::item_names_data::DISPLAY_NAMES.iter().any(|(_, n)| same(n));
+            let known = match item.kind {
+                FarmKind::Runeword => crate::runewords_data::lookup(&item.name).is_some(),
+                FarmKind::Unique => {
+                    crate::item_names_data::UNIQUE_NAMES.iter().any(|(_, n)| same(n)) || shown()
+                }
+                FarmKind::Set => crate::item_names_data::SET_NAMES.iter().any(|(_, n)| same(n)) || shown(),
+            };
+            if !known {
+                warnings.push(format!(
+                    "{}: unknown {} {:?} (kept, but it can never be found)",
+                    group.target,
+                    item.kind.name(),
+                    item.name
+                ));
+            }
+        }
+    }
+    Ok((groups, warnings))
+}
+
+/// The `farm.toml` next to the config file at `config_path`.
+#[must_use]
+pub fn farm_path_for(config_path: &Path) -> PathBuf {
+    config_path
+        .parent()
+        .map_or_else(|| PathBuf::from("farm.toml"), |p| p.join("farm.toml"))
+}
+
+/// Loads the farm list at `path`. Missing: empty, silently. Unreadable or invalid: one message
+/// on stderr, then empty (no panel). Warnings are reported too.
+pub fn load_farm(path: &Path) -> Vec<FarmGroup> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            eprintln!("farm {}: {e}; no farm list", path.display());
+            return Vec::new();
+        }
+    };
+    match parse_farm(&text) {
+        Ok((groups, warnings)) => {
+            for w in warnings {
+                eprintln!("farm {}: {w}", path.display());
+            }
+            groups
+        }
+        Err(e) => {
+            eprintln!("farm {}: invalid, no farm list:\n{e}", path.display());
+            Vec::new()
+        }
+    }
 }
 
 /// A character's `BiS` selection and (legacy) inline gear list: `[bis.<name>]` (user request,
@@ -832,6 +966,7 @@ pub fn parse(text: &str) -> Result<(Config, Vec<String>), toml::de::Error> {
             builds,
             bis,
             build_defs: BTreeMap::new(),
+            farm: Vec::new(),
         },
         warnings,
     ))
@@ -864,6 +999,7 @@ pub fn load_from(path: &Path) -> Config {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             return Config {
                 build_defs: load_builds(&builds_dir_for(path)),
+                farm: load_farm(&farm_path_for(path)),
                 ..Config::default()
             };
         }
@@ -871,6 +1007,7 @@ pub fn load_from(path: &Path) -> Config {
             eprintln!("config {}: {e}; using the defaults", path.display());
             return Config {
                 build_defs: load_builds(&builds_dir_for(path)),
+                farm: load_farm(&farm_path_for(path)),
                 ..Config::default()
             };
         }
@@ -882,6 +1019,7 @@ pub fn load_from(path: &Path) -> Config {
             }
             eprintln!("config: {}", path.display());
             config.build_defs = load_builds(&builds_dir_for(path));
+            config.farm = load_farm(&farm_path_for(path));
             config
         }
         Err(e) => {
@@ -889,6 +1027,7 @@ pub fn load_from(path: &Path) -> Config {
             // The build files stand on their own: a broken config.toml must not lose them.
             Config {
                 build_defs: load_builds(&builds_dir_for(path)),
+                farm: load_farm(&farm_path_for(path)),
                 ..Config::default()
             }
         }
@@ -1446,6 +1585,76 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad:?} accepted");
         }
+    }
+
+    #[test]
+    fn farm_list_parses() -> Result<()> {
+        let (groups, warnings) = parse_farm(
+            "[[farm]]\nfor = \"Fury Druid\"\nitems = [\n\
+             { name = \"Fortitude\", kind = \"runeword\" },\n\
+             { name = \"Raven Frost\", kind = \"unique\" },\n\
+             { name = \"Lawbringer\", kind = \"runeword\", count = 2 },\n\
+             { name = \"Tal Rasha's Guardianship\", kind = \"set\" },\n\
+             { name = \"Nonesuch\", kind = \"unique\", count = 0 },\n]\n\
+             [[farm]]\nfor = \"Other\"\nitems = []\n",
+        )?;
+        assert_eq!(groups.len(), 2);
+        let fury = groups.first().ok_or_else(|| anyhow!("no group"))?;
+        assert_eq!(fury.target, "Fury Druid");
+        let items: Vec<(&str, FarmKind, u32)> = fury
+            .items
+            .iter()
+            .map(|i| (i.name.as_str(), i.kind, i.count))
+            .collect();
+        assert_eq!(
+            items,
+            [
+                ("Fortitude", FarmKind::Runeword, 1),
+                ("Raven Frost", FarmKind::Unique, 1),
+                ("Lawbringer", FarmKind::Runeword, 2),
+                ("Tal Rasha's Guardianship", FarmKind::Set, 1),
+                ("Nonesuch", FarmKind::Unique, 1),
+            ],
+            "count defaults to 1, 0 reads as 1"
+        );
+        // The unknown name and the zero count are warned about, the entry kept.
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings.iter().all(|w| w.contains("Nonesuch")), "{warnings:?}");
+        assert_eq!(parse_farm("")?.0, vec![], "empty file: no groups");
+        for bad in [
+            "[[farm]]\nfor = \"X\"\nitems = [{ name = \"Smoke\", kind = \"rune\" }]\n",
+            "[[farm]]\nfor = \"X\"\nitems = [{ name = \"Smoke\" }]\n",
+            "[[farm]]\nitems = []\n",
+            "[[farm]]\nfor = \"X\"\nitems = []\ncolour = 1\n",
+            "[[farm]\n",
+        ] {
+            assert!(parse_farm(bad).is_err(), "{bad:?} accepted");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn farm_list_loads_next_to_the_config() -> Result<()> {
+        let dir = temp_dir("farm")?;
+        std::fs::create_dir_all(&dir)?;
+        let config = dir.join("config.toml");
+        assert_eq!(farm_path_for(&config), dir.join("farm.toml"));
+        // Missing farm.toml (and config.toml): no list, no error.
+        assert_eq!(load_from(&config).farm, []);
+        std::fs::write(
+            dir.join("farm.toml"),
+            "[[farm]]\nfor = \"B\"\nitems = [{ name = \"Smoke\", kind = \"runeword\" }]\n",
+        )?;
+        assert_eq!(load_from(&config).farm.len(), 1, "loaded without a config.toml");
+        std::fs::write(&config, "[valuables]\ntrade = [\"S\"]\n")?;
+        assert_eq!(load_from(&config).farm.len(), 1, "and with one");
+        // Malformed: no list (the config itself still loads).
+        std::fs::write(dir.join("farm.toml"), "[[farm]]\nfor = 3\n")?;
+        let loaded = load_from(&config);
+        assert_eq!(loaded.farm, []);
+        assert_eq!(loaded.valuables.trade, vec![Tier::S]);
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
     }
 
     #[test]

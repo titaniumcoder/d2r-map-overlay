@@ -54,3 +54,21 @@ normal_only = ["stamina"]
 #
 # [bis.Demonmaster.slots]
 # weapon = ["Mang Song's Lesson@82", "Heart of the Oak@55"]
+
+# farm.toml (a separate file next to this one, agent-authored; the app only reads it): a
+# cross-character farm list, shown as the dashboard's "Farm list" panel. Gear for a planned
+# build, farmed with other characters. Hot-reloaded like this file. Missing: no panel; invalid:
+# reported once on stderr, no panel.
+#
+# [[farm]]
+# for = "Fury Druid"
+# items = [
+#   { name = "Fortitude", kind = "runeword" },
+#   { name = "Raven Frost", kind = "unique" },
+#   { name = "Lawbringer", kind = "runeword", count = 2 },
+# ]
+#
+# kind: runeword, unique or set (by in-game name); count defaults to 1. An entry is done once
+# the shared stash holds `count` copies, found while the played character carries one
+# elsewhere, else missing. A runeword still to build lists its runes, and the stash panel's
+# rune stacks mark (⚑) the runes the list still needs.

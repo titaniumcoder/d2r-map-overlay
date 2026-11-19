@@ -3,8 +3,8 @@
 //! to `config.toml` with comments preserved (user decision, 2026-11-17). The gear itself is
 //! authored by the agent in `builds/*.toml` and shown read-only, annotated with the live ✓
 //! (owned / in the shared stash) and strike-through where the equipped piece is already
-//! better. The overlay watches the config file and the `builds/` directory and hot-reloads
-//! them (see `live`). The app also serves the live dashboard: the level, keep, sell, give-away
+//! better. The overlay watches the config file, the `builds/` directory and `farm.toml` and
+//! hot-reloads them (see `live`). The app also serves the live dashboard: the level, keep, sell, give-away
 //! and `BiS` blocks and the breakpoint guide (the overlay draws only the map and info line),
 //! published by `live` each tick and read by `GET /api/live`.
 
@@ -651,6 +651,9 @@ pub struct LiveInfo<'a> {
     pub white_bases: &'a [String],
     /// The quest flags of the current game ([`crate::quests::read`]); empty when unread.
     pub quests: &'a [u16],
+    /// The cross-character farm list (`farm.toml`, [`crate::config::load_farm`]): the Farm
+    /// panel ([`farm_json`]).
+    pub farm: &'a [crate::config::FarmGroup],
     /// The vendor trade window open right now ([`crate::game::Snapshot::shop`]).
     pub shop: Option<&'a crate::shop::Shop>,
     /// Base strength and dexterity ([`crate::game::Player::strength`]); `None` if unread.
@@ -681,7 +684,8 @@ pub struct LiveInfo<'a> {
 /// pieces ordered best→worst, their `state` computed here (see [`grid_pieces`]). The shared
 /// stash comes as `stash_pages` (the normal tabs in the game's UI order, [`stash_pages`]) and
 /// `stash_materials` (the gems/runes/materials tab's stacks, [`stash_materials`]). The
-/// `skills` section is the class's three skill trees ([`skills_json`]).
+/// `skills` section is the class's three skill trees ([`skills_json`]); `farm` is the
+/// cross-character farm list ([`farm_json`], `null` without one).
 #[must_use]
 pub fn live_json(info: &LiveInfo) -> String {
     let class = CLASS_NAMES
@@ -719,6 +723,7 @@ pub fn live_json(info: &LiveInfo) -> String {
         "recipes": recipes_json(info),
         "upgrades": upgrades_json(info),
         "shop": shop_json(info),
+        "farm": farm_json(info),
     })
     .to_string()
 }
@@ -1238,6 +1243,201 @@ fn need_totals(inputs: &[Input]) -> Vec<(String, u32)> {
         }
     }
     totals
+}
+
+/// Where a farm-list entry stands, across characters: `Done` once the shared stash holds
+/// `count` copies, `Found` while the played character carries a copy outside it, else
+/// `Missing`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FarmStatus {
+    Done,
+    Found,
+    Missing,
+}
+
+impl FarmStatus {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Found => "found",
+            Self::Missing => "missing",
+        }
+    }
+}
+
+/// The copies of farm entry `item`: `(in the shared stash, carried by the played character
+/// outside it)`. A runeword counts one per copy ([`LiveInfo::runeword_copies`] and the
+/// stash's runeword items, like [`runeword_copies`]); a unique or set counts its identified
+/// stash items of that quality, and at most one carried copy ([`LiveInfo::owned`] lists each
+/// name once).
+fn farm_copies(item: &crate::config::FarmItem, info: &LiveInfo) -> (u32, u32) {
+    use crate::config::FarmKind;
+    use crate::offsets::item_data;
+    let same = |n: &str| crate::info::same_name(n, &item.name);
+    let stash_items = info.stash.iter().flat_map(|tab| &tab.items);
+    let (stashed, carried) = match item.kind {
+        FarmKind::Runeword => (
+            stash_items.filter(|i| i.runeword && same(&i.name)).count(),
+            info.runeword_copies.iter().filter(|n| same(n)).count(),
+        ),
+        FarmKind::Unique | FarmKind::Set => {
+            let quality = if item.kind == FarmKind::Unique {
+                item_data::QUALITY_UNIQUE
+            } else {
+                item_data::QUALITY_SET
+            };
+            (
+                stash_items
+                    .filter(|i| i.identified && u32::from(i.quality) == quality && same(&i.name))
+                    .count(),
+                usize::from(info.owned.iter().any(|n| same(n))),
+            )
+        }
+    };
+    let clamp = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    (clamp(stashed), clamp(carried))
+}
+
+/// The status of a farm entry wanting `count` copies with `stashed` in the shared stash and
+/// `carried` on the played character.
+const fn farm_status(count: u32, stashed: u32, carried: u32) -> FarmStatus {
+    if stashed >= count {
+        FarmStatus::Done
+    } else if carried > 0 {
+        FarmStatus::Found
+    } else {
+        FarmStatus::Missing
+    }
+}
+
+/// The farm list (`live_json`'s `farm` section), `null` without one:
+/// `{ "groups": [{ "for", "items": [{ "name", "kind", "count", "stashed", "carried",
+/// "status", "runes", "bases" }] }], "runes": [{ "rune", "code", "need", "have", "stash",
+/// "for" }] }`.
+/// `status` is `"done"` / `"found"` / `"missing"` ([`farm_status`]). A runeword not done
+/// with copies still to build (`count` minus stashed and carried) lists its `runes` as
+/// `{ "rune", "need", "have", "status" }` (need = per copy × copies to build, have from
+/// [`owned_materials`], status `"have"`/`"missing"`) and its allowed `bases`; otherwise both
+/// are empty. The top-level `runes` sums those needs per rune over the whole list, in rune
+/// order, with the runewords needing it (`for`), the owned count (`have`) and the shared
+/// materials tab's own count (`stash`): the stash panel marks its rune stacks from it.
+fn farm_json(info: &LiveInfo) -> serde_json::Value {
+    if info.farm.is_empty() {
+        return serde_json::Value::Null;
+    }
+    let materials = owned_materials(info);
+    let stash_only = owned_materials(&LiveInfo {
+        held_materials: &[],
+        ..*info
+    });
+    let mut wanted = Vec::new();
+    let groups: Vec<serde_json::Value> = info
+        .farm
+        .iter()
+        .map(|group| {
+            let items: Vec<serde_json::Value> = group
+                .items
+                .iter()
+                .map(|item| farm_item_json(item, info, &materials, &mut wanted))
+                .collect();
+            serde_json::json!({ "for": group.target, "items": items })
+        })
+        .collect();
+    wanted.sort_by_key(|(rune, _, _)| crate::stash::RUNE_NAMES.iter().position(|r| r == rune));
+    let runes: Vec<serde_json::Value> = wanted
+        .into_iter()
+        .map(|(rune, need, words)| {
+            let count = |m: &[(String, u32)]| rune_count(rune, m);
+            let code = crate::stash::RUNE_NAMES
+                .iter()
+                .position(|r| *r == rune)
+                .map(|i| format!("r{:02}", i.saturating_add(1)));
+            serde_json::json!({
+                "rune": rune,
+                "code": code,
+                "need": need,
+                "have": count(&materials),
+                "stash": count(&stash_only),
+                "for": words,
+            })
+        })
+        .collect();
+    serde_json::json!({ "groups": groups, "runes": runes })
+}
+
+/// How many of `rune` (`"Sol"`) the merged material counts hold.
+fn rune_count(rune: &str, materials: &[(String, u32)]) -> u32 {
+    Input::Material {
+        name: format!("{rune} Rune"),
+        need: 0,
+    }
+    .have(materials)
+    .unwrap_or(0)
+}
+
+/// One farm entry's JSON ([`farm_json`]); a runeword still to build adds its rune needs to
+/// `wanted` (rune → total need, runewords needing it).
+fn farm_item_json(
+    item: &crate::config::FarmItem,
+    info: &LiveInfo,
+    materials: &[(String, u32)],
+    wanted: &mut Vec<(&'static str, u32, Vec<String>)>,
+) -> serde_json::Value {
+    let (stashed, carried) = farm_copies(item, info);
+    let status = farm_status(item.count, stashed, carried);
+    let to_build = item.count.saturating_sub(stashed.saturating_add(carried));
+    let word = (item.kind == crate::config::FarmKind::Runeword && to_build > 0)
+        .then(|| crate::runewords_data::lookup(&item.name))
+        .flatten();
+    let mut runes = Vec::new();
+    if let Some(word) = word {
+        let inputs: Vec<Input> = word
+            .runes
+            .iter()
+            .map(|r| Input::Material {
+                name: format!("{r} Rune"),
+                need: to_build,
+            })
+            .collect();
+        // Each distinct rune once, in socket order, with its merged need (a runeword naming
+        // one rune twice needs two per copy).
+        let totals = need_totals(&inputs);
+        let mut seen: Vec<&str> = Vec::new();
+        for &rune in word.runes {
+            if seen.contains(&rune) {
+                continue;
+            }
+            seen.push(rune);
+            let key = format!("{rune} rune").to_lowercase();
+            let need = totals.iter().find(|(k, _)| *k == key).map_or(0, |(_, n)| *n);
+            let have = rune_count(rune, materials);
+            runes.push(serde_json::json!({
+                "rune": rune,
+                "need": need,
+                "have": have,
+                "status": if have >= need { "have" } else { "missing" },
+            }));
+            match wanted.iter_mut().find(|(r, _, _)| *r == rune) {
+                Some((_, total, words)) => {
+                    *total = total.saturating_add(need);
+                    if !words.contains(&item.name) {
+                        words.push(item.name.clone());
+                    }
+                }
+                None => wanted.push((rune, need, vec![item.name.clone()])),
+            }
+        }
+    }
+    serde_json::json!({
+        "name": item.name,
+        "kind": item.kind.name(),
+        "count": item.count,
+        "stashed": stashed,
+        "carried": carried,
+        "status": status.name(),
+        "runes": runes,
+        "bases": word.map_or(&[][..], |w| w.bases),
+    })
 }
 
 /// The `ItemData::BODY` slots a build slot's equipped piece sits in (the merged ring column
@@ -2384,6 +2584,27 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .ins .hint { flex-basis: 100%; padding-left: 36px; font-size: 11px; color: var(--good); }
 .rc .res { font-size: 12px; color: #b9c4ff; overflow-wrap: anywhere; }
 .rc .note { font-size: 11px; color: var(--faint); margin-top: 3px; }
+/* Farm list: per planned build, each item's cross-character status */
+.fms { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.fm { background: var(--panel2); border: 1px solid var(--line2); border-left: 3px solid var(--line); border-radius: 0 6px 6px 0; padding: 6px 10px; min-width: 0; }
+.fm.unique { border-left-color: var(--unique); } .fm.unique .nm { color: var(--unique); }
+.fm.set { border-left-color: var(--set); } .fm.set .nm { color: var(--set); }
+.fm.runeword { border-left-color: var(--rune); } .fm.runeword .nm { color: var(--rune); }
+.fm.done { opacity: .6; }
+.fm-h { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
+.fm-h .nm { font-weight: 650; flex: 1 1 10em; min-width: 0; overflow-wrap: anywhere; }
+.fm-h .kd { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+.fst { font-size: 11px; font-weight: 650; border: 1px solid currentColor; border-radius: 999px; padding: 0 7px;
+  text-transform: uppercase; letter-spacing: .06em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fst.done { color: var(--good); } .fst.found { color: var(--have); } .fst.missing { color: var(--dim); }
+.fm .cr { font-size: 11.5px; color: var(--have); }
+.fm .rn { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.fm .rn .have { color: var(--good); } .fm .rn .missing { color: var(--bad); }
+.fm .bs { font-size: 11px; color: var(--faint); margin-top: 2px; overflow-wrap: anywhere; }
+.stk.farm { border-color: var(--accent); box-shadow: inset 0 0 0 1px rgba(212,154,58,.35); }
+.stk.farm::before { content: "⚑"; color: var(--accent); font-size: 10px; }
+.stk.short .q { color: var(--bad); }
+.stk.absent { opacity: .5; } .stk.absent .nm { color: var(--dim); }
 details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer; font-size: 12px; color: var(--dim); margin-bottom: 8px; }
 
 @media (max-width: 1200px) { .gear { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
@@ -2420,6 +2641,8 @@ Each card is a slot. The dashed box shows what is equipped (name and required le
 <div id="skills"></div></section>
 <section class="panel full" id="recipepanel" hidden><h2>Recipes <span class="sub">✓ = you have it (shared stash, inventory, cube, stash) · bases can't be read: check them</span></h2>
 <div id="recipes"></div></section>
+<section class="panel full" id="farmpanel" hidden><h2>Farm list <span class="sub">across characters · done = in the shared stash · found = on this character · ⚑ in the stash runes = needed</span></h2>
+<div id="farm"></div></section>
 <div class="grid">
 <section class="panel"><h2>Where to go <span class="sub">monster level around yours</span></h2><div id="levels"></div></section>
 <section class="panel"><h2>Shared stash</h2><div id="stash"></div></section>
@@ -2536,12 +2759,29 @@ function stash(r) {
     return `<div class="page"><h3><span>page ${esc(p.page)}</span><span>${(p.items || []).length || ""}</span></h3>${items}</div>`;
   }).join("");
   const m = r.stash_materials || {};
-  const stacks = (list, cls) => (list || []).map(s =>
-    `<span class="stk ${cls}" title="${esc(s.code || "")}"><span class="nm">${esc(s.name)}</span><span class="q">${esc(s.qty)}</span></span>`).join("");
+  // The runes the farm list's runewords still need (by "<Rune> Rune" stack name): those stacks
+  // get the ⚑ marker, a tooltip naming the runewords and stash/need when short; needed runes
+  // the stash lacks are added greyed as 0/need.
+  const farmRunes = new Map(((r.farm && r.farm.runes) || []).map(f => [f.rune + " Rune", f]));
+  const runeNo = s => parseInt(String(s.code || "").slice(1), 10) || 99;
+  const runeList = (m.runes || []).slice();
+  for (const [name, f] of farmRunes) {
+    if (!runeList.some(s => s.name === name)) runeList.push({ name, qty: 0, code: f.code, absent: true });
+  }
+  runeList.sort((a, b) => runeNo(a) - runeNo(b));
+  const stacks = (list, cls) => (list || []).map(s => {
+    const f = cls === "rune" ? farmRunes.get(s.name) : null;
+    if (!f) return `<span class="stk ${cls}" title="${esc(s.code || "")}"><span class="nm">${esc(s.name)}</span><span class="q">${esc(s.qty)}</span></span>`;
+    const short = (s.qty || 0) < f.need;
+    const tip = `farm: ${f.for.join(", ")} · need ${f.need} · have ${f.have} (shared stash ${f.stash})`;
+    return `<span class="stk ${cls} farm${short ? " short" : ""}${s.absent ? " absent" : ""}" title="${esc(tip)}"><span class="nm">${esc(s.name)}</span>`
+      + `<span class="q">${short ? `${esc(s.qty || 0)}/${esc(f.need)}` : esc(s.qty)}</span></span>`;
+  }).join("");
   const group = (title, list, cls) => list && list.length
     ? `<div><h3>${title}</h3><div class="stacks">${stacks(list, cls)}</div></div>` : "";
-  const mats = group("Runes", m.runes, "rune") + group("Gems", m.gems, "gem") + group("Materials", m.other, "mat");
-  const loaded = (r.stash_pages || []).some(p => (p.items || []).length) || mats;
+  const mats = group("Runes", runeList, "rune") + group("Gems", m.gems, "gem") + group("Materials", m.other, "mat");
+  const loaded = (r.stash_pages || []).some(p => (p.items || []).length)
+    || (m.runes || []).length || (m.gems || []).length || (m.other || []).length;
   el.innerHTML = (loaded ? "" : '<div class="empty">open the stash in game once to load it</div>')
     + `<div class="pages">${pages}</div><div class="mats">${mats}</div>`;
 }
@@ -2691,6 +2931,26 @@ function recipes(list) {
   });
   $("recipes").innerHTML = groups.join("");
 }
+// The farm list: one group per planned build, one card per item with its cross-character
+// status; a runeword still to build lists its runes (have/need) and allowed bases.
+function farm(f) {
+  const groups = (f && f.groups) || [];
+  $("farmpanel").hidden = !groups.length;
+  $("farm").innerHTML = groups.map(g => {
+    const items = g.items || [];
+    const done = items.filter(i => i.status === "done").length;
+    const cards = items.map(i => {
+      const n = i.count > 1 ? ` ${esc(i.stashed)}/${esc(i.count)}` : "";
+      const carried = i.status !== "done" && i.carried ? `<div class="cr">carried here: ${esc(i.carried)} · put in the shared stash</div>` : "";
+      const runes = (i.runes || []).length
+        ? `<div class="rn">${i.runes.map(x => `<span class="${esc(x.status)}">${esc(x.rune)} ${x.status === "have" ? "✓" : esc(x.have) + "/" + esc(x.need)}</span>`).join("")}</div>` : "";
+      const bases = (i.bases || []).length ? `<div class="bs">${esc(i.bases.join(", "))}</div>` : "";
+      return `<div class="fm ${esc(i.kind)} ${esc(i.status)}"><div class="fm-h"><span class="nm">${esc(i.name)}</span>`
+        + `<span class="kd">${esc(i.kind)}</span><span class="fst ${esc(i.status)}">${esc(i.status)}${n}</span></div>${carried}${runes}${bases}</div>`;
+    }).join("");
+    return `<h3 class="row-h">for ${esc(g.for)} · ${done}/${items.length} done</h3><div class="fms">${cards}</div>`;
+  }).join("");
+}
 // The open trade window: one column per store tab, the build's pieces first and bold (with
 // their slot), then the items whose stats beat the worn ones ("▲ better" and why), the ones
 // above the character level dimmed.
@@ -2714,8 +2974,9 @@ function shop(s) {
 function render(r) {
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
-    for (const id of ["guide", "levels", "gear", "merc", "extras", "targets", "statsplan", "tips", "stash", "sell", "skills", "recipes"]) $(id).innerHTML = "";
+    for (const id of ["guide", "levels", "gear", "merc", "extras", "targets", "statsplan", "tips", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
     $("recipepanel").hidden = true;
+    $("farmpanel").hidden = true;
     shop(null);
     stage(null);
     // The upgrade keys stay remembered: coming back from the menu must not chime again.
@@ -2740,6 +3001,7 @@ function render(r) {
   gear(r.gear);
   skillTrees(r.skills);
   recipes(r.recipes);
+  farm(r.farm);
   stash(r);
   sell(r);
 }
@@ -3350,6 +3612,7 @@ mod tests {
             held_materials: &[],
             white_bases: &[],
             quests: &[],
+            farm: &[],
             shop: None,
             strength: None,
             dexterity: None,
@@ -3392,6 +3655,7 @@ mod tests {
             held_materials: &[],
             white_bases: &[],
             quests: &[],
+            farm: &[],
             shop: None,
             strength: None,
             dexterity: None,
@@ -4447,6 +4711,7 @@ mod tests {
             held_materials: &[],
             white_bases: &[],
             quests: &[],
+            farm: &[],
             shop: Some(&shop),
             strength: None,
             dexterity: None,
@@ -4588,6 +4853,7 @@ mod tests {
             held_materials: &[],
             white_bases: &[],
             quests: &[],
+            farm: &[],
             shop: Some(&shop),
             strength: Some(30),
             dexterity: Some(40),
@@ -4652,6 +4918,7 @@ mod tests {
                 held_materials: &[],
                 white_bases: &[],
                 quests: &[],
+                farm: &[],
                 shop: None,
                 strength: None,
                 dexterity: None,
@@ -4850,5 +5117,217 @@ mod tests {
         let config = html_page("/config");
         assert!(config.contains("d2r-map-overlay config"), "{config}");
         assert!(html_page("/nope").starts_with("HTTP/1.1 404"));
+    }
+
+    /// The Fury Druid farm list of `farm.toml`, parsed like the real file.
+    fn fury_farm() -> Result<Vec<config::FarmGroup>> {
+        let (groups, warnings) = config::parse_farm(
+            "[[farm]]\nfor = \"Fury Druid\"\nitems = [\n\
+             { name = \"Fortitude\", kind = \"runeword\" },\n\
+             { name = \"Raven Frost\", kind = \"unique\" },\n\
+             { name = \"Ribcracker\", kind = \"unique\" },\n\
+             { name = \"Lawbringer\", kind = \"runeword\", count = 2 },\n\
+             { name = \"Smoke\", kind = \"runeword\" },\n\
+             { name = \"Bulwark\", kind = \"runeword\" },\n]\n",
+        )?;
+        assert_eq!(warnings, Vec::<String>::new());
+        Ok(groups)
+    }
+
+    /// The farm section's items as `(name, status, stashed, carried)`.
+    fn farm_rows(json: &serde_json::Value) -> Vec<(String, String, u64, u64)> {
+        json.pointer("/farm/groups/0/items")
+            .and_then(serde_json::Value::as_array)
+            .map_or_default(|items| {
+                items
+                    .iter()
+                    .map(|i| {
+                        let s = |k: &str| i.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_owned();
+                        let n = |k: &str| i.get(k).and_then(serde_json::Value::as_u64).unwrap_or(99);
+                        (s("name"), s("status"), n("stashed"), n("carried"))
+                    })
+                    .collect()
+            })
+    }
+
+    /// An item's runes as `(rune, need, have)`.
+    fn farm_runes(json: &serde_json::Value, item: usize) -> Vec<(String, u64, u64)> {
+        json.pointer(&format!("/farm/groups/0/items/{item}/runes"))
+            .and_then(serde_json::Value::as_array)
+            .map_or_default(|runes| {
+                runes
+                    .iter()
+                    .map(|r| {
+                        (
+                            r.get("rune")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_owned(),
+                            r.get("need").and_then(serde_json::Value::as_u64).unwrap_or(99),
+                            r.get("have").and_then(serde_json::Value::as_u64).unwrap_or(99),
+                        )
+                    })
+                    .collect()
+            })
+    }
+
+    #[test]
+    fn farm_status_done_found_missing_and_rune_needs() -> Result<()> {
+        use crate::offsets::item_data::{QUALITY_NORMAL, QUALITY_UNIQUE};
+        let farm = fury_farm()?;
+        let blocks = crate::render::TextBlocks::default();
+        let mut lawbringer = stash_item("Lawbringer", "flc", QUALITY_NORMAL, None);
+        lawbringer.runeword = true;
+        let mut stash = vec![crate::stash::StashTab {
+            kind: crate::stash::TabKind::Page(1),
+            items: vec![
+                stash_item("Raven Frost", "rin", QUALITY_UNIQUE, None),
+                lawbringer,
+                // An unidentified unique is no copy yet.
+                crate::stash::StashItem {
+                    identified: false,
+                    ..stash_item("Ribcracker", "8cs", QUALITY_UNIQUE, None)
+                },
+            ],
+        }];
+        stash.extend(materials_tab(&[("El Rune", "r01", 8), ("Io Rune", "r16", 1)]));
+        let owned = ["Ribcracker".to_owned(), "Lawbringer".to_owned()];
+        let copies = ["Lawbringer".to_owned()];
+        let held = [("Sol Rune".to_owned(), 1)];
+        let mut info = live_info(5, &blocks, &[], &stash, &[]);
+        info.farm = &farm;
+        info.owned = &owned;
+        info.runeword_copies = &copies;
+        info.held_materials = &held;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        assert_eq!(
+            json.pointer("/farm/groups/0/for"),
+            Some(&serde_json::json!("Fury Druid"))
+        );
+        let row = |name: &str, status: &str, stashed: u64, carried: u64| {
+            (name.to_owned(), status.to_owned(), stashed, carried)
+        };
+        assert_eq!(
+            farm_rows(&json),
+            [
+                row("Fortitude", "missing", 0, 0),
+                row("Raven Frost", "done", 1, 0),
+                row("Ribcracker", "found", 0, 1),
+                // 1 stashed + 1 carried of 2: not done, found, nothing left to build.
+                row("Lawbringer", "found", 1, 1),
+                row("Smoke", "missing", 0, 0),
+                row("Bulwark", "missing", 0, 0),
+            ]
+        );
+        let rune = |r: &str, need: u64, have: u64| (r.to_owned(), need, have);
+        assert_eq!(
+            farm_runes(&json, 0),
+            [
+                rune("El", 1, 8),
+                rune("Sol", 1, 1),
+                rune("Dol", 1, 0),
+                rune("Lo", 1, 0)
+            ]
+        );
+        assert_eq!(farm_runes(&json, 3), [], "Lawbringer: both copies exist");
+        assert_eq!(farm_runes(&json, 1), [], "uniques have no runes");
+        assert_eq!(
+            json.pointer("/farm/groups/0/items/0/bases"),
+            Some(&serde_json::json!(["weapons", "armor"]))
+        );
+        assert_eq!(
+            json.pointer("/farm/groups/0/items/3/bases"),
+            Some(&serde_json::json!([]))
+        );
+        // The rune list sums over the list: Sol for Fortitude and Bulwark; held runes count
+        // as had, but not as in the stash.
+        let runes = json
+            .pointer("/farm/runes")
+            .and_then(serde_json::Value::as_array)
+            .context("farm runes")?;
+        let names: Vec<&str> = runes.iter().filter_map(|r| r.get("rune")?.as_str()).collect();
+        assert_eq!(
+            names,
+            ["El", "Nef", "Sol", "Shael", "Dol", "Io", "Lum", "Lo"],
+            "rune order"
+        );
+        let sol = runes
+            .iter()
+            .find(|r| r.get("rune").and_then(|v| v.as_str()) == Some("Sol"))
+            .context("Sol")?;
+        assert_eq!(
+            sol,
+            &serde_json::json!({
+                "rune": "Sol", "code": "r12", "need": 2, "have": 1, "stash": 0,
+                "for": ["Fortitude", "Bulwark"],
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn farm_counts_split_and_multiply_rune_needs() -> Result<()> {
+        let farm = fury_farm()?;
+        let blocks = crate::render::TextBlocks::default();
+        let mut info = live_info(5, &blocks, &[], &[], &[]);
+        info.farm = &farm;
+        // No copy anywhere: two Lawbringers to build, two of each rune.
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        let rune = |r: &str, need: u64| (r.to_owned(), need, 0);
+        assert_eq!(
+            farm_runes(&json, 3),
+            [rune("Amn", 2), rune("Lem", 2), rune("Ko", 2)]
+        );
+        // One carried: one left to build.
+        let copies = ["Lawbringer".to_owned()];
+        info.runeword_copies = &copies;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        assert_eq!(
+            farm_runes(&json, 3),
+            [rune("Amn", 1), rune("Lem", 1), rune("Ko", 1)]
+        );
+        assert_eq!(
+            json.pointer("/farm/groups/0/items/3/status"),
+            Some(&serde_json::json!("found"))
+        );
+        // Two in the shared stash: done, no runes, gone from the rune list.
+        let mut stashed = stash_item("Lawbringer", "flc", 2, None);
+        stashed.runeword = true;
+        let stash = vec![crate::stash::StashTab {
+            kind: crate::stash::TabKind::Page(1),
+            items: vec![stashed.clone(), stashed],
+        }];
+        info.stash = &stash;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        assert_eq!(
+            json.pointer("/farm/groups/0/items/3/status"),
+            Some(&serde_json::json!("done"))
+        );
+        assert_eq!(farm_runes(&json, 3), []);
+        let runes = json.pointer("/farm/runes").map_or_default(ToString::to_string);
+        assert!(!runes.contains("\"Amn\""), "{runes}");
+        Ok(())
+    }
+
+    #[test]
+    fn farm_status_rule() {
+        assert_eq!(farm_status(1, 1, 0), FarmStatus::Done);
+        assert_eq!(farm_status(1, 2, 1), FarmStatus::Done, "extra copies stay done");
+        assert_eq!(farm_status(2, 1, 1), FarmStatus::Found);
+        assert_eq!(
+            farm_status(2, 1, 0),
+            FarmStatus::Missing,
+            "stashed short, none carried"
+        );
+        assert_eq!(farm_status(1, 0, 0), FarmStatus::Missing);
+    }
+
+    #[test]
+    fn no_farm_list_is_null() -> Result<()> {
+        let blocks = crate::render::TextBlocks::default();
+        let info = live_info(5, &blocks, &[], &[], &[]);
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        assert_eq!(json.get("farm"), Some(&serde_json::Value::Null));
+        Ok(())
     }
 }
