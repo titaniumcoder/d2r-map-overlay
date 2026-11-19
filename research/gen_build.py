@@ -43,7 +43,7 @@ BUILDS = {
     ),
     "druid-leveling": dict(
         name="Druid Leveling", cls="druid", damages=["fire", "physical"],
-        next="druid tornado", switch_level=38, auto_switch=False,
+        next="druid tornado", switch_level=38, auto_switch=True,
         notes="Maxroll Druid Leveling (Teo1904): Firestorm / Molten Boulder / Fissure to level 38, then respec to Tornado + Hurricane (next stage).",
         respec_note=("respec to Tornado + Hurricane before Nightmare Mephisto (~level 38, as early as NM Act 2): "
                      "Tornado 15, Hurricane 9, Cyclone Armor 14, 1 each in Arctic Blast and Twister"),
@@ -52,7 +52,7 @@ BUILDS = {
     # practically all out of date"). Summoner to 40, then a reset into Fury (werewolf).
     "summoner-druid-leveling": dict(
         name="Summoner Druid Leveling", cls="druid", damages=["physical", "cold"], default=True,
-        next="fury druid", switch_level=40, auto_switch=False,
+        next="fury druid", switch_level=40, auto_switch=True,
         notes="Summoner Druid to level 40 (Ravens, Spirit Wolves, Dire Wolves, Grizzly), then a skill reset into Fury (next stage). Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
         respec_note=("respec to Fury at level 40 (Akara's free reset): Fury 20, Lycanthropy 12 (300 s form), Werewolf 7, "
                      "Feral Rage 3, Rabies 1, Oak Sage 1 = 44 points (Normal quests + Nightmare Den of Evil); "
@@ -75,7 +75,7 @@ BUILDS = {
     # the earliest for it (its Summary says 32+; the detailed stage and the planner say 38).
     "amazon-leveling": dict(
         name="Amazon Leveling", cls="amazon", damages=["fire", "poison"], default=True,
-        next="lightning fury", switch_level=38, auto_switch=False,
+        next="lightning fury", switch_level=38, auto_switch=True,
         notes="Maxroll Amazon Leveling (Teo1904): Poison Javelin / Exploding Arrow to level 38, then respec to Lightning Fury + Charged Strike (next stage).",
         respec_note=("respec to Lightning Fury + Charged Strike on entering Act 4 Nightmare (level 38, the earliest per the guide): "
                      "Charged Strike 19, Lightning Fury 9, Pierce 5, 1 each in Dodge, Avoid, Evade and the prerequisites "
@@ -89,7 +89,7 @@ BUILDS = {
     # before entering Nightmare. This sorceress is the account's magic-find farmer (user, 2026-11-19).
     "sorceress-leveling": dict(
         name="Sorceress Leveling", cls="sorceress", damages=["lightning", "cold"], default=True,
-        next="blizzard sorceress", switch_level=26, auto_switch=False,
+        next="blizzard sorceress", switch_level=26, auto_switch=True,
         notes="Maxroll Sorceress Leveling (Teo1904): Charged Bolt / Nova to level 26, then respec to Blizzard (next stage). The account's magic-find farm character: cheap MF pieces (Chance Guards, Nagelring, Goldwrap, Splendor) are listed as alternatives.",
         respec_note=("respec to Blizzard at level 26, after the Normal Throne of Destruction waves and before entering Nightmare (Akara): "
                      "Static Field 5, Teleport 1, Frozen Armor 1, Ice Blast 7, Glacial Spike 9, Blizzard 3, plus 1 each in Telekinesis, "
