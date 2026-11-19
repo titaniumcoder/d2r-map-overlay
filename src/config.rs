@@ -137,10 +137,10 @@ pub struct Build {
     pub auto_switch: bool,
     /// The guide's advice for the switch (respec, prerequisites).
     pub switch_note: Option<String>,
-    /// Items the automatic switch waits for besides the level (`switch_requires =
-    /// ["Raven Frost"]`): unique/set display names or runeword names, each owned by the
-    /// account (see [`owns_item`]). Empty: the level alone decides.
-    pub switch_requires: Vec<String>,
+    /// What the automatic switch waits for besides the level: every group met (see
+    /// [`SwitchGroup`]; `switch_requires = ["Harmony", { label = "Cannot Be Frozen", any =
+    /// ["Raven Frost", "Nosferatu's Coil"] }]`). Empty: the level alone decides.
+    pub switch_requires: Vec<SwitchGroup>,
     /// Cumulative hard-point targets, in the guide's order (`[[skill_plan]]`).
     pub skill_plan: Vec<SkillTarget>,
     /// The recipes the guide uses (`[[recipes]]`: runewords, crafts, cube recipes …).
@@ -149,6 +149,47 @@ pub struct Build {
     pub tips: Vec<Tip>,
     /// How to spend stat points, one line per level range.
     pub stats_plan: Vec<String>,
+}
+
+/// One condition of a stage switch ([`Build::switch_requires`]): met when the account holds
+/// `count` copies of the items in `any` together (unique/set display names or runeword names;
+/// copies as counted by [`crate::stash::Holdings::count`]: shared stash, the character, its
+/// mercenary's gear). A plain string in the TOML is a group of one item, one copy, labelled
+/// with its name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchGroup {
+    /// What the group stands for ("Cannot Be Frozen"), shown on the dashboard.
+    pub label: String,
+    /// The alternatives, at least one.
+    pub any: Vec<String>,
+    /// The copies needed, summed over `any` (at least 1).
+    pub count: u32,
+}
+
+impl SwitchGroup {
+    /// A group of one copy of the single item `name`, labelled with it.
+    #[must_use]
+    pub fn item(name: &str) -> Self {
+        Self {
+            label: name.to_owned(),
+            any: vec![name.to_owned()],
+            count: 1,
+        }
+    }
+
+    /// The copies held of the group's items, `copies` giving each item's.
+    #[must_use]
+    pub fn have(&self, copies: &dyn Fn(&str) -> u32) -> u32 {
+        self.any
+            .iter()
+            .fold(0, |sum: u32, item| sum.saturating_add(copies(item)))
+    }
+
+    /// Whether [`SwitchGroup::have`] reaches `count`.
+    #[must_use]
+    pub fn met(&self, copies: &dyn Fn(&str) -> u32) -> bool {
+        self.have(copies) >= self.count
+    }
 }
 
 /// One `[[skill_plan]]` entry: by character level `by_level` the guide has `points` hard
@@ -357,20 +398,11 @@ fn item_name_known(name: &str) -> bool {
         || crate::item_names_data::DISPLAY_NAMES.iter().any(|(_, n)| same(n))
 }
 
-/// Whether the account owns `item` (a [`Build::switch_requires`] name): among the played
-/// character's `owned` names (worn, carried, cubed, personally stashed uniques, sets and
-/// runewords: [`crate::game::Snapshot::owned_names`]) or the shared stash's `stash` names
-/// ([`crate::game::Snapshot::stash_names`]), matched like the farm list ([`crate::info::same_name`]).
+/// The copy count of callers without live data (the config page, `level` unknown): nothing
+/// is owned, so a `switch_requires` is never met.
 #[must_use]
-pub fn owns_item(item: &str, owned: &[String], stash: &[String]) -> bool {
-    owned.iter().chain(stash).any(|n| crate::info::same_name(n, item))
-}
-
-/// The ownership test of callers without live data (the config page, `level` unknown):
-/// nothing is owned, so a `switch_requires` is never met.
-#[must_use]
-pub const fn owns_nothing(_item: &str) -> bool {
-    false
+pub const fn owns_nothing(_item: &str) -> u32 {
+    0
 }
 
 /// The `farm.toml` next to the config file at `config_path`.
@@ -537,8 +569,8 @@ impl Config {
 
     /// The character's current guide stage: the selected build (else its class's default),
     /// followed along `next` while the stage switches automatically (`auto_switch`), the
-    /// character `level` has reached `switch_level` and `owns` every `switch_requires` item
-    /// (see [`owns_item`]). The items count as owned, too, for a switch into a stage the
+    /// character `level` has reached `switch_level` and every `switch_requires` group is met
+    /// (`owns` gives an item's copies held, see [`SwitchGroup`]). The groups count as met, too, for a switch into a stage the
     /// character has `reached` before or into one leading there ([`Config::leads_to`]): the
     /// shared stash is unread until opened each game, and a switch is one-way. A `next` that
     /// is already part of the chain stops it (cycle guard). `class`/`level` are `None` where
@@ -550,7 +582,7 @@ impl Config {
         name: &str,
         class: Option<u32>,
         level: Option<u8>,
-        owns: &dyn Fn(&str) -> bool,
+        owns: &dyn Fn(&str) -> u32,
         reached: Option<&str>,
     ) -> Option<Stage<'_>> {
         let (start, class_default) = match self.selected(name) {
@@ -571,7 +603,7 @@ impl Config {
                     .switch_level
                     .zip(level)
                     .is_some_and(|(switch, level)| level >= switch)
-                && (build.switch_requires.iter().all(|item| owns(item))
+                && (build.switch_requires.iter().all(|group| group.met(owns))
                     || reached.is_some_and(|reached| self.leads_to(next_slug, reached)));
             if !due || chain.contains(&next_slug) {
                 break;
@@ -617,7 +649,7 @@ impl Config {
         name: &str,
         class: Option<u32>,
         level: Option<u8>,
-        owns: &dyn Fn(&str) -> bool,
+        owns: &dyn Fn(&str) -> u32,
         reached: Option<&str>,
     ) -> Option<Bis> {
         if let Some(bis) = self.bis.get(&name.to_lowercase())
@@ -643,7 +675,7 @@ impl Config {
         name: &str,
         class: Option<u32>,
         level: Option<u8>,
-        owns: &dyn Fn(&str) -> bool,
+        owns: &dyn Fn(&str) -> u32,
         reached: Option<&str>,
     ) -> &[Damage] {
         if let Some(damages) = self.builds.names.get(&name.to_lowercase()) {
@@ -805,11 +837,87 @@ struct RawBuild {
     switch_level: Option<u8>,
     auto_switch: bool,
     switch_note: String,
-    switch_requires: Vec<String>,
+    switch_requires: Vec<RawSwitchGroup>,
     skill_plan: Vec<SkillTarget>,
     recipes: Vec<Recipe>,
     tips: Vec<RawTip>,
     stats_plan: Vec<String>,
+}
+
+/// A `switch_requires` entry as written: an item name, or `{ label, any = [...], count }`.
+/// `untagged`: serde tries the variants in order, so a TOML string becomes `Item` and an inline
+/// table `Group`.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawSwitchGroup {
+    Item(String),
+    Group(RawSwitchAny),
+}
+
+/// The table form of a [`RawSwitchGroup`].
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSwitchAny {
+    #[serde(default)]
+    label: String,
+    any: Vec<String>,
+    /// Copies needed; 1 when left out.
+    count: Option<u32>,
+}
+
+/// The [`SwitchGroup`]s of a build's `switch_requires`: names trimmed, a blank item string
+/// dropped, a group without items warned about and dropped (it could never be met), a table
+/// without a label labelled with its items, `count = 0` warned about and taken as 1; unknown
+/// item names warned about and kept.
+fn switch_groups(raw: Vec<RawSwitchGroup>, label: &str, warnings: &mut Vec<String>) -> Vec<SwitchGroup> {
+    let mut groups = Vec::new();
+    for entry in raw {
+        let group = match entry {
+            RawSwitchGroup::Item(name) => {
+                let name = name.trim();
+                if name.is_empty() {
+                    continue;
+                }
+                SwitchGroup::item(name)
+            }
+            RawSwitchGroup::Group(table) => {
+                let any = clean_pieces(&table.any);
+                let mut group_label = table.label.trim().to_owned();
+                if any.is_empty() {
+                    warnings.push(format!(
+                        "{label}: switch_requires group {group_label:?} lists no items (any = []); ignored"
+                    ));
+                    continue;
+                }
+                if group_label.is_empty() {
+                    group_label = any.join(" / ");
+                }
+                let count = match table.count {
+                    Some(0) => {
+                        warnings.push(format!(
+                            "{label}: switch_requires group {group_label:?} has count = 0; taken as 1"
+                        ));
+                        1
+                    }
+                    count => count.unwrap_or(1),
+                };
+                SwitchGroup {
+                    label: group_label,
+                    any,
+                    count,
+                }
+            }
+        };
+        for item in &group.any {
+            if !item_name_known(item) {
+                warnings.push(format!(
+                    "{label}: switch_requires names unknown item {item:?} (kept, but it can never be owned)"
+                ));
+            }
+        }
+        groups.push(group);
+    }
+    groups
 }
 
 /// Parses one build file's text: the lowercased build name (the slug a `[bis.<name>]` `build`
@@ -859,14 +967,7 @@ fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de::Err
     }
     let next = raw.next.trim().to_lowercase();
     let switch_note = raw.switch_note.trim().to_owned();
-    let switch_requires = clean_pieces(&raw.switch_requires);
-    for item in &switch_requires {
-        if !item_name_known(item) {
-            warnings.push(format!(
-                "{label}: switch_requires names unknown item {item:?} (kept, but it can never be owned)"
-            ));
-        }
-    }
+    let switch_requires = switch_groups(raw.switch_requires, &label, &mut warnings);
     Ok((
         name.to_lowercase(),
         Build {
@@ -1572,13 +1673,170 @@ mod tests {
         )?;
         assert_eq!(
             def.switch_requires,
-            ["Raven Frost", "Enigma", "Ravenfrsot"],
+            ["Raven Frost", "Enigma", "Ravenfrsot"].map(SwitchGroup::item),
             "trimmed, blanks dropped"
         );
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings.iter().all(|w| w.contains("Ravenfrsot")), "{warnings:?}");
         let (_, def, _) = parse_build("name = \"B\"\n")?;
-        assert_eq!(def.switch_requires, [] as [String; 0]);
+        assert_eq!(def.switch_requires, []);
+        Ok(())
+    }
+
+    #[test]
+    fn switch_requires_mixes_names_and_any_of_groups() -> Result<()> {
+        let (_, def, warnings) = parse_build(
+            "name = \"Summoner\"\nswitch_requires = [\n\
+             \"Harmony\",\n\
+             { label = \" Cannot Be Frozen \", any = [\"Raven Frost\", \" Nosferatu's Coil \", \"\"] },\n\
+             { any = [\"Ribcracker\", \"Grief\"] },\n\
+             { label = \"Nothing\", any = [\"\"] },\n\
+             { label = \"Typo\", any = [\"Ravenfrsot\"] },\n\
+             { label = \"Physical immunes\", any = [\"Lawbringer\"], count = 2 },\n\
+             { label = \"Zero\", any = [\"Smoke\"], count = 0 },\n]\n",
+        )?;
+        let group = |label: &str, any: &[&str], count| SwitchGroup {
+            label: label.to_owned(),
+            any: any.iter().map(|&a| a.to_owned()).collect(),
+            count,
+        };
+        assert_eq!(
+            def.switch_requires,
+            [
+                SwitchGroup::item("Harmony"),
+                group("Cannot Be Frozen", &["Raven Frost", "Nosferatu's Coil"], 1),
+                group("Ribcracker / Grief", &["Ribcracker", "Grief"], 1),
+                group("Typo", &["Ravenfrsot"], 1),
+                group("Physical immunes", &["Lawbringer"], 2),
+                group("Zero", &["Smoke"], 1),
+            ],
+            "trimmed, blanks dropped, an unlabelled group named by its items, an empty one \
+             dropped, count 1 by default and at least 1"
+        );
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("\"Zero\"") && w.contains("count = 0")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("\"Nothing\"") && w.contains("no items")),
+            "{warnings:?}"
+        );
+        assert!(warnings.iter().any(|w| w.contains("Ravenfrsot")), "{warnings:?}");
+        // A table with an unknown key or without `any` is an error, not silently a group.
+        assert!(
+            parse_build("name = \"B\"\nswitch_requires = [{ label = \"X\", anyy = [\"Grief\"] }]\n").is_err()
+        );
+        assert!(parse_build("name = \"B\"\nswitch_requires = [{ label = \"X\" }]\n").is_err());
+        Ok(())
+    }
+
+    /// The copies of `item` in the name `lists` (a stand-in for [`crate::stash::Holdings::count`]).
+    fn copies_in(item: &str, lists: &[&[String]]) -> u32 {
+        let n = lists
+            .iter()
+            .flat_map(|list| list.iter())
+            .filter(|n| crate::info::same_name(n, item))
+            .count();
+        u32::try_from(n).unwrap_or(u32::MAX)
+    }
+
+    #[test]
+    fn stage_switch_counts_copies_over_a_group() -> Result<()> {
+        let mut config = druid_chain();
+        if let Some(b) = config.build_defs.get_mut("leveling") {
+            b.switch_requires = vec![
+                SwitchGroup {
+                    label: "Physical immunes".to_owned(),
+                    any: vec!["Lawbringer".to_owned()],
+                    count: 2,
+                },
+                SwitchGroup::item("Smoke"),
+            ];
+        }
+        let names = |n: &[&str]| n.iter().map(|&n| n.to_owned()).collect::<Vec<_>>();
+        let slug = |held: &[&str]| {
+            let held = names(held);
+            let owns = |item: &str| copies_in(item, &[&held]);
+            config
+                .stage("NewDruid", Some(5), Some(38), &owns, None)
+                .map(|s| s.slug)
+                .ok_or_else(|| anyhow!("no stage"))
+        };
+        assert_eq!(slug(&["Lawbringer", "Smoke"])?, "leveling", "one copy of two");
+        assert_eq!(slug(&["Lawbringer", "Lawbringer"])?, "leveling", "no Smoke");
+        assert_eq!(slug(&["Lawbringer", "Smoke", "lawbringer"])?, "tornado");
+        let group = SwitchGroup {
+            label: "Two of either".to_owned(),
+            any: vec!["Grief".to_owned(), "Ribcracker".to_owned()],
+            count: 2,
+        };
+        let held = names(&["Grief", "Ribcracker"]);
+        let copies = |item: &str| copies_in(item, &[&held]);
+        assert_eq!(group.have(&copies), 2, "copies sum over the group's items");
+        assert!(group.met(&copies));
+        Ok(())
+    }
+
+    #[test]
+    fn stage_switch_needs_every_group_and_any_item_of_each() -> Result<()> {
+        let mut config = druid_chain();
+        if let Some(b) = config.build_defs.get_mut("leveling") {
+            b.switch_requires = vec![
+                SwitchGroup {
+                    label: "Cannot Be Frozen".to_owned(),
+                    any: vec!["Raven Frost".to_owned(), "Nosferatu's Coil".to_owned()],
+                    count: 1,
+                },
+                SwitchGroup {
+                    label: "Weapon".to_owned(),
+                    any: vec!["Ribcracker".to_owned(), "Grief".to_owned()],
+                    count: 1,
+                },
+                SwitchGroup::item("Harmony"),
+            ];
+        }
+        let names = |n: &[&str]| n.iter().map(|&n| n.to_owned()).collect::<Vec<_>>();
+        let slug = |owned: &[&str], stash: &[&str]| {
+            let (owned, stash) = (names(owned), names(stash));
+            let owns = |item: &str| copies_in(item, &[&owned, &stash]);
+            config
+                .stage("NewDruid", Some(5), Some(38), &owns, None)
+                .map(|s| s.slug)
+                .ok_or_else(|| anyhow!("no stage"))
+        };
+        assert_eq!(slug(&[], &[])?, "leveling", "nothing owned");
+        assert_eq!(
+            slug(&["Raven Frost", "Grief"], &[])?,
+            "leveling",
+            "two of three groups"
+        );
+        assert_eq!(
+            slug(&["Raven Frost", "Nosferatu's Coil", "Harmony"], &[])?,
+            "leveling",
+            "two items of one group don't make up for another"
+        );
+        assert_eq!(
+            slug(&["Nosferatu's Coil", "Ribcracker", "Harmony"], &[])?,
+            "tornado",
+            "one item of each group"
+        );
+        assert_eq!(
+            slug(&["Harmony"], &["raven frost", "Grief"])?,
+            "tornado",
+            "carried and shared stash combine"
+        );
+        assert_eq!(
+            config
+                .stage("NewDruid", Some(5), Some(38), &owns_nothing, Some("tornado"))
+                .map(|s| s.slug),
+            Some("tornado"),
+            "a reached stage counts every group as met"
+        );
         Ok(())
     }
 
@@ -1586,10 +1844,10 @@ mod tests {
     fn stage_switch_waits_for_required_items() -> Result<()> {
         let mut config = druid_chain();
         if let Some(b) = config.build_defs.get_mut("leveling") {
-            b.switch_requires = vec!["Raven Frost".to_owned()];
+            b.switch_requires = vec![SwitchGroup::item("Raven Frost")];
         }
         let slug = |level, owned: &[String], stash: &[String]| {
-            let owns = |item: &str| owns_item(item, owned, stash);
+            let owns = |item: &str| copies_in(item, &[owned, stash]);
             config
                 .stage("NewDruid", Some(5), Some(level), &owns, None)
                 .map(|s| s.slug)
@@ -1626,7 +1884,7 @@ mod tests {
             Some("leveling")
         );
         // The BiS and damages follow the same stage.
-        let owns = |item: &str| owns_item(item, &raven, &[]);
+        let owns = |item: &str| copies_in(item, &[&raven]);
         assert_eq!(
             config
                 .resolved_bis("x", Some(5), Some(40), &owns, None)
@@ -1642,7 +1900,7 @@ mod tests {
         for (slug, auto) in [("leveling", true), ("tornado", true)] {
             if let Some(b) = config.build_defs.get_mut(slug) {
                 b.auto_switch = auto;
-                b.switch_requires = vec!["Raven Frost".to_owned()];
+                b.switch_requires = vec![SwitchGroup::item("Raven Frost")];
             }
         }
         let slug = |level, reached| {

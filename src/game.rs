@@ -114,6 +114,12 @@ pub struct Snapshot {
     /// keeps a runeword recipe until every slot of the stage that wants it can be filled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runeword_copies: Vec<String>,
+    /// Display names of the identified unique/set items the mercenary wears, one per item:
+    /// they count as owned for a stage switch and the farm list
+    /// ([`crate::stash::Holdings`]), but not in [`Snapshot::owned_names`] (the `BiS` ✓ of the
+    /// character's own pieces).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merc_worn: Vec<String>,
     /// The shared-stash tabs as read this snapshot. Empty once the tab units vanish (stash UI
     /// closed); the session keeps the last capture ([`crate::session::Session`]). Left out of
     /// the JSON when empty, so older dumps stay loadable.
@@ -430,6 +436,21 @@ impl OwnerVotes {
     }
 }
 
+impl Snapshot {
+    /// What the account holds, for copy counts ([`crate::stash::Holdings`]): the
+    /// (session-cached) shared stash, the player's own names and runeword copies, and the
+    /// mercenary's worn uniques and sets.
+    #[must_use]
+    pub fn holdings(&self) -> crate::stash::Holdings<'_> {
+        crate::stash::Holdings {
+            stash: &self.stash,
+            owned: &self.owned_names,
+            runeword_copies: &self.runeword_copies,
+            merc_worn: &self.merc_worn,
+        }
+    }
+}
+
 /// What one walk over the item units found.
 #[derive(Debug, Default)]
 struct ItemScan {
@@ -466,6 +487,8 @@ struct ItemScan {
     /// One name per runeword copy, per owning candidate (worn, carried, cubed, private stash)
     /// and under `NO_OWNER` for the mercenary's worn ones: [`Snapshot::runeword_copies`].
     runeword_copies: HashMap<u32, Vec<String>>,
+    /// The identified unique/set names the mercenary wears: [`Snapshot::merc_worn`].
+    merc_worn: Vec<String>,
 }
 
 /// Appends `name` to `names` unless it is there already ([`crate::info::same_name`]).
@@ -1002,6 +1025,7 @@ pub fn snapshot(
         equipped_items,
         owned_names,
         runeword_copies,
+        merc_worn: scan.merc_worn,
         stash,
         stash_names,
         player_candidates: candidates,
@@ -1868,7 +1892,8 @@ impl<M: ReadMem> Reader<'_, M> {
             }
             // Owned identified unique/set items and runewords (worn, carried, cubed or in the
             // private stash): the `BiS` list marks owned pieces with a ✓. The mercenary's worn
-            // runewords (owner `NO_OWNER`, equipped) count as copies only.
+            // runewords (owner `NO_OWNER`, equipped) count as copies only, its worn uniques
+            // and sets go to their own list.
             let item_owner = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok());
             let merc_worn = item_owner == Some(item_data::NO_OWNER) && self.equipped_slot(&head).is_some();
             if let Some(owner) = item_owner
@@ -1876,12 +1901,14 @@ impl<M: ReadMem> Reader<'_, M> {
             {
                 let quality = self.equipped_quality(&head);
                 if matches!(quality, Some(item_data::QUALITY_UNIQUE | item_data::QUALITY_SET)) {
-                    let name = (!merc_worn)
-                        .then(|| self.item_fields(addr, &head, items_table).ok())
-                        .flatten()
+                    let name = self
+                        .item_fields(addr, &head, items_table)
+                        .ok()
                         .and_then(|d| valuables::unique_set_name(&d).map(str::to_owned));
-                    if let Some(name) = name {
-                        push_unique_name(scan.owned_names.entry(owner).or_default(), name);
+                    match name {
+                        Some(name) if merc_worn => scan.merc_worn.push(name),
+                        Some(name) => push_unique_name(scan.owned_names.entry(owner).or_default(), name),
+                        None => {}
                     }
                 } else {
                     let flags = head.unit_data.and_then(|d| self.u32(d, item_data::FLAGS).ok());
@@ -3056,6 +3083,36 @@ mod tests {
     }
 
     #[test]
+    fn merc_worn_uniques_are_listed_apart_from_the_players() -> Result<()> {
+        let mut m = world()?;
+        let id = item_data::FLAG_IDENTIFIED;
+        unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
+        // The mercenary's identified unique helm (Shako, unique row 248) and an unidentified
+        // unique: only the identified one is named.
+        stored_item(&mut m, I1, (40, 7, id, 248), (1, 255), &[], I2)?;
+        set_owner(&mut m, I1, item_data::NO_OWNER)?;
+        set_body(&mut m, I1, 1)?;
+        stored_item(&mut m, I2, (40, 7, 0, 248), (1, 255), &[], I3)?;
+        set_owner(&mut m, I2, item_data::NO_OWNER)?;
+        set_body(&mut m, I2, 4)?;
+        // Bob's own worn set piece (Cleglaw's Claw, set row 7).
+        stored_item(&mut m, I3, (40, 5, id, 7), (1, 255), &[], 0)?;
+        set_owner(&mut m, I3, BOB_ID)?;
+        set_body(&mut m, I3, 2)?;
+        base_items_table(&mut m)?;
+
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        assert_eq!(s.merc_worn, ["Harlequin Crest"]);
+        assert_eq!(
+            s.owned_names,
+            ["Cleglaw's Claw"],
+            "the merc's piece isn't Bob's own"
+        );
+        assert_eq!(s.holdings().count("Harlequin Crest"), 1);
+        Ok(())
+    }
+
+    #[test]
     fn equipped_items_are_enriched_with_code_name_and_row() -> Result<()> {
         let mut m = world()?;
         let id = item_data::FLAG_IDENTIFIED;
@@ -3119,6 +3176,7 @@ mod tests {
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
         assert_eq!(s.equipped, vec![(1, 7), (2, 5), (4, 2), (3, 4)]);
         assert_eq!(s.merc_equipped, vec![(3, 2)], "the merc's piece stays a pair");
+        assert!(s.merc_worn.is_empty(), "a merc-worn runeword is a copy only");
         let eq = &s.equipped_items;
         assert_eq!(
             eq.iter().map(|e| e.body).collect::<Vec<_>>(),

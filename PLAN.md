@@ -416,9 +416,19 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - **Guide stages (2026-11-17, druid)**: a build file may also carry `class`, `default_for_class` (a
   character without a `[bis]` selection gets its class default), a stage chain `next` / `switch_level` /
   `auto_switch` / `switch_note` (`Config::stage`: selected build, else class default, then follow `next`
-  while `auto_switch` and clvl ≥ `switch_level` and every `switch_requires` item (unique/set/runeword
-  name) is owned by the character or in the shared stash, or the stage was reached before (the
-  `played.json` `stage` latch); cycle-guarded),
+  while `auto_switch` and clvl ≥ `switch_level` and every `switch_requires` group is met, or the stage
+  was reached before (the `played.json` `stage` latch counts every group as met); cycle-guarded).
+  `switch_requires` mixes plain names and any-of groups (user request, 2026-11-19):
+  `["Harmony", { label = "Cannot Be Frozen", any = ["Raven Frost", "Nosferatu's Coil"] },
+  { label = "Physical immunes", any = ["Lawbringer"], count = 2 }]`; a name is a group of one copy
+  labelled with it; a group is met when the copies held of its items (unique/set/runeword names) sum
+  to `count` (default 1). Copies are counted by `stash::Holdings` (shared with the farm list): the
+  shared stash's items, the character's runeword copies and owned names (at most one per unique/set),
+  the mercenary's worn runewords and identified uniques/sets (`Snapshot::merc_worn`). Unknown names
+  warn (kept), an empty `any` warns and drops the group, `count = 0` warns and becomes 1, a table
+  without `label` is labelled "A / B". The live JSON's `stage.next.requires` is
+  `[{label, count, have, met, any: [{name, owned}]}]` (no dashboard code reads it since the stage
+  strip went),
   `[[skill_plan]]` cumulative hard-point targets (skills panel: yours / guide-now → final, next-point
   hint), `[[recipes]]` (runeword/craft/cube/socket/upgrade; dashboard Recipes panel with ✓ from the
   shared materials + `Snapshot.held_materials`, bases via `white_bases`), `[[tips]]` by level range and

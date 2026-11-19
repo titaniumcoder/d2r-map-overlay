@@ -675,6 +675,9 @@ pub struct LiveInfo<'a> {
     /// One name per runeword copy outside the shared stash, the mercenary's worn ones included
     /// ([`crate::game::Snapshot::runeword_copies`]): the Recipes panel's built count.
     pub runeword_copies: &'a [String],
+    /// The identified unique/set names the mercenary wears
+    /// ([`crate::game::Snapshot::merc_worn`]): counted copies (farm list, stage switch).
+    pub merc_worn: &'a [String],
     /// The (session-cached) shared-stash tabs, shown in their own panel.
     pub stash: &'a [crate::stash::StashTab],
     /// Names of the identified unique/set items in the shared stash, emitted as
@@ -702,6 +705,18 @@ pub struct LiveInfo<'a> {
     pub dexterity: Option<u32>,
     /// Unix seconds of the tick that produced this data.
     pub updated_at: u64,
+}
+
+impl LiveInfo<'_> {
+    /// What the account holds, for copy counts ([`crate::stash::Holdings`]).
+    const fn holdings(&self) -> crate::stash::Holdings<'_> {
+        crate::stash::Holdings {
+            stash: self.stash,
+            owned: self.owned,
+            runeword_copies: self.runeword_copies,
+            merc_worn: self.merc_worn,
+        }
+    }
 }
 
 /// Serializes one tick's dashboard data. Pure: the same input gives the same JSON, so the
@@ -760,9 +775,7 @@ pub fn live_json(info: &LiveInfo) -> String {
             info.skills,
             info.build.map_or(&[][..], |b| b.skill_plan.as_slice()),
         ),
-        "stage": stage_json(info.stage.as_ref(), &|item| {
-            crate::config::owns_item(item, info.owned, info.stash_owned)
-        }),
+        "stage": stage_json(info.stage.as_ref(), &|item| info.holdings().count(item)),
         "recipes": recipes_json(info),
         "upgrades": upgrades_json(info),
         "shop": shop_json(info),
@@ -936,10 +949,12 @@ fn shop_match(item: &crate::shop::ShopItem, info: &LiveInfo) -> Option<(String, 
 }
 
 /// The guide stage (`live_json`'s `stage` section): `{ "slug", "name", "class_default",
-/// "next": { "slug", "name", "level", "auto", "note", "requires": [{ "name", "owned" }] } |
-/// null }`, `null` without a build. `requires` lists the current stage's `switch_requires`
-/// items with `owns`' verdict ([`crate::config::owns_item`]).
-fn stage_json(stage: Option<&crate::config::Stage>, owns: &dyn Fn(&str) -> bool) -> serde_json::Value {
+/// "next": { "slug", "name", "level", "auto", "note", "requires": [{ "label", "count",
+/// "have", "met", "any": [{ "name", "owned" }] }] } | null }`, `null` without a build.
+/// `requires` lists the current stage's `switch_requires` groups ([`crate::config::SwitchGroup`]):
+/// `have` copies of the group's items (`copies` per item, [`crate::stash::Holdings::count`]),
+/// met at `count`; `owned` = at least one copy of that item.
+fn stage_json(stage: Option<&crate::config::Stage>, copies: &dyn Fn(&str) -> u32) -> serde_json::Value {
     let Some(stage) = stage else {
         return serde_json::Value::Null;
     };
@@ -954,7 +969,20 @@ fn stage_json(stage: Option<&crate::config::Stage>, owns: &dyn Fn(&str) -> bool)
                 .build
                 .switch_requires
                 .iter()
-                .map(|item| serde_json::json!({ "name": item, "owned": owns(item) }))
+                .map(|group| {
+                    let any = group
+                        .any
+                        .iter()
+                        .map(|item| serde_json::json!({ "name": item, "owned": copies(item) > 0 }))
+                        .collect::<Vec<_>>();
+                    serde_json::json!({
+                        "label": group.label,
+                        "count": group.count,
+                        "have": group.have(copies),
+                        "met": group.met(copies),
+                        "any": any,
+                    })
+                })
                 .collect::<Vec<_>>(),
         })
     });
@@ -1317,36 +1345,9 @@ impl FarmStatus {
 }
 
 /// The copies of farm entry `item`: `(in the shared stash, carried by the played character
-/// outside it)`. A runeword counts one per copy ([`LiveInfo::runeword_copies`] and the
-/// stash's runeword items, like [`runeword_copies`]); a unique or set counts its identified
-/// stash items of that quality, and at most one carried copy ([`LiveInfo::owned`] lists each
-/// name once).
+/// outside it or worn by its mercenary)` ([`crate::stash::Holdings::copies`]).
 fn farm_copies(item: &crate::config::FarmItem, info: &LiveInfo) -> (u32, u32) {
-    use crate::config::FarmKind;
-    use crate::offsets::item_data;
-    let same = |n: &str| crate::info::same_name(n, &item.name);
-    let stash_items = info.stash.iter().flat_map(|tab| &tab.items);
-    let (stashed, carried) = match item.kind {
-        FarmKind::Runeword => (
-            stash_items.filter(|i| i.runeword && same(&i.name)).count(),
-            info.runeword_copies.iter().filter(|n| same(n)).count(),
-        ),
-        FarmKind::Unique | FarmKind::Set => {
-            let quality = if item.kind == FarmKind::Unique {
-                item_data::QUALITY_UNIQUE
-            } else {
-                item_data::QUALITY_SET
-            };
-            (
-                stash_items
-                    .filter(|i| i.identified && u32::from(i.quality) == quality && same(&i.name))
-                    .count(),
-                usize::from(info.owned.iter().any(|n| same(n))),
-            )
-        }
-    };
-    let clamp = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
-    (clamp(stashed), clamp(carried))
+    info.holdings().copies(&item.name, Some(item.kind))
 }
 
 /// The status of a farm entry wanting `count` copies with `stashed` in the shared stash and
@@ -3839,6 +3840,7 @@ mod tests {
             equipped_items: &[],
             owned: &[],
             runeword_copies: &[],
+            merc_worn: &[],
             stash,
             stash_owned,
             skills: &EMPTY_SKILLS,
@@ -3882,6 +3884,7 @@ mod tests {
             equipped_items,
             owned,
             runeword_copies: &[],
+            merc_worn: &[],
             stash: &[],
             stash_owned: &[],
             skills: &EMPTY_SKILLS,
@@ -4938,6 +4941,7 @@ mod tests {
             equipped_items: &[],
             owned: &[],
             runeword_copies: &[],
+            merc_worn: &[],
             stash: &[],
             stash_owned: &[],
             skills: &EMPTY_SKILLS,
@@ -5080,6 +5084,7 @@ mod tests {
             equipped_items: &equipped_items,
             owned: &[],
             runeword_copies: &[],
+            merc_worn: &[],
             stash: &[],
             stash_owned: &[],
             skills: &EMPTY_SKILLS,
@@ -5145,6 +5150,7 @@ mod tests {
                 equipped_items,
                 owned: &[],
                 runeword_copies: &[],
+                merc_worn: &[],
                 stash: &[],
                 stash_owned: &[],
                 skills: &EMPTY_SKILLS,
@@ -5268,7 +5274,19 @@ mod tests {
             switch_level: Some(38),
             auto_switch: false,
             switch_note: Some("you have Spirit".to_owned()),
-            switch_requires: vec!["Raven Frost".to_owned(), "Enigma".to_owned()],
+            switch_requires: vec![
+                config::SwitchGroup {
+                    label: "Cannot Be Frozen".to_owned(),
+                    any: vec!["Raven Frost".to_owned(), "Nosferatu's Coil".to_owned()],
+                    count: 1,
+                },
+                config::SwitchGroup {
+                    label: "Physical immunes".to_owned(),
+                    any: vec!["Lawbringer".to_owned()],
+                    count: 2,
+                },
+                config::SwitchGroup::item("Enigma"),
+            ],
             ..config::Build::default()
         };
         let tornado = config::Build {
@@ -5281,14 +5299,30 @@ mod tests {
             class_default: true,
             next: Some(("tornado", &tornado)),
         };
-        let owns = |item: &str| item == "Raven Frost";
+        let owns = |item: &str| match item {
+            "Raven Frost" | "Lawbringer" => 1,
+            _ => 0,
+        };
         assert_eq!(
             stage_json(Some(&stage), &owns),
             serde_json::json!({
                 "slug": "leveling", "name": "Leveling", "class_default": true,
                 "next": {
                     "slug": "tornado", "name": "Tornado", "level": 38, "auto": false, "note": "you have Spirit",
-                    "requires": [{ "name": "Raven Frost", "owned": true }, { "name": "Enigma", "owned": false }],
+                    "requires": [
+                        {
+                            "label": "Cannot Be Frozen", "count": 1, "have": 1, "met": true,
+                            "any": [{ "name": "Raven Frost", "owned": true }, { "name": "Nosferatu's Coil", "owned": false }],
+                        },
+                        {
+                            "label": "Physical immunes", "count": 2, "have": 1, "met": false,
+                            "any": [{ "name": "Lawbringer", "owned": true }],
+                        },
+                        {
+                            "label": "Enigma", "count": 1, "have": 0, "met": false,
+                            "any": [{ "name": "Enigma", "owned": false }],
+                        },
+                    ],
                 },
             })
         );

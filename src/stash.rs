@@ -238,6 +238,72 @@ pub fn stash_names(tabs: &[StashTab]) -> Vec<String> {
     out
 }
 
+/// What the account holds of named uniques, sets and runewords, for counting copies: the
+/// farm list's status and the stage switch's `switch_requires` groups
+/// ([`crate::config::SwitchGroup`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Holdings<'a> {
+    /// The (session-cached) shared-stash tabs.
+    pub stash: &'a [StashTab],
+    /// The played character's identified unique/set and runeword names, each once
+    /// ([`crate::game::Snapshot::owned_names`]: worn, carried, cubed, privately stashed).
+    pub owned: &'a [String],
+    /// One name per runeword copy outside the shared stash, the mercenary's worn ones
+    /// included ([`crate::game::Snapshot::runeword_copies`]).
+    pub runeword_copies: &'a [String],
+    /// One name per identified unique/set item the mercenary wears
+    /// ([`crate::game::Snapshot::merc_worn`]).
+    pub merc_worn: &'a [String],
+}
+
+impl Holdings<'_> {
+    /// The copies of `name`: `(in the shared stash, on the played character or its
+    /// mercenary)`, matched by [`crate::info::same_name`]. `kind` says which items count;
+    /// `None` takes a runeword name ([`crate::runewords_data::lookup`]) as a runeword and any
+    /// other as a unique or set. A runeword counts one per copy (the stash's runeword items
+    /// and `runeword_copies`); a unique or set counts its identified stash items of that
+    /// quality, at most one copy the character holds (`owned` lists each name once) and each
+    /// one the mercenary wears.
+    #[must_use]
+    pub fn copies(&self, name: &str, kind: Option<crate::config::FarmKind>) -> (u32, u32) {
+        use crate::config::FarmKind;
+        let same = |n: &str| crate::info::same_name(n, name);
+        let stash_items = self.stash.iter().flat_map(|tab| &tab.items);
+        let runeword = kind.map_or_else(
+            || crate::runewords_data::lookup(name).is_some(),
+            |kind| kind == FarmKind::Runeword,
+        );
+        let (stashed, carried) = if runeword {
+            (
+                stash_items.filter(|i| i.runeword && same(&i.name)).count(),
+                self.runeword_copies.iter().filter(|n| same(n)).count(),
+            )
+        } else {
+            let quality_ok = |q: u32| match kind {
+                Some(FarmKind::Unique) => q == item_data::QUALITY_UNIQUE,
+                Some(FarmKind::Set) => q == item_data::QUALITY_SET,
+                _ => matches!(q, item_data::QUALITY_UNIQUE | item_data::QUALITY_SET),
+            };
+            (
+                stash_items
+                    .filter(|i| i.identified && quality_ok(u32::from(i.quality)) && same(&i.name))
+                    .count(),
+                usize::from(self.owned.iter().any(|n| same(n)))
+                    .saturating_add(self.merc_worn.iter().filter(|n| same(n)).count()),
+            )
+        };
+        let clamp = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        (clamp(stashed), clamp(carried))
+    }
+
+    /// All copies of `name`, wherever held ([`Holdings::copies`] with the kind inferred).
+    #[must_use]
+    pub fn count(&self, name: &str) -> u32 {
+        let (stashed, carried) = self.copies(name, None);
+        stashed.saturating_add(carried)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +348,43 @@ mod tests {
             vec!["Harlequin Crest", "uap", "Sigon's Visor", "Stealth"]
         );
         assert_eq!(stash_names(&[]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn holdings_count_stash_character_and_merc_copies() {
+        use crate::config::FarmKind;
+        let id = item_data::FLAG_IDENTIFIED;
+        let names = |n: &[&str]| n.iter().map(|&s| s.to_owned()).collect::<Vec<_>>();
+        let tabs = [StashTab {
+            kind: TabKind::Page(1),
+            items: vec![
+                item("Harlequin Crest", item_data::QUALITY_UNIQUE, id),
+                item("Harlequin Crest", item_data::QUALITY_UNIQUE, 0), // unidentified: out
+                item("Tal Rasha's Horadric Crest", item_data::QUALITY_SET, id),
+                StashItem {
+                    runeword: true,
+                    ..item("Lawbringer", item_data::QUALITY_NORMAL, id)
+                },
+            ],
+        }];
+        let (owned, copies, merc) = (
+            names(&["Harlequin Crest", "Lawbringer"]),
+            names(&["Lawbringer"]),
+            names(&["Harlequin Crest", "Andariel's Visage"]),
+        );
+        let holdings = Holdings {
+            stash: &tabs,
+            owned: &owned,
+            runeword_copies: &copies,
+            merc_worn: &merc,
+        };
+        assert_eq!(holdings.copies("harlequin crest", None), (1, 2), "own + merc's");
+        assert_eq!(holdings.count("Harlequin Crest"), 3);
+        assert_eq!(holdings.copies("Harlequin Crest", Some(FarmKind::Set)), (0, 2));
+        assert_eq!(holdings.count("Lawbringer"), 2, "one per runeword copy");
+        assert_eq!(holdings.count("Andariels Visage"), 1, "merc-worn only");
+        assert_eq!(holdings.count("Tal Rasha's Horadric Crest"), 1);
+        assert_eq!(holdings.count("Enigma"), 0);
     }
 
     #[test]

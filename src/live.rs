@@ -290,6 +290,7 @@ fn publish_dashboard(
         equipped_items: &snap.equipped_items,
         owned: &snap.owned_names,
         runeword_copies: &snap.runeword_copies,
+        merc_worn: &snap.merc_worn,
         stash: &snap.stash,
         stash_owned: &snap.stash_names,
         skills: &snap.skills,
@@ -356,13 +357,13 @@ fn follow_game(
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
                 // Damages: the character's own `[builds]` entry, else the selected build's,
                 // else its class's. `BiS`: inline slots when present, else the selected
-                // build's (user decision, 2026-11-17). A stage's `switch_requires` items count
-                // when owned by this character or in the shared stash, or when the character
-                // reached the stage before (played.json): the shared stash is unread each new
-                // game until opened, and a switch is one-way.
+                // build's (user decision, 2026-11-17). A `switch_requires` group is met by the
+                // copies held in the shared stash (session-cached), by this character or worn by
+                // its mercenary, or when the character reached the stage before (played.json):
+                // the shared stash is unread each new game until opened, and a switch is one-way.
                 let (class, level) = (Some(snap.player.class), snap.player.char_level);
-                let (owned, stashed) = (&snap.owned_names, &snap.stash_names);
-                let owns = |item: &str| config::owns_item(item, owned, stashed);
+                let holdings = snap.holdings();
+                let owns = |item: &str| holdings.count(item);
                 let name = snap.player.name.as_str();
                 let reached = last_played.reached(name);
                 let build = config

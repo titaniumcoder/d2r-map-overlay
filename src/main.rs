@@ -221,7 +221,8 @@ fn load_for_drawing(path: &str, config: &config::Config) -> Result<game::Snapsho
     valuables::apply(&mut snap.drops, &config.valuables);
     session::Session::default().apply(&mut snap);
     config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
-    let owns = |item: &str| config::owns_item(item, &snap.owned_names, &snap.stash_names);
+    let holdings = snap.holdings();
+    let owns = |item: &str| holdings.count(item);
     snap.player.build = config
         .damages_for_player(
             &snap.player.name,
