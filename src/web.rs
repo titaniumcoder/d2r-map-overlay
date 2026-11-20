@@ -675,8 +675,9 @@ pub struct LiveInfo<'a> {
     /// One name per runeword copy outside the shared stash, the mercenary's worn ones included
     /// ([`crate::game::Snapshot::runeword_copies`]): the Recipes panel's built count.
     pub runeword_copies: &'a [String],
-    /// The identified unique/set names the mercenary wears
-    /// ([`crate::game::Snapshot::merc_worn`]): counted copies (farm list, stage switch).
+    /// The identified unique/set and runeword names the mercenary wears
+    /// ([`crate::game::Snapshot::merc_worn`]): counted copies (farm list, stage switch) and
+    /// worn ones ([`farm_worn`]).
     pub merc_worn: &'a [String],
     /// The (session-cached) shared-stash tabs, shown in their own panel.
     pub stash: &'a [crate::stash::StashTab],
@@ -1433,8 +1434,9 @@ fn farm_json(info: &LiveInfo) -> serde_json::Value {
 /// Whether farm entry `item` of the group for build `target` is hidden (user request,
 /// 2026-11-20): the played character is on that build — its current stage or a later one
 /// along the `next` links ([`LiveInfo::stage_chain`]: it keeps the gear through a respec) —
-/// and wears at least `count` copies itself (its equipped items; carried, cubed, stashed and
-/// mercenary-worn copies don't count).
+/// and it or its mercenary wears at least `count` copies (its equipped items plus
+/// [`LiveInfo::merc_worn`], which is empty with other players in the game: PLAN.md, "Merc gear
+/// caveat"; carried, cubed and stashed copies don't count).
 fn farm_worn(target: &str, item: &crate::config::FarmItem, info: &LiveInfo) -> bool {
     let on_build = info
         .stage_chain
@@ -1443,11 +1445,9 @@ fn farm_worn(target: &str, item: &crate::config::FarmItem, info: &LiveInfo) -> b
     let worn = info
         .equipped_items
         .iter()
-        .filter(|e| {
-            e.name
-                .as_deref()
-                .is_some_and(|n| crate::info::same_name(n, &item.name))
-        })
+        .filter_map(|e| e.name.as_deref())
+        .chain(info.merc_worn.iter().map(String::as_str))
+        .filter(|n| crate::info::same_name(n, &item.name))
         .count();
     on_build && u32::try_from(worn).is_ok_and(|w| w >= item.count.max(1))
 }
@@ -5980,7 +5980,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
         // Spirit worn for the current build: its group (all hidden) disappears. Raven Frost
         // worn for the later Fury stage: hidden too. One Lawbringer of two: still listed.
-        assert_eq!(names(&json), [("Fury Druid".to_owned(), fury_rest)]);
+        assert_eq!(names(&json), [("Fury Druid".to_owned(), fury_rest.clone())]);
         // Another build's character wearing the same items: everything stays.
         let sorc_chain = ["Blizzard Sorceress".to_owned()];
         info.stage_chain = &sorc_chain;
@@ -5992,13 +5992,28 @@ mod tests {
                 ("Fury Druid".to_owned(), fury_all.clone()),
             ]
         );
-        // Mercenary-worn and carried copies don't hide an entry.
-        let merc = ["Raven Frost".to_owned()];
+        // A carried copy doesn't hide an entry.
         let owned = ["Raven Frost".to_owned()];
         info.stage_chain = &summoner_chain;
         info.equipped_items = &[];
-        info.merc_worn = &merc;
         info.owned = &owned;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        assert_eq!(
+            names(&json),
+            [
+                ("Summoner Druid".to_owned(), vec!["Spirit".to_owned()]),
+                ("Fury Druid".to_owned(), fury_all.clone()),
+            ]
+        );
+        // Mercenary-worn copies (a unique and a runeword; `merc_worn` is filled only in solo
+        // games, `game::held_copies`) hide an entry like the character's own.
+        let merc = ["Raven Frost".to_owned(), "Spirit".to_owned()];
+        info.owned = &[];
+        info.merc_worn = &merc;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        assert_eq!(names(&json), [("Fury Druid".to_owned(), fury_rest)]);
+        // In a group game `merc_worn` is empty: the merc's gear hides nothing.
+        info.merc_worn = &[];
         let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
         assert_eq!(
             names(&json),

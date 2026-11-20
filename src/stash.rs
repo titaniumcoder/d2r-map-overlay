@@ -279,8 +279,9 @@ pub struct Holdings<'a> {
     /// One name per runeword copy outside the shared stash, the mercenary's worn ones
     /// included ([`crate::game::Snapshot::runeword_copies`]).
     pub runeword_copies: &'a [String],
-    /// One name per identified unique/set item the mercenary wears
-    /// ([`crate::game::Snapshot::merc_worn`]).
+    /// One name per identified unique/set item and runeword the mercenary wears
+    /// ([`crate::game::Snapshot::merc_worn`]); only its uniques/sets count here, its runewords
+    /// are already in `runeword_copies`.
     pub merc_worn: &'a [String],
 }
 

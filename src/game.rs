@@ -115,11 +115,13 @@ pub struct Snapshot {
     /// keeps a runeword recipe until every slot of the stage that wants it can be filled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runeword_copies: Vec<String>,
-    /// Display names of the identified unique/set items the mercenary wears, one per item:
-    /// they count as owned for a stage switch and the farm list
-    /// ([`crate::stash::Holdings`]), but not in [`Snapshot::owned_names`] (the `BiS` ✓ of the
-    /// character's own pieces). Empty when other players are in the game: their mercs' gear
-    /// can't be told from the local player's own merc's (PLAN.md, "Merc gear caveat").
+    /// Display names of the identified unique/set items and the runewords the mercenary wears,
+    /// one per item: its uniques/sets count as owned for a stage switch and the farm list
+    /// ([`crate::stash::Holdings`]; its runewords count there through
+    /// [`Snapshot::runeword_copies`]), and every name counts as worn for the farm list's
+    /// hiding rule (`web::farm_worn`); none are in [`Snapshot::owned_names`] (the `BiS` ✓ of
+    /// the character's own pieces). Empty when other players are in the game: their mercs'
+    /// gear can't be told from the local player's own merc's (PLAN.md, "Merc gear caveat").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub merc_worn: Vec<String>,
     /// The shared-stash tabs as read this snapshot. Empty once the tab units vanish (stash UI
@@ -500,7 +502,8 @@ struct ItemScan {
     /// One name per runeword copy, per owning candidate (worn, carried, cubed, private stash)
     /// and under `NO_OWNER` for the mercenary's worn ones: [`Snapshot::runeword_copies`].
     runeword_copies: HashMap<u32, Vec<String>>,
-    /// The identified unique/set names the mercenary wears: [`Snapshot::merc_worn`].
+    /// The identified unique/set and runeword names the mercenary wears:
+    /// [`Snapshot::merc_worn`].
     merc_worn: Vec<String>,
 }
 
@@ -1938,8 +1941,8 @@ impl<M: ReadMem> Reader<'_, M> {
             }
             // Owned identified unique/set items and runewords (worn, carried, cubed or in the
             // private stash): the `BiS` list marks owned pieces with a ✓. The mercenary's worn
-            // runewords (owner `NO_OWNER`, equipped) count as copies only, its worn uniques
-            // and sets go to their own list. CAVEAT (PLAN.md, "Merc gear"): nothing ties such
+            // runewords (owner `NO_OWNER`, equipped) count as copies and, like its worn uniques
+            // and sets, go to its own worn list (not `owned_names`). CAVEAT (PLAN.md, "Merc gear"): nothing ties such
             // an item to the local player's own merc, so [`snapshot`] drops both when other
             // players are in the game.
             let item_owner = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok());
@@ -1962,7 +1965,9 @@ impl<M: ReadMem> Reader<'_, M> {
                     let flags = head.unit_data.and_then(|d| self.u32(d, item_data::FLAGS).ok());
                     if let Some(name) = flags.and_then(|f| self.runeword_name(addr, &head, f, items_table)) {
                         scan.runeword_copies.entry(owner).or_default().push(name.clone());
-                        if !merc_worn {
+                        if merc_worn {
+                            scan.merc_worn.push(name);
+                        } else {
                             push_unique_name(scan.owned_names.entry(owner).or_default(), name);
                         }
                     }
@@ -3289,7 +3294,7 @@ mod tests {
         // The same gear with Bob alone in the game counts.
         solo_bob(&mut m)?;
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
-        assert_eq!(s.merc_worn, ["Harlequin Crest"]);
+        assert_eq!(s.merc_worn, ["Harlequin Crest", "Leaf"]);
         assert_eq!(s.runeword_copies, ["Leaf"]);
         assert_eq!(s.holdings().count("Harlequin Crest"), 1);
         assert_eq!(s.holdings().count("Leaf"), 1);
@@ -3361,7 +3366,7 @@ mod tests {
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
         assert_eq!(s.equipped, vec![(1, 7), (2, 5), (4, 2), (3, 4)]);
         assert_eq!(s.merc_equipped, vec![(3, 2)], "the merc's piece stays a pair");
-        assert!(s.merc_worn.is_empty(), "a merc-worn runeword is a copy only");
+        assert_eq!(s.merc_worn, ["Leaf"], "a merc-worn runeword is worn by the merc");
         let eq = &s.equipped_items;
         assert_eq!(
             eq.iter().map(|e| e.body).collect::<Vec<_>>(),

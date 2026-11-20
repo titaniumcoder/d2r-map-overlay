@@ -506,7 +506,8 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   owned upgrade to wear, else an unowned unique/set/runeword findable now: req ≤ clvl, qlvl ≤
   the band's max mlvl, a runeword's missing runes' misc.txt qlvl ≤ it; mercenary slots never)
   until the viewer clicks. Farm entries the character wears (≥ count, equipped only) for its
-  current stage or a later one (`Config::stage_chain`) are hidden.
+  current stage or a later one (`Config::stage_chain`) are hidden; its mercenary's worn
+  uniques/sets and runewords (`Snapshot::merc_worn`, solo games only) count as worn too.
 - **Recently played first** (user request, 2026-11-18): `played.json` in the data dir maps the
   lowercased character name → `{name, t, class?, stage?}` (unix secs last seen in a game; `src/played.rs`).
   `stage` is the guide stage slug the character last reached live: it latches a `switch_requires`
