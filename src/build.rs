@@ -1,14 +1,16 @@
-//! How well the current character's build fits the area: from Nightmare on, the info line's
-//! monster-level part turns red where too many monster types are immune to the build's damage
-//! and green where none is immune to its primary damage (user request, 2026-11-15).
+//! How well the current character's build fits the area: the info line's monster-level part
+//! turns red where too many monster types are immune to the build's damage and, from
+//! Nightmare on, green where none is immune to its primary damage (user request, 2026-11-15).
+//! The dashboard's "Where to go" panel greys the bad areas out (2026-11-20).
 //!
-//! The build is the damage types from the config's `[builds]` (see [`crate::config::Builds`]),
-//! primary first. The area's immunities are the generated `levels_data::IMMUNITIES` table:
+//! The build is the character's damage types, primary first
+//! ([`crate::config::Config::damages_for_player`]: its `[builds]` entry, else the current guide
+//! stage's `damages`, else its class's). The area's immunities are the generated `levels_data::IMMUNITIES` table:
 //! per level and difficulty, the distinct monster types that spawn and how many are immune
 //! (resist >= 100) to each damage type.
 
 use crate::info::TOWNS;
-use crate::levels_data::IMMUNITIES;
+use crate::levels_data::{AreaImmunities, IMMUNITIES};
 
 /// A damage type, in the order of the `IMMUNITIES` counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +64,7 @@ impl Damage {
 /// How the area suits the build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Rating {
-    /// Normal, a town, no build, or neither good nor bad: the usual colour.
+    /// A town, no build, neither good nor bad, or good in Normal: the usual colour.
     #[default]
     Neutral,
     /// Red: see [`BAD_PRIMARY_SHARE`].
@@ -79,26 +81,58 @@ pub const BAD_UNCOVERED_SHARE: f64 = 0.0;
 pub const GOOD_PRIMARY_SHARE: f64 = 0.0;
 
 /// Rates level `level_id` in `difficulty` (0 Normal, 1 Nightmare, 2 Hell) for `build` (primary
-/// damage first). Neutral in Normal, for an unknown difficulty or level, in towns, in areas
-/// without monsters and without a build.
+/// damage first). Neutral for an unknown difficulty or level, in towns, in areas without
+/// monsters and without a build. Normal is rated too (the table has its rows: nearly no
+/// immunes, one poison-immune type in the Bloody Foothills), but only [`Rating::Bad`] counts
+/// there: nearly every Normal area would be "good", which says nothing.
 pub fn rate(level_id: u32, difficulty: Option<u8>, build: &[Damage]) -> Rating {
     let Some(&primary) = build.first() else {
         return Rating::Neutral;
     };
-    let Some(d) = difficulty.filter(|&d| d >= 1).map(usize::from) else {
+    let Some((types, immune, masks)) = area_immunities(level_id, difficulty) else {
         return Rating::Neutral;
     };
-    if TOWNS.contains(&level_id) {
-        return Rating::Neutral;
+    match rate_counts(types, immune, masks, primary, build) {
+        Rating::Good if difficulty == Some(0) => Rating::Neutral,
+        rating => rating,
     }
-    let Some(&(types, immune, masks)) = IMMUNITIES
+}
+
+/// Why level `level_id` is bad for `build` in `difficulty`: the build's damage types with
+/// immune monster types, as `"physical immunes: 3 of 7 types"` (joined by `"; "`), and the
+/// count of types immune to all of them. `None` unless [`rate`] says [`Rating::Bad`].
+pub fn bad_reason(level_id: u32, difficulty: Option<u8>, build: &[Damage]) -> Option<String> {
+    if rate(level_id, difficulty, build) != Rating::Bad {
+        return None;
+    }
+    let (types, immune, masks) = area_immunities(level_id, difficulty)?;
+    let mut parts: Vec<String> = build
+        .iter()
+        .filter_map(|&d| {
+            let n = immune.get(d.index()).copied().filter(|&n| n > 0)?;
+            Some(format!("{} immunes: {n} of {types} types", d.name()))
+        })
+        .collect();
+    let build_mask = build.iter().fold(0u8, |m, d| m | d.bit());
+    let uncovered = masks.iter().filter(|&&m| m & build_mask == build_mask).count();
+    if build.len() > 1 && uncovered > 0 {
+        parts.push(format!("{uncovered} immune to all your damage"));
+    }
+    Some(parts.join("; "))
+}
+
+/// The `IMMUNITIES` entry of `level_id` in `difficulty`; `None` for an unknown level or
+/// difficulty and in towns.
+fn area_immunities(level_id: u32, difficulty: Option<u8>) -> Option<AreaImmunities> {
+    let d = usize::from(difficulty?);
+    if TOWNS.contains(&level_id) {
+        return None;
+    }
+    IMMUNITIES
         .iter()
         .find(|&&(id, _)| id == level_id)
         .and_then(|(_, per_difficulty)| per_difficulty.get(d))
-    else {
-        return Rating::Neutral;
-    };
-    rate_counts(types, immune, masks, primary, build)
+        .copied()
 }
 
 /// [`rate`] on one `IMMUNITIES` entry: `types` monster types, `immune` per damage type, the
@@ -127,7 +161,6 @@ fn rate_counts(types: u8, immune: [u8; 6], masks: &[u8], primary: Damage, build:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::levels_data::AreaImmunities;
     use Damage::{Cold, Fire, Lightning, Physical, Poison};
 
     const VEX: [Damage; 3] = [Lightning, Fire, Physical];
@@ -221,6 +254,28 @@ mod tests {
             Rating::Neutral,
             "no monsters"
         );
+    }
+
+    #[test]
+    fn normal_is_rated_bad_only() {
+        // Bloody Foothills (110), Normal: one of 7 types is poison immune — uncovered for a
+        // poison-only build, so bad even in Normal.
+        assert_eq!(rate(110, Some(0), &[Poison]), Rating::Bad);
+        assert_eq!(
+            bad_reason(110, Some(0), &[Poison]).as_deref(),
+            Some("poison immunes: 1 of 7 types")
+        );
+        // A summoner (physical, cold) is never bad in Normal, and "good" stays neutral there.
+        assert_eq!(rate(110, Some(0), &[Physical, Cold]), Rating::Neutral);
+        assert_eq!(bad_reason(110, Some(0), &[Physical, Cold]), None);
+    }
+
+    #[test]
+    fn bad_reason_names_the_immune_damage() {
+        // Hell City of the Damned: 4 of 7 lightning immune.
+        let reason = bad_reason(106, Some(2), &VEX).unwrap_or_default();
+        assert!(reason.starts_with("lightning immunes: 4 of 7 types"), "{reason}");
+        assert_eq!(bad_reason(83, Some(1), &VEX), None, "good: no reason");
     }
 
     #[test]

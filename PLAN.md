@@ -497,6 +497,16 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - **Dashboard "Where to go"**: the level-suggestion band is structured (`mlvl` + `bucket`:
   `below`/`equal`/`above` clvl, `info::LevelEntry` at the `live_json` layer, `level_lines_full` the
   source) and the panel lays it out in three labelled columns (user request, 2026-11-17).
+- **Dashboard layout pass** (user requests, 2026-11-20): Sell / Keep beside "Where to go" at
+  the top (one column under 900 px); the sell / keep / give lists carry every entry (one JSON
+  line each, the page wraps them as comma runs; the old 3-line `wrap` was dashboard-only and
+  is gone). "Where to go" greys out areas `build::rate` calls Bad (`levels[].bad` = reason,
+  e.g. "physical immunes: 1 of 5 types"); Bad now applies in Normal too (Good stays
+  Nightmare+). The Gear panel folds; it opens on `gear_attention` (`web::gear_attention`: an
+  owned upgrade to wear, else an unowned unique/set/runeword findable now: req ≤ clvl, qlvl ≤
+  the band's max mlvl, a runeword's missing runes' misc.txt qlvl ≤ it; mercenary slots never)
+  until the viewer clicks. Farm entries the character wears (≥ count, equipped only) for its
+  current stage or a later one (`Config::stage_chain`) are hidden.
 - **Recently played first** (user request, 2026-11-18): `played.json` in the data dir maps the
   lowercased character name → `{name, t, class?, stage?}` (unix secs last seen in a game; `src/played.rs`).
   `stage` is the guide stage slug the character last reached live: it latches a `switch_requires`

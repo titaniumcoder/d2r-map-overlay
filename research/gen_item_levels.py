@@ -1,10 +1,11 @@
 """Generate src/item_levels_data.rs from blizzhackers/d2data (D2R JSON game tables).
 
-Usage: python3 -I research/gen_item_levels.py <dir with uniqueitems.json, setitems.json, armor.json> > src/item_levels_data.rs
+Usage: python3 -I research/gen_item_levels.py <dir with uniqueitems.json, setitems.json, armor.json, misc.json> > src/item_levels_data.rs
 Fetch the tables with:
   gh api repos/blizzhackers/d2data/contents/json/uniqueitems.json -H "Accept: application/vnd.github.raw" > uniqueitems.json
   gh api repos/blizzhackers/d2data/contents/json/setitems.json -H "Accept: application/vnd.github.raw" > setitems.json
   gh api repos/blizzhackers/d2data/contents/json/armor.json -H "Accept: application/vnd.github.raw" > armor.json
+  gh api repos/blizzhackers/d2data/contents/json/misc.json -H "Accept: application/vnd.github.raw" > misc.json
 The required character level of an equipped unique/set item is looked up by its
 ItemData FILE_INDEX (the table row's `*ID`; verified live 2026-11-15: Khalim's Flail
 unique 127, Cleglaw's Claw set 7) in the `lvl req` column. Base items (normal, magic,
@@ -12,6 +13,9 @@ rare, ...) are looked up by their 4-char item code: armor rows here, weapons row
 src/weapons_data.rs (its `levelreq` column, research/gen_weapons.py). Base-item levels
 of magic/rare items are the BASE requirement: affixes can raise the real one.
 Rows without a `lvl req` (10 uniqueitems) are left out; the lookup answers None.
+Quality levels (qlvl, the lowest item level that can roll the item: the dashboard's "findable at
+your level" check) come from the `lvl` column of uniqueitems/setitems (same `*ID` keys) and the
+`level` column of misc.json's 33 `type == "rune"` rows (keyed by the bare rune name).
 """
 import json
 import sys
@@ -44,6 +48,31 @@ for const, file, what in [
     for i, lvl in rows:
         print(f"    ({i}, {lvl}),")
     print("];")
+
+for const, file, what in [
+    ("UNIQUE_QLVLS", "uniqueitems.json", "uniqueitems"),
+    ("SET_QLVLS", "setitems.json", "setitems"),
+]:
+    rows = sorted((r["*ID"], r["lvl"]) for r in table(file) if "*ID" in r and isinstance(r.get("lvl"), int))
+    print()
+    print(f"/// ({what} row `*ID`, `lvl` = quality level), sorted by row. Rows without a `lvl` are")
+    print("/// left out.")
+    print(f"pub const {const}: &[(u32, u32)] = &[")
+    for i, lvl in rows:
+        print(f"    ({i}, {lvl}),")
+    print("];")
+
+runes = sorted(
+    ((r["name"].removesuffix(" Rune"), int(r["level"])) for r in table("misc.json") if r.get("type") == "rune"),
+    key=lambda t: t[1],
+)
+assert len(runes) == 33, f"expected 33 runes, got {len(runes)}"
+print()
+print("/// (bare rune name, misc.txt `level` = quality level), lowest first.")
+print(f"pub const RUNE_QLVLS: &[(&str, u32); {len(runes)}] = &[")
+for name, lvl in runes:
+    print(f"    ({rust_str(name)}, {lvl}),")
+print("];")
 
 armor = sorted(
     ((r["code"], int(r["levelreq"]), r["name"]) for r in table("armor.json") if r.get("code")),
@@ -94,4 +123,28 @@ print("pub fn armor_name(code: &str) -> Option<&'static str> {")
 print("    ARMOR.binary_search_by_key(&code, |&(c, _, _)| c).ok()")
 print("        .and_then(|i| ARMOR.get(i))")
 print("        .map(|&(_, _, name)| name)")
+print("}")
+print()
+print("/// The quality level of uniqueitems row `row`, `None` if unknown.")
+print("#[must_use]")
+print("pub fn unique_qlvl(row: u32) -> Option<u32> {")
+print("    UNIQUE_QLVLS.binary_search_by_key(&row, |&(i, _)| i).ok()")
+print("        .and_then(|i| UNIQUE_QLVLS.get(i))")
+print("        .map(|&(_, lvl)| lvl)")
+print("}")
+print()
+print("/// The quality level of setitems row `row`, `None` if unknown.")
+print("#[must_use]")
+print("pub fn set_qlvl(row: u32) -> Option<u32> {")
+print("    SET_QLVLS.binary_search_by_key(&row, |&(i, _)| i).ok()")
+print("        .and_then(|i| SET_QLVLS.get(i))")
+print("        .map(|&(_, lvl)| lvl)")
+print("}")
+print()
+print("/// The quality level of rune `name` (`\"Tal\"` or `\"Tal Rune\"`, any case), `None` if unknown.")
+print("#[must_use]")
+print("pub fn rune_qlvl(name: &str) -> Option<u32> {")
+print("    let name = name.trim();")
+print("    let bare = name.strip_suffix(\" Rune\").or_else(|| name.strip_suffix(\" rune\")).unwrap_or(name);")
+print("    RUNE_QLVLS.iter().find(|(r, _)| r.eq_ignore_ascii_case(bare)).map(|&(_, lvl)| lvl)")
 print("}")

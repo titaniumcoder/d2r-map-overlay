@@ -45,15 +45,10 @@ const PAD: u32 = 3;
 const TEXT: [u8; 4] = [255, 255, 255, 255];
 /// The inventory keep lines: green, same outline as the info line.
 pub const KEEP_TEXT: [u8; 4] = [90, 230, 90, 255];
-/// Most keep lines; the last one ends in "+N more" when the list is longer.
-pub const MAX_KEEP_LINES: usize = 3;
-const KEEP_PREFIX: &str = "Keep: ";
 /// The sell lines: grey (dashboard Sell panel).
 pub const SELL_TEXT: [u8; 4] = [175, 175, 175, 255];
-pub const SELL_PREFIX: &str = "Sell: ";
 /// The give-away lines: yellow (dashboard, riding with the Sell panel).
 pub const GIVE_TEXT: [u8; 4] = [255, 225, 60, 255];
-pub const GIVE_PREFIX: &str = "Give away: ";
 /// The level-suggestion lines (dashboard Where-to-go panel): light blue.
 pub const LEVEL_TEXT: [u8; 4] = [120, 210, 255, 255];
 /// The breakpoint/gear/runeword guide lines (user request, 2026-11-17): light violet.
@@ -78,8 +73,6 @@ pub const TOWNS: [u32; 5] = [1, 40, 75, 103, 109];
 /// Level ids from here on are special or uber levels (Pandemonium, Uber Tristram, …): never
 /// suggested.
 const FIRST_SPECIAL_LEVEL: u32 = 133;
-/// Separator of the sell and give-away entries.
-const COMMA: &str = ", ";
 /// The last part of a terrorized level's line, drawn in [`TERROR_TEXT`].
 const TERRORIZED: &str = "terrorized";
 const TERROR_TEXT: [u8; 4] = [190, 120, 255, 255];
@@ -524,12 +517,16 @@ pub struct LevelEntry {
     pub text: String,
     pub mlvl: u8,
     pub bucket: &'static str,
+    /// Why the area is bad for the build ([`build::bad_reason`]), `None` when it isn't: the
+    /// dashboard greys the area out with this as its tooltip.
+    pub bad: Option<String>,
 }
 
 /// The whole level-suggestion band for the dashboard: one entry per area (the first carries
 /// the `Level N →` prefix), in the same usefulness order, uncapped within the band; the
-/// nearest-areas fallback (empty band) keeps its 5-entry cap.
-pub fn level_lines_full(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<LevelEntry> {
+/// nearest-areas fallback (empty band) keeps its 5-entry cap. `build` (primary damage first)
+/// marks the areas bad for it ([`LevelEntry::bad`]).
+pub fn level_lines_full(char_level: Option<u8>, difficulty: Option<u8>, build: &[Damage]) -> Vec<LevelEntry> {
     let (Some(lvl), areas) = (char_level, level_suggestions(char_level, difficulty)) else {
         return Vec::new();
     };
@@ -548,8 +545,19 @@ pub fn level_lines_full(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<L
                 m if m < lvl => "below",
                 _ => "above",
             },
+            bad: level_id(name, mlvl, difficulty).and_then(|id| build::bad_reason(id, difficulty, build)),
         })
         .collect()
+}
+
+/// The id of the area called `name` with monster level `mlvl` in `difficulty`: the first such
+/// (the seven Tal Rasha's Tombs share name and level; [`level_suggestions`] lists them once).
+fn level_id(name: &str, mlvl: u8, difficulty: Option<u8>) -> Option<u32> {
+    let d = usize::from(difficulty?);
+    LEVELS
+        .iter()
+        .find(|&&(_, n, lvls)| n == name && lvls.get(d) == Some(&mlvl))
+        .map(|&(id, _, _)| id)
 }
 
 /// The info-line font, loaded on first use from [`FONT_PATHS`]; `None` (logged once) if none loads.
@@ -579,15 +587,6 @@ pub fn spare_entry(s: &Spare) -> String {
     }
 }
 
-/// A sell or give-away list as lines after `prefix`, comma-separated, of at most `max_width` px
-/// in `font`, capped like the keep lines.
-pub fn spare_lines(font: &FontVec, prefix: &str, spares: &[Spare], max_width: f32) -> Vec<String> {
-    let entries: Vec<String> = spares.iter().map(spare_entry).collect();
-    wrap(prefix, COMMA, &entries, MAX_KEEP_LINES, |t| {
-        text_width(font, t) <= max_width
-    })
-}
-
 /// One keep-list entry as text: `Harlequin Crest (S)`, `Lem Rune ×2 (A)`.
 pub fn keep_entry(k: &Keep) -> String {
     let tier = match k.tier {
@@ -600,66 +599,6 @@ pub fn keep_entry(k: &Keep) -> String {
     } else {
         format!("{} ({tier})", k.name)
     }
-}
-
-/// The keep list as lines of at most `max_width` px in `font` (see [`wrap_keep`]).
-pub fn keep_lines(font: &FontVec, keep: &[Keep], max_width: f32) -> Vec<String> {
-    let entries: Vec<String> = keep.iter().map(keep_entry).collect();
-    wrap_keep(&entries, |t| text_width(font, t) <= max_width)
-}
-
-/// Packs `entries` after "Keep: " into lines joined by " · " for which `fits` holds (an entry too
-/// wide for a line of its own gets one anyway), at most [`MAX_KEEP_LINES`]. If they don't all
-/// fit, the last line ends in "+N more" for the rest. Empty for no entries.
-pub fn wrap_keep(entries: &[String], fits: impl Fn(&str) -> bool) -> Vec<String> {
-    wrap(KEEP_PREFIX, SEPARATOR, entries, MAX_KEEP_LINES, fits)
-}
-
-/// [`wrap_keep`] with any `prefix` before the first line and `sep` between entries; `max_lines`
-/// caps the lines (the last then ends in `+N more`).
-fn wrap(
-    prefix: &str,
-    sep: &str,
-    entries: &[String],
-    max_lines: usize,
-    fits: impl Fn(&str) -> bool,
-) -> Vec<String> {
-    let render = |i: usize, line: &[String]| {
-        let body = line.join(sep);
-        if i == 0 { format!("{prefix}{body}") } else { body }
-    };
-    let mut lines: Vec<Vec<String>> = Vec::new();
-    for e in entries {
-        let i = lines.len().saturating_sub(1);
-        match lines.last_mut() {
-            Some(line) => {
-                line.push(e.clone());
-                if line.len() > 1 && !fits(&render(i, line)) {
-                    line.pop();
-                    lines.push(vec![e.clone()]);
-                }
-            }
-            None => lines.push(vec![e.clone()]),
-        }
-    }
-    if lines.len() > max_lines {
-        lines.truncate(max_lines);
-        let placed: usize = lines.iter().map(Vec::len).sum();
-        let mut rest = entries.len().saturating_sub(placed);
-        if let Some(last) = lines.last_mut() {
-            loop {
-                last.push(format!("+{rest} more"));
-                if last.len() == 1 || fits(&render(max_lines - 1, last)) {
-                    break;
-                }
-                // Drop "+N more" and move the line's last entry into the rest.
-                last.pop();
-                last.pop();
-                rest += 1;
-            }
-        }
-    }
-    lines.iter().enumerate().map(|(i, l)| render(i, l)).collect()
 }
 
 /// One dashboard text row (the breakpoint guide): its text, colour, and optional coloured segments
@@ -1341,38 +1280,7 @@ mod tests {
     }
 
     #[test]
-    fn keep_lines_wrap_and_cap() {
-        let entries: Vec<String> = [
-            "aaaa", "bbbb", "cccc", "dddd", "eeee", "ffff", "gggg", "hhhh", "iiii", "jjjj",
-        ]
-        .map(str::to_owned)
-        .to_vec();
-        // Width by characters: 20 per line.
-        let fits = |t: &str| t.chars().count() <= 20;
-        assert_eq!(wrap_keep(&[], fits), Vec::<String>::new());
-        assert_eq!(
-            wrap_keep(entries.get(..2).unwrap_or_default(), fits),
-            vec!["Keep: aaaa · bbbb"]
-        );
-        assert_eq!(
-            wrap_keep(entries.get(..5).unwrap_or_default(), fits),
-            vec!["Keep: aaaa · bbbb", "cccc · dddd · eeee"]
-        );
-        // Ten entries need four lines: three, the last ending in "+N more" (two entries make
-        // room for it).
-        let capped = wrap_keep(&entries, fits);
-        assert_eq!(
-            capped,
-            vec!["Keep: aaaa · bbbb", "cccc · dddd · eeee", "ffff · +4 more"]
-        );
-        assert!(capped.iter().all(|l| fits(l)), "{capped:?}");
-        // An entry wider than a line still gets one.
-        let long = vec!["x".repeat(30), "y".into()];
-        assert_eq!(wrap_keep(&long, fits).len(), 2);
-    }
-
-    #[test]
-    fn spare_entries_and_lines() {
+    fn spare_entries() {
         use crate::valuables::Place;
         let spare = |name: &str, place, count| Spare {
             name: name.into(),
@@ -1389,13 +1297,6 @@ mod tests {
         );
         assert_eq!(spare_entry(&spare("a", Place::Cube, 1)), "a (cube)");
         assert_eq!(spare_entry(&spare("a", Place::Shared, 1)), "a (shared)");
-        let entries: Vec<String> = (0..12).map(|i| format!("i{i:02}")).collect();
-        let fits = |t: &str| t.chars().count() <= 20;
-        let lines = wrap(SELL_PREFIX, COMMA, &entries, MAX_KEEP_LINES, fits);
-        assert_eq!(
-            lines,
-            vec!["Sell: i00, i01, i02", "i03, i04, i05, i06", "i07, i08, +3 more"]
-        );
     }
 
     #[test]
@@ -1613,7 +1514,7 @@ mod tests {
     fn level_lines_full_lists_the_whole_band_one_per_line() {
         // One line per area in the usefulness order, the `Level N →` prefix only on the first;
         // no `+N more` tail, no cap.
-        let full = level_lines_full(Some(1), Some(0));
+        let full = level_lines_full(Some(1), Some(0), &[]);
         assert_eq!(full.len(), 14, "the whole −5…+4 band: {full:?}");
         let first = full.first().map_or_else(LevelEntry::default, Clone::clone);
         assert_eq!(first.text, "Level 1 → Blood Moor (1)");
@@ -1627,8 +1528,47 @@ mod tests {
         assert_eq!(last.text, "Hole Level 2 (5)");
         assert_eq!(last.mlvl, 5);
         assert_eq!(last.bucket, "above");
-        assert_eq!(level_lines_full(Some(80), Some(0)), Vec::<LevelEntry>::new());
-        assert_eq!(level_lines_full(None, Some(0)), Vec::<LevelEntry>::new());
+        assert_eq!(level_lines_full(Some(80), Some(0), &[]), Vec::<LevelEntry>::new());
+        assert_eq!(level_lines_full(None, Some(0), &[]), Vec::<LevelEntry>::new());
+    }
+
+    #[test]
+    fn level_lines_full_flags_areas_bad_for_the_build() {
+        use crate::build::Damage::{Cold, Physical};
+        // A Hell fury druid (physical only) at 70: the Jail (one physical-immune type of 5)
+        // and the Cathedral are bad, with the reason; the rest of the band is not.
+        let full = level_lines_full(Some(70), Some(2), &[Physical]);
+        let bad: Vec<(&str, &str)> = full
+            .iter()
+            .filter_map(|e| Some((e.text.as_str(), e.bad.as_deref()?)))
+            .collect();
+        assert_eq!(
+            bad,
+            [
+                ("Jail Level 1 (71)", "physical immunes: 1 of 5 types"),
+                ("Jail Level 2 (71)", "physical immunes: 1 of 5 types"),
+                ("Jail Level 3 (71)", "physical immunes: 1 of 5 types"),
+                ("Cathedral (72)", "physical immunes: 1 of 3 types"),
+            ]
+        );
+        // Without a build nothing is flagged. The summoner (physical, cold) isn't either: no
+        // type there is immune to both, and physical immunes stay under the 35 % share.
+        assert!(
+            level_lines_full(Some(70), Some(2), &[])
+                .iter()
+                .all(|e| e.bad.is_none())
+        );
+        assert!(
+            level_lines_full(Some(70), Some(2), &[Physical, Cold])
+                .iter()
+                .all(|e| e.bad.is_none())
+        );
+        // Normal has (almost) no immunes: nothing is bad for the summoner.
+        assert!(
+            level_lines_full(Some(20), Some(0), &[Physical, Cold])
+                .iter()
+                .all(|e| e.bad.is_none())
+        );
     }
 
     #[test]
@@ -1636,7 +1576,7 @@ mod tests {
         // The dashboard's three "Where to go" columns come from the `bucket` field: below /
         // equal / above the character level (`equal` = mlvl == char_level, user request,
         // 2026-11-17). Normal 23: the band is 18–27, own-level-first in `text`.
-        let full = level_lines_full(Some(23), Some(0));
+        let full = level_lines_full(Some(23), Some(0), &[]);
         assert!(!full.is_empty(), "the band is not empty for clvl 23");
         for entry in &full {
             let expected = match entry.mlvl {

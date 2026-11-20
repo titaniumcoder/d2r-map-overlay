@@ -270,6 +270,7 @@ fn publish_dashboard(
     stage: Option<config::Stage<'_>>,
     quests: &[u16],
     farm: &[config::FarmGroup],
+    stage_chain: &[String],
 ) {
     web::publish_live(web::live_json(&web::LiveInfo {
         player_name: &snap.player.name,
@@ -286,6 +287,7 @@ fn publish_dashboard(
         white_bases: &snap.white_bases,
         quests,
         farm,
+        stage_chain,
         equipped: &snap.equipped,
         equipped_items: &snap.equipped_items,
         owned: &snap.owned_names,
@@ -408,7 +410,10 @@ fn follow_game(
                     merc_equipped: snap.merc_equipped.clone(),
                 });
                 let quests = quest_flags.read(pid, mem, update.new_game);
-                publish_dashboard(&snap, &blocks, stage, quests, &config.farm);
+                // The current stage and its later ones: a farm entry for any of them that this
+                // character wears leaves the list (it keeps the gear through a respec).
+                let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
+                publish_dashboard(&snap, &blocks, stage, quests, &config.farm, &chain);
                 if let Some((tabs, items)) = update.stash_captured {
                     eprintln!("shared stash captured: {tabs} tabs, {items} items");
                     journal.stash(true, tabs, items);

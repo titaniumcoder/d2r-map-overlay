@@ -698,6 +698,10 @@ pub struct LiveInfo<'a> {
     /// The cross-character farm list (`farm.toml`, [`crate::config::load_farm`]): the Farm
     /// panel ([`farm_json`]).
     pub farm: &'a [crate::config::FarmGroup],
+    /// The build names of the character's current stage and every later one
+    /// ([`crate::config::Config::stage_chain`]): a farm entry for one of them that the
+    /// character wears enough copies of is hidden ([`farm_worn`]).
+    pub stage_chain: &'a [String],
     /// The vendor trade window open right now ([`crate::game::Snapshot::shop`]).
     pub shop: Option<&'a crate::shop::Shop>,
     /// Base strength and dexterity ([`crate::game::Player::strength`]); `None` if unread.
@@ -733,9 +737,11 @@ impl LiveInfo<'_> {
 /// piece. The `levels` lines are the whole level-suggestion band, one area per line, each as
 /// `{ "text", "colour", "mlvl", "bucket" }` ([`crate::info::LevelEntry`]: the own-level-first
 /// order in `text`, and the `below`/`equal`/`above` bucket the dashboard lays its "Where to
-/// go" panel out in three columns from). The give-away lines have no panel of their own, so
-/// they ride with `sell` in
-/// the dashboard's Sell panel. The `gear` section is the 2×5 `BiS` grid: one column per
+/// go" panel out in three columns from, plus `bad`: why the area is bad for the build). The
+/// `keep` / `sell` / `give` lines are one entry each, every entry (the page joins each list
+/// into one wrapping comma-separated run); the give-away lines have no panel of their own, so
+/// they ride with `sell` in the dashboard's Sell / Keep panel. `gear_attention` (bool) and
+/// `gear_attention_why` (text or `null`, [`gear_attention`]) open the Gear panel. The `gear` section is the 2×5 `BiS` grid: one column per
 /// gear slot ([`gear_json`]), each with the equipped piece in that slot and the build's
 /// pieces ordered best→worst, their `state` computed here (see [`grid_pieces`]). The shared
 /// stash comes as `stash_pages` (the normal tabs in the game's UI order, [`stash_pages`]) and
@@ -748,6 +754,8 @@ pub fn live_json(info: &LiveInfo) -> String {
         .get(usize::try_from(info.class).unwrap_or(usize::MAX))
         .map_or_else(|| format!("class {}", info.class), |name| (*name).to_owned());
     let difficulty = info.difficulty.and_then(crate::info::difficulty_name);
+    let upgrades = upgrades_json(info);
+    let attention = gear_attention(info, &upgrades);
     serde_json::json!({
         "live": true,
         "updated_at": info.updated_at,
@@ -777,7 +785,9 @@ pub fn live_json(info: &LiveInfo) -> String {
         ),
         "stage": stage_json(info.stage.as_ref(), &|item| info.holdings().count(item)),
         "recipes": recipes_json(info),
-        "upgrades": upgrades_json(info),
+        "gear_attention": attention.is_some(),
+        "gear_attention_why": attention,
+        "upgrades": upgrades,
         "shop": shop_json(info),
         "farm": farm_json(info),
     })
@@ -1362,7 +1372,8 @@ const fn farm_status(count: u32, stashed: u32, carried: u32) -> FarmStatus {
     }
 }
 
-/// The farm list (`live_json`'s `farm` section), `null` without one:
+/// The farm list (`live_json`'s `farm` section), `null` without one; entries the character
+/// wears for its own build are left out, and a group left empty with them ([`farm_worn`]):
 /// `{ "groups": [{ "for", "items": [{ "name", "kind", "count", "stashed", "carried",
 /// "status", "runes", "bases" }] }], "runes": [{ "rune", "code", "need", "have", "stash",
 /// "for" }] }`.
@@ -1386,13 +1397,15 @@ fn farm_json(info: &LiveInfo) -> serde_json::Value {
     let groups: Vec<serde_json::Value> = info
         .farm
         .iter()
-        .map(|group| {
+        .filter_map(|group| {
             let items: Vec<serde_json::Value> = group
                 .items
                 .iter()
+                .filter(|item| !farm_worn(&group.target, item, info))
                 .map(|item| farm_item_json(item, info, &materials, &mut wanted))
                 .collect();
-            serde_json::json!({ "for": group.target, "items": items })
+            // A group whose entries are all worn leaves the list.
+            (!items.is_empty()).then(|| serde_json::json!({ "for": group.target, "items": items }))
         })
         .collect();
     wanted.sort_by_key(|(rune, _, _)| crate::stash::RUNE_NAMES.iter().position(|r| r == rune));
@@ -1415,6 +1428,28 @@ fn farm_json(info: &LiveInfo) -> serde_json::Value {
         })
         .collect();
     serde_json::json!({ "groups": groups, "runes": runes })
+}
+
+/// Whether farm entry `item` of the group for build `target` is hidden (user request,
+/// 2026-11-20): the played character is on that build — its current stage or a later one
+/// along the `next` links ([`LiveInfo::stage_chain`]: it keeps the gear through a respec) —
+/// and wears at least `count` copies itself (its equipped items; carried, cubed, stashed and
+/// mercenary-worn copies don't count).
+fn farm_worn(target: &str, item: &crate::config::FarmItem, info: &LiveInfo) -> bool {
+    let on_build = info
+        .stage_chain
+        .iter()
+        .any(|b| b.trim().eq_ignore_ascii_case(target.trim()));
+    let worn = info
+        .equipped_items
+        .iter()
+        .filter(|e| {
+            e.name
+                .as_deref()
+                .is_some_and(|n| crate::info::same_name(n, &item.name))
+        })
+        .count();
+    on_build && u32::try_from(worn).is_ok_and(|w| w >= item.count.max(1))
 }
 
 /// How many of `rune` (`"Sol"`) the merged material counts hold.
@@ -1676,6 +1711,116 @@ fn shop_upgrades(info: &LiveInfo, lvl: u32, out: &mut Vec<serde_json::Value>) {
             "why": format!("{vendor} sells it{req}"),
         }));
     }
+}
+
+/// Why the dashboard's Gear panel should open on its own (`live_json`'s `gear_attention` and
+/// `gear_attention_why`; user request, 2026-11-20), `None` to keep it collapsed. Only the
+/// character's own slots count (the swap slot is unread, the mercenary's never trigger it):
+/// - an owned or shared-stash piece to wear now: the `"equip"` entries of `upgrades`
+///   ([`upgrades_json`]) → `"▲ upgrade to wear: <name>"`;
+/// - else unowned unique, set or runeword pieces findable at the character's level
+///   ([`findable_upgrade`]) → `"▲ findable: <names>"`.
+fn gear_attention(info: &LiveInfo, upgrades: &[serde_json::Value]) -> Option<String> {
+    let wear: Vec<&str> = upgrades
+        .iter()
+        .filter(|u| u.get("kind").and_then(serde_json::Value::as_str) == Some("equip"))
+        .filter_map(|u| u.get("name")?.as_str())
+        .collect();
+    if !wear.is_empty() {
+        return Some(format!("▲ upgrade to wear: {}", wear.join(", ")));
+    }
+    let (Some(bis), Some(lvl)) = (info.bis, info.char_level) else {
+        return None;
+    };
+    // The highest monster level the "Where to go" panel offers right now.
+    let max_mlvl = u32::from(info.blocks.level_full.iter().map(|e| e.mlvl).max()?);
+    let materials = owned_materials(info);
+    let mut found: Vec<&str> = Vec::new();
+    for slot in crate::config::SLOT_NAMES.iter().filter(|&&s| s != "swap") {
+        let eq_level = equipped_level(slot_bodies(slot), info);
+        for piece in bis.slots.get(*slot).map_or(&[][..], Vec::as_slice) {
+            let name = crate::info::piece_name(piece);
+            if !found.iter().any(|f| crate::info::same_name(f, name))
+                && !outgrown(piece, info)
+                && findable_upgrade(piece, u32::from(lvl), max_mlvl, eq_level, &materials, info)
+            {
+                found.push(name);
+            }
+        }
+    }
+    (!found.is_empty()).then(|| format!("▲ findable: {}", found.join(", ")))
+}
+
+/// Whether build piece `piece` is an unowned upgrade findable now: not worn, owned or in the
+/// shared stash; its required level known and ≤ `lvl`; better than the equipped piece
+/// ([`piece_state`] against `eq_level`); and droppable where the "Where to go" panel sends
+/// the character (`max_mlvl` = its highest monster level):
+/// - a unique or set item: its quality level ≤ `max_mlvl` ([`unique_set_qlvl`]);
+/// - a runeword: every rune not already owned (`materials`, [`owned_materials`]: the shared
+///   materials tab plus inventory, cube and stash) has a quality level ≤ `max_mlvl`
+///   (misc.txt `level`); the base can't be checked and counts as findable.
+///
+/// Anything else (a magic, rare or white base described in words) is never "findable": there is
+/// no item level to check it by.
+fn findable_upgrade(
+    piece: &str,
+    lvl: u32,
+    max_mlvl: u32,
+    eq_level: Option<u32>,
+    materials: &[(String, u32)],
+    info: &LiveInfo,
+) -> bool {
+    let name = crate::info::piece_name(piece);
+    let Some(req) = crate::info::piece_level(piece) else {
+        return false;
+    };
+    let unowned =
+        crate::info::piece_tick(piece, &[], info.owned, info.stash_owned).is_none() && !is_worn(name, info);
+    if !unowned || req > lvl || piece_state(Some(req), eq_level, lvl) != "better" {
+        return false;
+    }
+    if let Some(word) = crate::runewords_data::lookup(name) {
+        return word.runes.iter().all(|rune| {
+            let need = word.runes.iter().filter(|r| *r == rune).count();
+            let have = materials
+                .iter()
+                .filter(|(n, _)| same_rune(n, rune))
+                .map(|(_, q)| *q)
+                .sum::<u32>();
+            usize::try_from(have).is_ok_and(|have| have >= need)
+                || crate::item_levels_data::rune_qlvl(rune).is_some_and(|q| q <= max_mlvl)
+        });
+    }
+    unique_set_qlvl(name).is_some_and(|q| q <= max_mlvl)
+}
+
+/// Whether material name `material` (`"Tal Rune"`) is rune `rune` (`"Tal"`).
+fn same_rune(material: &str, rune: &str) -> bool {
+    material
+        .trim()
+        .strip_suffix(" Rune")
+        .is_some_and(|bare| bare.eq_ignore_ascii_case(rune))
+}
+
+/// The quality level of the unique or set item shown in game as `name` (the lowest when
+/// several rows share it), `None` for any other name. The in-game name maps back to the
+/// tables' `index` name through `DISPLAY_NAMES` (Biggin's Bonnet is `War Bonnet` there).
+fn unique_set_qlvl(name: &str) -> Option<u32> {
+    use crate::item_names_data::{DISPLAY_NAMES, SET_NAMES, UNIQUE_NAMES};
+    let index = DISPLAY_NAMES
+        .iter()
+        .find(|(_, shown)| crate::info::same_name(shown, name))
+        .map_or(name, |&(index, _)| index);
+    let rows = |table: &'static [(u32, &'static str)]| {
+        table
+            .iter()
+            .filter(move |(_, n)| crate::info::same_name(n, index))
+            .map(|&(row, _)| row)
+    };
+    rows(UNIQUE_NAMES)
+        .filter_map(crate::item_levels_data::unique_qlvl)
+        .chain(rows(SET_NAMES).filter_map(crate::item_levels_data::set_qlvl))
+        .min()
 }
 
 /// The skill trees (`live_json`'s `skills` section): `{ "total", "left", "right", "trees":
@@ -2217,15 +2362,20 @@ fn text_lines(lines: &[String], colour: [u8; 4]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// The whole level-suggestion band as `{ "text", "colour", "mlvl", "bucket" }` objects
-/// ([`crate::info::LevelEntry`]): the own-level-first reading order in `text`, and the
+/// The whole level-suggestion band as `{ "text", "colour", "mlvl", "bucket", "bad" }` objects
+/// ([`crate::info::LevelEntry`]): the own-level-first reading order in `text`, the
 /// structured `mlvl` + `below`/`equal`/`above` bucket the dashboard re-groups its "Where to
-/// go" panel's three columns from.
+/// go" panel's three columns from, and `bad`: why the area is bad for the build (the page
+/// greys it out), else `null`.
 fn level_lines_full(entries: &[crate::info::LevelEntry], colour: [u8; 4]) -> Vec<serde_json::Value> {
     let hex = hex(colour);
     entries
         .iter()
-        .map(|e| serde_json::json!({ "text": e.text, "colour": hex, "mlvl": e.mlvl, "bucket": e.bucket }))
+        .map(|e| {
+            serde_json::json!({
+                "text": e.text, "colour": hex, "mlvl": e.mlvl, "bucket": e.bucket, "bad": e.bad,
+            })
+        })
         .collect()
 }
 
@@ -2537,9 +2687,11 @@ load();
 "#;
 
 /// The live dashboard page (a single string: no assets, no framework), dark-themed. Layout:
-/// a sticky character bar with the breakpoint chips, the gear grid (equipped piece on top of
-/// each slot card, the build's pieces below with their stats), then "Where to go" beside the
-/// shared stash. The script follows in [`DASHBOARD_SCRIPT`].
+/// a sticky character bar with the breakpoint chips, then Sell / Keep beside "Where to go"
+/// (one column when narrow), the vendor, the collapsible gear grid (equipped piece on top of
+/// each slot card, the build's pieces below with their stats; open while `gear_attention`
+/// says so, until the viewer clicks), skills, recipes, the farm list and the shared stash.
+/// The script follows in [`DASHBOARD_SCRIPT`].
 const DASHBOARD_HEAD: &str = r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2577,7 +2729,15 @@ a { color: var(--gold); text-decoration: none; } a:hover { text-decoration: unde
 .grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); margin-top: 16px; }
 .panel { background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
 .panel.full { grid-column: 1 / -1; }
-.wrap > .panel + .panel { margin-top: 16px; }
+.wrap > .panel + .panel, .wrap > .grid + .panel { margin-top: 16px; }
+.wrap > .grid:first-child { margin-top: 0; }
+/* The Gear panel's fold: the heading's button toggles the body. */
+.panel h2 .fold { all: unset; cursor: pointer; display: inline-flex; align-items: baseline; gap: 6px; }
+.panel h2 .fold::before { content: "▸"; display: inline-block; transition: transform .15s; }
+.panel h2 .fold[aria-expanded="true"]::before { transform: rotate(90deg); }
+.panel h2 .fold:focus-visible { outline: 1px solid var(--gold); outline-offset: 2px; }
+.panel h2 .sub.attn { color: var(--good); }
+#gearpanel:has(#gearbody[hidden]) h2 { margin-bottom: 0; }
 .panel h2 { margin: 0 0 10px; font-size: 13px; font-weight: 650; letter-spacing: .08em;
   text-transform: uppercase; color: var(--gold); display: flex; align-items: baseline; gap: 10px; }
 .panel h2 .sub { color: var(--faint); font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 12px; }
@@ -2641,6 +2801,7 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .area { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 1px 0; }
 .area .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .area .m { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 12px; }
+.area.bad { opacity: .4; filter: grayscale(1); } .area.bad .n { text-decoration: line-through dotted; }
 
 /* Stash */
 .pages { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
@@ -2655,6 +2816,8 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .stk .q { color: var(--gold); font-variant-numeric: tabular-nums; font-weight: 650; }
 .stk.rune .nm { color: var(--rune); }
 .lines .line { white-space: pre-wrap; font-size: 13px; }
+.lines .line.run { white-space: normal; overflow-wrap: anywhere; }
+.lines .line.run + .line.run { margin-top: 6px; }
 
 /* Skills */
 .skbtns { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
@@ -2766,9 +2929,13 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
 </div></div>
 <div class="upbar" id="upgrades" hidden></div>
 <div class="wrap">
-<section class="panel full" id="sellpanel"><h2>Sell / Keep</h2><div id="sell" class="lines"></div></section>
+<div class="grid">
+<section class="panel" id="sellpanel"><h2>Sell / Keep</h2><div id="sell" class="lines"></div></section>
+<section class="panel"><h2>Where to go <span class="sub">monster level around yours · greyed = bad for your build</span></h2><div id="levels"></div></section>
+</div>
 <section class="panel full" id="shoppanel" hidden><h2>Vendor <span class="sub" id="shopnpc"></span></h2><div class="shop" id="shop"></div></section>
-<section class="panel full"><h2>Gear <span class="sub" id="buildname"></span></h2>
+<section class="panel full" id="gearpanel"><h2><button type="button" class="fold" id="gearfold" aria-expanded="false" aria-controls="gearbody">Gear</button> <span class="sub" id="buildname"></span> <span class="sub attn" id="gearwhy"></span></h2>
+<div id="gearbody" hidden>
 <details class="help"><summary>How to read this</summary>
 Each card is a slot. The dashed box shows what is equipped (name and required level), and below it are the build's pieces, best first.
 ▲ / green outline = an upgrade you can wear now, faded = above the level gate (character level + 5), struck through = already beaten by what you wear.
@@ -2777,17 +2944,15 @@ Each card is a slot. The dashed box shows what is equipped (name and required le
 <ul class="targets stats" id="statsplan"></ul>
 <div class="gear" id="gear"></div>
 <div id="mercbox"><h3 class="row-h">Mercenary · charms · sockets</h3>
-<div class="gear" id="merc"></div><div class="gear extras" id="extras"></div></div></section>
+<div class="gear" id="merc"></div><div class="gear extras" id="extras"></div></div></div></section>
 <section class="panel full" id="skillpanel"><h2>Skills <span class="sub" id="skillsum"></span></h2>
 <div id="skills"></div></section>
 <section class="panel full" id="recipepanel" hidden><h2>Recipes <span class="sub">✓ = you have it (shared stash, inventory, cube, stash) · bases can't be read: check them</span></h2>
 <div id="recipes"></div></section>
 <section class="panel full" id="farmpanel" hidden><h2>Farm list <span class="sub">across characters · done = in the shared stash · found = on this character · ⚑ in the stash runes = needed</span></h2>
 <div id="farm"></div></section>
-<div class="grid">
-<section class="panel"><h2>Where to go <span class="sub">monster level around yours</span></h2><div id="levels"></div></section>
-<section class="panel"><h2>Shared stash</h2><div id="stash"></div></section>
-</div></div>
+<section class="panel full"><h2>Shared stash</h2><div id="stash"></div></section>
+</div>
 "#;
 
 /// The dashboard page's script: first-paint fetch, then the SSE stream (`render` is the
@@ -2816,7 +2981,9 @@ function levels(entries) {
   const cards = ["below", "equal", "above"].map(bucket => {
     const rows = (entries || []).filter(e => e.bucket === bucket).map(e => {
       const name = e.text.replace(/\s*\(\d+\)\s*$/, "");
-      return `<div class="area" style="color:${col(e.colour)}"><span class="n" title="${esc(name)}">${esc(name)}</span><span class="m">${e.mlvl != null ? e.mlvl : ""}</span></div>`;
+      // Bad for the build (immunes): greyed out, the reason as the tooltip.
+      const tip = e.bad ? `${name} · bad for your build: ${e.bad}` : name;
+      return `<div class="area${e.bad ? " bad" : ""}" style="color:${col(e.colour)}"><span class="n" title="${esc(tip)}">${esc(name)}</span><span class="m">${e.mlvl != null ? e.mlvl : ""}</span></div>`;
     }).join("");
     return `<div class="lvc ${bucket}"><h3>${bucket}</h3>${rows || '<div class="empty">none</div>'}</div>`;
   }).join("");
@@ -2954,9 +3121,12 @@ function skillTrees(s) {
   }).join("");
   $("skills").innerHTML = (buttons ? `<div class="skbtns">${buttons}</div>` : "") + `<div class="trees">${trees}</div>`;
 }
+// Sell / Keep / Give away: every entry (one per JSON line), each list one comma-separated
+// run that wraps to the panel width.
 function sell(r) {
-  const all = (r.sell || []).concat(r.keep || []).concat(r.give || []);
-  $("sell").innerHTML = all.map(e => `<div class="line" style="color:${col(e.colour)}">${esc(e.text)}</div>`).join("")
+  const run = (label, list) => list && list.length
+    ? `<div class="line run" style="color:${col(list[0].colour)}"><b>${label}:</b> ${list.map(e => esc(e.text)).join(", ")}</div>` : "";
+  $("sell").innerHTML = run("Sell", r.sell) + run("Keep", r.keep) + run("Give away", r.give)
     || '<div class="empty">nothing to sell or keep right now</div>';
 }
 // Upgrade chime: the bell toggles it (the click is the user gesture browsers need before audio
@@ -3094,7 +3264,25 @@ function shop(s) {
   }).join("") || '<div class="empty">nothing for sale</div>';
 }
 // One rendered frame from a live payload (the first-paint fetch and every SSE event).
+// The Gear panel follows the server's gear_attention (open while there is an upgrade to wear
+// or to find) until the viewer clicks its heading; from then on their choice sticks for this
+// page session. Only the body's hidden flag changes: render never rebuilds the wrapper.
+let gearChoice = null;
+function setGear(open) {
+  $("gearbody").hidden = !open;
+  $("gearfold").setAttribute("aria-expanded", String(open));
+}
+$("gearfold").addEventListener("click", () => {
+  gearChoice = $("gearbody").hidden;
+  setGear(gearChoice);
+});
+function gearFold(r) {
+  const why = r && r.live && r.gear_attention ? (r.gear_attention_why || "") : "";
+  $("gearwhy").textContent = why;
+  setGear(gearChoice != null ? gearChoice : why !== "");
+}
 function render(r) {
+  gearFold(r);
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
     for (const id of ["guide", "levels", "gear", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
@@ -3841,6 +4029,7 @@ mod tests {
             white_bases: &[],
             quests: &[],
             farm: &[],
+            stage_chain: &[],
             shop: None,
             strength: None,
             dexterity: None,
@@ -3885,6 +4074,7 @@ mod tests {
             white_bases: &[],
             quests: &[],
             farm: &[],
+            stage_chain: &[],
             shop: None,
             strength: None,
             dexterity: None,
@@ -3938,16 +4128,18 @@ mod tests {
                     text: "Level 3 → a (3)".to_owned(),
                     mlvl: 3,
                     bucket: "equal",
+                    bad: None,
                 },
                 crate::info::LevelEntry {
                     text: "b (5)".to_owned(),
                     mlvl: 5,
                     bucket: "above",
+                    bad: Some("physical immunes: 3 of 7 types".to_owned()),
                 },
             ],
-            keep: vec!["Keep: Harlequin Crest (S)".to_owned()],
-            sell: vec!["Sell: Gravenspine (inv)".to_owned()],
-            give: vec!["Give away: Lem Rune (stash)".to_owned()],
+            keep: vec!["Harlequin Crest (S)".to_owned()],
+            sell: vec!["Gravenspine (inv)".to_owned()],
+            give: vec!["Lem Rune (stash)".to_owned()],
             bis: vec![crate::info::BisLine {
                 text: "helm: Harlequin Crest (82)".to_owned(),
                 tick: None,
@@ -3992,22 +4184,22 @@ mod tests {
         assert_eq!(
             levels,
             vec![
-                serde_json::json!({"text": "Level 3 → a (3)", "colour": "#78d2ff", "mlvl": 3, "bucket": "equal"}),
-                serde_json::json!({"text": "b (5)", "colour": "#78d2ff", "mlvl": 5, "bucket": "above"}),
+                serde_json::json!({"text": "Level 3 → a (3)", "colour": "#78d2ff", "mlvl": 3, "bucket": "equal", "bad": null}),
+                serde_json::json!({"text": "b (5)", "colour": "#78d2ff", "mlvl": 5, "bucket": "above", "bad": "physical immunes: 3 of 7 types"}),
             ],
             "{levels:?}"
         );
         assert_eq!(
             colour_of("keep"),
-            vec![("Keep: Harlequin Crest (S)".to_owned(), "#5ae65a".to_owned())]
+            vec![("Harlequin Crest (S)".to_owned(), "#5ae65a".to_owned())]
         );
         assert_eq!(
             colour_of("sell"),
-            vec![("Sell: Gravenspine (inv)".to_owned(), "#afafaf".to_owned())]
+            vec![("Gravenspine (inv)".to_owned(), "#afafaf".to_owned())]
         );
         assert_eq!(
             colour_of("give"),
-            vec![("Give away: Lem Rune (stash)".to_owned(), "#ffe13c".to_owned())]
+            vec![("Lem Rune (stash)".to_owned(), "#ffe13c".to_owned())]
         );
         assert_eq!(
             colour_of("bis"),
@@ -4942,6 +5134,7 @@ mod tests {
             white_bases: &[],
             quests: &[],
             farm: &[],
+            stage_chain: &[],
             shop: Some(&shop),
             strength: None,
             dexterity: None,
@@ -5085,6 +5278,7 @@ mod tests {
             white_bases: &[],
             quests: &[],
             farm: &[],
+            stage_chain: &[],
             shop: Some(&shop),
             strength: Some(30),
             dexterity: Some(40),
@@ -5151,6 +5345,7 @@ mod tests {
                 white_bases: &[],
                 quests: &[],
                 farm: &[],
+                stage_chain: &[],
                 shop: None,
                 strength: None,
                 dexterity: None,
@@ -5571,6 +5766,247 @@ mod tests {
         assert_eq!(farm_runes(&json, 3), []);
         let runes = json.pointer("/farm/runes").map_or_default(ToString::to_string);
         assert!(!runes.contains("\"Amn\""), "{runes}");
+        Ok(())
+    }
+
+    #[test]
+    fn live_json_sends_every_sell_and_keep_entry() -> Result<()> {
+        let blocks = crate::render::TextBlocks {
+            sell: (0..20).map(|i| format!("Item {i} (inv)")).collect(),
+            keep: (0..7).map(|i| format!("Rune {i} (A)")).collect(),
+            ..crate::render::TextBlocks::default()
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&live_json(&live_info(5, &blocks, &[], &[], &[])))?;
+        let sell = lines_of(&json, "sell");
+        assert_eq!(sell.len(), 20, "one line per entry, no \"+N more\"");
+        assert_eq!(sell.last().map(|(t, _)| t.as_str()), Some("Item 19 (inv)"));
+        assert!(sell.iter().all(|(_, c)| c == "#afafaf"));
+        assert_eq!(lines_of(&json, "keep").len(), 7);
+        Ok(())
+    }
+
+    /// The live JSON's `gear_attention_why` for a level-`level` character with player
+    /// `slots`, mercenary `merc` slots, a "Where to go" band topping out at `max_mlvl`,
+    /// `owned` names and `held` materials; asserts `gear_attention` agrees with it.
+    fn attention(
+        slots: &[(&str, &[&str])],
+        merc: &[(&str, &[&str])],
+        level: u8,
+        max_mlvl: u8,
+        owned: &[String],
+        held: &[(String, u32)],
+    ) -> Result<Option<String>> {
+        let to_map = |list: &[(&str, &[&str])]| -> BTreeMap<String, Vec<String>> {
+            list.iter()
+                .map(|(slot, pieces)| ((*slot).to_owned(), pieces.iter().map(|&p| p.to_owned()).collect()))
+                .collect()
+        };
+        let bis = config::Bis {
+            build: "test".to_owned(),
+            slots: to_map(slots),
+            merc_slots: to_map(merc),
+        };
+        let blocks = crate::render::TextBlocks {
+            level_full: vec![
+                crate::info::LevelEntry {
+                    text: "a".to_owned(),
+                    mlvl: max_mlvl.saturating_sub(2),
+                    bucket: "below",
+                    bad: None,
+                },
+                crate::info::LevelEntry {
+                    text: "b".to_owned(),
+                    mlvl: max_mlvl,
+                    bucket: "above",
+                    bad: None,
+                },
+            ],
+            ..crate::render::TextBlocks::default()
+        };
+        let mut info = live_info(5, &blocks, &[], &[], &[]);
+        info.char_level = Some(level);
+        info.bis = Some(&bis);
+        info.owned = owned;
+        info.held_materials = held;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        let why = json
+            .get("gear_attention_why")
+            .and_then(|w| w.as_str())
+            .map(str::to_owned);
+        assert_eq!(
+            json.get("gear_attention"),
+            Some(&serde_json::json!(why.is_some()))
+        );
+        Ok(why)
+    }
+
+    #[test]
+    fn gear_attention_for_an_owned_upgrade() -> Result<()> {
+        let slots: [(&str, &[&str]); 1] = [("helm", &["Harlequin Crest@62", "Biggin's Bonnet@3"])];
+        let owned = ["Biggin's Bonnet".to_owned()];
+        assert_eq!(
+            attention(&slots, &[], 20, 1, &owned, &[])?.as_deref(),
+            Some("▲ upgrade to wear: Biggin's Bonnet"),
+            "owned and wearable, whatever the areas"
+        );
+        // Harlequin Crest (lvl 62) is too high to wear at 20, and nothing else is: closed.
+        assert_eq!(attention(&slots[..], &[], 20, 1, &[], &[])?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn gear_attention_for_a_findable_unique() -> Result<()> {
+        // Biggin's Bonnet (War Bonnet, qlvl 4) and Nagelring (qlvl 10).
+        let slots: [(&str, &[&str]); 2] = [("ring1", &["Nagelring@7"]), ("helm", &["Biggin's Bonnet@3"])];
+        assert_eq!(
+            attention(&slots, &[], 10, 12, &[], &[])?.as_deref(),
+            Some("▲ findable: Nagelring, Biggin's Bonnet")
+        );
+        assert_eq!(
+            attention(&slots, &[], 10, 6, &[], &[])?.as_deref(),
+            Some("▲ findable: Biggin's Bonnet"),
+            "Nagelring's qlvl 10 is above the areas offered"
+        );
+        assert_eq!(
+            attention(&slots, &[], 6, 12, &[], &[])?.as_deref(),
+            Some("▲ findable: Biggin's Bonnet"),
+            "Nagelring needs level 7"
+        );
+        // A piece described in words has no item level to check: never findable.
+        let words: [(&str, &[&str]); 1] = [("helm", &["Druid pelt with +summoning skills@3"])];
+        assert_eq!(attention(&words, &[], 10, 12, &[], &[])?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn gear_attention_for_runewords_counts_owned_runes() -> Result<()> {
+        // Stealth = Tal (qlvl 17) + Eth (15); Leaf = Tir (13) + Ral (19).
+        let slots: [(&str, &[&str]); 2] = [("body", &["Stealth@17"]), ("weapon", &["Leaf@19"])];
+        assert_eq!(
+            attention(&slots, &[], 20, 16, &[], &[])?,
+            None,
+            "Tal and Ral drop only above the areas offered"
+        );
+        let tal = [("Tal Rune".to_owned(), 1)];
+        assert_eq!(
+            attention(&slots, &[], 20, 16, &[], &tal)?.as_deref(),
+            Some("▲ findable: Stealth"),
+            "Tal owned, Eth drops there"
+        );
+        assert_eq!(
+            attention(&slots, &[], 20, 19, &[], &[])?.as_deref(),
+            Some("▲ findable: Stealth, Leaf")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gear_attention_ignores_the_mercenary() -> Result<()> {
+        let merc: [(&str, &[&str]); 1] = [("weapon", &["Insight@27"])];
+        let owned = ["Insight".to_owned()];
+        assert_eq!(attention(&[], &merc, 60, 80, &[], &[])?, None, "findable");
+        assert_eq!(attention(&[], &merc, 60, 80, &owned, &[])?, None, "owned");
+        Ok(())
+    }
+
+    /// A named item (unique or runeword) the character wears in `body`.
+    fn worn_item(body: u8, name: &str, runeword: bool) -> crate::game::Equipped {
+        crate::game::Equipped {
+            body,
+            quality: if runeword {
+                crate::offsets::item_data::QUALITY_SUPERIOR
+            } else {
+                crate::offsets::item_data::QUALITY_UNIQUE
+            },
+            code: None,
+            name: Some(name.to_owned()),
+            file_index: None,
+            runeword,
+            stats: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
+        let (mut farm, _) = config::parse_farm(
+            "[[farm]]\nfor = \"Summoner Druid\"\nitems = [{ name = \"Spirit\", kind = \"runeword\" }]\n",
+        )?;
+        farm.extend(fury_farm()?);
+        let blocks = crate::render::TextBlocks::default();
+        let names = |json: &serde_json::Value| -> Vec<(String, Vec<String>)> {
+            json.pointer("/farm/groups")
+                .and_then(serde_json::Value::as_array)
+                .map_or_default(|groups| {
+                    groups
+                        .iter()
+                        .map(|g| {
+                            let items = g
+                                .get("items")
+                                .and_then(serde_json::Value::as_array)
+                                .map_or_default(|i| {
+                                    i.iter()
+                                        .filter_map(|i| Some(i.get("name")?.as_str()?.to_owned()))
+                                        .collect()
+                                });
+                            let target = g.get("for").and_then(|f| f.as_str()).unwrap_or_default();
+                            (target.to_owned(), items)
+                        })
+                        .collect()
+                })
+        };
+        let fury_all: Vec<String> = [
+            "Fortitude",
+            "Raven Frost",
+            "Ribcracker",
+            "Lawbringer",
+            "Smoke",
+            "Bulwark",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let fury_rest: Vec<String> = fury_all.iter().filter(|n| *n != "Raven Frost").cloned().collect();
+        // The summoner wears Spirit and Raven Frost, and one of the two Lawbringers.
+        let worn = [
+            worn_item(4, "Spirit", true),
+            worn_item(6, "Raven Frost", false),
+            worn_item(5, "Lawbringer", true),
+        ];
+        let summoner_chain = ["Summoner Druid".to_owned(), "Fury Druid".to_owned()];
+        let mut info = live_info(5, &blocks, &[], &[], &[]);
+        info.farm = &farm;
+        info.equipped_items = &worn;
+        info.stage_chain = &summoner_chain;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        // Spirit worn for the current build: its group (all hidden) disappears. Raven Frost
+        // worn for the later Fury stage: hidden too. One Lawbringer of two: still listed.
+        assert_eq!(names(&json), [("Fury Druid".to_owned(), fury_rest)]);
+        // Another build's character wearing the same items: everything stays.
+        let sorc_chain = ["Blizzard Sorceress".to_owned()];
+        info.stage_chain = &sorc_chain;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        assert_eq!(
+            names(&json),
+            [
+                ("Summoner Druid".to_owned(), vec!["Spirit".to_owned()]),
+                ("Fury Druid".to_owned(), fury_all.clone()),
+            ]
+        );
+        // Mercenary-worn and carried copies don't hide an entry.
+        let merc = ["Raven Frost".to_owned()];
+        let owned = ["Raven Frost".to_owned()];
+        info.stage_chain = &summoner_chain;
+        info.equipped_items = &[];
+        info.merc_worn = &merc;
+        info.owned = &owned;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        assert_eq!(
+            names(&json),
+            [
+                ("Summoner Druid".to_owned(), vec!["Spirit".to_owned()]),
+                ("Fury Druid".to_owned(), fury_all),
+            ]
+        );
         Ok(())
     }
 

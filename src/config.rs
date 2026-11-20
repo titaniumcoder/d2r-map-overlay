@@ -619,6 +619,28 @@ impl Config {
         })
     }
 
+    /// The names of build `from` (a slug) and of every stage after it along the builds' `next`
+    /// links, in order (cycles stop the walk; an unknown slug gives none): the builds one
+    /// character counts as for the farm list (it keeps its gear through a respec).
+    #[must_use]
+    pub fn stage_chain(&self, from: &str) -> Vec<String> {
+        let mut seen: Vec<&str> = Vec::new();
+        let mut names = Vec::new();
+        let mut slug = from;
+        while let Some(build) = self.build_defs.get(slug) {
+            if seen.contains(&slug) {
+                break;
+            }
+            seen.push(slug);
+            names.push(build.name.clone());
+            match build.next.as_deref() {
+                Some(next) => slug = next,
+                None => break,
+            }
+        }
+        names
+    }
+
     /// Whether stage `to` is `from` or comes after it along the builds' `next` links (cycles
     /// stop the walk).
     #[must_use]
@@ -2006,6 +2028,19 @@ mod tests {
             None
         );
         Ok(())
+    }
+
+    #[test]
+    fn stage_chain_lists_the_build_and_its_later_stages() {
+        let mut config = druid_chain();
+        assert_eq!(config.stage_chain("leveling"), ["Leveling", "Tornado", "Fissure"]);
+        assert_eq!(config.stage_chain("tornado"), ["Tornado", "Fissure"]);
+        assert_eq!(config.stage_chain("missing"), Vec::<String>::new());
+        // A cycle stops before repeating a stage.
+        if let Some(b) = config.build_defs.get_mut("fissure") {
+            b.next = Some("leveling".to_owned());
+        }
+        assert_eq!(config.stage_chain("tornado"), ["Tornado", "Fissure", "Leveling"]);
     }
 
     #[test]

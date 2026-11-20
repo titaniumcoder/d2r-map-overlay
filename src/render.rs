@@ -1023,6 +1023,8 @@ pub fn map_height(height: u32, font: Option<&FontVec>) -> u32 {
 #[derive(Debug, Default)]
 pub struct TextBlocks {
     pub guide: Vec<info::Band>,
+    /// The keep, sell and give-away lists: every entry, one string each, no prefix (the
+    /// dashboard's Sell / Keep panel wraps them as comma-separated runs).
     pub keep: Vec<String>,
     pub sell: Vec<String>,
     pub give: Vec<String>,
@@ -1049,10 +1051,11 @@ pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextB
                 .into_iter()
                 .map(|band| info::fit_band(band, f, max_width))
                 .collect(),
-        level_full: info::level_lines_full(snap.player.char_level, snap.difficulty),
-        keep: info::keep_lines(f, &snap.inventory_keep, max_width),
-        sell: info::spare_lines(f, info::SELL_PREFIX, &snap.sell, max_width),
-        give: info::spare_lines(f, info::GIVE_PREFIX, &snap.give_away, max_width),
+        level_full: info::level_lines_full(snap.player.char_level, snap.difficulty, &snap.player.build),
+        // Every entry, one string each: the dashboard lays them out as one wrapping run.
+        keep: snap.inventory_keep.iter().map(info::keep_entry).collect(),
+        sell: snap.sell.iter().map(info::spare_entry).collect(),
+        give: snap.give_away.iter().map(info::spare_entry).collect(),
         // The BiS chase list (user request, 2026-11-17): the tick is computed from the owned
         // and shared-stash names separately, so the dashboard can mark ✓(stash) distinctly.
         bis: snap.player.bis.as_ref().map_or_else(Vec::new, |bis| {
@@ -2895,9 +2898,9 @@ mod tests {
         let blocks = text_blocks(&snap, 400, Some(font));
         // The dashboard's JSON is built from these blocks (crate::web::live_json); the overlay
         // draws only the map and info line, so the lists are asserted here, not in a rendered frame.
-        assert_eq!(blocks.keep, vec!["Keep: Harlequin Crest (S)"]);
-        assert_eq!(blocks.sell, vec!["Sell: Gravenspine (inv)"]);
-        assert_eq!(blocks.give, vec!["Give away: Magefist (shared)"]);
+        assert_eq!(blocks.keep, vec!["Harlequin Crest (S)"]);
+        assert_eq!(blocks.sell, vec!["Gravenspine (inv)"]);
+        assert_eq!(blocks.give, vec!["Magefist (shared)"]);
         assert!(
             blocks
                 .level_full
