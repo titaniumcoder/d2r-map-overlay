@@ -549,11 +549,29 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   are in the game.** `game::snapshot` keeps `merc_worn` and the merc's (`NO_OWNER`) runeword
   copies only when exactly one live player unit is a candidate; with more, both are empty, so
   neither the farm list nor a stage switch (`stash::Holdings`) can be satisfied by merc gear.
-  `merc_equipped` (the gear grid's merc slots) is left as is: display only. To lift the
-  mitigation for good, verify: in a 2-player game, read each monster unit's `Inventory` (unit `+0x90`):
-  its `inventory::OWNER_ID` (`+0x48`) and its `FIRST_ITEM` chain (`+0x10`, next at
-  `ItemData +0xB0`) — if the hired merc's inventory chains its worn items and names the hiring
-  player, collect merc gear by walking the merc of the chosen player instead.
+  `merc_equipped` is left as is: display only. To lift the mitigation for good, verify: in a
+  2-player game, read each monster unit's `Inventory` (unit `+0x90`): its `inventory::OWNER_ID`
+  (`+0x48`) and its `FIRST_ITEM` chain (`+0x10`, next at `ItemData +0xB0`) — if the hired merc's
+  inventory chains its worn items and names the hiring player, collect merc gear by walking the
+  merc of the chosen player instead.
+- **Merc gear grid (user bug, 2026-11-20: merc wore Insight, Smoke, Bulwark; the grid proposed
+  Soul Harvest / The Battlebranch as "better", Smoke with "missing Lum", no helm column)**: the
+  dashboard's merc columns now tick from `merc_worn` (solo games only) like the player's from
+  their worn names: worn piece ✓ (shown even past its leveling window), its build level stands in
+  for the equipped requirement, and every piece ranked below it is struck through (`"worse"`, no
+  "wear now"); a worn runeword drops its missing-rune note (player columns too).
+  The upgrade bar and `gear_attention` never list merc pieces; a vendor match (`shop_match`)
+  skips the merc's worn piece and those below it (`gear::merc_open`). The summoner build got a
+  merc helm slot (Bulwark@35, `lvl 35-99`); Insight (`lvl 27-99`) and Smoke (`lvl 37-99`) no
+  longer leave the merc columns at 40 / 60. Open: the overlay's merc BiS lines
+  (`info::bis_lines`) still ignore `merc_worn`.
+- **Fury weapons and Eternity (user, 2026-11-20)**: Fury weapon slot = eth Eternity (Archon
+  Staff, natural 5os; Maxroll's S16 pick; the 3.4 Eternity is indestructible) → eth Breath of
+  the Dying (Champion Axe 6os, fastest on its own) → Ribcracker (`starter`); 2026-11-20
+  calculation: BotD eth Champion Axe 100 %, eth Eternity 89–93 %. Eternity is Cannot Be
+  Frozen, so Raven Frost is not needed once it is worn (Raven Frost's note); the summoner's
+  `switch_requires` "Cannot Be Frozen" group already listed Eternity (the Fury stage has no
+  `switch_requires`).
 - **Upgrades + chime**: `upgrades` in the live JSON = owned/stash pieces of the current stage wearable now
   and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
   are all owned. The page chimes (WebAudio, 🔔 toggle) when a key appears that this character hasn't had.

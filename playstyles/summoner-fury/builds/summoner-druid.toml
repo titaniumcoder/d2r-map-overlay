@@ -133,6 +133,7 @@ ring1 = ["Raven Frost@45", "Manald Heal@15"]
 
 [merc_slots]
 body = ["Smoke@37"]
+helm = ["Bulwark@35"]
 weapon = ["Insight@27", "Soul Harvest@19", "The Battlebranch@17"]
 
 [extras]
@@ -227,7 +228,7 @@ stats = ["4-7% Mana Stolen per Hit", "Replenish Life +5-8", "+20 to Life", "Rege
 
 [pieces."Insight"]
 kind = "runeword"
-setup = "lvl 24-40"
+setup = "lvl 27-99"
 base = "polearm that dropped with 4 sockets (Act 2 merc; spears can't hold Insight): Voulge (50 Str, at most 4 sockets), Scythe (41 Str / 41 Dex), Poleaxe (62 Str); polearms drop with at most 3 sockets up to item level 25, 4 up to 40, so from Normal Act 5 / Cow Level / Nightmare"
 why = "Meditation pays for re-summoning."
 notes = "MISSING Tir and Sol (Ral, Tal in the stash). Until then The Battlebranch or Soul Harvest (both in the stash)."
@@ -235,11 +236,18 @@ stats = ["Level 12-17 Meditation Aura When Equipped", "+35% Faster Cast Rate", "
 
 [pieces."Smoke"]
 kind = "runeword"
-setup = "lvl 40-60"
+setup = "lvl 37-99"
 base = "2-socket body armor: the stash's Ghost Armor 2os (38 Str)"
 why = "Merc armor: +50 all resistances against Nightmare's -40 and Hell's -100 penalty (difficultylevels.json) for the Might merc; Smoke is always merc gear and stays on the merc in the Fury stage."
 notes = "Nef Lum: missing Lum."
 stats = ["All Resistances +50", "+20% Faster Hit Recovery", "+75% Enhanced Defense", "+250 Defense vs. Missile", "Level 6 Weaken (18 Charges)"]
+
+[pieces."Bulwark"]
+kind = "runeword"
+setup = "lvl 35-99"
+base = "3-socket helm (Shael Io Sol)"
+why = "Merc helm: life steal and physical damage reduction keep the Might merc alive (user setup, 2026-11-20: Insight, Smoke, Bulwark); the Fury stage keeps it on the merc."
+stats = ["4-6% Life Stolen per Hit", "Replenish Life +30", "Physical Damage Taken Reduced by 10-15%", "+5% Maximum Life", "+75-100% Enhanced Defense"]
 
 [pieces."Bloodfist"]
 kind = "unique"

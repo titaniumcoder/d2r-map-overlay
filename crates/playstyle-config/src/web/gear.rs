@@ -10,6 +10,28 @@ use super::{
     PanelInfo, base_hint, equipped_level, is_worn, outgrown, piece_state, piece_window, slot_bodies,
 };
 
+/// The part of a mercenary slot's `pieces` (stored best→worst) still worth getting: the pieces
+/// ranked above the first one the merc wears ([`d2r_core::web::LiveInfo::merc_worn`]; all of
+/// them when it wears none, or in a group game where that list is empty).
+#[must_use]
+pub fn merc_open<'p>(pieces: &'p [String], info: &PanelInfo) -> &'p [String] {
+    // `split` always yields a first part: the pieces before the first worn one (all of them
+    // when none is worn).
+    pieces
+        .split(|p| is_merc_worn(d2r_core::info::piece_name(p), info))
+        .next()
+        .unwrap_or(pieces)
+}
+
+/// Whether the mercenary wears a piece named `name` ([`d2r_core::web::LiveInfo::merc_worn`]).
+#[must_use]
+pub fn is_merc_worn(name: &str, info: &PanelInfo) -> bool {
+    info.live
+        .merc_worn
+        .iter()
+        .any(|n| d2r_core::names::same_name(n, name))
+}
+
 /// The vendor panel's notes ([`ShopNote`]), one per item of the open trade window (empty
 /// when none is open): the build slot whose current-stage piece the item is ([`shop_match`])
 /// and why its stats beat what is worn in its body slot ([`crate::gear_score::verdict`] for
@@ -124,11 +146,13 @@ pub fn score_profile(info: &PanelInfo) -> crate::gear_score::Profile {
 
 /// The build slot (`gloves`, `ring`, `merc helm`, …) and bare piece name of the first
 /// current-stage piece the store `item` is ([`d2r_core::shop::matches`]): the character's slots
-/// in [`d2r_core::config::SLOT_NAMES`] order, then the mercenary's; outgrown pieces are skipped.
+/// in [`d2r_core::config::SLOT_NAMES`] order, then the mercenary's; outgrown pieces are skipped,
+/// and so are the mercenary's worn pieces and those ranked below them ([`merc_open`]).
 #[must_use]
 pub fn shop_match(item: &d2r_core::shop::ShopItem, info: &PanelInfo) -> Option<(String, String)> {
     let bis = info.bis?;
     let piece_in = |pieces: &[String]| {
+        // `pieces` may be a merc slot cut at the merc's worn piece ([`merc_open`]).
         pieces
             .iter()
             .filter(|p| !outgrown(p, info))
@@ -146,7 +170,7 @@ pub fn shop_match(item: &d2r_core::shop::ShopItem, info: &PanelInfo) -> Option<(
         .or_else(|| {
             bis.merc_slots
                 .iter()
-                .find_map(|(slot, pieces)| Some((format!("merc {slot}"), piece_in(pieces)?)))
+                .find_map(|(slot, pieces)| Some((format!("merc {slot}"), piece_in(merc_open(pieces, info))?)))
         })
 }
 
@@ -160,8 +184,10 @@ pub fn shop_match(item: &d2r_core::shop::ShopItem, info: &PanelInfo) -> Option<(
 /// - `"shop"`: an item of the open trade window that is a current-stage piece
 ///   ([`shop_match`]; mercenary slots included, any required level) — buying ahead is fine.
 ///
-/// The mercenary's slots are left out: its equipped items are not read, so every owned
-/// piece would always count as better.
+/// The mercenary's slots get no `"equip"` or `"craft"` entries: its items' required levels are
+/// not read (only their names, and only in solo games), so there is nothing to compare an
+/// owned piece against; a `"shop"` entry never names a piece the merc wears or one ranked
+/// below it ([`shop_match`]).
 #[must_use]
 pub fn upgrades_json(info: &PanelInfo) -> Vec<serde_json::Value> {
     let (Some(bis), Some(lvl)) = (info.bis, info.live.char_level) else {
@@ -456,8 +482,11 @@ pub fn gear_json(info: &PanelInfo) -> serde_json::Value {
     }
     let ring = grid_column("Ring", Some(&ring_pieces), &[6, 7], info);
     columns.insert(6, ring);
-    // The mercenary's slots (its equipped items are not attributed yet: no header) and the
-    // build's extras (charms, jewels, runes), with the same per-piece state and details.
+    // The mercenary's slots (no header: its items' levels and slots are not read) and the
+    // build's extras (charms, jewels, runes), with the same per-piece state and details. The
+    // merc's worn names (solo games only) tick its pieces ✓; the worn piece's build level
+    // stands in for the equipped requirement the player's columns compare against, and the
+    // pieces ranked below it are beaten as well.
     let merc: Vec<_> = [
         ("Merc weapon", "weapon", 4),
         ("Merc off-hand", "offhand", 5),
@@ -470,10 +499,20 @@ pub fn gear_json(info: &PanelInfo) -> serde_json::Value {
         // The mercenary of the stage's act (Act 2 without a build file): no class-only bases,
         // its act's weapons only.
         let act = info.build.map_or_else(MercAct::default, |b| b.merc_act);
-        Some(serde_json::json!({
-            "title": title,
-            "pieces": grid_pieces(pieces, None, &[], (Some(body), Wearer::Merc(act)), info),
-        }))
+        let worn_level = pieces
+            .iter()
+            .filter(|p| is_merc_worn(d2r_core::info::piece_name(p), info))
+            .filter_map(|p| d2r_core::info::piece_level(p))
+            .max();
+        let mut json = grid_pieces(
+            pieces,
+            worn_level,
+            info.live.merc_worn,
+            (Some(body), Wearer::Merc(act)),
+            info,
+        );
+        beat_below_worn(&mut json);
+        Some(serde_json::json!({ "title": title, "pieces": json }))
     })
     .collect();
     let extras: Vec<_> = info
@@ -497,6 +536,25 @@ pub fn gear_json(info: &PanelInfo) -> serde_json::Value {
         "merc": merc,
         "extras": extras,
     })
+}
+
+/// Marks the grid pieces ranked below the first worn one (`tick` `"worn"`) as beaten: state
+/// `"worse"` and no `now` badge, whatever their level.
+pub fn beat_below_worn(pieces: &mut [serde_json::Value]) {
+    let Some(first) = pieces
+        .iter()
+        .position(|p| p.get("tick").and_then(serde_json::Value::as_str) == Some("worn"))
+    else {
+        return;
+    };
+    for obj in pieces
+        .iter_mut()
+        .skip(first + 1)
+        .filter_map(serde_json::Value::as_object_mut)
+    {
+        obj.insert("state".to_owned(), serde_json::json!("worse"));
+        obj.remove("now");
+    }
 }
 
 /// The current stage's tips for the character level, as `{ "levels", "text" }` (all of them
@@ -586,6 +644,10 @@ pub fn grid_column(
 ///
 /// A column whose equipped piece is unnameable therefore shows no strike-throughs.
 ///
+/// A worn piece (`worn`) is shown even when outgrown, and a worn runeword drops its build
+/// `notes` (the missing-rune remark is moot once it is made). A `"worse"` piece never gets
+/// the `now` ("wear now") badge.
+///
 /// A runeword piece also gets a `base_hint` ([`base_hint`]) filtered by the column's body
 /// `slot` and its `wearer` ([`Wearer`]).
 #[must_use]
@@ -600,7 +662,9 @@ pub fn grid_pieces(
     pieces
         .iter()
         .filter_map(|piece| {
-            if outgrown(piece, info) {
+            let tick = d2r_core::info::piece_tick(piece, worn, info.live.owned, info.live.stash_owned);
+            let is_worn = tick == Some(d2r_core::info::Tick::Worn);
+            if outgrown(piece, info) && !is_worn {
                 return None;
             }
             let (range, rune) = piece_window(piece, info);
@@ -611,10 +675,10 @@ pub fn grid_pieces(
                 "name": d2r_core::info::piece_name(piece),
                 "level": req,
                 "state": state,
-                "tick": d2r_core::info::piece_tick(piece, worn, info.live.owned, info.live.stash_owned)
-                    .map(d2r_core::info::Tick::as_str),
+                "tick": tick.map(d2r_core::info::Tick::as_str),
             });
-            if let Some(rw) = d2r_core::runewords_data::lookup(d2r_core::info::piece_name(piece))
+            let runeword = d2r_core::runewords_data::lookup(d2r_core::info::piece_name(piece));
+            if let Some(rw) = runeword
                 && let Some(obj) = json.as_object_mut()
             {
                 obj.insert("runes".to_owned(), serde_json::json!(rw.runes));
@@ -625,6 +689,12 @@ pub fn grid_pieces(
                 );
             }
             add_piece_details(&mut json, d2r_core::info::piece_name(piece), info.build);
+            if is_worn
+                && runeword.is_some()
+                && let Some(obj) = json.as_object_mut()
+            {
+                obj.remove("notes");
+            }
             if let (Some((from, to)), Some(obj)) = (range, json.as_object_mut()) {
                 if rune {
                     // The rune's own requirement when known; the guide window only says when
@@ -632,6 +702,7 @@ pub fn grid_pieces(
                     let min = req.unwrap_or(from);
                     obj.insert("setup".to_owned(), serde_json::json!(format!("lvl {min}+")));
                 } else if info.live.char_level.is_some()
+                    && state != "worse"
                     && (from..=to).contains(&lvl)
                     // In the guide's window but above the piece's own requirement: not yet.
                     && req.is_none_or(|r| r <= lvl)

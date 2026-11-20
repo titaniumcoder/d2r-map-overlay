@@ -86,9 +86,62 @@
   },
   "items": [
     {
-      "name": "Ribcracker",
+      "name": "Eternity",
       "slot": "weapon",
       "setup": "standard",
+      "kind": "runeword",
+      "req_level": 63,
+      "base": "ethereal Archon Staff (two-handed staff) that dropped with 5 sockets (natural 5os); Maxroll's S16 pick; indestructible",
+      "stats": [
+        "Indestructible",
+        "+30% Increased Attack Speed",
+        "+300-390% Enhanced Damage",
+        "+9 to Minimum Damage",
+        "+3-297 to Maximum Damage (Based on Character Level)",
+        "7% Life Stolen per Hit",
+        "20% Chance of Crushing Blow",
+        "Hit Blinds Target",
+        "Slows Target by 33%",
+        "Regenerate Mana 16%",
+        "Replenish Life +16",
+        "Cannot Be Frozen",
+        "30% Better Chance of Getting Magic Items",
+        "+5 to Revive (Oskill)"
+      ],
+      "why": "Best for the whole build (calculation 2026-11-20: 89-93% of Breath of the Dying's damage): Cannot Be Frozen frees the Raven Frost ring slot.",
+      "notes": "Amn Ber Ist Sol Sur. Patch 3.4 (Season 16, Ladder/Offline): +30% IAS, +300-390% ED, +3 max damage per character level. Best for the whole build: Cannot Be Frozen, crushing blow.",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Breath of the Dying",
+      "slot": "weapon",
+      "setup": "standard",
+      "kind": "runeword",
+      "req_level": 69,
+      "base": "ethereal Champion Axe (two-handed axe) that dropped with 6 sockets",
+      "stats": [
+        "50% Chance to cast level 20 Poison Nova when you Kill an Enemy",
+        "Indestructible",
+        "+60% Increased Attack Speed",
+        "+350-400% Enhanced Damage",
+        "-25% Target Defense",
+        "+50 to Attack Rating",
+        "+200% Damage to Undead",
+        "7% Mana Stolen per Hit",
+        "12-15% Life Stolen per Hit",
+        "Prevent Monster Heal",
+        "+30 to All Attributes",
+        "+1 to Light Radius",
+        "Requirements -20%"
+      ],
+      "why": "Fastest on its own (calculation 2026-11-20: eth Champion Axe = 100%, the reference).",
+      "notes": "Vex Hel El Eld Zod Eth.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Ribcracker",
+      "slot": "weapon",
+      "setup": "starter",
       "kind": "unique",
       "req_level": 31,
       "base": "Quarterstaff (two-handed staff, 25 Str, WSM 0)",
@@ -103,7 +156,7 @@
         "+15 to Dexterity"
       ],
       "why": "Weapon IAS counts undiminished in the shapeshift formula: 5-frame attacks from Werewolf 3, the fastest of all candidates.",
-      "rank_in_slot": 1
+      "rank_in_slot": 3
     },
     {
       "name": "Jalal's Mane",
@@ -214,6 +267,7 @@
         "+40 to Mana"
       ],
       "why": "Cannot Be Frozen and AR for a melee wolf.",
+      "notes": "Not needed once Eternity is worn (Eternity is Cannot Be Frozen).",
       "rank_in_slot": 1
     },
     {

@@ -2645,3 +2645,114 @@ fn next_section_carries_the_route_step() -> Result<()> {
     );
     Ok(())
 }
+
+/// The live case of 2026-11-20 on the shipped summoner build: a level-57 druid whose merc
+/// wears Insight, Smoke and Bulwark (solo game, so `merc_worn` is filled). Each worn piece is
+/// ticked ✓ (Insight although its leveling window ended at 40), the stash's Soul Harvest and
+/// The Battlebranch are beaten, Smoke drops its "missing Lum" note, and no merc piece reaches
+/// the upgrade bar.
+#[test]
+fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
+    let config = crate::files::load(&d2r_core::playstyle::Files {
+        shipped: Some(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury"),
+        ),
+        quiet: true,
+        ..d2r_core::playstyle::Files::default()
+    });
+    let build = config
+        .build_defs
+        .get("summoner druid")
+        .context("shipped summoner build")?;
+    let bis = config::Bis {
+        build: build.name.clone(),
+        slots: build.slots.clone(),
+        merc_slots: build.merc_slots.clone(),
+    };
+    let blocks = d2r_core::render::TextBlocks::default();
+    let stash_owned = ["Soul Harvest".to_owned(), "The Battlebranch".to_owned()];
+    let merc = ["Bulwark".to_owned(), "Insight".to_owned(), "Smoke".to_owned()];
+    let mut info = live_info(5, &blocks, &[], &[], &stash_owned);
+    info.live.char_level = Some(57);
+    info.live.difficulty = Some(1);
+    info.live.merc_worn = &merc;
+    info.bis = Some(&bis);
+    info.build = Some(build);
+    let column = |gear: &serde_json::Value, title: &str| -> Vec<serde_json::Value> {
+        gear.get("merc")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|cols| {
+                cols.iter()
+                    .find(|c| c.get("title") == Some(&serde_json::json!(title)))
+            })
+            .and_then(|c| c.get("pieces")?.as_array().cloned())
+            .unwrap_or_default()
+    };
+    let field = |p: &serde_json::Value, key: &str| p.get(key).cloned().unwrap_or(serde_json::Value::Null);
+    let at = |v: &[serde_json::Value], i: usize| v.get(i).cloned().unwrap_or(serde_json::Value::Null);
+    let gear = gear_json(&info);
+
+    let weapon = column(&gear, "Merc weapon");
+    let names: Vec<_> = weapon.iter().map(|p| field(p, "name")).collect();
+    assert_eq!(
+        names,
+        ["Insight", "Soul Harvest", "The Battlebranch"],
+        "{weapon:?}"
+    );
+    assert_eq!(field(&at(&weapon, 0), "tick"), "worn");
+    for beaten in weapon.iter().skip(1) {
+        assert_eq!(field(beaten, "state"), "worse", "{beaten}");
+        assert_eq!(field(beaten, "now"), serde_json::Value::Null, "{beaten}");
+    }
+
+    let body = column(&gear, "Merc body");
+    assert_eq!(body.len(), 1, "{body:?}");
+    assert_eq!(field(&at(&body, 0), "name"), "Smoke");
+    assert_eq!(field(&at(&body, 0), "tick"), "worn");
+    assert_eq!(
+        field(&at(&body, 0), "notes"),
+        serde_json::Value::Null,
+        "no missing-rune note"
+    );
+    assert_eq!(field(&at(&body, 0), "now"), serde_json::Value::Null);
+
+    let helm = column(&gear, "Merc helm");
+    assert_eq!(helm.len(), 1, "{helm:?}");
+    assert_eq!(field(&at(&helm, 0), "name"), "Bulwark");
+    assert_eq!(field(&at(&helm, 0), "tick"), "worn");
+
+    let ups = upgrades_json(&info);
+    assert!(
+        !ups.iter()
+            .any(|u| field(u, "slot").as_str().is_some_and(|s| s.starts_with("merc"))),
+        "{ups:?}"
+    );
+    assert!(
+        !ups.iter().any(
+            |u| ["Insight", "Soul Harvest", "The Battlebranch", "Smoke", "Bulwark"]
+                .contains(&field(u, "name").as_str().unwrap_or_default())
+        ),
+        "{ups:?}"
+    );
+    assert!(
+        super::gear::gear_attention(&info, &ups).is_none_or(|why| ![
+            "Soul Harvest",
+            "The Battlebranch",
+            "Insight"
+        ]
+        .iter()
+        .any(|n| why.contains(n))),
+        "attention"
+    );
+    // Only the pieces ranked above the worn one stay open for the vendor match.
+    let weapons = bis.merc_slots.get("weapon").context("merc weapon slot")?;
+    assert_eq!(super::gear::merc_open(weapons, &info), &[] as &[String]);
+
+    // In a group game the merc's gear is unread: no ticks, nothing beaten.
+    info.live.merc_worn = &[];
+    let gear = gear_json(&info);
+    let weapon = column(&gear, "Merc weapon");
+    assert!(weapon.iter().all(|p| field(p, "tick") != "worn"), "{weapon:?}");
+    assert_eq!(super::gear::merc_open(weapons, &info).len(), weapons.len());
+    Ok(())
+}
