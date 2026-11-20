@@ -40,7 +40,7 @@ pub struct ShopItem {
     /// The item's stat entries (`game::Reader::item_stats`), for the comparison with the
     /// worn gear ([`crate::gear_score`]); empty when unread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub stats: Vec<crate::gear_score::ItemStat>,
+    pub stats: Vec<crate::item_stats::ItemStat>,
 }
 
 /// Names a store item from its code, quality, store tab and raw affix ids
@@ -97,7 +97,7 @@ fn base_of(code: &str) -> (Option<u32>, Option<&'static str>) {
 /// Whether `item` is the build piece named `piece` (a bare piece name, see
 /// [`crate::info::piece_name`]): the piece names the item's base plus any of its affixes, so
 /// "Coral Heavy Gloves" matches Coral Heavy Gloves of Frost, "Sash" any sash, but "Russet
-/// Heavy Boots of Haste" needs both affixes. Names compare with [`crate::info::same_name`].
+/// Heavy Boots of Haste" needs both affixes. Names compare with [`crate::names::same_name`].
 #[must_use]
 pub fn matches(item: &ShopItem, piece: &str) -> bool {
     let base = item.base.as_str();
@@ -109,7 +109,7 @@ pub fn matches(item: &ShopItem, piece: &str) -> bool {
         suf.map(|s| format!("{base} {s}")),
         Some(item.name.clone()),
     ];
-    forms.iter().flatten().any(|f| crate::info::same_name(f, piece))
+    forms.iter().flatten().any(|f| crate::names::same_name(f, piece))
 }
 
 #[cfg(test)]

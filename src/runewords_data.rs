@@ -519,17 +519,17 @@ pub static RUNEWORDS: [Runeword; 99] = [
     },
 ];
 
-/// Looks a runeword up by name, ignoring ASCII case and apostrophes ([`crate::info::same_name`]:
+/// Looks a runeword up by name, ignoring ASCII case and apostrophes ([`crate::names::same_name`]:
 /// `"steel"`, `"Ancients' Pledge"` match): the `BiS` piece strings in the config are user-typed. Disambiguated
 /// upstream names (`"Hustle (armor)"`, `"Hustle (weapon)"`) also match their bare
 /// form, since that is what the game shows.
 #[must_use]
 pub fn lookup(name: &str) -> Option<&'static Runeword> {
     RUNEWORDS.iter().find(|w| {
-        crate::info::same_name(w.name, name)
+        crate::names::same_name(w.name, name)
             || w.name
                 .split_once(" (")
-                .is_some_and(|(bare, _)| crate::info::same_name(bare, name))
+                .is_some_and(|(bare, _)| crate::names::same_name(bare, name))
     })
 }
 

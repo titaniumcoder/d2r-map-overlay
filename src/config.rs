@@ -360,26 +360,9 @@ impl FarmSlot {
     }
 }
 
-/// What kind of item a [`FarmItem`] names: which table its name comes from and how its
-/// copies are counted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FarmKind {
-    Runeword,
-    Unique,
-    Set,
-}
-
-impl FarmKind {
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Runeword => "runeword",
-            Self::Unique => "unique",
-            Self::Set => "set",
-        }
-    }
-}
+/// What kind of item a [`FarmItem`] names: the core [`crate::names::ItemKind`] (which table
+/// its name comes from and how its copies are counted).
+pub type FarmKind = crate::names::ItemKind;
 
 /// serde's `default = "..."` needs a function path.
 const fn one() -> u32 {
@@ -409,7 +392,7 @@ pub fn parse_farm(text: &str) -> Result<(Vec<FarmGroup>, Vec<String>), toml::de:
                 ));
                 item.count = 1;
             }
-            let same = |n: &str| crate::info::same_name(n, &item.name);
+            let same = |n: &str| crate::names::same_name(n, &item.name);
             // Uniques and sets by their in-game name: the table's, or its display override
             // (`DISPLAY_NAMES` covers both kinds; this is only a warning).
             let shown = || crate::item_names_data::DISPLAY_NAMES.iter().any(|(_, n)| same(n));
@@ -436,7 +419,7 @@ pub fn parse_farm(text: &str) -> Result<(Vec<FarmGroup>, Vec<String>), toml::de:
 /// Whether `name` is a unique, set (table name or display override) or runeword name, for
 /// load-time warnings about item names that can never match.
 fn item_name_known(name: &str) -> bool {
-    let same = |n: &str| crate::info::same_name(n, name);
+    let same = |n: &str| crate::names::same_name(n, name);
     crate::runewords_data::lookup(name).is_some()
         || crate::item_names_data::UNIQUE_NAMES.iter().any(|(_, n)| same(n))
         || crate::item_names_data::SET_NAMES.iter().any(|(_, n)| same(n))
@@ -1836,7 +1819,7 @@ mod tests {
         let n = lists
             .iter()
             .flat_map(|list| list.iter())
-            .filter(|n| crate::info::same_name(n, item))
+            .filter(|n| crate::names::same_name(n, item))
             .count();
         u32::try_from(n).unwrap_or(u32::MAX)
     }

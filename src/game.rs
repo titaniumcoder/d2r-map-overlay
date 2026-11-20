@@ -11,6 +11,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::items::{self, DropKind};
+use crate::objects::is_consumable_quest_object;
 use crate::objects_data::{SHRINE_OBJECTS, WELL_OBJECTS};
 use crate::offsets::{
     ROOM_TILE_SCALE, act, act_misc, inventory, item_data, item_mode, level, level_preset, monster_data,
@@ -18,7 +19,6 @@ use crate::offsets::{
     stash_tab_node, stat_list, state, static_path, unit, unit_table,
 };
 use crate::process::ReadMem;
-use crate::render::is_consumable_quest_object;
 use crate::skills_data;
 use crate::stash::{self, StashTab};
 use crate::valuables;
@@ -163,7 +163,7 @@ pub struct Snapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wells: Vec<Well>,
     /// Operated consumable quest objects near the player (Diablo seals; see
-    /// [`crate::render::CONSUMABLE_QUEST_OBJECTS`]). The session hides their presets for the game.
+    /// [`crate::objects::CONSUMABLE_QUEST_OBJECTS`]). The session hides their presets for the game.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub operated_objects: Vec<OperatedObject>,
     /// Items in the player's inventory (shown or not); live-mode only, not in the JSON.
@@ -507,9 +507,9 @@ struct ItemScan {
     merc_worn: Vec<String>,
 }
 
-/// Appends `name` to `names` unless it is there already ([`crate::info::same_name`]).
+/// Appends `name` to `names` unless it is there already ([`crate::names::same_name`]).
 fn push_unique_name(names: &mut Vec<String>, name: String) {
-    if !names.iter().any(|n| crate::info::same_name(n, &name)) {
+    if !names.iter().any(|n| crate::names::same_name(n, &name)) {
         names.push(name);
     }
 }
@@ -757,7 +757,7 @@ pub struct Well {
     pub y: u32,
 }
 
-/// A consumable quest object (txt id in [`crate::render::CONSUMABLE_QUEST_OBJECTS`]) that has
+/// A consumable quest object (txt id in [`crate::objects::CONSUMABLE_QUEST_OBJECTS`]) that has
 /// been operated (unit mode other than [`object_mode::NEUTRAL`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperatedObject {
@@ -823,7 +823,7 @@ pub struct Equipped {
     /// 4-char item code ("uap"); `None` if the items table wasn't found yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
-    /// Display name of an identified unique/set item (the `valuables::unique_set_name`
+    /// Display name of an identified unique/set item (the `names::unique_set_name_parts`
     /// identity path) or of a runeword (its socketed runes in socket order,
     /// [`stash::runeword_by_runes`]); `None` otherwise (unidentified, magic, rare, base).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -839,7 +839,7 @@ pub struct Equipped {
     /// The item's full stat entries ([`Reader::item_stats`]: base, affixes, runeword, sockets):
     /// what the vendor panel compares store items against ([`crate::gear_score`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub stats: Vec<crate::gear_score::ItemStat>,
+    pub stats: Vec<crate::item_stats::ItemStat>,
 }
 
 impl Equipped {
@@ -1959,10 +1959,10 @@ impl<M: ReadMem> Reader<'_, M> {
             {
                 let quality = self.equipped_quality(&head);
                 if matches!(quality, Some(item_data::QUALITY_UNIQUE | item_data::QUALITY_SET)) {
-                    let name = self
-                        .item_fields(addr, &head, items_table)
-                        .ok()
-                        .and_then(|d| valuables::unique_set_name(&d).map(str::to_owned));
+                    let name = self.item_fields(addr, &head, items_table).ok().and_then(|d| {
+                        crate::names::unique_set_name_parts(d.quality, d.flags, d.unique_index)
+                            .map(str::to_owned)
+                    });
                     match name {
                         Some(name) if merc_worn => scan.merc_worn.push(name),
                         Some(name) => push_unique_name(scan.owned_names.entry(owner).or_default(), name),
@@ -2072,7 +2072,7 @@ impl<M: ReadMem> Reader<'_, M> {
         let code = items_table
             .and_then(|t| items::read_code(self.mem, t, head.txt))
             .map(items::code_text);
-        let name = valuables::unique_set_name_parts(quality, flags, file_index).map(str::to_owned);
+        let name = crate::names::unique_set_name_parts(quality, flags, file_index).map(str::to_owned);
         let named_index = if name.is_some() { file_index } else { None };
         let runeword = flags & item_data::FLAG_RUNEWORD != 0;
         let name = name.or_else(|| self.runeword_name(addr, head, flags, items_table));
@@ -2160,7 +2160,7 @@ impl<M: ReadMem> Reader<'_, M> {
     /// stat list ([`unit::STATS`]) normally carries the aggregated array
     /// ([`stat_list::FULL_ENTRIES`], flag [`stat_list::FLAG_FULL_STATS`]): base, affixes,
     /// runeword and socketed runes/gems, each once, ED% already applied; it is read through
-    /// [`crate::gear_score::ItemStat::from_totals`], which needs the base list's stat ids (the
+    /// [`crate::item_stats::ItemStat::from_totals`], which needs the base list's stat ids (the
     /// top list's own entries) to pick the damage pairs the base carries. Live 2026-11-19 (worn,
     /// carried, stash and merc items: all had the flag; store items assumed the same).
     ///
@@ -2170,7 +2170,7 @@ impl<M: ReadMem> Reader<'_, M> {
     /// the rolled base defense (31), damage (21/22, 23/24, 159/160) and durability, the next
     /// list the affixes; the chain then runs into other owners' lists. Optional data: an
     /// unreadable list ends the walk.
-    fn item_stats(&self, item: u64, id: u32) -> Vec<crate::gear_score::ItemStat> {
+    fn item_stats(&self, item: u64, id: u32) -> Vec<crate::item_stats::ItemStat> {
         let mut out = Vec::new();
         let Some(mut list) = self.ptr(item, unit::STATS).unwrap_or(None) else {
             return out;
@@ -2187,7 +2187,7 @@ impl<M: ReadMem> Reader<'_, M> {
             && let Ok(base) = self.stat_entries(list)
         {
             let base_ids: Vec<u16> = base.into_iter().map(|(_, stat, _)| stat).collect();
-            return crate::gear_score::ItemStat::from_totals(&full, &base_ids);
+            return crate::item_stats::ItemStat::from_totals(&full, &base_ids);
         }
         for i in 0..8 {
             let (Ok(ty), Ok(owner)) = (self.u32(list, 0x08), self.u32(list, 0x0C)) else {
@@ -2201,7 +2201,7 @@ impl<M: ReadMem> Reader<'_, M> {
             };
             out.extend(
                 entries.into_iter().map(|(param, stat, raw)| {
-                    crate::gear_score::ItemStat::from_raw(param, stat, raw, i == 0)
+                    crate::item_stats::ItemStat::from_raw(param, stat, raw, i == 0)
                 }),
             );
             match self.u64(list, stat_list::NEXT) {
@@ -3538,7 +3538,7 @@ mod tests {
                 .find(|e| e.body == body)
                 .map_or_default(|e| e.stats.clone())
         };
-        let stat = |id: u16, value: i32, base: bool| crate::gear_score::ItemStat {
+        let stat = |id: u16, value: i32, base: bool| crate::item_stats::ItemStat {
             id,
             param: 0,
             value,
@@ -3642,7 +3642,7 @@ mod tests {
         let ring = s.equipped_items.first().context("ring")?;
         assert_eq!(
             ring.stats,
-            [crate::gear_score::ItemStat {
+            [crate::item_stats::ItemStat {
                 id: stat_list::RESIST_FIRE,
                 param: 0,
                 value: 5,

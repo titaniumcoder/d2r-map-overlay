@@ -649,7 +649,7 @@ progress per character and difficulty (like the build stage in `played.json`).
 8–10 are the new features)
 - [x] 1. Delete the sorceress builds (only Summoner Druid → Fury Druid stay); drop the Larzuk
   valuables rule; Smoke moved to merc body in both druid builds.
-- [ ] 2. Small moves that untangle shared pieces.
+- [x] 2. Small moves that untangle shared pieces: new core modules `objects`, `names`, `item_stats`; dead blood-boil branches gone from `gen_build.py`.
 - [ ] 3. The reader stops computing keep/sell: it returns raw items, the playstyle sorts them.
 - [ ] 4. Reader plugin trait plus the Proton reader.
 - [ ] 5. Playstyle plugin trait, wrapping today's builds, farm list and valuables.

@@ -16,6 +16,7 @@ mod image;
 mod info;
 mod item_levels_data;
 mod item_names_data;
+mod item_stats;
 mod items;
 mod journal;
 #[allow(
@@ -24,6 +25,8 @@ mod journal;
 )]
 mod levels_data;
 mod live;
+mod names;
+mod objects;
 mod objects_data;
 mod offset_cache;
 mod offsets;

@@ -50,8 +50,9 @@ use serde::{Deserialize, Serialize};
 use crate::cows;
 use crate::game::{BorderLink, Monster, Preset, PresetKind, RoomLink, RoomRect, Shrine, Snapshot, Well};
 use crate::levels_data::SUPERUNIQUES;
+use crate::objects::is_consumable_quest_object;
 use crate::offsets::monster_data;
-use crate::render::{candidate_room, is_consumable_quest_object, quest_monster};
+use crate::render::{candidate_room, quest_monster};
 use crate::stash::{self, StashTab};
 
 /// Most distance in tiles between a dead superunique and the superunique preset it is credited

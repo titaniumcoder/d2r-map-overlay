@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::game::ItemDrop;
 use crate::items::{self, DropKind};
+use crate::names::ItemKind;
 use crate::offsets::item_data;
 use crate::runewords_data::{RUNEWORDS, Runeword};
 use crate::valuables;
@@ -287,20 +288,19 @@ pub struct Holdings<'a> {
 
 impl Holdings<'_> {
     /// The copies of `name`: `(in the shared stash, on the played character or its
-    /// mercenary)`, matched by [`crate::info::same_name`]. `kind` says which items count;
+    /// mercenary)`, matched by [`crate::names::same_name`]. `kind` says which items count;
     /// `None` takes a runeword name ([`crate::runewords_data::lookup`]) as a runeword and any
     /// other as a unique or set. A runeword counts one per copy (the stash's runeword items
     /// and `runeword_copies`); a unique or set counts its identified stash items of that
     /// quality, at most one copy the character holds (`owned` lists each name once) and each
     /// one the mercenary wears.
     #[must_use]
-    pub fn copies(&self, name: &str, kind: Option<crate::config::FarmKind>) -> (u32, u32) {
-        use crate::config::FarmKind;
-        let same = |n: &str| crate::info::same_name(n, name);
+    pub fn copies(&self, name: &str, kind: Option<ItemKind>) -> (u32, u32) {
+        let same = |n: &str| crate::names::same_name(n, name);
         let stash_items = self.stash.iter().flat_map(|tab| &tab.items);
         let runeword = kind.map_or_else(
             || crate::runewords_data::lookup(name).is_some(),
-            |kind| kind == FarmKind::Runeword,
+            |kind| kind == ItemKind::Runeword,
         );
         let (stashed, carried) = if runeword {
             (
@@ -309,8 +309,8 @@ impl Holdings<'_> {
             )
         } else {
             let quality_ok = |q: u32| match kind {
-                Some(FarmKind::Unique) => q == item_data::QUALITY_UNIQUE,
-                Some(FarmKind::Set) => q == item_data::QUALITY_SET,
+                Some(ItemKind::Unique) => q == item_data::QUALITY_UNIQUE,
+                Some(ItemKind::Set) => q == item_data::QUALITY_SET,
                 _ => matches!(q, item_data::QUALITY_UNIQUE | item_data::QUALITY_SET),
             };
             (
@@ -381,7 +381,6 @@ mod tests {
 
     #[test]
     fn holdings_count_stash_character_and_merc_copies() {
-        use crate::config::FarmKind;
         let id = item_data::FLAG_IDENTIFIED;
         let names = |n: &[&str]| n.iter().map(|&s| s.to_owned()).collect::<Vec<_>>();
         let tabs = [StashTab {
@@ -409,7 +408,7 @@ mod tests {
         };
         assert_eq!(holdings.copies("harlequin crest", None), (1, 2), "own + merc's");
         assert_eq!(holdings.count("Harlequin Crest"), 3);
-        assert_eq!(holdings.copies("Harlequin Crest", Some(FarmKind::Set)), (0, 2));
+        assert_eq!(holdings.copies("Harlequin Crest", Some(ItemKind::Set)), (0, 2));
         assert_eq!(holdings.count("Lawbringer"), 2, "one per runeword copy");
         assert_eq!(holdings.count("Andariels Visage"), 1, "merc-worn only");
         assert_eq!(holdings.count("Tal Rasha's Horadric Crest"), 1);

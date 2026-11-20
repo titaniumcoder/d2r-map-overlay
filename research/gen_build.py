@@ -300,17 +300,6 @@ def keep_target(line):
     return not any(line.startswith(p + ":") for p in DROP_TARGETS)
 
 
-def targets_blood_boil(t):
-    a = t["attributes"]["planner_totals"]
-    return [
-        f"FCR: {t['fcr']['minimum']}, goal {t['fcr']['goal']}",
-        "Stats: " + t["attributes"]["rule"] + f" (planner lvl 75: {a['starter_lvl75']['str']} str / {a['starter_lvl75']['vit']} vit; lvl 99: {a['standard_lvl99']['str']} str / {a['standard_lvl99']['vit']} vit)",
-        "Fire pierce: " + t["fire_resistance_pierce"],
-        f"Merc: starter {t['mercenary']['starter']}; endgame {t['mercenary']['standard']} — needs {t['mercenary']['needs']}",
-        "Bound demon: " + t["bound_demon"],
-    ]
-
-
 def targets_generic(d):
     """Short target lines from a druid guide's `targets` (hardcore-only parts left out)."""
     t = d.get("targets") or {}
@@ -434,16 +423,11 @@ def main(argv):
         if i["name"] in pieces:
             continue
         notes = [n for n in [i.get("notes") or ""] if n]
-        if stem == "blood-boil":
-            if "magic_find" in (i.get("setups") or []) and i["setup"] == "alternative":
-                notes.insert(0, "Magic Find setup")
-            setup = i.get("setup") or ""
-        else:
-            setup = short_setup(i.get("setup"))
-            if setup == "alternative" and i.get("setup") not in (None, "alternative"):
-                notes.insert(0, f"{i['setup'].replace('_', ' ')} setup")
-            if i.get("merc_tier"):
-                notes.insert(0, f"merc gear: {i['merc_tier']} game")
+        setup = short_setup(i.get("setup"))
+        if setup == "alternative" and i.get("setup") not in (None, "alternative"):
+            notes.insert(0, f"{i['setup'].replace('_', ' ')} setup")
+        if i.get("merc_tier"):
+            notes.insert(0, f"merc gear: {i['merc_tier']} game")
         pieces[i["name"]] = dict(kind=i.get("kind") or "", setup=setup, base=i.get("base") or "",
                                  stats=i.get("stats") or [], why=i.get("why") or "", notes="; ".join(notes))
 
@@ -454,51 +438,48 @@ def main(argv):
                                      why=i.get("why") or "", notes="from the leveling guide; " + (i.get("notes") or ""))
     plan, recipes, tips, stats, switch_note = [], [], [], [], cfg.get("switch_note", "")
     # No attribute plan either (user request): `stats` stays empty.
-    if stem == "blood-boil":
-        targets = targets_blood_boil(d["targets"])
-    else:
-        targets = targets_generic(d)
-        recipes = [recipe_of(r) for r in d.get("recipes") or []]
-        sp = d.get("skill_plan")
-        act_tips = list(d.get("act_tips") or [])
-        if isinstance(sp, dict) and "entries" in sp:
-            # The leveling guide: everything before the respec (the next stage takes over).
-            pre = [e for e in sp["entries"] if "respec" not in e["stage"]]
-            plan, _ = expand_plan(pre, stem, known)
-            if "respec" in d:
-                switch_note = cfg.get("respec_note", "")
-                if not switch_note:
-                    problems.append(f"{stem}: source has a respec but BUILDS has no respec_note")
-        elif isinstance(sp, dict):
-            if "--leveling" in opts:
-                lev = json.load(open(opts["--leveling"], encoding="utf-8"))
-                post = [e for e in lev["skill_plan"]["entries"] if "respec" in e["stage"]]
-                plan, current = expand_plan(post, stem, known)
-                last = max(p[2] for p in plan)
-                order = [(s, MAX_POINTS) for s in sp.get("max_order") or []]
-                left = (sp.get("leftover_points") or {}).get("skill")
-                if left:
-                    order.append((left, MAX_POINTS))
-                plan += simulate(current, max(last, 75), order, stem, known)
-                # The leveling stage's tips from its switch into this stage on.
-                lev_stem = os.path.basename(opts["--leveling"]).removesuffix(".json").removesuffix(".source")
-                start = BUILDS.get(lev_stem, {}).get("switch_level", 38)
-                act_tips = [t for t in lev.get("act_tips") or []
-                            if (level_range(tip_range(t["range"]) or "0") or (0,))[0] >= start]
-            else:
-                alloc = sp["planner_allocations"]["starter_lvl75"]
-                order = (sp.get("variants") or {}).get("starter_standard_magic_find", {}).get("max_order") or sp.get("max_order") or []
-                for s in alloc:
-                    if s not in known:
-                        problems.append(f"{stem}: skill {s!r} is not a {cfg['cls']} skill in skills_data.rs")
-                plan = allocation_at(alloc, 75, order, "respec: the guide's level-75 Starter allocation")
-                plan += simulate(alloc, 75, [(s, MAX_POINTS) for s in order], stem, known)
-        for t in act_tips:
-            rng = tip_range(t["range"])
-            if rng:
-                tips += [(rng, x) for x in t.get("tips") or []]
-        if "--prerequisites" in opts:
-            switch_note = switch_note_prereq(json.load(open(opts["--prerequisites"], encoding="utf-8"))["prerequisites"])
+    targets = targets_generic(d)
+    recipes = [recipe_of(r) for r in d.get("recipes") or []]
+    sp = d.get("skill_plan")
+    act_tips = list(d.get("act_tips") or [])
+    if isinstance(sp, dict) and "entries" in sp:
+        # The leveling guide: everything before the respec (the next stage takes over).
+        pre = [e for e in sp["entries"] if "respec" not in e["stage"]]
+        plan, _ = expand_plan(pre, stem, known)
+        if "respec" in d:
+            switch_note = cfg.get("respec_note", "")
+            if not switch_note:
+                problems.append(f"{stem}: source has a respec but BUILDS has no respec_note")
+    elif isinstance(sp, dict):
+        if "--leveling" in opts:
+            lev = json.load(open(opts["--leveling"], encoding="utf-8"))
+            post = [e for e in lev["skill_plan"]["entries"] if "respec" in e["stage"]]
+            plan, current = expand_plan(post, stem, known)
+            last = max(p[2] for p in plan)
+            order = [(s, MAX_POINTS) for s in sp.get("max_order") or []]
+            left = (sp.get("leftover_points") or {}).get("skill")
+            if left:
+                order.append((left, MAX_POINTS))
+            plan += simulate(current, max(last, 75), order, stem, known)
+            # The leveling stage's tips from its switch into this stage on.
+            lev_stem = os.path.basename(opts["--leveling"]).removesuffix(".json").removesuffix(".source")
+            start = BUILDS.get(lev_stem, {}).get("switch_level", 38)
+            act_tips = [t for t in lev.get("act_tips") or []
+                        if (level_range(tip_range(t["range"]) or "0") or (0,))[0] >= start]
+        else:
+            alloc = sp["planner_allocations"]["starter_lvl75"]
+            order = (sp.get("variants") or {}).get("starter_standard_magic_find", {}).get("max_order") or sp.get("max_order") or []
+            for s in alloc:
+                if s not in known:
+                    problems.append(f"{stem}: skill {s!r} is not a {cfg['cls']} skill in skills_data.rs")
+            plan = allocation_at(alloc, 75, order, "respec: the guide's level-75 Starter allocation")
+            plan += simulate(alloc, 75, [(s, MAX_POINTS) for s in order], stem, known)
+    for t in act_tips:
+        rng = tip_range(t["range"])
+        if rng:
+            tips += [(rng, x) for x in t.get("tips") or []]
+    if "--prerequisites" in opts:
+        switch_note = switch_note_prereq(json.load(open(opts["--prerequisites"], encoding="utf-8"))["prerequisites"])
 
     L = ["# Agent-authored build definition (do not edit while the overlay runs: it is hot-reloaded)."]
     if "header" in cfg:
@@ -510,8 +491,7 @@ def main(argv):
               "# leveling stage, 'lvl a-b'), everything else folds as alternative."]
     L += [f"name = {q(cfg['name'])}", f"damages = [{', '.join(q(x) for x in cfg['damages'])}]",
           "notes = " + q(cfg["notes"]), "targets = [" + ", ".join(q(x) for x in targets if keep_target(x)) + "]"]
-    if stem != "blood-boil" or cfg.get("cls"):
-        L.append(f"class = {q(cfg['cls'])}")
+    L.append(f"class = {q(cfg['cls'])}")
     if cfg.get("default"):
         L.append("default_for_class = true")
     if cfg.get("next"):

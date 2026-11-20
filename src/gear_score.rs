@@ -3,9 +3,10 @@
 //! an item "better" when the gain passes [`MIN_GAIN`] (user request, 2026-11-18: leveling
 //! help, mark only, small gains ignored).
 //!
-//! An item's stats are its stat-list chain ([`ItemStat`], read by `game::Reader`): the BASE
-//! list holds the rolled base values (defense `31` = the base defense, damage pairs `21/22`
-//! one-handed, `23/24` two-handed, `159/160` thrown; live 2026-11-18 on a level-4 amazon:
+//! An item's stats are its stat-list chain ([`ItemStat`] in [`crate::item_stats`], read by
+//! `game::Reader`): the BASE list holds the rolled base values (defense `31` = the base
+//! defense, damage pairs `21/22` one-handed, `23/24` two-handed, `159/160` thrown; live
+//! 2026-11-18 on a level-4 amazon:
 //! Short Bow `23/24` = 1/4, Javelin `21/22` = 1/5 and `159/160` = 6/14, Hard Leather Armor
 //! `31` = 25), the affix lists the modifiers (ED% `16` on armor, `17/18` on weapons, res,
 //! +skills, flat damage …). ED% applies to the base value only; flat bonuses add after.
@@ -23,140 +24,9 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
-
 use crate::bases_data::{self, Base};
+use crate::item_stats::{ItemStat, stat};
 use crate::skills_data;
-
-/// One stat-list entry of an item: `{u16 param (the "layer"), u16 stat id, u32 value}`,
-/// with the value made plain ([`ItemStat::from_raw`]) and whether it is a base value that
-/// ED% scales (from the base list, or a defense/damage total from [`ItemStat::from_totals`])
-/// or a modifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ItemStat {
-    /// itemstatcost.txt row.
-    pub id: u16,
-    /// The stat's parameter: the class of `+class skills`, the skill of `+single skill`, the
-    /// tab of `+skill tab`; 0 for most stats.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub param: u16,
-    pub value: i32,
-    /// A base value (rolled base defense/damage, durability; or an aggregated defense/damage
-    /// total), not a modifier.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub base: bool,
-}
-
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "serde's skip_serializing_if passes a reference"
-)]
-const fn is_zero(v: &u16) -> bool {
-    *v == 0
-}
-
-impl ItemStat {
-    /// The entry from its raw words. Values are signed (the base list's attack-speed stat
-    /// reads `0xFFFFFFFB` = -5 on a Short Bow); life, mana and stamina (ids 6..=11,
-    /// itemstatcost `ValShift` 8) are stored in 1/256 units.
-    #[must_use]
-    pub const fn from_raw(param: u16, id: u16, raw: u32, base: bool) -> Self {
-        let value = raw.cast_signed();
-        let value = if id >= 6 && id <= 11 { value >> 8 } else { value };
-        Self {
-            id,
-            param,
-            value,
-            base,
-        }
-    }
-
-    /// The stats of an item's aggregated array (`(param, id, raw)` entries: base, affixes,
-    /// runeword and socketed runes, each once, ED% already applied; live 2026-11-19: Stoutnail
-    /// 7/12 → 14/24 with its 100% ED, rare boots defense 6 → 7 with 23% ED, ED itself not
-    /// listed), shaped for the score's base × ED% + flat rule so nothing counts twice:
-    /// defense and the damage pairs the item's base list carries (`base_ids`) become `base`
-    /// values; ED% entries are dropped (applied already); a damage stat the base list lacks
-    /// is dropped too (a flat bonus the game writes to every pair: its amount is already in
-    /// the pair the base carries, and keeping it would make a two-hander look one-handed).
-    #[must_use]
-    pub fn from_totals(entries: &[(u16, u16, u32)], base_ids: &[u16]) -> Vec<Self> {
-        const DAMAGE: [u16; 6] = [
-            stat::MIN_DAMAGE,
-            stat::MAX_DAMAGE,
-            stat::MIN_DAMAGE_2H,
-            stat::MAX_DAMAGE_2H,
-            stat::THROW_MIN,
-            stat::THROW_MAX,
-        ];
-        const ED: [u16; 3] = [
-            stat::DEFENSE_PERCENT,
-            stat::MAX_DAMAGE_PERCENT,
-            stat::MIN_DAMAGE_PERCENT,
-        ];
-        entries
-            .iter()
-            .filter_map(|&(param, id, raw)| {
-                let damage = DAMAGE.contains(&id);
-                if ED.contains(&id) || (damage && !base_ids.contains(&id)) {
-                    return None;
-                }
-                Some(Self::from_raw(param, id, raw, damage || id == stat::DEFENSE))
-            })
-            .collect()
-    }
-}
-
-/// itemstatcost.txt stat ids the score reads.
-pub mod stat {
-    pub const STRENGTH: u16 = 0;
-    pub const ENERGY: u16 = 1;
-    pub const DEXTERITY: u16 = 2;
-    pub const VITALITY: u16 = 3;
-    pub const MAX_LIFE: u16 = 7;
-    pub const MAX_MANA: u16 = 9;
-    /// Enhanced defense %.
-    pub const DEFENSE_PERCENT: u16 = 16;
-    /// Enhanced damage %, applied to the max and the min damage.
-    pub const MAX_DAMAGE_PERCENT: u16 = 17;
-    pub const MIN_DAMAGE_PERCENT: u16 = 18;
-    pub const ATTACK_RATING: u16 = 19;
-    /// One-handed damage.
-    pub const MIN_DAMAGE: u16 = 21;
-    pub const MAX_DAMAGE: u16 = 22;
-    /// Two-handed damage.
-    pub const MIN_DAMAGE_2H: u16 = 23;
-    pub const MAX_DAMAGE_2H: u16 = 24;
-    pub const DEFENSE: u16 = 31;
-    pub const RES_FIRE: u16 = 39;
-    pub const RES_LIGHTNING: u16 = 41;
-    pub const RES_COLD: u16 = 43;
-    pub const RES_POISON: u16 = 45;
-    /// Elemental damage (min, max) pairs: fire, lightning, magic, cold.
-    pub const ELEMENTAL: [(u16, u16); 4] = [(48, 49), (50, 51), (52, 53), (54, 55)];
-    pub const LIFE_LEECH: u16 = 60;
-    pub const MANA_LEECH: u16 = 62;
-    pub const REPLENISH_LIFE: u16 = 74;
-    pub const MAGIC_FIND: u16 = 80;
-    /// +class skills; param = class.
-    pub const CLASS_SKILLS: u16 = 83;
-    /// Requirements -%.
-    pub const REQUIREMENTS_PERCENT: u16 = 91;
-    pub const IAS: u16 = 93;
-    pub const FRW: u16 = 96;
-    /// +skill (any class; "oskill"); param = skill.
-    pub const NONCLASS_SKILL: u16 = 97;
-    pub const FHR: u16 = 99;
-    pub const FCR: u16 = 105;
-    /// +skill (own class); param = skill.
-    pub const SINGLE_SKILL: u16 = 107;
-    pub const ALL_SKILLS: u16 = 127;
-    /// Thrown damage.
-    pub const THROW_MIN: u16 = 159;
-    pub const THROW_MAX: u16 = 160;
-    /// +skill tab; param = class × 8 + tab.
-    pub const SKILL_TAB: u16 = 188;
-}
 
 /// Score weights: score points per unit of a stat (per +1 skill, per point of average
 /// damage, per % of resistance …). The one table to tune; [`MIN_GAIN`] is the bar.
@@ -652,13 +522,6 @@ mod tests {
             code: Some(code),
             stats,
         }
-    }
-
-    #[test]
-    fn raw_values_are_signed_and_life_is_shifted() {
-        assert_eq!(ItemStat::from_raw(0, 68, 0xFFFF_FFFB, true).value, -5);
-        assert_eq!(ItemStat::from_raw(0, stat::MAX_LIFE, 20 << 8, false).value, 20);
-        assert_eq!(ItemStat::from_raw(0, stat::RES_FIRE, 15, false).value, 15);
     }
 
     #[test]

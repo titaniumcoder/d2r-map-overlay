@@ -867,7 +867,8 @@ fn shop_json(info: &LiveInfo) -> serde_json::Value {
 /// current piece naming one; strength and dexterity are the base
 /// values plus the worn gear's.
 fn score_profile(info: &LiveInfo) -> crate::gear_score::Profile {
-    use crate::gear_score::{Profile, is_caster, piece_kind, stat};
+    use crate::gear_score::{Profile, is_caster, piece_kind};
+    use crate::item_stats::stat;
     let gear = |id: u16| -> i32 {
         info.equipped_items
             .iter()
@@ -880,7 +881,7 @@ fn score_profile(info: &LiveInfo) -> crate::gear_score::Profile {
     for target in info.build.map_or(&[][..], |b| b.skill_plan.as_slice()) {
         let planned = crate::skills_data::SKILLS
             .iter()
-            .find(|s| u32::from(s.class) == info.class && crate::info::same_name(s.name, &target.skill));
+            .find(|s| u32::from(s.class) == info.class && crate::names::same_name(s.name, &target.skill));
         if let Some(s) = planned
             && !skills.contains(&s.id)
         {
@@ -1180,13 +1181,13 @@ fn runeword_copies(info: &LiveInfo, name: &str) -> usize {
     let held = info
         .runeword_copies
         .iter()
-        .filter(|n| crate::info::same_name(n, name))
+        .filter(|n| crate::names::same_name(n, name))
         .count();
     let stashed = info
         .stash
         .iter()
         .flat_map(|tab| &tab.items)
-        .filter(|item| item.runeword && crate::info::same_name(&item.name, name))
+        .filter(|item| item.runeword && crate::names::same_name(&item.name, name))
         .count();
     held + stashed
 }
@@ -1201,7 +1202,7 @@ fn runeword_slots(build: &crate::config::Build, name: &str) -> usize {
         .filter(|pieces| {
             pieces
                 .iter()
-                .any(|p| crate::info::same_name(crate::info::piece_name(p), name))
+                .any(|p| crate::names::same_name(crate::info::piece_name(p), name))
         })
         .count()
         .max(1)
@@ -1445,7 +1446,7 @@ fn farm_worn(target: &str, item: &crate::config::FarmItem, info: &LiveInfo) -> b
         .iter()
         .filter_map(|e| e.name.as_deref())
         .chain(info.merc_worn.iter().map(String::as_str))
-        .filter(|n| crate::info::same_name(n, &item.name))
+        .filter(|n| crate::names::same_name(n, &item.name))
         .count();
     on_build && u32::try_from(worn).is_ok_and(|w| w >= item.count.max(1))
 }
@@ -1584,11 +1585,13 @@ fn piece_state(req: Option<u32>, equipped_level: Option<u32>, lvl: u32) -> &'sta
 }
 
 /// Whether a piece named `name` is equipped already (any slot), by the equipped items'
-/// unique/set/runeword names ([`crate::info::same_name`]).
+/// unique/set/runeword names ([`crate::names::same_name`]).
 fn is_worn(name: &str, info: &LiveInfo) -> bool {
-    info.equipped_items
-        .iter()
-        .any(|e| e.name.as_deref().is_some_and(|n| crate::info::same_name(n, name)))
+    info.equipped_items.iter().any(|e| {
+        e.name
+            .as_deref()
+            .is_some_and(|n| crate::names::same_name(n, name))
+    })
 }
 
 /// The upgrades the character can make right now (`live_json`'s `upgrades` section), each
@@ -1654,7 +1657,7 @@ fn upgrades_json(info: &LiveInfo) -> Vec<serde_json::Value> {
         }
         let slot_piece = crate::config::SLOT_NAMES.iter().find_map(|slot| {
             bis.slots.get(*slot)?.iter().find_map(|p| {
-                crate::info::same_name(crate::info::piece_name(p), &recipe.name).then_some((*slot, p))
+                crate::names::same_name(crate::info::piece_name(p), &recipe.name).then_some((*slot, p))
             })
         });
         let Some((slot, piece)) = slot_piece.filter(|(_, p)| !outgrown(p, info)) else {
@@ -1758,7 +1761,7 @@ fn gear_attention(info: &LiveInfo, upgrades: &[serde_json::Value]) -> Option<Str
         let eq_level = equipped_level(slot_bodies(slot), info);
         for piece in bis.slots.get(*slot).map_or(&[][..], Vec::as_slice) {
             let name = crate::info::piece_name(piece);
-            if !found.iter().any(|f| crate::info::same_name(f, name))
+            if !found.iter().any(|f| crate::names::same_name(f, name))
                 && !outgrown(piece, info)
                 && findable_upgrade(piece, u32::from(lvl), max_mlvl, eq_level, &materials, info)
             {
@@ -1827,12 +1830,12 @@ fn unique_set_qlvl(name: &str) -> Option<u32> {
     use crate::item_names_data::{DISPLAY_NAMES, SET_NAMES, UNIQUE_NAMES};
     let index = DISPLAY_NAMES
         .iter()
-        .find(|(_, shown)| crate::info::same_name(shown, name))
+        .find(|(_, shown)| crate::names::same_name(shown, name))
         .map_or(name, |&(index, _)| index);
     let rows = |table: &'static [(u32, &'static str)]| {
         table
             .iter()
-            .filter(move |(_, n)| crate::info::same_name(n, index))
+            .filter(move |(_, n)| crate::names::same_name(n, index))
             .map(|&(row, _)| row)
     };
     rows(UNIQUE_NAMES)
@@ -5156,7 +5159,7 @@ mod tests {
     /// bar and a bow above her level are not; nothing joins the upgrade list.
     #[test]
     fn shop_marks_items_better_than_the_worn_ones() {
-        use crate::gear_score::{ItemStat, stat};
+        use crate::item_stats::{ItemStat, stat};
         use crate::shop::shop_item;
         let base = |id, value| ItemStat {
             id,

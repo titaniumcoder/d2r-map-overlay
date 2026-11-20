@@ -9,9 +9,10 @@ use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config;
 use crate::game::ItemDrop;
+use crate::names::{self, identity, shown};
 use crate::offsets::item_data;
-use crate::{config, item_names_data};
 
 /// How much a drop is worth. Declared lowest first, so the derived order is "worse < better"
 /// (and the best ring is drawn last, on top).
@@ -136,46 +137,12 @@ pub struct Highlight {
     pub uncertain: bool,
 }
 
-/// The unique or set name (`index` string), if known: only for an identified item whose
-/// file index is in the table of its quality. The index is verified for identified
-/// uniques only (see `item_data::FILE_INDEX`); unidentified ones stay unknown, and their name
-/// rules match as uncertain.
-fn identity(quality: u32, flags: u32, unique_index: Option<u32>) -> Option<&'static str> {
-    if flags & item_data::FLAG_IDENTIFIED == 0 {
-        return None;
-    }
-    let table = match quality {
-        item_data::QUALITY_UNIQUE => item_names_data::UNIQUE_NAMES,
-        item_data::QUALITY_SET => item_names_data::SET_NAMES,
-        _ => return None,
-    };
-    let index = unique_index?;
-    let row = table.binary_search_by_key(&index, |&(i, _)| i).ok()?;
-    table.get(row).map(|&(_, name)| name)
-}
-
 /// The in-game display name of an identified unique/set item (`None` otherwise: unidentified
-/// items carry no name index yet, non-unique/set items none at all).
+/// items carry no name index yet, non-unique/set items none at all;
+/// [`names::unique_set_name_parts`]).
 #[must_use]
 pub fn unique_set_name(drop: &ItemDrop) -> Option<&'static str> {
-    unique_set_name_parts(drop.quality, drop.flags, drop.unique_index)
-}
-
-/// [`unique_set_name`] over the raw fields, for callers that read them directly instead of
-/// building an [`ItemDrop`] (the equipped-item scan of `game::Reader::items`).
-#[must_use]
-pub fn unique_set_name_parts(quality: u32, flags: u32, unique_index: Option<u32>) -> Option<&'static str> {
-    identity(quality, flags, unique_index).map(shown)
-}
-
-/// The in-game name of a unique/set `index` name: some internal keys differ (Piercerib is
-/// shown as "Rogue's Bow"; see `item_names_data::DISPLAY_NAMES`).
-fn shown(index: &'static str) -> &'static str {
-    item_names_data::DISPLAY_NAMES
-        .binary_search_by_key(&index, |&(i, _)| i)
-        .ok()
-        .and_then(|row| item_names_data::DISPLAY_NAMES.get(row))
-        .map_or(index, |&(_, name)| name)
+    names::unique_set_name_parts(drop.quality, drop.flags, drop.unique_index)
 }
 
 /// The rule's verdict on the drop: `None` if it doesn't match, else `Some(uncertain)`.
@@ -710,17 +677,6 @@ mod tests {
     }
 
     #[test]
-    fn name_tables_are_sorted_by_row() {
-        for table in [item_names_data::UNIQUE_NAMES, item_names_data::SET_NAMES] {
-            assert!(
-                table.windows(2).all(|w| matches!(w, [a, b] if a.0 < b.0)),
-                "binary_search needs ascending, unique rows"
-            );
-            assert_ne!(table.len(), 0);
-        }
-    }
-
-    #[test]
     fn tier_filter_by_config() {
         let vex = drop("r26", 2, 0, false);
         let lem = drop("r20", 2, 0, false);
@@ -794,17 +750,6 @@ mod tests {
         d.flags = item_data::FLAG_IDENTIFIED;
         d.unique_index = Some(index);
         d
-    }
-
-    #[test]
-    fn internal_names_are_shown_in_game_spelling() {
-        assert_eq!(shown("Piercerib"), "Rogue's Bow");
-        assert_eq!(shown("The Chieftan"), "The Chieftain");
-        assert_eq!(shown("Gravenspine"), "Gravenspine", "same name stays");
-        assert!(
-            item_names_data::DISPLAY_NAMES.is_sorted_by(|a, b| a.0 < b.0),
-            "sorted for binary search"
-        );
     }
 
     #[test]

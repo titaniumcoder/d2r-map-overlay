@@ -46,7 +46,7 @@ const WORDS: usize = 48;
 pub fn word_of(name: &str) -> Option<usize> {
     QUESTS
         .iter()
-        .find(|(n, _)| crate::info::same_name(n, name))
+        .find(|(n, _)| crate::names::same_name(n, name))
         .map(|&(_, w)| w)
 }
 
