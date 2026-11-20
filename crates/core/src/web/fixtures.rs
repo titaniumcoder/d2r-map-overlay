@@ -10,6 +10,10 @@ pub static EMPTY_SKILLS: crate::game::Skills = crate::game::Skills {
     right: None,
 };
 
+/// No marked ground drops: the `drops` section is empty.
+pub static EMPTY_MARKS: std::sync::LazyLock<crate::guidance::Marks> =
+    std::sync::LazyLock::new(crate::guidance::Marks::new);
+
 /// A stash item for the panel tests (identified, not a runeword).
 #[must_use]
 pub fn stash_item(name: &str, code: &str, quality: u32, quantity: Option<u32>) -> crate::stash::StashItem {
@@ -93,6 +97,7 @@ pub fn live_info<'a>(
         shop: None,
         strength: None,
         dexterity: None,
+        marks: &EMPTY_MARKS,
         updated_at: 1_700_000_000,
     }
 }

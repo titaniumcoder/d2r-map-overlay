@@ -576,6 +576,20 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
   are all owned. The page chimes (WebAudio, 🔔 toggle) when a key appears that this character hasn't had.
 - [x] Guide stages, recipes panel, upgrade chime, favicon (2026-11-17).
+- [x] **Dashboard sounds** (user's picks, 2026-11-20): six more WebAudio sounds beside the upgrade
+  chime, each under 0.6 s and once per event. Louder: a farm-list drop on the ground (a `farm`
+  mark), ready to switch stage (`stage.next.ready`: every `switch_requires` group met, or the
+  stage switched on to its `next`). Quiet: an S / A trade mark on the ground, a farm entry held
+  (missing → found / done, rolled entries too; a further copy of a multi-copy entry counts
+  again), the route's `next.id` changing, a `farm.worth` boss gone (two frames in a row, per
+  difficulty). Server side: the core's live JSON gained `drops: [{id, kind, tier}]` (the
+  marked ground drops by unit id, from `Guidance::marks` via `LiveInfo::marks`), the playstyle's
+  `stage.next` gained `ready`. The page (`soundEvents` in `assets/dashboard.js`) keys each sound
+  by stable ids whose seen sets only grow per character, so a one-tick flicker never repeats;
+  the first frame after loading, an SSE error, a menu return or a character change only
+  records. Several in one frame queue (at most three, the louder first; a backlog over 2 s is
+  dropped). 🔔 stays the master switch (`d2r-chime`); the ▾ popover holds one checkbox per sound
+  (`d2r-sounds` in localStorage, all on by default; ticking one previews it).
 - **Quest-reward recipes** (user request, 2026-11-18): a `[[recipes]]` entry may name its quest
   (`quest = "Tools of the Trade"`, `"Siege on Harrogath"`, `"Prison of Ice"`; names in
   `src/quests.rs`). The Recipes panel drops it once the reward is used (bit 0 set, bit 1 clear),

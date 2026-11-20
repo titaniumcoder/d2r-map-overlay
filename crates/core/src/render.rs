@@ -672,7 +672,9 @@ impl Marker {
                 (look.colour(), radius, Shape::Circle)
             }
             Self::Merc => ([150, 255, 190, 255], 2.5, Shape::Circle),
-            Self::Player => ([40, 255, 60, 255], 2.5, Shape::Circle),
+            // Bigger than the merc and the drops (user, 2026-11-20: "make my own point a little
+            // bit bigger"); redrawn after the labels so it is always in front.
+            Self::Player => ([40, 255, 60, 255], 3.5, Shape::Circle),
         }
     }
 }
@@ -1366,6 +1368,14 @@ fn render_rules(
     if let Some(font) = font {
         draw_labels(&mut pm, view, font, snap, &tagged);
         draw_info_line(&mut pm, font, snap, guidance.rating);
+    }
+    // The player's dot on top of everything, labels included (user, 2026-11-20: a label or
+    // marker must never hide it).
+    let (colour, size, shape) = Marker::Player.style();
+    let (px, py) = view.to_screen(f64::from(snap.player.x), f64::from(snap.player.y));
+    if let Some(dot) = marker_outline(Marker::Player, shape, px, py, size) {
+        solid(&mut pm, &dot, colour);
+        pm.stroke_path(&dot, &paint(MARKER_OUTLINE), &ring, Transform::identity(), None);
     }
     Ok(pm)
 }

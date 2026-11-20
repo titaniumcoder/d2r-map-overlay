@@ -116,6 +116,40 @@ fn live_json_has_the_stash_pages_and_materials() -> Result<()> {
 }
 
 #[test]
+fn live_json_lists_the_marked_drops_by_id() -> Result<()> {
+    use crate::guidance::{Category, Mark, MarkKind, Marks, Tier};
+    let mark = |kind, trade| Mark {
+        kind,
+        trade,
+        rule: "rule".to_owned(),
+        uncertain: false,
+    };
+    let marks: Marks = [
+        (30, mark(MarkKind::Trade, Some((Tier::S, Category::Trade)))),
+        (7, mark(MarkKind::Farm, None)),
+        (12, mark(MarkKind::Keep, None)),
+    ]
+    .into_iter()
+    .collect();
+    let blocks = crate::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.marks = &marks;
+    let json = serde_json::from_str::<serde_json::Value>(&live_json(&info))?;
+    assert_eq!(
+        json.get("drops"),
+        Some(&serde_json::json!([
+            {"id": 7, "kind": "farm", "tier": null},
+            {"id": 12, "kind": "keep", "tier": null},
+            {"id": 30, "kind": "trade", "tier": "S"},
+        ])),
+        "sorted by unit id, a trade mark with its tier"
+    );
+    let empty = serde_json::from_str::<serde_json::Value>(&live_json(&live_info(5, &blocks, &[], &[], &[])))?;
+    assert_eq!(empty.get("drops"), Some(&serde_json::json!([])));
+    Ok(())
+}
+
+#[test]
 fn unknown_classes_slots_and_qualities_are_shown_not_dropped() -> Result<()> {
     let blocks = crate::render::TextBlocks::default();
     let json =

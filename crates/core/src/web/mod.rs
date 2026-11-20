@@ -89,6 +89,9 @@ pub struct LiveInfo<'a> {
     /// Base strength and dexterity ([`crate::game::Player::strength`]); `None` if unread.
     pub strength: Option<u32>,
     pub dexterity: Option<u32>,
+    /// The marked ground drops by unit id ([`crate::guidance::Guidance::marks`]): the `drops`
+    /// section the page's drop sounds key on.
+    pub marks: &'a crate::guidance::Marks,
     /// Unix seconds of the tick that produced this data.
     pub updated_at: u64,
 }
@@ -127,13 +130,15 @@ pub struct Panels<'a> {
 /// part:
 /// `{ "live": true, "updated_at": <unix secs>, "player": {"name", "class", "level",
 /// "difficulty"}, "area": …, "guide": […], "equipped": […], "stash_pages": […],
-/// "stash_materials": {…}, "stash_owned": […], "skills": {…} | null, "shop": {…} | null }`,
+/// "stash_materials": {…}, "stash_owned": […], "skills": {…} | null, "shop": {…} | null,
+/// "drops": […] }`,
 /// where each line is `{ "text": …, "colour": "#rrggbb" }` (the overlay line's colour as hex;
 /// the guide's per-span colours are flattened to the base colour). The shared stash comes as
 /// `stash_pages` (the normal tabs in the game's UI order, [`stash::stash_pages`]) and
 /// `stash_materials` (the gems/runes/materials tab's stacks, [`stash::stash_materials`]). The
 /// `skills` section is the class's three skill trees ([`skills::skills_json`]), `shop` the open
-/// trade window ([`vendor::shop_json`]). The playstyle's sections are listed in
+/// trade window ([`vendor::shop_json`]), `drops` the marked ground drops ([`drops_json`]). The
+/// playstyle's sections are listed in
 /// `d2r_playstyle_config::web`.
 #[must_use]
 pub fn live_json(info: &LiveInfo, panels: Panels) -> String {
@@ -158,6 +163,7 @@ pub fn live_json(info: &LiveInfo, panels: Panels) -> String {
         "stash_owned": info.stash_owned,
         "skills": skills::skills_json(info.class, info.char_level, info.skills, panels.skill_plan),
         "shop": vendor::shop_json(info, &panels.shop),
+        "drops": drops_json(info.marks),
     });
     if let Some(obj) = json.as_object_mut() {
         for (key, value) in panels.sections {
@@ -165,6 +171,25 @@ pub fn live_json(info: &LiveInfo, panels: Panels) -> String {
         }
     }
     json.to_string()
+}
+
+/// The marked ground drops as `[{ "id", "kind": "keep" | "farm" | "trade", "tier": "S" | "A" |
+/// "B" | null }]`, by unit id (the marks are a hash map: sorted, so an unchanged frame gives the
+/// same JSON). The page sounds once per new id of a farm mark or an S / A trade mark (user
+/// request, 2026-11-20).
+fn drops_json(marks: &crate::guidance::Marks) -> Vec<serde_json::Value> {
+    let mut drops: Vec<_> = marks.iter().collect();
+    drops.sort_unstable_by_key(|(id, _)| **id);
+    drops
+        .into_iter()
+        .map(|(id, mark)| {
+            serde_json::json!({
+                "id": id,
+                "kind": mark.kind,
+                "tier": mark.trade.map(|(tier, _)| tier),
+            })
+        })
+        .collect()
 }
 
 /// `equipped` lines as `{ "text", "colour" }` objects in the block's colour.

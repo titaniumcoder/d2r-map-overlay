@@ -217,6 +217,7 @@ fn publish_dashboard<'a, P: Playstyle>(
         shop: snap.shop.as_ref(),
         strength: snap.player.strength,
         dexterity: snap.player.dexterity,
+        marks: &evaluation.guidance.marks,
         updated_at: now_secs(),
     };
     web::publish_live(web::live_json(&info, playstyle.panels(evaluation, &info)));

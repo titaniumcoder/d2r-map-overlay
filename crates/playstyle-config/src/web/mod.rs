@@ -85,8 +85,11 @@ pub fn panels<'a>(info: &PanelInfo<'a>) -> Panels<'a> {
 }
 
 /// The guide stage (`live_json`'s `stage` section): `{ "slug", "name", "class_default",
-/// "next": { "slug", "name", "level", "auto", "note", "requires": [{ "label", "count",
+/// "next": { "slug", "name", "level", "auto", "note", "ready", "requires": [{ "label", "count",
 /// "have", "met", "any": [{ "name", "owned" }] }] } | null }`, `null` without a build.
+/// `ready`: every `requires` group is met (the level is not part of it; with `auto` the stage
+/// switches by itself once `level` is reached too). The page sounds when it turns true (user
+/// request, 2026-11-20: "ready to switch to Fury").
 /// `requires` lists the current stage's `switch_requires` groups ([`crate::config::SwitchGroup`]):
 /// `have` copies of the group's items (`copies` per item, [`d2r_core::stash::Holdings::count`]),
 /// met at `count`; `owned` = at least one copy of that item.
@@ -101,6 +104,7 @@ pub fn stage_json(stage: Option<&Stage>, copies: &dyn Fn(&str) -> u32) -> serde_
             "level": stage.build.switch_level,
             "auto": stage.build.auto_switch,
             "note": stage.build.switch_note,
+            "ready": stage.build.switch_requires.iter().all(|group| group.met(copies)),
             "requires": stage
                 .build
                 .switch_requires

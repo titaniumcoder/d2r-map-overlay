@@ -11,7 +11,7 @@ use super::recipes::{Input, runeword_slots, socket_count};
 use super::*;
 use crate::config;
 use d2r_core::build::Damage;
-use d2r_core::web::fixtures::{EMPTY_SKILLS, lines_of, stash_item, test_stash};
+use d2r_core::web::fixtures::{EMPTY_MARKS, EMPTY_SKILLS, lines_of, stash_item, test_stash};
 use d2r_core::web::{GearInfo, LiveInfo};
 
 /// The core fixture ([`d2r_core::web::fixtures::live_info`]) without a build, stage or farm list.
@@ -653,6 +653,7 @@ fn gear_grid<'a>(
             shop: None,
             strength: None,
             dexterity: None,
+            marks: &EMPTY_MARKS,
             updated_at: 1_700_000_000,
         },
         bis: Some(&bis),
@@ -1607,6 +1608,7 @@ fn score_profile_takes_the_weapon_kind_from_gear_or_build() {
                 shop: None,
                 strength: None,
                 dexterity: None,
+                marks: &EMPTY_MARKS,
                 updated_at: 1_700_000_000,
             },
             bis: Some(&bis),
@@ -1761,6 +1763,7 @@ fn stage_json_shows_current_and_next() {
             "slug": "leveling", "name": "Leveling", "class_default": true,
             "next": {
                 "slug": "tornado", "name": "Tornado", "level": 38, "auto": false, "note": "you have Spirit",
+                "ready": false,
                 "requires": [
                     {
                         "label": "Cannot Be Frozen", "count": 1, "have": 1, "met": true,
@@ -1777,6 +1780,16 @@ fn stage_json_shows_current_and_next() {
                 ],
             },
         })
+    );
+    // Every group met: ready to switch (the level doesn't count).
+    let owns_all = |item: &str| match item {
+        "Raven Frost" | "Enigma" => 1,
+        "Lawbringer" => 2,
+        _ => 0,
+    };
+    assert_eq!(
+        stage_json(Some(&stage), &owns_all).pointer("/next/ready"),
+        Some(&serde_json::json!(true))
     );
     let last = config::Build {
         next: None,

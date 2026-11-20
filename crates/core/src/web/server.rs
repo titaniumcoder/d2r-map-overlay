@@ -746,14 +746,15 @@ mod tests {
     /// The served pages, headers included, byte for byte: the snapshot taken from the
     /// single-file pages before they moved to `assets/` (refactor step 6). A deliberate page
     /// change updates these numbers (the failure message prints the new ones). Step 8 added the
-    /// farm panel's "worth farming" line.
+    /// farm panel's "worth farming" line; the dashboard sounds (2026-11-20) the ▾ sound picker
+    /// and the sound detection.
     #[test]
     fn served_pages_match_their_snapshot() {
         let dashboard = html_page("/");
         let config = html_page("/config");
         assert_eq!(
             (dashboard.len(), format!("{:#018x}", fnv1a(dashboard.as_bytes()))),
-            (43_682, "0x3025f34bca92d567".to_owned()),
+            (50_339, "0x159ec8e18988c2f3".to_owned()),
             "dashboard page"
         );
         assert_eq!(
