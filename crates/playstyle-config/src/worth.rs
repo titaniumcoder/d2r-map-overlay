@@ -12,6 +12,9 @@
 //!   Mephisto counts from Lem up). The Countess herself counts every missing rune she drops, so
 //!   she stays worth it while runes are missing. Without Countess data for the difficulty
 //!   (none today), every dropping rune counts, as before the rule.
+//! - The Countess's runes split in two (user, 2026-11-20, [`countess_runes`]): reliable ones
+//!   from her own rune TC (`Runes 4` / `8` / `12`: up to Ral / Io / Ist), each with its "1 in N"
+//!   per kill ([`d2r_core::drops_data::COUNTESS_RUNES`]), and rare ones only her item TC reaches.
 //! - A rolled entry (an amulet with Teleport, `kind = "rolled"`) counts for no boss: any boss
 //!   dropping amulets could drop one, so it would make every boss worth it (simple choice,
 //!   2026-11-20).
@@ -69,7 +72,7 @@ pub fn worth(
     };
     let drops_code = |code: &str| drops.binary_search(&code).is_ok();
     // Runes ranked at or below this one are left to the Countess (`None`: all count).
-    let rune_floor = if same_name(boss, COUNTESS) {
+    let rune_floor = if is_countess(boss) {
         None
     } else {
         countess_top_rune(difficulty)
@@ -154,7 +157,92 @@ fn missing_runes(name: &str, to_build: u32, materials: &[(String, u32)]) -> Vec<
 }
 
 /// The boss whose rune drops set the floor for every other boss's runes.
-const COUNTESS: &str = "The Countess";
+pub const COUNTESS: &str = "The Countess";
+
+/// Whether `boss` is the Countess.
+#[must_use]
+pub fn is_countess(boss: &str) -> bool {
+    same_name(boss, COUNTESS)
+}
+
+/// One rune the Countess is worth farming for ([`countess_runes`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CountessRune {
+    pub rune: &'static str,
+    /// Percent chance of at least one per kill from her rune TC; `None`: only her item TC
+    /// drops it (rare).
+    pub chance: Option<f64>,
+    /// The farm entries needing it, in farm-list order.
+    pub entries: Vec<String>,
+}
+
+impl CountessRune {
+    /// Kills per drop, rounded ("1 in 43"); `None` for a rare rune.
+    #[must_use]
+    pub fn one_in(&self) -> Option<f64> {
+        self.chance.map(|c| (100.0 / c).round())
+    }
+}
+
+/// The Countess's per-kill chance in percent of rune `name` from her own rune TC in
+/// `difficulty`; `None` when that TC doesn't reach it.
+#[must_use]
+pub fn countess_rune_chance(name: &str, difficulty: u8) -> Option<f64> {
+    let code = rune_code(name)?;
+    let runes = d2r_core::drops_data::COUNTESS_RUNES.get(usize::from(difficulty))?;
+    runes.iter().find(|(c, _)| *c == code).map(|&(_, chance)| chance)
+}
+
+/// The runes of the Countess's `worth` items ([`worth`] for her in `difficulty`), each once
+/// with the entries needing it: the reliable ones (her rune TC) first, then the rare ones,
+/// each part by rune rank.
+#[must_use]
+pub fn countess_runes(difficulty: u8, worth: &[(String, Why)]) -> Vec<CountessRune> {
+    let mut out: Vec<CountessRune> = Vec::new();
+    for (name, why) in worth {
+        let Why::Runes(runes) = why else { continue };
+        for &rune in runes {
+            match out.iter_mut().find(|r| r.rune == rune) {
+                Some(r) => r.entries.push(name.clone()),
+                None => out.push(CountessRune {
+                    rune,
+                    chance: countess_rune_chance(rune, difficulty),
+                    entries: vec![name.clone()],
+                }),
+            }
+        }
+    }
+    out.sort_by_key(|r| (r.chance.is_none(), rune_rank(r.rune)));
+    out
+}
+
+/// The Countess's worth line as parts, empty ones left out:
+/// `"reliable: Ko (1 in 43: Heart of the Oak, Lawbringer), Lem (1 in 82: Wealth)"`,
+/// `"rare: Vex (Heart of the Oak)"` and `"items: Bloodfist"` (uniques and sets that drop).
+#[must_use]
+pub fn countess_parts(difficulty: u8, worth: &[(String, Why)]) -> Vec<String> {
+    let runes = countess_runes(difficulty, worth);
+    let shown = |r: &CountessRune| {
+        let odds = r.one_in().map_or_else(String::new, |n| format!("1 in {n}: "));
+        format!("{} ({odds}{})", r.rune, r.entries.join(", "))
+    };
+    let reliable: Vec<String> = runes.iter().filter(|r| r.chance.is_some()).map(shown).collect();
+    let rare: Vec<String> = runes.iter().filter(|r| r.chance.is_none()).map(shown).collect();
+    let items: Vec<&str> = worth
+        .iter()
+        .filter(|(_, why)| *why == Why::Drops)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    [
+        ("reliable", reliable.join(", ")),
+        ("rare", rare.join(", ")),
+        ("items", items.join(", ")),
+    ]
+    .into_iter()
+    .filter(|(_, list)| !list.is_empty())
+    .map(|(label, list)| format!("{label}: {list}"))
+    .collect()
+}
 
 /// The rank (0 = El) of the Countess's highest droppable rune in `difficulty`; `None` without
 /// her drop data there (then every rune counts).
@@ -192,6 +280,7 @@ mod tests {
         merc_worn: &[],
     };
     const NIGHTMARE: u8 = 1;
+    const HELL: u8 = 2;
 
     /// The shipped farm list (`playstyles/summoner-fury/farm.toml`).
     fn shipped_farm() -> Result<Vec<FarmGroup>> {
@@ -400,6 +489,78 @@ mod tests {
         // NM Andariel drops no rune above the Countess's Ko; Mephisto keeps only Lem and up.
         assert!(!andariel.iter().any(|w| w.contains('(')), "{andariel:?}");
         assert!(mephisto.iter().any(|w| w == "Heart of the Oak (Pul)"));
+        Ok(())
+    }
+
+    #[test]
+    fn countess_rune_tc_tops_out_at_ral_io_ist() {
+        let top = |d: u8| {
+            RUNE_NAMES
+                .iter()
+                .copied()
+                .rfind(|r| countess_rune_chance(r, d).is_some())
+        };
+        assert_eq!([0, 1, 2].map(top), [Some("Ral"), Some("Io"), Some("Ist")]);
+        assert_eq!(countess_rune_chance("El", 3), None, "no fourth difficulty");
+        // Every rune of her rune TC is one her full drop list has.
+        for d in 0..3 {
+            for r in RUNE_NAMES.iter().filter(|r| countess_rune_chance(r, d).is_some()) {
+                let (_, drops) = boss_drops(COUNTESS, d).unwrap_or_default();
+                assert!(
+                    rune_code(r).is_some_and(|c| drops.contains(&c.as_str())),
+                    "{r} in {d}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hell_countess_ko_is_about_one_in_43() {
+        let ko = CountessRune {
+            rune: "Ko",
+            chance: countess_rune_chance("Ko", HELL),
+            entries: Vec::new(),
+        };
+        assert_eq!(ko.one_in().map(|n| n.to_string()), Some("43".to_owned()));
+        let ist = countess_rune_chance("Ist", HELL).unwrap_or_default();
+        assert!((0.4..0.43).contains(&ist), "Ist {ist}%");
+    }
+
+    #[test]
+    fn hell_countess_splits_reliable_and_rare_runes() -> Result<()> {
+        // Heart of the Oak is Ko Vex Pul Thul; with Pul and Thul owned, Ko and Vex are missing.
+        let farm = farm_of(
+            "{ name = \"Heart of the Oak\", kind = \"runeword\" },\n{ name = \"Lawbringer\", kind = \"runeword\" },",
+        )?;
+        let owned: Vec<(String, u32)> = ["Pul", "Thul", "Amn", "Lem"]
+            .iter()
+            .map(|r| (format!("{r} Rune"), 1))
+            .collect();
+        let items = worth(COUNTESS, HELL, &farm, &NO_HOLDINGS, &owned);
+        // Lawbringer is Amn Lem Ko: only Ko missing.
+        let runes = countess_runes(HELL, &items);
+        let shown: Vec<(&str, bool, Vec<String>)> = runes
+            .iter()
+            .map(|r| (r.rune, r.chance.is_some(), r.entries.clone()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (
+                    "Ko",
+                    true,
+                    vec!["Heart of the Oak".to_owned(), "Lawbringer".to_owned()]
+                ),
+                ("Vex", false, vec!["Heart of the Oak".to_owned()]),
+            ]
+        );
+        assert_eq!(
+            countess_parts(HELL, &items),
+            [
+                "reliable: Ko (1 in 43: Heart of the Oak, Lawbringer)",
+                "rare: Vex (Heart of the Oak)"
+            ]
+        );
         Ok(())
     }
 }

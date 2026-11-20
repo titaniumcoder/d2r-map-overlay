@@ -2135,6 +2135,12 @@ fn farm_names_the_bosses_worth_farming() -> Result<()> {
         Some(&serde_json::json!({
             "boss": "The Countess",
             "level": 11,
+            // Both from her rune TC (Runes 4): 1 - (1 - p)^3 per kill.
+            "reliable": [
+                { "rune": "El", "one_in": 9.0, "for": ["Fortitude"] },
+                { "rune": "Nef", "one_in": 6.0, "for": ["Smoke"] },
+            ],
+            "rare": [],
             "items": [
                 { "name": "Fortitude", "runes": ["El"] },
                 { "name": "Smoke", "runes": ["Nef"] },

@@ -161,7 +161,10 @@ pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
 /// The bosses worth farming in the current difficulty ([`crate::worth`]):
 /// `{ "difficulty": "Nightmare", "bosses": [{ "boss", "level", "items": [{ "name", "runes" }] }] }`,
 /// only bosses with at least one item, in the drop data's order; `runes` are a runeword's
-/// missing runes that drop (empty for a unique / set). `null` with the difficulty unknown.
+/// missing runes that drop (empty for a unique / set). The Countess adds her runes split
+/// ([`crate::worth::countess_runes`]): `"reliable": [{ "rune", "one_in", "for" }]` from her
+/// rune TC and `"rare": [{ "rune", "one_in": null, "for" }]` only her item TC drops. `null`
+/// with the difficulty unknown.
 #[must_use]
 pub fn worth_json(info: &PanelInfo, materials: &[(String, u32)]) -> serde_json::Value {
     let Some(difficulty) = info.live.difficulty else {
@@ -173,6 +176,18 @@ pub fn worth_json(info: &PanelInfo, materials: &[(String, u32)]) -> serde_json::
             let (level, _) = crate::worth::boss_drops(boss, difficulty)?;
             let items = crate::worth::worth(boss, difficulty, info.farm, &holdings, materials);
             (!items.is_empty()).then(|| {
+                // The Countess's runes split before `items` is consumed.
+                let split = crate::worth::is_countess(boss).then(|| {
+                    let runes = crate::worth::countess_runes(difficulty, &items);
+                    let part = |reliable: bool| -> Vec<serde_json::Value> {
+                        runes
+                            .iter()
+                            .filter(|r| r.chance.is_some() == reliable)
+                            .map(|r| serde_json::json!({ "rune": r.rune, "one_in": r.one_in(), "for": r.entries }))
+                            .collect()
+                    };
+                    (part(true), part(false))
+                });
                 let items: Vec<serde_json::Value> = items
                     .into_iter()
                     .map(|(name, why)| {
@@ -183,7 +198,12 @@ pub fn worth_json(info: &PanelInfo, materials: &[(String, u32)]) -> serde_json::
                         serde_json::json!({ "name": name, "runes": runes })
                     })
                     .collect();
-                serde_json::json!({ "boss": boss, "level": level, "items": items })
+                let mut out = serde_json::json!({ "boss": boss, "level": level, "items": items });
+                if let (Some((reliable, rare)), Some(map)) = (split, out.as_object_mut()) {
+                    map.insert("reliable".to_owned(), reliable.into());
+                    map.insert("rare".to_owned(), rare.into());
+                }
+                out
             })
         })
         .collect();

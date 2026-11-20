@@ -213,3 +213,16 @@ pub const BOSS_DROPS: &[BossDrops] = &[
     // Act 1 (N) Super Bx / Act 5 (N) Super Cx / Act 5 (H) Super Cx
     ("Thresh Socket", [41, 63, 84], [D33, D36, D37]),
 ];
+
+/// The Countess's own rune TC per difficulty [Normal, Nightmare, Hell]: each rune code it
+/// reaches, by rank, with the chance in percent of at least one per kill (solo). Her higher
+/// runes come only through her item TC (in [`BOSS_DROPS`]).
+#[rustfmt::skip] // generated; one line per difficulty
+pub const COUNTESS_RUNES: [&[(&str, f64)]; 3] = [
+    // Countess Rune
+    &[("r01", 10.8334), ("r02", 7.3141), ("r03", 25.5707), ("r04", 17.6025), ("r05", 34.4331), ("r06", 24.0201), ("r07", 46.3623), ("r08", 33.0078)],
+    // Countess Rune (N)
+    &[("r01", 5.4162), ("r02", 3.6331), ("r03", 13.1682), ("r04", 8.9161), ("r05", 18.0934), ("r06", 12.3286), ("r07", 25.1264), ("r08", 17.2858), ("r09", 25.1264), ("r10", 17.2858), ("r11", 19.8371), ("r12", 13.5480), ("r13", 12.2520), ("r14", 8.2863), ("r15", 6.9383), ("r16", 4.6624)],
+    // Countess Rune (H)
+    &[("r01", 5.1426), ("r02", 3.4485), ("r03", 12.5210), ("r04", 8.4711), ("r05", 17.2211), ("r06", 11.7208), ("r07", 23.9507), ("r08", 16.4497), ("r09", 23.9507), ("r10", 16.4497), ("r11", 18.8875), ("r12", 12.8832), ("r13", 11.6478), ("r14", 7.8718), ("r15", 6.5896), ("r16", 4.4263), ("r17", 3.5152), ("r18", 2.3527), ("r19", 1.8169), ("r20", 1.2137), ("r21", 0.9238), ("r22", 0.6165), ("r23", 0.6289), ("r24", 0.4196)],
+];

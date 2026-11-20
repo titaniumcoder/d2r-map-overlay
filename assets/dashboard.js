@@ -365,11 +365,23 @@ function recipes(list) {
 function farm(f) {
   const groups = (f && f.groups) || [];
   $("farmpanel").hidden = !groups.length;
-  // "Nightmare worth farming: Mephisto → Bloodfist, Heart of the Oak (Ko); Andariel → …"
+  // "Nightmare worth farming: Mephisto → Bloodfist, Heart of the Oak (Ko); Andariel → …", the
+  // Countess on her own line with her runes split: "The Countess (82) — reliable: Ko (1 in 43:
+  // Heart of the Oak, Lawbringer), Lem (1 in 82: …); rare: Vex (…); items: …".
   const w = f && f.worth, bosses = (w && w.bosses) || [];
-  $("worth").innerHTML = bosses.length
-    ? `${esc(w.difficulty || "")} worth farming: ` + bosses.map(b => `<b>${esc(b.boss)}</b> → `
-      + b.items.map(i => esc(i.name) + (i.runes.length ? ` (${esc(i.runes.join(" "))})` : "")).join(", ")).join("; ")
+  const others = bosses.filter(b => !b.reliable), countess = bosses.filter(b => b.reliable);
+  const rune = r => esc(r.rune) + ` (${r.one_in != null ? `1 in ${esc(r.one_in)}: ` : ""}${esc((r.for || []).join(", "))})`;
+  const lines = [];
+  if (others.length) lines.push(others.map(b => `<b>${esc(b.boss)}</b> → `
+    + b.items.map(i => esc(i.name) + (i.runes.length ? ` (${esc(i.runes.join(" "))})` : "")).join(", ")).join("; "));
+  for (const b of countess) {
+    const parts = [["reliable", b.reliable.map(rune)], ["rare", (b.rare || []).map(rune)],
+      ["items", b.items.filter(i => !i.runes.length).map(i => esc(i.name))]]
+      .filter(([, list]) => list.length).map(([label, list]) => `${label}: ${list.join(", ")}`);
+    lines.push(`<b>${esc(b.boss)}</b> (${esc(b.level)}) — ${parts.join("; ")}`);
+  }
+  $("worth").innerHTML = lines.length
+    ? `${esc(w.difficulty || "")} worth farming: ` + lines.join("<br>")
     : "";
   $("farm").innerHTML = groups.map(g => {
     const items = g.items || [];

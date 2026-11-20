@@ -21,6 +21,11 @@ reaches, flattened offline. Rules (d2data / the game's TC logic):
 - Monster level = item level of the drop: quest bosses (monstats `boss = 1`) have their fixed
   monstats `Level` / `Level(N)` / `Level(H)`; a superunique has its monstats `Level` + 3 in
   Normal and its area's `MonLvlEx(N)` / `MonLvlEx(H)` + 3 in Nightmare / Hell.
+The Countess also has a dedicated rune TC beside her item TC (`Countess` = `Countess Item` +
+`Countess Rune`, each `(N)` / `(H)`): Picks 3 of `Runes 4` / `Runes 8` / `Runes 12` against
+NoDrop 5. Those are her reliable runes; `COUNTESS_RUNES` lists, per difficulty, each rune it
+reaches with the chance of at least one per kill, 1 - (1 - p)^picks, p the chained per-pick
+chance (solo: NoDrop as listed, no /players). Higher runes come only through her item TC.
 Unique / set items are matched against these codes by the playstyle (`playstyle::worth`)
 with the existing name / code / qlvl tables (item_names_data.rs, item_levels_data.rs).
 """
@@ -146,6 +151,35 @@ for shown, source, key in BOSSES:
         sets.append(sorted(flatten(tc)))
     rows.append((shown, lvls, sets, roots))
 
+
+
+def pick_chances(name):
+    """Per-pick chance of each item code under TC `name`, NoDrop included at every level."""
+    row = tcs[name]
+    entries = [(row[f"Item{i}"], row[f"Prob{i}"]) for i in range(1, 11) if row.get(f"Item{i}") and isinstance(row.get(f"Prob{i}"), int) and row[f"Prob{i}"] > 0]
+    total = sum(p for _, p in entries) + int(row.get("NoDrop") or 0)
+    out = {}
+    for item, prob in entries:
+        if item in tcs:
+            assert tcs[item].get("Picks") == 1, f"{item}: a chained TC must pick once"
+            for code, p in pick_chances(item).items():
+                out[code] = out.get(code, 0) + p * prob / total
+        else:
+            out[item] = out.get(item, 0) + prob / total
+    return out
+
+
+countess_runes = []
+for sfx in SUFFIX:
+    root = tcs[supers["The Countess"][f"TC{sfx}"]]
+    rune_tcs = [root[f"Item{i}"] for i in range(1, 11) if "Rune" in (root.get(f"Item{i}") or "")]
+    assert len(rune_tcs) == 1, rune_tcs
+    picks = tcs[rune_tcs[0]]["Picks"]
+    assert picks > 0, rune_tcs
+    chances = pick_chances(rune_tcs[0])
+    assert all(re.fullmatch(r"r\d\d", c) for c in chances), chances
+    countess_runes.append((rune_tcs[0], [(c, 100 * (1 - (1 - chances[c]) ** picks)) for c in sorted(chances)]))
+
 assert not unknown, f"unresolved TC entries: {sorted(unknown)}"
 
 lists = []
@@ -178,4 +212,14 @@ for shown, lvls, sets, roots in rows:
     ids = [f"D{lists.index(s)}" for s in sets]
     print(f"    // {' / '.join(roots)}")
     print(f"    ({rust_str(shown)}, [{', '.join(map(str, lvls))}], [{', '.join(ids)}]),")
+print("];")
+print()
+print("/// The Countess's own rune TC per difficulty [Normal, Nightmare, Hell]: each rune code it")
+print("/// reaches, by rank, with the chance in percent of at least one per kill (solo). Her higher")
+print("/// runes come only through her item TC (in [`BOSS_DROPS`]).")
+print("#[rustfmt::skip] // generated; one line per difficulty")
+print("pub const COUNTESS_RUNES: [&[(&str, f64)]; 3] = [")
+for tc, runes in countess_runes:
+    print(f"    // {tc}")
+    print(f"    &[{', '.join(f'({rust_str(c)}, {p:.4f})' for c, p in runes)}],")
 print("];")

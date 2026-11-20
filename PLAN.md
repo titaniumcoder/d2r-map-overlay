@@ -985,6 +985,23 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   Stealth (Tal Eth), Bloodfist, …; Mephisto → …". Every boss worth it is listed; picking which
   to run is the route's job (step 9: Mephisto / Andariel in NM until 57, Andariel "items only"
   from 55, then Diablo, the Ancients, Shenk / Eldritch). Page snapshot numbers updated.
+- [x] 8b. The Countess's reliable vs rare runes (user, 2026-11-20: "show me which runes I have
+  to farm that she drops reliable"). Her TC is her item TC + her own rune TC (`Countess Rune`
+  / `(N)` / `(H)`: Picks 3, NoDrop 5, one item `Runes 4` / `Runes 8` / `Runes 12`, prob 15):
+  the reliable runes are El..Ral / El..Io / El..Ist; higher ones (NM Ko, Hell Gul..Lo) come only
+  rarely through her item TC. **Data**: `gen_treasure.py` (output first checked byte-identical
+  to the committed file) adds `COUNTESS_RUNES` to `drops_data.rs`: per difficulty, each rune
+  code of her rune TC with the per-kill chance in percent, 1 - (1 - p)^3 with p the chained
+  per-pick chance (solo, no /players). Hell: Ko 2.35 % (1 in 43), Lem 1.21 % (1 in 82), Pul
+  0.92 % (1 in 108), Um 0.62 % (1 in 162), Ist 0.42 % (1 in 238). **Worth** (`worth.rs`): the
+  rules unchanged (she counts every rune she drops); `countess_runes(difficulty, worth)` splits
+  her worth items' runes, each once with the entries needing it, reliable (with "1 in N") then
+  rare, by rank; `countess_parts` = the text form. **Dashboard**: her farm JSON boss adds
+  `reliable` / `rare` (`{rune, one_in, for}`); the worth line shows her on her own line:
+  "The Countess (82) — reliable: Ko (1 in 43: Heart of the Oak, Lawbringer), …; rare: Vex
+  (Heart of the Oak); items: …". **Route**: her boss line (Next panel) uses the same parts
+  ("The Countess (82) — reliable: …; rare: …"); `normal-tristram` and `nm-countess` now name her
+  as a `[[step.boss]]` too, so Normal and Nightmare show the list while she is worth it.
 - [x] 9. The route engine and a "Next" panel on the dashboard. **Data**:
   `playstyles/summoner-fury/route.toml` (user override `~/.config/d2r-map-overlay/playstyle/route.toml`
   wins whole; no old place; hot-reloaded, a broken file keeps the current route). Format (the

@@ -47,6 +47,10 @@ title = "Tristram or the Countess until 15"
 when = { difficulty = "normal", level_below = 15 }
 farm = ["Tristram", "Forgotten Tower (the Countess)"]
 
+# Shown while she drops a missing rune: her reliable runes (rune TC) with "1 in N", then rare.
+[[step.boss]]
+name = "The Countess"
+
 [[step]]
 id = "normal-canyon"
 title = "Quests to open the Tombs"
@@ -97,7 +101,10 @@ id = "nm-countess"
 title = "The Countess until 45"
 when = { difficulty = "nightmare", level_below = 45 }
 farm = ["Forgotten Tower (the Countess)"]
-note = "Runes up to Ko."
+note = "Her rune roll goes up to Io (Ko only rarely, through her item drop)."
+
+[[step.boss]]
+name = "The Countess"
 
 [[step]]
 id = "nm-rush-mephisto"

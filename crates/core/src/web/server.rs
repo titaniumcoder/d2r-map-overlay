@@ -820,14 +820,15 @@ mod tests {
     /// single-file pages before they moved to `assets/` (refactor step 6). A deliberate page
     /// change updates these numbers (the failure message prints the new ones). Step 8 added the
     /// farm panel's "worth farming" line; the dashboard sounds (2026-11-20) the ▾ sound picker
-    /// and the sound detection; the config page's "Loot filter" section (2026-11-20).
+    /// and the sound detection; the config page's "Loot filter" section (2026-11-20); the
+    /// Countess's reliable / rare runes on the worth line (2026-11-20).
     #[test]
     fn served_pages_match_their_snapshot() {
         let dashboard = html_page("/");
         let config = html_page("/config");
         assert_eq!(
             (dashboard.len(), format!("{:#018x}", fnv1a(dashboard.as_bytes()))),
-            (50_339, "0x159ec8e18988c2f3".to_owned()),
+            (51_198, "0xa899dd0e21c373b6".to_owned()),
             "dashboard page"
         );
         assert_eq!(
