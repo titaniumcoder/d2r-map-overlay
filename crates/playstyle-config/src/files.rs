@@ -532,7 +532,7 @@ mod tests {
             ["fury druid", "summoner druid"]
         );
         assert_eq!(settings.farm.len(), 2);
-        assert_eq!(settings.route.step.len(), 16);
+        assert_eq!(settings.route.step.len(), 17);
         assert_eq!(
             settings.class_default(5).map(|(slug, _)| slug),
             Some("summoner druid")

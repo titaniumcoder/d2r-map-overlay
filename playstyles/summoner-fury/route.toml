@@ -139,13 +139,23 @@ quests = ["Rite of Passage"]
 
 [[step]]
 id = "nm-baal"
-title = "Baal waves, Shenk and Eldritch for XP"
-when = { difficulty = "nightmare", options = ["nm_baal_waves"] }
+title = "Baal runs, Shenk and Eldritch until 65"
+when = { difficulty = "nightmare", level_below = 65, options = ["nm_baal_waves"] }
 farm = [
   "Throne of Destruction (Baal waves)", "Bloody Foothills (Shenk)",
   "Frigid Highlands (Eldritch)",
 ]
-note = "Baal himself isn't worth farming; the waves are good XP. Shenk (61) and Eldritch (62) give full XP from 57. Kill Baal (Eve of Destruction) to open Hell."
+note = "The waves are full XP (monster level 65-66). Baal (75) has the widest Nightmare drop list (the only one with Highlord's Wrath and Vex); Shenk (61) and Eldritch (62) give full XP from 57. At 65 on to Hell (user, 2026-11-20)."
+
+[[step.boss]]
+name = "Baal"
+
+[[step]]
+id = "nm-to-hell"
+title = "On to Hell"
+when = { difficulty = "nightmare", level_min = 65 }
+quests = ["Eve of Destruction"]
+note = "Level 65: kill Baal (Eve of Destruction) if not done yet, then start Hell games: the Countess first."
 
 # --- Hell -----------------------------------------------------------------------------------
 

@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn the_shipped_route_parses_without_warnings() -> Result<()> {
         let route = shipped()?;
-        assert_eq!(route.step.len(), 16);
+        assert_eq!(route.step.len(), 17);
         let (_, warnings) = parse_route(
             "[quest_sets]\nx = [\"Nope\"]\n[[step]]\nid = \"a\"\nquests = \"y\"\nwhen = { options = [\"z\"] }\n\
              [[step.boss]]\nname = \"Nobody\"\n[[step]]\nid = \"a\"",
@@ -595,6 +595,11 @@ mod tests {
         );
         let a = advise(&route, 60, NIGHTMARE, &ancients, &both)?;
         assert_eq!(a.id, "nm-baal");
+        assert_eq!(a.then.as_deref(), Some("On to Hell"));
+        // From 65 (user, 2026-11-20): on to Hell, with Baal's quest listed while it's missing.
+        let a = advise(&route, 65, NIGHTMARE, &ancients, &both)?;
+        assert_eq!(a.id, "nm-to-hell");
+        assert_eq!(a.todo, ["Quests left: Eve of Destruction"]);
         assert_eq!(a.then.as_deref(), Some("Hell: the Countess"));
         Ok(())
     }
