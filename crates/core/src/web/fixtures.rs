@@ -80,6 +80,7 @@ pub fn live_info<'a>(
         blocks,
         equipped,
         equipped_items: &[],
+        owned_items: &[],
         owned: &[],
         runeword_copies: &[],
         merc_worn: &[],

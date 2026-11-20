@@ -1,7 +1,9 @@
 //! The farm list panel: the cross-character farm list (`farm.toml`) with the copies held and
 //! the runes still needed.
 
+use crate::config::FarmItem;
 use crate::worth::Why;
+use d2r_core::game::Place;
 use d2r_core::socket_bases::{MercAct, Wearer};
 use d2r_core::web::LiveInfo;
 
@@ -29,10 +31,47 @@ impl FarmStatus {
 }
 
 /// The copies of farm entry `item`: `(in the shared stash, carried by the played character
-/// outside it or worn by its mercenary)` ([`d2r_core::stash::Holdings::copies`]).
+/// outside it or worn by its mercenary)` ([`d2r_core::stash::Holdings::copies`]); a rolled
+/// entry's by its stats ([`rolled_copies`]).
 #[must_use]
-pub fn farm_copies(item: &crate::config::FarmItem, info: &PanelInfo) -> (u32, u32) {
-    info.live.holdings().copies(&item.name, Some(item.kind))
+pub fn farm_copies(item: &FarmItem, info: &PanelInfo) -> (u32, u32) {
+    item.kind.item_kind().map_or_else(
+        || rolled_copies(item, &info.live),
+        |kind| info.live.holdings().copies(&item.name, Some(kind)),
+    )
+}
+
+/// The copies of rolled entry `item` ([`FarmItem::rolled_match`]): `(in the shared stash, on
+/// the played character: worn, inventory, cube, personal stash)`. The mercenary's gear has no
+/// stats in the snapshot, so it never counts.
+#[must_use]
+pub fn rolled_copies(item: &FarmItem, live: &LiveInfo<'_>) -> (u32, u32) {
+    let stashed = live
+        .stash
+        .iter()
+        .flat_map(|tab| &tab.items)
+        .filter(|i| item.rolled_match(i.code.as_deref(), &i.stats))
+        .count();
+    let carried = live
+        .owned_items
+        .iter()
+        .filter(|(_, place)| *place != Place::Shared)
+        .map(|(i, _)| (i.code.as_deref(), &i.stats))
+        .chain(live.equipped_items.iter().map(|e| (e.code.as_deref(), &e.stats)))
+        .filter(|(code, stats)| item.rolled_match(*code, stats))
+        .count();
+    let clamp = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    (clamp(stashed), clamp(carried))
+}
+
+/// Whether farm entry `item` of the group for `target` leaves the panel: worn ([`farm_worn`]),
+/// or a rolled entry needing Teleport once Enigma is held (it gives Teleport; user,
+/// 2026-11-20: "very high for the summoner until he gets enigma"; held anywhere the copy
+/// counts see: [`crate::gear_score::teleport_wanted`]).
+#[must_use]
+pub fn farm_hidden(target: &str, item: &FarmItem, info: &PanelInfo) -> bool {
+    farm_worn(target, item, info)
+        || (item.wants_teleport() && !crate::gear_score::teleport_wanted(&info.live.holdings()))
 }
 
 /// The status of a farm entry wanting `count` copies with `stashed` in the shared stash and
@@ -49,10 +88,13 @@ pub const fn farm_status(count: u32, stashed: u32, carried: u32) -> FarmStatus {
 }
 
 /// The farm list (`live_json`'s `farm` section), `null` without one; entries the character
-/// wears for its own build are left out, and a group left empty with them ([`farm_worn`]):
+/// wears for its own build (and Teleport entries once Enigma is held) are left out, and a
+/// group left empty with them ([`farm_hidden`]):
 /// `{ "groups": [{ "for", "items": [{ "name", "kind", "count", "stashed", "carried",
-/// "status", "runes", "bases" }] }], "runes": [{ "rune", "code", "need", "have", "stash",
-/// "for" }], "worth": … }` (`worth`: [`worth_json`]).
+/// "status", "runes", "bases", "slot", "needs", "note" }] }], "runes": [{ "rune", "code",
+/// "need", "have", "stash", "for" }], "worth": … }` (`worth`: [`worth_json`]). `slot` is the
+/// entry's slot name or `null`, `needs` a rolled entry's stat names, `note` its free text or
+/// `null`.
 /// `status` is `"done"` / `"found"` / `"missing"` ([`farm_status`]). A runeword not done
 /// with copies still to build (`count` minus stashed and carried) lists its `runes` as
 /// `{ "rune", "need", "have", "status" }` (need = per copy × copies to build, have from
@@ -88,7 +130,7 @@ pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
             let items: Vec<serde_json::Value> = group
                 .items
                 .iter()
-                .filter(|item| !farm_worn(&group.target, item, info))
+                .filter(|item| !farm_hidden(&group.target, item, info))
                 .map(|item| farm_item_json(item, info, merc_act, &materials, &mut wanted))
                 .collect();
             // A group whose entries are all worn leaves the list.
@@ -158,7 +200,7 @@ pub fn worth_json(info: &PanelInfo, materials: &[(String, u32)]) -> serde_json::
 /// and it or its mercenary wears at least `count` copies (its equipped items plus
 /// [`LiveInfo::merc_worn`], which is empty with other players in the game: PLAN.md, "Merc gear
 /// caveat"; carried, cubed and stashed copies don't count).
-pub fn farm_worn(target: &str, item: &crate::config::FarmItem, info: &PanelInfo) -> bool {
+pub fn farm_worn(target: &str, item: &FarmItem, info: &PanelInfo) -> bool {
     let on_build = info
         .stage_chain
         .iter()
@@ -178,7 +220,7 @@ pub fn farm_worn(target: &str, item: &crate::config::FarmItem, info: &PanelInfo)
 /// `wanted` (rune → total need, runewords needing it). A mercenary entry's base hint is for
 /// the mercenary of `merc_act`.
 pub fn farm_item_json(
-    item: &crate::config::FarmItem,
+    item: &FarmItem,
     info: &PanelInfo,
     merc_act: MercAct,
     materials: &[(String, u32)],
@@ -238,6 +280,9 @@ pub fn farm_item_json(
         "status": status.name(),
         "runes": runes,
         "bases": word.map_or(&[][..], |w| w.bases),
+        "slot": item.slot.map(crate::config::FarmSlot::name),
+        "needs": item.needs.iter().map(|n| n.name()).collect::<Vec<_>>(),
+        "note": item.note,
         "base_hint": word.and_then(|w| {
             let wearer = if item.merc { Wearer::Merc(merc_act) } else { Wearer::Player(info.live.class) };
             base_hint(w, info, item.slot.map(crate::config::FarmSlot::body), wearer)

@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use d2r_core::bases_data::{self, Base};
 use d2r_core::item_stats::{ItemStat, stat};
 use d2r_core::skills_data;
+use d2r_core::stash::{Holdings, TabKind};
 
 /// Score weights: score points per unit of a stat (per +1 skill, per point of average
 /// damage, per % of resistance …). The one table to tune; [`MIN_GAIN`] is the bar.
@@ -70,6 +71,9 @@ pub struct Weights {
     pub defense: f64,
     pub magic_find: f64,
     pub replenish_life: f64,
+    /// Teleport (oskill or charges, [`grants_skill`]) while the character has no Enigma
+    /// ([`Profile::teleport`]); without that want it counts as any other skill.
+    pub teleport: f64,
 }
 
 /// The weights in use.
@@ -101,6 +105,7 @@ pub const WEIGHTS: Weights = Weights {
     defense: 0.1,
     magic_find: 0.2,
     replenish_life: 1.0,
+    teleport: 40.0,
 };
 
 /// The smallest score gain marked "better": 8 points = +4 average damage, +8 resistance,
@@ -124,6 +129,9 @@ pub struct Profile {
     pub weapon: Option<&'static str>,
     /// A caster: weapon damage, IAS, AR and leech don't count; mana, energy and FCR more.
     pub caster: bool,
+    /// Teleport on gear is wanted (the `teleport` weight of [`WEIGHTS`]): no Enigma held yet
+    /// ([`teleport_wanted`]; user, 2026-11-20).
+    pub teleport: bool,
 }
 
 impl Profile {
@@ -137,6 +145,40 @@ impl Profile {
                     && (u16::from(s.class) * 8 + u16::from(s.page)).checked_sub(1) == Some(param)
             })
     }
+}
+
+/// skills.txt row of Teleport ([`skills_data`]: the sorceress's, granted to any class as an
+/// oskill or as charges).
+pub const TELEPORT: u16 = 54;
+
+/// Whether `stats` give skill `skill` to any class: as an oskill (`+1 to Teleport`,
+/// [`stat::NONCLASS_SKILL`]) or as charges ([`stat::CHARGED_SKILL`], param = skill << 6 |
+/// level). A class-only `+skill` ([`stat::SINGLE_SKILL`]) doesn't: it works for its class only.
+#[must_use]
+pub fn grants_skill(stats: &[ItemStat], skill: u16) -> bool {
+    stats.iter().any(|s| match s.id {
+        stat::NONCLASS_SKILL => s.param == skill && s.value > 0,
+        stat::CHARGED_SKILL => s.param >> 6 == skill,
+        _ => false,
+    })
+}
+
+/// Whether Teleport on gear is still wanted (user, 2026-11-20: "very high for the summoner
+/// until he gets enigma. for the fury too"): the player has no Enigma of its own, i.e. none
+/// worn, carried, cubed or in the personal stash ([`Holdings::owned`]) and none on the own
+/// shared pages 1–2 (the stash plan's own side). An Enigma on the trade pages 3–4 is for
+/// trading and page 5 is ignored; the mercenary's doesn't give the player Teleport. Enigma
+/// gives Teleport itself.
+#[must_use]
+pub fn teleport_wanted(holdings: &Holdings<'_>) -> bool {
+    let enigma = |n: &str| d2r_core::names::same_name(n, "Enigma");
+    let on_own_pages = holdings
+        .stash
+        .iter()
+        .filter(|tab| matches!(tab.kind, TabKind::Page(1 | 2)))
+        .flat_map(|tab| &tab.items)
+        .any(|i| i.runeword && enigma(&i.name));
+    !on_own_pages && !holdings.owned.iter().any(|n| enigma(n))
 }
 
 /// The weapon kinds a caster holds (staves, wands, orbs).
@@ -191,6 +233,8 @@ enum Part {
     LifeLeech,
     ManaLeech,
     ReplenishLife,
+    /// Teleport from an oskill or charges, counted once ([`grants_skill`]).
+    Teleport,
 }
 
 impl Part {
@@ -204,7 +248,8 @@ impl Part {
             Self::Tab(t) if who.plans_tab(t) => w.tab_planned,
             Self::Tab(_) => w.tab_other,
             Self::Skill(s) if who.skills.contains(&s) => w.skill_planned,
-            Self::Skill(_) => w.skill_other,
+            Self::Teleport if who.teleport => w.teleport,
+            Self::Skill(_) | Self::Teleport => w.skill_other,
             Self::Damage => w.avg_damage * fighter,
             Self::ResFire | Self::ResCold | Self::ResLightning | Self::ResPoison => w.resist,
             Self::Life => w.life,
@@ -266,6 +311,8 @@ impl Part {
             Self::LifeLeech => format!("{n}% life leech"),
             Self::ManaLeech => format!("{n}% mana leech"),
             Self::ReplenishLife => format!("{n} replenish life"),
+            Self::Teleport if amount < 0.0 => "no Teleport".to_owned(),
+            Self::Teleport => "Teleport".to_owned(),
         }
     }
 }
@@ -354,6 +401,8 @@ fn parts(piece: Piece<'_>, who: &Profile) -> BTreeMap<Part, f64> {
             stat::ALL_SKILLS => add(Part::AllSkills, v),
             stat::CLASS_SKILLS if u32::from(s.param) == who.class => add(Part::ClassSkills, v),
             stat::SKILL_TAB if u32::from(s.param / 8) == who.class => add(Part::Tab(s.param), v),
+            // Teleport is its own part, added once below.
+            stat::NONCLASS_SKILL if s.param == TELEPORT => {}
             stat::SINGLE_SKILL | stat::NONCLASS_SKILL => add(Part::Skill(s.param), v),
             stat::RES_FIRE => add(Part::ResFire, v),
             stat::RES_COLD => add(Part::ResCold, v),
@@ -376,6 +425,9 @@ fn parts(piece: Piece<'_>, who: &Profile) -> BTreeMap<Part, f64> {
             stat::REPLENISH_LIFE => add(Part::ReplenishLife, v),
             _ => {}
         }
+    }
+    if grants_skill(stats, TELEPORT) {
+        add(Part::Teleport, 1.0);
     }
     add(
         Part::Defense,
@@ -546,6 +598,7 @@ mod tests {
             skills: vec![7, 16],
             weapon: Some("bow"),
             caster: false,
+            teleport: false,
         }
     }
 
@@ -718,6 +771,67 @@ mod tests {
         // A sorceress tab on an amazon counts nothing.
         let fire_tab = [param(stat::SKILL_TAB, 8, 3)];
         assert_eq!(verdict(piece("amu", &fire_tab), Some(0), &worn, &bowazon()), None);
+    }
+
+    #[test]
+    fn only_an_own_enigma_ends_the_teleport_want() {
+        use d2r_core::stash::{StashItem, StashTab};
+        fn wanted(stash: &[StashTab], owned: &[String], merc: &[String]) -> bool {
+            teleport_wanted(&Holdings {
+                stash,
+                owned,
+                runeword_copies: merc,
+                merc_worn: merc,
+            })
+        }
+        let enigma = StashItem {
+            name: "Enigma".to_owned(),
+            code: Some("uui".to_owned()),
+            quality: 2,
+            identified: true,
+            ethereal: false,
+            runeword: true,
+            quantity: None,
+            sockets: 3,
+            unique_index: None,
+            stats: Vec::new(),
+        };
+        let on_page = |n: u8| {
+            [StashTab {
+                kind: TabKind::Page(n),
+                items: vec![enigma.clone()],
+            }]
+        };
+        let names = ["Enigma".to_owned()];
+        assert!(wanted(&[], &[], &[]), "none held");
+        assert!(!wanted(&[], &names, &[]), "worn or carried");
+        assert!(!wanted(&on_page(1), &[], &[]), "own page 1");
+        assert!(!wanted(&on_page(2), &[], &[]), "own page 2");
+        assert!(wanted(&on_page(3), &[], &[]), "trade page 3");
+        assert!(wanted(&on_page(4), &[], &[]), "trade page 4");
+        assert!(wanted(&on_page(5), &[], &[]), "ignored page 5");
+        assert!(wanted(&[], &[], &names), "the merc's");
+    }
+
+    #[test]
+    fn teleport_weighs_until_enigma() {
+        assert_eq!(skills_data::name(TELEPORT), Some("Teleport"));
+        let charges = [param(stat::CHARGED_SKILL, (TELEPORT << 6) | 1, 10)];
+        let oskill = [param(stat::NONCLASS_SKILL, TELEPORT, 1)];
+        assert!(grants_skill(&charges, TELEPORT) && grants_skill(&oskill, TELEPORT));
+        // A sorceress-only +Teleport gives the druid nothing.
+        assert!(!grants_skill(&[param(stat::SINGLE_SKILL, TELEPORT, 1)], TELEPORT));
+        let mut who = druid();
+        who.teleport = true;
+        assert_eq!(
+            verdict(piece("amu", &charges), None, &[], &who).as_deref(),
+            Some("Teleport")
+        );
+        let (total, affixes) = scores(piece("amu", &oskill), &who);
+        assert!((total - WEIGHTS.teleport).abs() < 1e-9 && (affixes - total).abs() < 1e-9);
+        // Enigma held: just another skill, too small to mark.
+        who.teleport = false;
+        assert_eq!(verdict(piece("amu", &charges), None, &[], &who), None);
     }
 
     #[test]

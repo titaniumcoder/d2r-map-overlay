@@ -132,6 +132,8 @@ pub mod stat {
     pub const THROW_MAX: u16 = 160;
     /// +skill tab; param = class × 8 + tab.
     pub const SKILL_TAB: u16 = 188;
+    /// Skill charges ("Level 3 Teleport (12/12 charges)"); param = skill << 6 | level.
+    pub const CHARGED_SKILL: u16 = 204;
 }
 
 #[cfg(test)]

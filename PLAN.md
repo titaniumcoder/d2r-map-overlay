@@ -776,6 +776,27 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   the snapshot, so a merc-wearable base (helm, body, its act's weapon) failing the player's test
   is kept unscored.
 - Left alone: gems, runes, carried charms, finished runewords that aren't build pieces, quest items.
+- **Teleport until Enigma** (user, 2026-11-20: "there was an amulet with teleport on it. that
+  one is also in the farm list and very high for the summoner until he gets enigma. for the fury
+  too, because with both I normally teleport to the endboss and then switch into whatever mode I
+  need"). Teleport on an item is an oskill (stat 97, param 54) or charges (stat 204, param
+  `54 << 6 | level`); a sorceress-only +Teleport (stat 107) doesn't count
+  (`gear_score::grants_skill`). While the player has no Enigma of its own
+  (`gear_score::teleport_wanted`: worn, inventory, cube, personal stash or the own shared pages
+  1–2; one on the trade pages 3–4, on page 5 or on the merc doesn't count):
+  - stash plan: an identified magic / rare / crafted item with Teleport is Keep · own, reason
+    "Teleport" (Move to 1–2 from elsewhere), before the trade rules and the boots rule
+    (`stash_plan::keeps_teleport`); a weapon of a type no build uses is still sold as "not a
+    build weapon";
+  - gear score: `Part::Teleport` weighs 40 (= +1 all skills), counted once per item, so the
+    vendor panel marks a Teleport amulet better; with Enigma held it falls back to an ordinary
+    skill (1);
+  - farm list: `kind = "rolled"` entries (`slot`, `needs = ["Teleport"]`, `note`): "Teleport
+    Amulet" first in both druid groups. Done once one is in the shared stash; found while the
+    character has one (worn, inventory, cube, personal stash; merc gear has no stats); hidden
+    once Enigma is held. Worth farming leaves rolled entries out (any amulet-dropping boss
+    could drop one).
+  - Map marks unchanged: a ground drop's stats aren't read before pickup, so no keep mark.
 
 **User answers (2026-11-20)**
 - **Smoke is ALWAYS merc gear.** The summoner keeps Stealth (from 12 until Enigma) for its FCR.

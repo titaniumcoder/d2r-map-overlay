@@ -56,6 +56,10 @@ pub struct LiveInfo<'a> {
     /// The equipped items enriched for the gear grid's column headers
     /// ([`crate::game::Equipped`]): per body slot code, name and runeword flag.
     pub equipped_items: &'a [crate::game::Equipped],
+    /// The player's own inventory, cube and stash items with their stats
+    /// ([`crate::game::Snapshot::owned_items`]): the farm list's rolled entries (an amulet
+    /// with Teleport) look at their stats.
+    pub owned_items: &'a [(crate::game::ItemDrop, crate::game::Place)],
     /// Display names of the identified unique/set items the character owns (equipped,
     /// carried, personally stashed): the grid pieces' ✓ ticks.
     pub owned: &'a [String],

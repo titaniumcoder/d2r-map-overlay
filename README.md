@@ -86,7 +86,13 @@ level 75):
   `*.source.json` next to them); `merc_act = 1 | 2 | 3 | 5` (default 2) names the act of the
   build's mercenary, which decides the weapons its `[merc_slots]` take (Act 5: swords, one-handed,
   with a second sword in `offhand`)
-- `farm.toml`: a cross-character farm list for a planned build (the dashboard's Farm list panel)
+- `farm.toml`: a cross-character farm list for a planned build (the dashboard's Farm list panel).
+  Each entry is `{ name, kind, count?, merc?, slot?, note? }` with `kind = "runeword" | "unique" |
+  "set"` (counted by name), or `kind = "rolled"` with `slot` and `needs` (skill names given as an
+  oskill or as charges), for example
+  `{ name = "Teleport Amulet", kind = "rolled", slot = "amulet", needs = ["Teleport"], note = "until Enigma" }`:
+  done once such an item is in the shared stash, found while the character has one; an entry
+  needing Teleport is hidden once Enigma is held. An unknown `needs` name fails the file.
 - `route.toml`: the leveling and farming route (the dashboard's Next panel)
 - `valuables.json`: the drop mark rules (compiled in)
 

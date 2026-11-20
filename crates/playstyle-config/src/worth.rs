@@ -12,6 +12,9 @@
 //!   Mephisto counts from Lem up). The Countess herself counts every missing rune she drops, so
 //!   she stays worth it while runes are missing. Without Countess data for the difficulty
 //!   (none today), every dropping rune counts, as before the rule.
+//! - A rolled entry (an amulet with Teleport, `kind = "rolled"`) counts for no boss: any boss
+//!   dropping amulets could drop one, so it would make every boss worth it (simple choice,
+//!   2026-11-20).
 //! - Entries already done (enough copies in the shared stash) or held by the played character
 //!   are skipped, as the farm panel counts them ([`farm_status`]).
 
@@ -77,7 +80,12 @@ pub fn worth(
         if out.iter().any(|(name, _)| same_name(name, &item.name)) {
             continue;
         }
-        let (stashed, carried) = holdings.copies(&item.name, Some(item.kind));
+        // A rolled entry (an amulet with Teleport) has no drop rule: any boss dropping its
+        // slot could drop it, so it would make every boss worth farming. Left out.
+        if item.kind == FarmKind::Rolled {
+            continue;
+        }
+        let (stashed, carried) = holdings.copies(&item.name, item.kind.item_kind());
         if farm_status(item.count, stashed, carried) != FarmStatus::Missing {
             continue;
         }
@@ -94,6 +102,7 @@ pub fn worth(
                     .collect();
                 (!dropping.is_empty()).then_some(Why::Runes(dropping))
             }
+            FarmKind::Rolled => None,
         };
         if let Some(why) = why {
             out.push((item.name.clone(), why));
@@ -107,7 +116,7 @@ pub fn worth(
 fn unique_set_drops(item: &FarmItem, ilvl: u32, drops_code: &impl Fn(&str) -> bool) -> bool {
     let (names, codes, qlvl): (_, _, fn(u32) -> Option<u32>) = match item.kind {
         FarmKind::Set => (SET_NAMES, SET_CODES, set_qlvl),
-        FarmKind::Unique | FarmKind::Runeword => (UNIQUE_NAMES, UNIQUE_CODES, unique_qlvl),
+        FarmKind::Unique | FarmKind::Runeword | FarmKind::Rolled => (UNIQUE_NAMES, UNIQUE_CODES, unique_qlvl),
     };
     names
         .iter()
@@ -206,6 +215,23 @@ mod tests {
                 Why::Runes(r) => format!("{name} ({})", r.join(", ")),
             })
             .collect()
+    }
+
+    #[test]
+    fn a_rolled_entry_never_makes_a_boss_worth_farming() -> Result<()> {
+        let farm = farm_of(
+            "{ name = \"Teleport Amulet\", kind = \"rolled\", slot = \"amulet\", needs = [\"Teleport\"] },",
+        )?;
+        for boss in bosses() {
+            for difficulty in 0..3 {
+                assert_eq!(
+                    worth(boss, difficulty, &farm, &NO_HOLDINGS, &[]),
+                    Vec::new(),
+                    "{boss} in difficulty {difficulty}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

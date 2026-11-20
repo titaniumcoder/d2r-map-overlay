@@ -5,11 +5,17 @@
 # Hot-reloaded like the build files.
 # Optional per entry: merc = true (for the mercenary of the group's build: its merc_act,
 # Act 2 by default) and slot = "weapon" / "shield" /
-# "helm" / "body" / ...: they steer a runeword's natural-socket base hint.
+# "helm" / "body" / ...: they steer a runeword's natural-socket base hint; note = "..." is
+# shown with the entry.
+# kind = "rolled" is any item of its slot carrying every stat in needs (skill names, as an
+# oskill or as charges): done once one is in the shared stash, found while the character has
+# one (worn, inventory, cube, personal stash). An entry needing Teleport is hidden once
+# Enigma is held (Enigma gives Teleport).
 
 [[farm]]
 for = "Summoner Druid"
 items = [
+  { name = "Teleport Amulet", kind = "rolled", slot = "amulet", needs = ["Teleport"], note = "until Enigma" },
   { name = "Stealth", kind = "runeword", slot = "body" },
   { name = "Ancients' Pledge", kind = "runeword", slot = "shield" },
   { name = "Spirit", kind = "runeword" },
@@ -26,6 +32,7 @@ items = [
 [[farm]]
 for = "Fury Druid"
 items = [
+  { name = "Teleport Amulet", kind = "rolled", slot = "amulet", needs = ["Teleport"], note = "until Enigma" },
   { name = "Fortitude", kind = "runeword", slot = "body" },
   { name = "Raven Frost", kind = "unique" },
   { name = "Ribcracker", kind = "unique" },

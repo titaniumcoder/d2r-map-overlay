@@ -18,6 +18,8 @@ use serde::Deserialize;
 use crate::valuables::{Category, Tier};
 use d2r_core::build::Damage;
 use d2r_core::config::{CLASS_NAMES, SLOT_NAMES, class_id};
+use d2r_core::item_stats::ItemStat;
+use d2r_core::names::ItemKind;
 use d2r_core::socket_bases::MercAct;
 // The skill plan format is the core skills panel's; the build files carry it.
 pub use d2r_core::web::SkillTarget;
@@ -476,7 +478,9 @@ pub struct FarmGroup {
     pub items: Vec<FarmItem>,
 }
 
-/// One farm-list entry: an item by display name (unique/set) or runeword name.
+/// One farm-list entry: an item by display name (unique/set) or runeword name, or a rolled
+/// item (`kind = "rolled"`: any item of `slot` with the stats in `needs`; user, 2026-11-20:
+/// "an amulet with teleport on it").
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FarmItem {
@@ -494,6 +498,74 @@ pub struct FarmItem {
     /// of that slot (Fortitude as `"body"` lists armor, not weapons). Left out: any slot.
     #[serde(default)]
     pub slot: Option<FarmSlot>,
+    /// `needs = ["Teleport"]`: what a rolled entry's item must carry (skill names, given as
+    /// an oskill or as charges, [`crate::gear_score::grants_skill`]). An unknown name fails
+    /// the file. Only read for `kind = "rolled"`.
+    #[serde(default)]
+    pub needs: Vec<FarmStat>,
+    /// Free text shown with the entry ("until Enigma").
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl FarmItem {
+    /// Whether an item of `code` with `stats` is a copy of this rolled entry: a base of its
+    /// `slot` (any slot when unset) carrying every one of its `needs`. Never for other kinds
+    /// (they are counted by name, [`d2r_core::stash::Holdings::copies`]) nor for a rolled
+    /// entry without needs.
+    #[must_use]
+    pub fn rolled_match(&self, code: Option<&str>, stats: &[ItemStat]) -> bool {
+        let slot_ok = self.slot.is_none_or(|slot| {
+            code.and_then(d2r_core::bases_data::base)
+                .is_some_and(|b| b.slot == slot.body())
+        });
+        self.kind == FarmKind::Rolled
+            && !self.needs.is_empty()
+            && slot_ok
+            && self
+                .needs
+                .iter()
+                .all(|n| crate::gear_score::grants_skill(stats, n.skill))
+    }
+
+    /// Whether this entry wants Teleport, which Enigma gives (hidden once Enigma is held,
+    /// `web::farm::farm_hidden`).
+    #[must_use]
+    pub fn wants_teleport(&self) -> bool {
+        self.kind == FarmKind::Rolled && self.needs.iter().any(|n| n.skill == crate::gear_score::TELEPORT)
+    }
+}
+
+/// One stat a rolled [`FarmItem`] needs: today a skill (given to any class, as an oskill or
+/// charges), by its skills.txt name ("Teleport"). Parsed from the name; an unknown one fails
+/// the file with a message naming it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct FarmStat {
+    /// skills.txt row.
+    pub skill: u16,
+}
+
+impl FarmStat {
+    /// Its name as in the game tables.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        d2r_core::skills_data::name(self.skill).unwrap_or("?")
+    }
+}
+
+impl TryFrom<String> for FarmStat {
+    type Error = String;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        d2r_core::skills_data::SKILLS
+            .iter()
+            .find(|s| d2r_core::names::same_name(s.name, &name))
+            .map(|s| Self { skill: s.id })
+            .ok_or_else(|| {
+                format!("unknown stat {name:?} in needs: expected a skill name such as \"Teleport\"")
+            })
+    }
 }
 
 /// The body slot of a [`FarmItem`], as written in `farm.toml`. An unknown name fails the
@@ -515,6 +587,22 @@ pub enum FarmSlot {
 }
 
 impl FarmSlot {
+    /// Its `farm.toml` name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Helm => "helm",
+            Self::Amulet => "amulet",
+            Self::Body => "body",
+            Self::Weapon => "weapon",
+            Self::Shield => "shield",
+            Self::Ring => "ring",
+            Self::Belt => "belt",
+            Self::Boots => "boots",
+            Self::Gloves => "gloves",
+        }
+    }
+
     /// The `ItemData::BODY` slot (the numbering of `bases_data::Base::slot`).
     #[must_use]
     pub const fn body(self) -> u8 {
@@ -532,9 +620,40 @@ impl FarmSlot {
     }
 }
 
-/// What kind of item a [`FarmItem`] names: the core [`d2r_core::names::ItemKind`] (which table
-/// its name comes from and how its copies are counted).
-pub type FarmKind = d2r_core::names::ItemKind;
+/// What kind of item a [`FarmItem`] names: a runeword, unique or set by name (copies counted
+/// by [`d2r_core::stash::Holdings::copies`]), or a rolled item by slot and stats
+/// ([`FarmItem::rolled_match`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FarmKind {
+    Runeword,
+    Unique,
+    Set,
+    Rolled,
+}
+
+impl FarmKind {
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Runeword => "runeword",
+            Self::Unique => "unique",
+            Self::Set => "set",
+            Self::Rolled => "rolled",
+        }
+    }
+
+    /// The core kind of a named entry, `None` for a rolled one.
+    #[must_use]
+    pub const fn item_kind(self) -> Option<ItemKind> {
+        match self {
+            Self::Runeword => Some(ItemKind::Runeword),
+            Self::Unique => Some(ItemKind::Unique),
+            Self::Set => Some(ItemKind::Set),
+            Self::Rolled => None,
+        }
+    }
+}
 
 /// serde's `default = "..."` needs a function path.
 const fn one() -> u32 {
@@ -581,7 +700,25 @@ pub fn parse_farm(text: &str) -> Result<(Vec<FarmGroup>, Vec<String>), toml::de:
                         || shown()
                 }
                 FarmKind::Set => d2r_core::item_names_data::SET_NAMES.iter().any(|(_, n)| same(n)) || shown(),
+                // Any display name; it must say what it needs instead.
+                FarmKind::Rolled => {
+                    if item.needs.is_empty() {
+                        warnings.push(format!(
+                            "{}: rolled {:?} has no needs (kept, but it can never be found)",
+                            group.target, item.name
+                        ));
+                    }
+                    true
+                }
             };
+            if item.kind != FarmKind::Rolled && !item.needs.is_empty() {
+                warnings.push(format!(
+                    "{}: {:?} is a {}; its needs are ignored (only rolled entries have them)",
+                    group.target,
+                    item.name,
+                    item.kind.name()
+                ));
+            }
             if !known {
                 warnings.push(format!(
                     "{}: unknown {} {:?} (kept, but it can never be found)",
@@ -1744,6 +1881,65 @@ mod tests {
                 "[[farm]]\nfor = \"X\"\nitems = [{ name = \"Smoke\", kind = \"runeword\", merc = \"yes\" }]\n"
             )
             .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rolled_farm_entries_take_slot_needs_and_note() -> Result<()> {
+        let (groups, warnings) = parse_farm(
+            "[[farm]]\nfor = \"Fury Druid\"\nitems = [\n\
+             { name = \"Teleport Amulet\", kind = \"rolled\", slot = \"amulet\", needs = [\"teleport\"], note = \"until Enigma\" },\n\
+             { name = \"Anything\", kind = \"rolled\" },\n\
+             { name = \"Smoke\", kind = \"runeword\", needs = [\"Teleport\"] },\n]\n",
+        )?;
+        let items = &groups.first().ok_or_else(|| anyhow!("no group"))?.items;
+        let amulet = items.first().ok_or_else(|| anyhow!("no entry"))?;
+        assert_eq!(amulet.kind, FarmKind::Rolled);
+        assert_eq!(amulet.slot, Some(FarmSlot::Amulet));
+        assert_eq!(
+            amulet.needs,
+            [FarmStat {
+                skill: crate::gear_score::TELEPORT
+            }],
+            "skill names match case-insensitively"
+        );
+        assert_eq!(amulet.needs.first().map(|n| n.name()), Some("Teleport"));
+        assert_eq!(amulet.note.as_deref(), Some("until Enigma"));
+        assert!(amulet.wants_teleport());
+        // An entry without needs can never be found; needs on a named entry are ignored.
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w.contains("\"Anything\" has no needs")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("\"Smoke\" is a runeword")),
+            "{warnings:?}"
+        );
+        // Matching: an amulet with Teleport charges or the oskill, nothing else.
+        let charges = ItemStat {
+            id: d2r_core::item_stats::stat::CHARGED_SKILL,
+            param: (crate::gear_score::TELEPORT << 6) | 3,
+            value: 12,
+            base: false,
+        };
+        assert!(amulet.rolled_match(Some("amu"), &[charges]));
+        assert!(
+            !amulet.rolled_match(Some("rin"), &[charges]),
+            "a ring is no amulet"
+        );
+        assert!(!amulet.rolled_match(Some("amu"), &[]));
+        // A bad stat name fails the file, saying what was written and where.
+        let err = parse_farm(
+            "[[farm]]\nfor = \"X\"\nitems = [\n{ name = \"T\", kind = \"rolled\", needs = [\"Telport\"] },\n]\n",
+        )
+        .err()
+        .ok_or_else(|| anyhow!("needs = [\"Telport\"] accepted"))?
+        .to_string();
+        assert!(
+            err.contains("unknown stat \"Telport\"") && err.contains("Teleport") && err.contains("line 4"),
+            "{err}"
         );
         Ok(())
     }

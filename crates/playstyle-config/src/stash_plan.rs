@@ -36,6 +36,12 @@
 //! Two hard rules come first (user rules, 2026-11-20): a weapon whose type no build of the
 //! stage chain uses ([`build_weapon_types`]: axes, daggers, javelins, claws, orbs … for the
 //! druid) is sold as "not a build weapon", identified or not (the merc's weapons excepted); identified boots without faster run/walk are sold as "no run speed".
+//! Right after the weapon-type rule (and before the trade rules): an identified magic / rare /
+//! crafted item giving Teleport (oskill or charges) is Keep · own with the reason "Teleport"
+//! while the player has no Enigma of its own (user, 2026-11-20; [`keeps_teleport`],
+//! [`gear_score::teleport_wanted`]); with one it is scored like any other. A Teleport weapon
+//! of a type no build uses is still sold as "not a build weapon".
+//! On the map nothing changes: a ground drop's stats aren't read before pickup.
 //! Gems, runes, charms in the inventory (they work there), finished runewords that aren't
 //! build pieces, quest items and anything else no rule speaks about get no action.
 
@@ -261,6 +267,7 @@ impl Scoring {
                 skills,
                 weapon,
                 caster: gear_score::is_caster(class, weapon),
+                teleport: gear_score::teleport_wanted(&snap.holdings()),
             },
             worn: snap
                 .equipped_items
@@ -284,27 +291,49 @@ pub const NEAR_WORN: f64 = 0.8;
 /// planned +skill, +1 class skill, 20 resistance or life, 20 caster FCR.
 pub const NOTABLE: f64 = 20.0;
 
-/// The own-use verdict on a magic, rare or crafted item no trade rule wants: `Ok(())` keep,
-/// `Err(reason)` sell.
-fn judge(item: &ItemDrop, scoring: &Scoring) -> Result<(), &'static str> {
+/// Whether `item` is a must-keep for its Teleport (user, 2026-11-20: "an amulet with teleport
+/// on it ... very high for the summoner until he gets enigma. for the fury too"): an identified
+/// magic, rare or crafted item giving Teleport as an oskill or charges
+/// ([`gear_score::grants_skill`]) while no Enigma is held ([`Profile::teleport`]); but not a
+/// weapon no build uses ([`off_build_weapon`]: it is still sold).
+fn keeps_teleport(item: &ItemDrop, scoring: &Scoring) -> bool {
+    scoring.profile.teleport
+        && d2r_core::game::magic_or_better(item.quality)
+        && item.flags & item_data::FLAG_IDENTIFIED != 0
+        && gear_score::grants_skill(&item.stats, gear_score::TELEPORT)
+        && !off_build_weapon(item, scoring)
+}
+
+/// A weapon of a type no build uses (user rule, 2026-11-20): sold, identified or not (no point
+/// identifying it). The mercenary's weapons (its act's: polearms and spears for Act 2, never
+/// javelins) keep the other rules.
+fn off_build_weapon(item: &ItemDrop, scoring: &Scoring) -> bool {
+    let code = item.code.as_deref();
+    code.and_then(d2r_core::bases_data::base).is_some_and(|b| {
+        b.slot == 4
+            && !code.is_some_and(|c| scoring.merc_wears(c))
+            && !scoring.weapon_types.is_empty()
+            && !scoring.weapon_types.contains(&b.kind)
+    })
+}
+
+/// The own-use verdict on a magic, rare or crafted item no trade rule wants: `Ok(reason)` keep
+/// (`Some("Teleport")` for a Teleport item, [`keeps_teleport`]; it beats every rule after the
+/// weapon type), `Err(reason)` sell.
+fn judge(item: &ItemDrop, scoring: &Scoring) -> Result<Option<&'static str>, &'static str> {
+    if off_build_weapon(item, scoring) {
+        return Err("not a build weapon");
+    }
+    if keeps_teleport(item, scoring) {
+        return Ok(Some("Teleport"));
+    }
     let code = item.code.as_deref();
     let base = code.and_then(d2r_core::bases_data::base);
     let merc = code.is_some_and(|c| scoring.merc_wears(c));
-    // A weapon of a type no build uses (user rule, 2026-11-20): sold, identified or not (no
-    // point identifying it). The mercenary's weapons (its act's: polearms and spears for
-    // Act 2, never javelins) keep their rule below.
-    if let Some(b) = base
-        && b.slot == 4
-        && !merc
-        && !scoring.weapon_types.is_empty()
-        && !scoring.weapon_types.contains(&b.kind)
-    {
-        return Err("not a build weapon");
-    }
     // Unidentified, or stats unread (a real magic / rare item always has affix stats): it
     // can't be judged yet.
     if item.flags & item_data::FLAG_IDENTIFIED == 0 || item.stats.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     // Boots without faster run/walk (user rule, 2026-11-20: "a must on the boots"), whatever
     // else they roll.
@@ -319,7 +348,7 @@ fn judge(item: &ItemDrop, scoring: &Scoring) -> Result<(), &'static str> {
     let (total, affixes) = gear_score::scores(piece, who);
     let no_stats = "no build stats";
     if matches!(item.kind, DropKind::Charm { .. }) || item.code.as_deref() == Some("jew") {
-        return if total > 0.0 { Ok(()) } else { Err(no_stats) };
+        return if total > 0.0 { Ok(None) } else { Err(no_stats) };
     }
     let worn: Vec<(u8, Piece<'_>)> = scoring
         .worn
@@ -335,16 +364,16 @@ fn judge(item: &ItemDrop, scoring: &Scoring) -> Result<(), &'static str> {
         })
         .collect();
     match gear_score::replaced_score(piece, &worn, who) {
-        Some(old) if (total > 0.0 && total >= NEAR_WORN * old) || affixes >= NOTABLE => Ok(()),
-        _ if merc => Ok(()),
+        Some(old) if (total > 0.0 && total >= NEAR_WORN * old) || affixes >= NOTABLE => Ok(None),
+        _ if merc => Ok(None),
         Some(_) if affixes > 0.0 => Err("worse than worn"),
         Some(_) => Err(no_stats),
         // Another class's item, or a shield beside a two-hander; no base known: keep.
         None => match item.code.as_deref().and_then(d2r_core::bases_data::base) {
             Some(base) if base.class.is_some_and(|c| u32::from(c) != who.class) => Err("other class"),
-            Some(_) if affixes >= NOTABLE => Ok(()),
+            Some(_) if affixes >= NOTABLE => Ok(None),
             Some(_) => Err(no_stats),
-            None => Ok(()),
+            None => Ok(None),
         },
     }
 }
@@ -508,7 +537,9 @@ impl Needs {
         for group in &config.farm {
             let target = config.build_defs.get(&group.target.to_lowercase());
             let farm_class = target.and_then(|b| b.class).unwrap_or(class);
-            for item in &group.items {
+            // A rolled entry names no item: the magic / rare judge keeps its copies
+            // ([`keeps_teleport`]).
+            for item in group.items.iter().filter(|i| i.kind != FarmKind::Rolled) {
                 needs.piece(&item.name, item.count);
                 if let Some(build) = target {
                     let player = Wearer::Player(farm_class);
@@ -687,7 +718,7 @@ pub fn for_snapshot(
     let missing = |name: &str| {
         config.farm.iter().flat_map(|g| &g.items).any(|item| {
             matches!(item.kind, FarmKind::Unique | FarmKind::Set) && same_name(&item.name, name) && {
-                let (stashed, carried) = holdings.copies(&item.name, Some(item.kind));
+                let (stashed, carried) = holdings.copies(&item.name, item.kind.item_kind());
                 farm_status(item.count, stashed, carried) == FarmStatus::Missing
             }
         })
@@ -896,7 +927,8 @@ pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> (Vec<Advice>, W
         if slot.is_some() || left_alone(h) {
             continue;
         }
-        let action = if trade_worthy(&h.item) {
+        // A Teleport item is own gear before any trade rule ([`keeps_teleport`]).
+        let action = if trade_worthy(&h.item) && !keeps_teleport(&h.item, scoring) {
             match valuables::keep_one_name(&h.item) {
                 Some(name) if kept_one.contains(&name) => Some(Action::GiveAway),
                 one => {
@@ -909,7 +941,7 @@ pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> (Vec<Advice>, W
             continue;
         } else if d2r_core::game::magic_or_better(h.item.quality) {
             *slot = Some(match judge(&h.item, scoring) {
-                Ok(()) => (keep_or_move(Side::Own, h.spot), None),
+                Ok(reason) => (keep_or_move(Side::Own, h.spot), reason),
                 Err(reason) => (Action::Sell, Some(reason)),
             });
             continue;
@@ -1072,10 +1104,12 @@ mod tests {
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
                     name: "Insight".to_owned(),
-                    kind: d2r_core::names::ItemKind::Runeword,
+                    kind: FarmKind::Runeword,
                     count: 1,
                     merc: true,
                     slot: Some(FarmSlot::Weapon),
+                    needs: Vec::new(),
+                    note: None,
                 }],
             }],
             ..Settings::default()
@@ -1507,6 +1541,89 @@ mod tests {
     }
 
     #[test]
+    fn a_teleport_item_is_kept_own_until_enigma_is_held() {
+        // Level 1 Teleport charges: param = 54 << 6 | 1.
+        let charges = (stat::CHARGED_SKILL, (gear_score::TELEPORT << 6) | 1, 10);
+        let amulet = rolled("amu", QUALITY_MAGIC, &[charges]);
+        let mut scoring = druid();
+        scoring.profile.teleport = true;
+        // A far better amulet is worn: the Teleport one is kept anyway, and moved to 1–2.
+        scoring.worn = vec![(
+            2,
+            Some("amu".to_owned()),
+            vec![ItemStat {
+                id: stat::CLASS_SKILLS,
+                param: 5,
+                value: 2,
+                base: false,
+            }],
+        )];
+        let items = [
+            at(amulet.clone(), Spot::Inventory),
+            at(amulet.clone(), Spot::Page(1)),
+        ];
+        assert_eq!(
+            judged(&items, &scoring),
+            vec![
+                (
+                    "Magic Amulet".to_owned(),
+                    Spot::Inventory,
+                    Action::Move(Side::Own),
+                    Some("Teleport")
+                ),
+                (
+                    "Magic Amulet".to_owned(),
+                    Spot::Page(1),
+                    Action::Keep(Side::Own),
+                    Some("Teleport")
+                ),
+            ]
+        );
+        // As an oskill too.
+        let oskill = rolled(
+            "amu",
+            QUALITY_MAGIC,
+            &[(stat::NONCLASS_SKILL, gear_score::TELEPORT, 1)],
+        );
+        assert_eq!(
+            judged(&[at(oskill, Spot::Page(2))], &scoring),
+            vec![(
+                "Magic Amulet".to_owned(),
+                Spot::Page(2),
+                Action::Keep(Side::Own),
+                Some("Teleport")
+            )]
+        );
+        // A Teleport weapon of a type no build uses is still sold; a build weapon is kept.
+        scoring.weapon_types = vec!["staf"];
+        let axe = rolled("hax", QUALITY_MAGIC, &[charges]);
+        let staff = rolled("sst", QUALITY_MAGIC, &[charges]);
+        assert_eq!(
+            judged(&[at(axe, Spot::Page(1)), at(staff, Spot::Page(1))], &scoring)
+                .into_iter()
+                .map(|(_, _, action, reason)| (action, reason))
+                .collect::<Vec<_>>(),
+            vec![
+                (Action::Sell, Some("not a build weapon")),
+                (Action::Keep(Side::Own), Some("Teleport")),
+            ],
+            "the axe is sold, the staff kept"
+        );
+        scoring.weapon_types = Vec::new();
+        // Enigma held: scored like any other amulet, against the worn one.
+        scoring.profile.teleport = false;
+        assert_eq!(
+            judged(&[at(amulet, Spot::Page(1))], &scoring),
+            vec![(
+                "Magic Amulet".to_owned(),
+                Spot::Page(1),
+                Action::Sell,
+                Some("worse than worn")
+            )]
+        );
+    }
+
+    #[test]
     fn an_unidentified_rare_is_kept() {
         let mut ring = rolled("rin", QUALITY_RARE, &[(LIGHT_RADIUS, 0, 2)]);
         ring.flags = 0;
@@ -1677,10 +1794,12 @@ mod tests {
             target: "Fury".to_owned(),
             items: vec![FarmItem {
                 name: "Insight".to_owned(),
-                kind: d2r_core::names::ItemKind::Runeword,
+                kind: FarmKind::Runeword,
                 count: 1,
                 merc: true,
                 slot: Some(FarmSlot::Weapon),
+                needs: Vec::new(),
+                note: None,
             }],
         }];
         let needs = Needs::from_config(
@@ -1745,10 +1864,12 @@ mod tests {
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
                     name: "Harmony".to_owned(),
-                    kind: d2r_core::names::ItemKind::Runeword,
+                    kind: FarmKind::Runeword,
                     count: 1,
                     merc: false,
                     slot: Some(FarmSlot::Weapon),
+                    needs: Vec::new(),
+                    note: None,
                 }],
             }],
             ..Settings::default()
@@ -1846,10 +1967,12 @@ mod tests {
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
                     name: "Harmony".to_owned(),
-                    kind: d2r_core::names::ItemKind::Runeword,
+                    kind: FarmKind::Runeword,
                     count: 1,
                     merc: false,
                     slot: Some(FarmSlot::Weapon),
+                    needs: Vec::new(),
+                    note: None,
                 }],
             }],
             ..Settings::default()
@@ -1916,9 +2039,9 @@ mod tests {
             vec![
                 Err("not a build weapon"),
                 Err("not a build weapon"),
-                Ok(()),
+                Ok(None),
                 Err("no build stats"),
-                Ok(()),
+                Ok(None),
             ],
             "javelins sold even with druid skills or unidentified; swords judged normally; \
              the merc's spear keeps its rule"
@@ -1972,7 +2095,7 @@ mod tests {
         assert_eq!(build_weapon_types([&shield].into_iter(), 5), ["swor"]);
         // No builds known: every weapon type is judged.
         let javelin = rolled("jav", QUALITY_RARE, &[(stat::CLASS_SKILLS, 5, 2)]);
-        assert_eq!(judge(&javelin, &druid()), Ok(()));
+        assert_eq!(judge(&javelin, &druid()), Ok(None));
     }
 
     #[test]
@@ -1990,7 +2113,7 @@ mod tests {
                 .iter()
                 .map(|b| judge(b, &druid()))
                 .collect::<Vec<_>>(),
-            vec![Err("no run speed"), Ok(()), Ok(())],
+            vec![Err("no run speed"), Ok(None), Ok(None)],
             "24 cold res without FRW is sold; 20 FRW + res judged normally; unidentified kept"
         );
         // Named boots (Sigon's Sabot) are build pieces or valuables, never judged.

@@ -640,6 +640,7 @@ fn gear_grid<'a>(
             blocks: &d2r_core::render::TextBlocks::default(),
             equipped: &[],
             equipped_items,
+            owned_items: &[],
             owned,
             runeword_copies: &[],
             merc_worn: &[],
@@ -1524,29 +1525,18 @@ fn shop_marks_items_better_than_the_worn_ones() {
             with(shop_item(Some("rin"), 4, 3, 0, 0), vec![affix(stat::MAX_LIFE, 5)]),
         ],
     };
+    let blocks = d2r_core::render::TextBlocks::default();
     let info = PanelInfo {
         live: LiveInfo {
             player_name: "Fulmina",
-            class: 0,
             char_level: Some(12),
             difficulty: Some(0),
             area: "Rogue Encampment",
-            blocks: &d2r_core::render::TextBlocks::default(),
-            equipped: &[],
             equipped_items: &equipped_items,
-            owned: &[],
-            runeword_copies: &[],
-            merc_worn: &[],
-            stash: &[],
-            stash_owned: &[],
-            skills: &EMPTY_SKILLS,
-            held_materials: &[],
-            white_bases: &[],
-            quests: &[],
             shop: Some(&shop),
             strength: Some(30),
             dexterity: Some(40),
-            updated_at: 1_700_000_000,
+            ..d2r_core::web::fixtures::live_info(0, &blocks, &[], &[], &[])
         },
         bis: None,
         build: None,
@@ -1604,6 +1594,7 @@ fn score_profile_takes_the_weapon_kind_from_gear_or_build() {
                 blocks: &d2r_core::render::TextBlocks::default(),
                 equipped: &[],
                 equipped_items,
+                owned_items: &[],
                 owned: &[],
                 runeword_copies: &[],
                 merc_worn: &[],
@@ -1952,6 +1943,101 @@ fn farm_status_done_found_missing_and_rune_needs() -> Result<()> {
             "for": ["Fortitude", "Bulwark"],
         })
     );
+    Ok(())
+}
+
+#[test]
+fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Result<()> {
+    use d2r_core::item_stats::{ItemStat, stat};
+    use d2r_core::offsets::item_data::QUALITY_MAGIC;
+    let (farm, warnings) = crate::config::parse_farm(
+        "[[farm]]\nfor = \"Summoner Druid\"\nitems = [\n\
+         { name = \"Teleport Amulet\", kind = \"rolled\", slot = \"amulet\", needs = [\"Teleport\"], note = \"until Enigma\" },\n]\n",
+    )?;
+    assert_eq!(warnings, Vec::<String>::new());
+    let teleport = vec![ItemStat {
+        id: stat::CHARGED_SKILL,
+        param: (crate::gear_score::TELEPORT << 6) | 1,
+        value: 10,
+        base: false,
+    }];
+    let blocks = d2r_core::render::TextBlocks::default();
+    let rows = |info: &PanelInfo| -> Result<Vec<(String, String, u64, u64)>> {
+        let json: serde_json::Value = serde_json::from_str(&live_json(info))?;
+        Ok(farm_rows(&json))
+    };
+    let row = |status: &str, stashed: u64, carried: u64| {
+        vec![("Teleport Amulet".to_owned(), status.to_owned(), stashed, carried)]
+    };
+    // Nothing held; a Teleport ring and a plain amulet are no copies.
+    let ring = d2r_core::stash::StashItem {
+        stats: teleport.clone(),
+        ..stash_item("Magic Ring", "rin", QUALITY_MAGIC, None)
+    };
+    let plain = stash_item("Magic Amulet", "amu", QUALITY_MAGIC, None);
+    let tabs = [d2r_core::stash::StashTab {
+        kind: d2r_core::stash::TabKind::Page(1),
+        items: vec![ring, plain],
+    }];
+    let mut info = live_info(5, &blocks, &[], &tabs, &[]);
+    info.farm = &farm;
+    assert_eq!(rows(&info)?, row("missing", 0, 0));
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    let entry = json.pointer("/farm/groups/0/items/0").context("entry")?;
+    assert_eq!(entry.get("kind"), Some(&serde_json::json!("rolled")));
+    assert_eq!(entry.get("slot"), Some(&serde_json::json!("amulet")));
+    assert_eq!(entry.get("needs"), Some(&serde_json::json!(["Teleport"])));
+    assert_eq!(entry.get("note"), Some(&serde_json::json!("until Enigma")));
+    // Worn, or in the inventory: found.
+    let worn = [d2r_core::game::Equipped {
+        body: 2,
+        quality: QUALITY_MAGIC,
+        code: Some("amu".to_owned()),
+        name: None,
+        file_index: None,
+        runeword: false,
+        stats: teleport.clone(),
+    }];
+    info.live.equipped_items = &worn;
+    assert_eq!(rows(&info)?, row("found", 0, 1));
+    info.live.equipped_items = &[];
+    let carried = [(
+        d2r_core::game::ItemDrop {
+            id: 1,
+            code: Some("amu".to_owned()),
+            kind: d2r_core::items::DropKind::Base,
+            quality: QUALITY_MAGIC,
+            flags: d2r_core::offsets::item_data::FLAG_IDENTIFIED,
+            ethereal: false,
+            sockets: 0,
+            unique_index: None,
+            stats: teleport.clone(),
+            item_data_head: String::new(),
+            x: 0,
+            y: 0,
+        },
+        d2r_core::game::Place::Inventory,
+    )];
+    info.live.owned_items = &carried;
+    assert_eq!(rows(&info)?, row("found", 0, 1));
+    // In the shared stash: done.
+    let stashed = [d2r_core::stash::StashTab {
+        kind: d2r_core::stash::TabKind::Page(2),
+        items: vec![d2r_core::stash::StashItem {
+            stats: teleport,
+            ..stash_item("Magic Amulet", "amu", QUALITY_MAGIC, None)
+        }],
+    }];
+    info.live.stash = &stashed;
+    assert_eq!(rows(&info)?, row("done", 1, 1));
+    // An Enigma only the mercenary wears doesn't count; one the character holds does: the
+    // entry (and its group, now empty) leaves the panel.
+    let copies = ["Enigma".to_owned()];
+    info.live.runeword_copies = &copies;
+    assert_eq!(rows(&info)?, row("done", 1, 1));
+    info.live.owned = &copies;
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    assert_eq!(json.pointer("/farm/groups"), Some(&serde_json::json!([])));
     Ok(())
 }
 

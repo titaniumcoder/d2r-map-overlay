@@ -53,7 +53,8 @@ pub fn shop_notes(info: &PanelInfo) -> Vec<ShopNote> {
 /// plan; its weapon kind is the worn weapon's, else that of the best current weapon piece
 /// wearable at this level that names a base ([`crate::gear_score::piece_kind`]), else of any
 /// current piece naming one; strength and dexterity are the base
-/// values plus the worn gear's.
+/// values plus the worn gear's; Teleport is wanted until Enigma is held
+/// ([`crate::gear_score::teleport_wanted`]).
 pub fn score_profile(info: &PanelInfo) -> crate::gear_score::Profile {
     use crate::gear_score::{Profile, is_caster, piece_kind};
     use d2r_core::item_stats::stat;
@@ -117,6 +118,7 @@ pub fn score_profile(info: &PanelInfo) -> crate::gear_score::Profile {
         skills,
         weapon,
         caster: is_caster(info.live.class, weapon),
+        teleport: crate::gear_score::teleport_wanted(&info.live.holdings()),
     }
 }
 

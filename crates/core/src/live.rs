@@ -207,6 +207,7 @@ fn publish_dashboard<'a, P: Playstyle>(
         quests,
         equipped: &snap.equipped,
         equipped_items: &snap.equipped_items,
+        owned_items: &snap.owned_items,
         owned: &snap.owned_names,
         runeword_copies: &snap.runeword_copies,
         merc_worn: &snap.merc_worn,

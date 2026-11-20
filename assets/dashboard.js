@@ -280,8 +280,12 @@ function farm(f) {
         ? `<div class="rn">${i.runes.map(x => `<span class="${esc(x.status)}">${esc(x.rune)} ${x.status === "have" ? "✓" : esc(x.have) + "/" + esc(x.need)}</span>`).join("")}</div>` : "";
       const bases = i.base_hint ? `<div class="bs">${esc(i.base_hint)}</div>`
         : (i.bases || []).length ? `<div class="bs">${esc(i.bases.join(", "))}</div>` : "";
+      // A rolled entry: its slot and the stats it needs ("amulet with Teleport").
+      const needs = (i.needs || []).length
+        ? `<div class="bs">${esc(i.slot || "any item")} with ${esc(i.needs.join(" + "))}</div>` : "";
+      const note = i.note ? `<div class="bs">${esc(i.note)}</div>` : "";
       return `<div class="fm ${esc(i.kind)} ${esc(i.status)}"><div class="fm-h"><span class="nm">${esc(i.name)}</span>`
-        + `<span class="kd">${esc(i.kind)}</span><span class="fst ${esc(i.status)}">${esc(i.status)}${n}</span></div>${carried}${runes}${bases}</div>`;
+        + `<span class="kd">${esc(i.kind)}</span><span class="fst ${esc(i.status)}">${esc(i.status)}${n}</span></div>${carried}${needs}${note}${runes}${bases}</div>`;
     }).join("");
     return `<h3 class="row-h">for ${esc(g.for)} · ${done}/${items.length} done</h3><div class="fms">${cards}</div>`;
   }).join("");
