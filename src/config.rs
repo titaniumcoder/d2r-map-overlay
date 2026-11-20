@@ -313,6 +313,51 @@ pub struct FarmItem {
     /// How many copies the build needs (default 1; two Lawbringers for two weapon slots).
     #[serde(default = "one")]
     pub count: u32,
+    /// `merc = true`: the item is for the mercenary (taken as Act 2, as everywhere else), so
+    /// a runeword's base hint skips class-only bases, keeps polearms/spears for weapons and
+    /// ranks helm and body bases by defense.
+    #[serde(default)]
+    pub merc: bool,
+    /// `slot = "helm"`: the body slot it is worn in, narrowing a runeword's base hint to bases
+    /// of that slot (Fortitude as `"body"` lists armor, not weapons). Left out: any slot.
+    #[serde(default)]
+    pub slot: Option<FarmSlot>,
+}
+
+/// The body slot of a [`FarmItem`], as written in `farm.toml`. An unknown name fails the
+/// file with serde's own message (unknown variant `hat`, expected one of ...), with its line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FarmSlot {
+    Helm,
+    Amulet,
+    Body,
+    Weapon,
+    /// Also accepted as `"offhand"`, the build files' name for it.
+    #[serde(alias = "offhand")]
+    Shield,
+    Ring,
+    Belt,
+    Boots,
+    Gloves,
+}
+
+impl FarmSlot {
+    /// The `ItemData::BODY` slot (the numbering of `bases_data::Base::slot`).
+    #[must_use]
+    pub const fn body(self) -> u8 {
+        match self {
+            Self::Helm => 1,
+            Self::Amulet => 2,
+            Self::Body => 3,
+            Self::Weapon => 4,
+            Self::Shield => 5,
+            Self::Ring => 6,
+            Self::Belt => 8,
+            Self::Boots => 9,
+            Self::Gloves => 10,
+        }
+    }
 }
 
 /// What kind of item a [`FarmItem`] names: which table its name comes from and how its
@@ -2177,6 +2222,53 @@ mod tests {
         ] {
             assert!(parse_farm(bad).is_err(), "{bad:?} accepted");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn farm_entries_take_merc_and_slot() -> Result<()> {
+        let (groups, warnings) = parse_farm(
+            "[[farm]]\nfor = \"Fury Druid\"\nitems = [\n\
+             { name = \"Bulwark\", kind = \"runeword\", merc = true, slot = \"helm\" },\n\
+             { name = \"Ancients' Pledge\", kind = \"runeword\", slot = \"offhand\" },\n\
+             { name = \"Fortitude\", kind = \"runeword\" },\n]\n",
+        )?;
+        assert_eq!(warnings, Vec::<String>::new());
+        let items: Vec<(bool, Option<FarmSlot>)> = groups
+            .first()
+            .ok_or_else(|| anyhow!("no group"))?
+            .items
+            .iter()
+            .map(|i| (i.merc, i.slot))
+            .collect();
+        assert_eq!(
+            items,
+            [
+                (true, Some(FarmSlot::Helm)),
+                (false, Some(FarmSlot::Shield)),
+                (false, None)
+            ],
+            "offhand is the shield slot; both fields optional"
+        );
+        assert_eq!(FarmSlot::Body.body(), 3);
+        // A bad slot name fails the file with serde's message: what was written, what is
+        // allowed and where.
+        let err = parse_farm(
+            "[[farm]]\nfor = \"X\"\nitems = [\n{ name = \"Smoke\", kind = \"runeword\", slot = \"chest\" },\n]\n",
+        )
+        .err()
+        .ok_or_else(|| anyhow!("slot = \"chest\" accepted"))?
+        .to_string();
+        assert!(
+            err.contains("unknown variant `chest`") && err.contains("`body`") && err.contains("line 4"),
+            "{err}"
+        );
+        assert!(
+            parse_farm(
+                "[[farm]]\nfor = \"X\"\nitems = [{ name = \"Smoke\", kind = \"runeword\", merc = \"yes\" }]\n"
+            )
+            .is_err()
+        );
         Ok(())
     }
 

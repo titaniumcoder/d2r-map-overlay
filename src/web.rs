@@ -1527,7 +1527,10 @@ fn farm_item_json(
         "status": status.name(),
         "runes": runes,
         "bases": word.map_or(&[][..], |w| w.bases),
-        "base_hint": word.and_then(|w| base_hint(w, info, None, Wearer::Player(info.class))),
+        "base_hint": word.and_then(|w| {
+            let wearer = if item.merc { Wearer::Act2Merc } else { Wearer::Player(info.class) };
+            base_hint(w, info, item.slot.map(crate::config::FarmSlot::body), wearer)
+        }),
     })
 }
 
@@ -6004,6 +6007,66 @@ mod tests {
             "{farm_fort}"
         );
         assert!(!format!("{spirit}{fort}{insight}{farm_fort}").contains("Larzuk"));
+        Ok(())
+    }
+
+    #[test]
+    fn farm_merc_and_slot_fields_steer_the_base_hint() -> Result<()> {
+        let blocks = crate::render::TextBlocks {
+            level_full: vec![crate::info::LevelEntry {
+                text: "a".to_owned(),
+                mlvl: 45,
+                bucket: "above",
+                bad: None,
+            }],
+            ..crate::render::TextBlocks::default()
+        };
+        let (farm, warnings) = config::parse_farm(
+            "[[farm]]\nfor = \"Fury Druid\"\nitems = [\n\
+             { name = \"Fortitude\", kind = \"runeword\", slot = \"body\" },\n\
+             { name = \"Bulwark\", kind = \"runeword\", merc = true, slot = \"helm\" },\n\
+             { name = \"Bulwark\", kind = \"runeword\" },\n]\n",
+        )?;
+        assert_eq!(warnings, Vec::<String>::new());
+        let bis = config::Bis {
+            build: "test".to_owned(),
+            slots: BTreeMap::new(),
+            merc_slots: [("helm".to_owned(), vec!["Bulwark".to_owned()])].into(),
+        };
+        let mut info = live_info(5, &blocks, &[], &[], &[]);
+        info.char_level = Some(43);
+        info.bis = Some(&bis);
+        info.farm = &farm;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        let hint = |pointer: &str| -> Result<String> {
+            Ok(json
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .with_context(|| format!("no hint at {pointer}"))?
+                .to_owned())
+        };
+        // Fortitude as body armor: armor only, no weapon group.
+        let fort = hint("/farm/groups/0/items/0/base_hint")?;
+        assert!(fort.starts_with("4 sockets: "), "{fort}");
+        assert!(!fort.contains("weapons: ") && !fort.contains("armor: "), "{fort}");
+        // The merc's Bulwark: no druid pelt, strongest first with its defense.
+        let merc = hint("/farm/groups/0/items/1/base_hint")?;
+        assert!(
+            !merc.contains("Wolf Head") && !merc.contains("Hawk Helm"),
+            "{merc}"
+        );
+        let defs: Vec<u32> = merc
+            .split("(def ")
+            .skip(1)
+            .map(|s| s.split(',').next().unwrap_or_default().parse())
+            .collect::<Result<_, _>>()?;
+        assert!(defs.len() >= 2, "{merc}");
+        assert!(defs.windows(2).all(|w| w.first() >= w.get(1)), "{merc}");
+        // The gear card's merc helm column ranks the same way.
+        assert_eq!(hint("/gear/merc/0/pieces/0/base_hint")?, merc);
+        // Without merc/slot the druid's own cheapest helms, pelts included.
+        let own = hint("/farm/groups/0/items/2/base_hint")?;
+        assert!(own.contains("Wolf Head") && !own.contains("(def "), "{own}");
         Ok(())
     }
 

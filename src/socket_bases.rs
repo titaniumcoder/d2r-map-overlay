@@ -45,7 +45,8 @@ pub enum Wearer {
     Player(u32),
     /// The mercenary, always taken as an Act 2 Desert Mercenary: the live snapshot doesn't read
     /// the hireling's act, and every build here uses Act 2. A mercenary can't wear class-only
-    /// bases, and its weapons are only polearms and spears ([`ACT2_MERC_WEAPONS`]).
+    /// bases (pelts, barbarian helms, ...; circlets have no class and stay in), and its weapons
+    /// are only polearms and spears ([`ACT2_MERC_WEAPONS`]).
     Act2Merc,
 }
 
@@ -64,12 +65,20 @@ fn wearable(wearer: Wearer, ty: &str, slot: u8, class: Option<u8>) -> bool {
     }
 }
 
+/// Whether the hint ranks by defense: the mercenary's helm or body armor (user request,
+/// 2026-11-20: the merc wants the strongest base, its strength is no concern of the player's).
+fn by_defense(wearer: Wearer, slot: Option<u8>) -> bool {
+    wearer == Wearer::Act2Merc && matches!(slot, Some(1 | 3))
+}
+
 /// One base that can drop with the wanted socket count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pick {
     pub name: &'static str,
     pub str: u32,
     pub dex: u32,
+    /// Maximum base defense (armor.txt `maxac`; 0 for weapons).
+    pub def: u16,
     /// Index into the runeword's `bases` of the category it matched first.
     pub category: usize,
 }
@@ -106,7 +115,8 @@ fn type_cap(ty: &str, ilvl: u32) -> u8 {
 /// exactly `sockets` sockets at item level `max_ilvl` or below, whose quality level is ≤
 /// `max_ilvl`, that `wearer` can use ([`Wearer`]) and, with `slot` set, that is worn in that
 /// body slot.
-/// Sorted by strength + dexterity requirement, then quality level, then name.
+/// Sorted by strength + dexterity requirement, then quality level, then name; for the
+/// mercenary's helm or body armor by maximum defense, highest first, then the same keys.
 ///
 /// The socket check uses `max_ilvl` alone: the caps only grow with item level, so the
 /// highest reachable level is where a base can roll the most sockets.
@@ -129,7 +139,7 @@ pub fn natural_bases(
         .collect();
     let mut picks: Vec<(u32, &str, Pick)> = SOCKETABLE
         .iter()
-        .filter_map(|&(code, name, ty, max, qlvl)| {
+        .filter_map(|&(code, name, ty, max, qlvl, def)| {
             let base = bases_data::base(code)?;
             let category = wanted.iter().position(|w| w.is_some_and(|w| is_a(ty, w, 0)))?;
             let max = usize::from(max.min(type_cap(ty, max_ilvl)));
@@ -144,12 +154,18 @@ pub fn natural_bases(
                     name,
                     str: base.str,
                     dex: base.dex,
+                    def,
                     category,
                 },
             ))
         })
         .collect();
-    picks.sort_by_key(|&(qlvl, name, p)| (p.str.saturating_add(p.dex), qlvl, name));
+    let defense = by_defense(wearer, slot);
+    picks.sort_by_key(|&(qlvl, name, p)| {
+        // `Reverse` puts the highest defense first; 0 for everything outside the merc's armor.
+        let def = std::cmp::Reverse(if defense { p.def } else { 0 });
+        (def, p.str.saturating_add(p.dex), qlvl, name)
+    });
     picks.into_iter().map(|(_, _, p)| p).collect()
 }
 
@@ -166,18 +182,23 @@ fn requirement(p: &Pick) -> String {
 /// The dashboard's base hint for runeword `word`: `"4 sockets: Hunter's Bow (28 Dex),
 /// Long Bow (22/19), …"` — the cheapest four [`natural_bases`] by requirement, or, when the
 /// runeword allows several categories that each have bases, the cheapest three per category
-/// (`"4 sockets: swords: … · shields: …"`). `None` when nothing qualifies (the caller falls
-/// back to the category names).
+/// (`"4 sockets: swords: … · shields: …"`). For the mercenary's helm or body armor the four
+/// strongest, with their defense: `"3 sockets: Corona (def 165, 174 Str), …"`. `None`
+/// when nothing qualifies (the caller falls back to the category names).
 #[must_use]
 pub fn hint(word: &Runeword, max_ilvl: u32, wearer: Wearer, slot: Option<u8>) -> Option<String> {
     let sockets = word.runes.len();
     let picks = natural_bases(word.bases, sockets, max_ilvl, wearer, slot);
-    let list = |ps: &mut dyn Iterator<Item = &Pick>, n: usize| {
-        ps.take(n)
-            .map(|p| format!("{} ({})", p.name, requirement(p)))
-            .collect::<Vec<_>>()
-            .join(", ")
+    let defense = by_defense(wearer, slot);
+    let label = |p: &Pick| {
+        if defense {
+            format!("{} (def {}, {})", p.name, p.def, requirement(p))
+        } else {
+            format!("{} ({})", p.name, requirement(p))
+        }
     };
+    let list =
+        |ps: &mut dyn Iterator<Item = &Pick>, n: usize| ps.take(n).map(label).collect::<Vec<_>>().join(", ");
     let groups: Vec<(usize, &&str)> = word
         .bases
         .iter()
@@ -272,7 +293,7 @@ mod tests {
         let picks = natural_bases(&["weapons"], 4, 60, Wearer::Act2Merc, Some(4));
         assert!(names(&picks).contains(&"Voulge"), "{:?}", names(&picks));
         for p in &picks {
-            let (_, _, ty, _, _) = SOCKETABLE
+            let (_, _, ty, _, _, _) = SOCKETABLE
                 .iter()
                 .find(|row| row.1 == p.name)
                 .ok_or_else(|| anyhow::anyhow!("{}", p.name))?;
@@ -289,6 +310,37 @@ mod tests {
         assert!(
             helms.contains(&"Cap") && !helms.contains(&"Wolf Head"),
             "{helms:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_merc_helm_and_body_rank_by_defense() -> anyhow::Result<()> {
+        let helms = natural_bases(&["helms"], 3, 60, Wearer::Act2Merc, Some(1));
+        let names = names(&helms);
+        assert!(
+            !names.contains(&"Wolf Head") && !names.contains(&"Jawbone Cap"),
+            "{names:?}"
+        );
+        assert!(
+            helms
+                .windows(2)
+                .all(|w| w.first().map(|p| p.def) >= w.get(1).map(|p| p.def)),
+            "{names:?}"
+        );
+        let bulwark = crate::runewords_data::lookup("Bulwark").ok_or_else(|| anyhow::anyhow!("Bulwark"))?;
+        let text = hint(bulwark, 99, Wearer::Act2Merc, Some(1)).ok_or_else(|| anyhow::anyhow!("no hint"))?;
+        assert!(
+            text.starts_with("3 sockets: Corona (def 165, 174 Str), Spired Helm (def 159, 192 Str)"),
+            "{text}"
+        );
+        // The merc's weapon and the player's helms keep the requirement order.
+        let druid = hint(bulwark, 99, DRUID, Some(1)).ok_or_else(|| anyhow::anyhow!("no hint"))?;
+        assert!(!druid.contains("(def "), "{druid}");
+        let body = natural_bases(&["armor"], 4, 60, Wearer::Act2Merc, Some(3));
+        assert!(
+            body.windows(2)
+                .all(|w| w.first().map(|p| p.def) >= w.get(1).map(|p| p.def))
         );
         Ok(())
     }

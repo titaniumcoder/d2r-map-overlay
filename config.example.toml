@@ -63,12 +63,17 @@ normal_only = ["stamina"]
 # [[farm]]
 # for = "Fury Druid"
 # items = [
-#   { name = "Fortitude", kind = "runeword" },
+#   { name = "Fortitude", kind = "runeword", slot = "body" },
 #   { name = "Raven Frost", kind = "unique" },
 #   { name = "Lawbringer", kind = "runeword", count = 2 },
+#   { name = "Bulwark", kind = "runeword", merc = true, slot = "helm" },
 # ]
 #
-# kind: runeword, unique or set (by in-game name); count defaults to 1. An entry is done once
+# kind: runeword, unique or set (by in-game name); count defaults to 1. Optional, for a
+# runeword's base hint: `merc = true` (for the mercenary, taken as Act 2: no class-only bases,
+# polearm/spear weapons; with slot = helm or body, bases ranked by defense) and `slot` (weapon, shield or
+# offhand, helm, body, gloves, boots, belt, amulet, ring: only bases of that slot; left out,
+# any slot the runeword allows). An entry is done once
 # the shared stash holds `count` copies, found while the played character carries one
 # elsewhere, else missing. A runeword still to build lists its runes, and the stash panel's
 # rune stacks mark (⚑) the runes the list still needs.

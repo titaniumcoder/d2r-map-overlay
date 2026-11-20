@@ -15,8 +15,9 @@ item's damage and defense come from its own stat list, not from here.
 
 Two more tables feed the natural-socket base hints (src/socket_bases.rs):
 - SOCKETABLE: every spawnable weapon/armor base that can have sockets: its English name
-  (`name`), raw item type (`type`, not folded), max sockets (`gemsockets`) and quality
-  level (`level`, the lowest item level it drops at);
+  (`name`), raw item type (`type`, not folded), max sockets (`gemsockets`), quality
+  level (`level`, the lowest item level it drops at) and maximum base defense (`maxac`,
+  armor only; 0 for weapons): the merc's armor hints rank by it;
 - ITEM_TYPES: every itemtypes.txt row: its two Equiv parents and its natural-socket caps
   MaxSockets1/2/3 (item level <= 25 / <= 40 / above; the thresholds are 25/40 in every row,
   asserted below).
@@ -67,7 +68,9 @@ for r in table("weapons") + table("armor"):
     if code in codes and r.get("spawnable") == 1 and int(r.get("gemsockets") or 0) > 0:
         name = r["name"]
         assert '"' not in name and "\\" not in name, name
-        socketable.append((code, name, r["type"], int(r["gemsockets"]), int(r.get("level") or 0)))
+        maxac = int(r.get("maxac") or 0)
+        assert maxac < 65536, (code, maxac)
+        socketable.append((code, name, r["type"], int(r["gemsockets"]), int(r.get("level") or 0), maxac))
 socketable.sort()
 
 types = []
@@ -125,13 +128,14 @@ print("    })")
 print("}")
 print()
 print("/// A [`SOCKETABLE`] row: (code, English name, raw items.txt type, max sockets, quality")
-print("/// level). Every spawnable weapon or armor base with `gemsockets` > 0, sorted by code.")
-print("pub type SocketRow = (&'static str, &'static str, &'static str, u8, u8);")
+print("/// level, maximum base defense (0 for weapons)). Every spawnable weapon or armor base with")
+print("/// `gemsockets` > 0, sorted by code.")
+print("pub type SocketRow = (&'static str, &'static str, &'static str, u8, u8, u16);")
 print()
 print("/// Spawnable bases that can have sockets ([`SocketRow`]).")
 print("pub const SOCKETABLE: &[SocketRow] = &[")
-for code, name, ty, sockets, qlvl in socketable:
-    print(f'    ("{code}", "{name}", "{ty}", {sockets}, {qlvl}),')
+for code, name, ty, sockets, qlvl, maxac in socketable:
+    print(f'    ("{code}", "{name}", "{ty}", {sockets}, {qlvl}, {maxac}),')
 print("];")
 print()
 print("/// An [`ITEM_TYPES`] row: (code, Equiv1, Equiv2 (\"\" = none), natural-socket caps at item")
