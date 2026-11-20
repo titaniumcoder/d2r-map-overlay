@@ -231,6 +231,7 @@ fn handle<P: Playstyle>(stream: TcpStream, files: &Files) {
             ("GET", "/favicon.ico") => respond("200 OK", "image/svg+xml", FAVICON_SVG),
             ("GET", "/api/config") => api_config::<P>(files),
             ("GET", "/api/builds") => api_builds::<P>(files),
+            ("GET", "/api/loot-filter") => loot_filter_response(P::loot_filter(&files.quiet())),
             ("GET", "/api/live") => api_live(),
             // The stream owns the connection from here on; nothing is written after it.
             ("GET", "/api/live-stream") => {
@@ -406,6 +407,26 @@ fn api_config<P: Playstyle>(files: &Files) -> String {
 fn api_builds<P: Playstyle>(files: &Files) -> String {
     let playstyle = P::load(&files.quiet());
     respond("200 OK", "application/json", &playstyle.builds_json().to_string())
+}
+
+/// `GET /api/loot-filter`: the playstyle's loot filter profile ([`Playstyle::loot_filter`]) as
+/// `application/json`, byte for byte (not re-serialised: the game imports exactly this text);
+/// `404` with "no loot filter in this playstyle" when it has none, `500` when the file isn't
+/// UTF-8 (no JSON then). `no-store`: an edited override shows on the next click.
+fn loot_filter_response(filter: Option<Vec<u8>>) -> String {
+    match filter.map(String::from_utf8) {
+        Some(Ok(json)) => respond_no_store("200 OK", "application/json", &json),
+        Some(Err(_)) => respond(
+            "500 Internal Server Error",
+            "text/plain",
+            "the loot filter file is not UTF-8\n",
+        ),
+        None => respond(
+            "404 Not Found",
+            "text/plain",
+            "no loot filter in this playstyle\n",
+        ),
+    }
 }
 
 /// Runs one of the playstyle's saves under [`CONFIG_WRITE`]: concurrent saves must not both
@@ -677,6 +698,11 @@ mod tests {
             Ok(())
         }
 
+        /// `loot-filter.json` in the shipped folder, if any (the route test's file).
+        fn loot_filter(files: &Files) -> Option<Vec<u8>> {
+            std::fs::read(files.shipped.as_ref()?.join("loot-filter.json")).ok()
+        }
+
         fn remove_character(_: &Files, _: &str) -> Result<()> {
             Ok(())
         }
@@ -721,6 +747,53 @@ mod tests {
         Ok(())
     }
 
+    /// One `GET path` through [`handle`] with `files`: the whole answer.
+    fn get(path: &str, files: Files) -> Result<Vec<u8>> {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        let addr = listener.local_addr()?;
+        let server = thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                handle::<NoPlaystyle>(stream, &files);
+            }
+        });
+        let mut client = std::net::TcpStream::connect(addr)?;
+        client.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())?;
+        let mut answer = Vec::new();
+        client.read_to_end(&mut answer)?;
+        server.join().map_err(|_| anyhow!("server thread panicked"))?;
+        Ok(answer)
+    }
+
+    #[test]
+    fn the_loot_filter_is_served_byte_for_byte() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("d2r-loot-filter-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        // Odd spacing and a non-ASCII name: served as is, not re-serialised.
+        let file = "{\n  \"name\": \"Dru\u{ef}d \u{2014} v1\",\n\t\"rules\": [ ]\n}\n";
+        std::fs::write(dir.join("loot-filter.json"), file)?;
+        let files = Files {
+            shipped: Some(dir.clone()),
+            ..Files::default()
+        };
+        let answer = get("/api/loot-filter", files)?;
+        let text = String::from_utf8(answer.clone())?;
+        assert!(text.starts_with("HTTP/1.1 200 OK"), "{text}");
+        assert!(text.contains("Content-Type: application/json"), "{text}");
+        assert!(text.contains("Cache-Control: no-store"), "{text}");
+        assert!(answer.ends_with(file.as_bytes()), "{text}");
+        assert!(
+            text.contains(&format!("Content-Length: {}\r\n", file.len())),
+            "{text}"
+        );
+        std::fs::remove_dir_all(&dir)?;
+        // No file: a 404 the page shows as "no loot filter in this playstyle".
+        let none = String::from_utf8(get("/api/loot-filter", Files::default())?)?;
+        assert!(none.starts_with("HTTP/1.1 404"), "{none}");
+        assert!(none.ends_with("no loot filter in this playstyle\n"), "{none}");
+        assert!(loot_filter_response(Some(vec![0xff, b'{'])).starts_with("HTTP/1.1 500"));
+        Ok(())
+    }
+
     #[test]
     fn root_is_the_dashboard_and_config_moved() {
         for path in ["/", "/index.html", "/dashboard"] {
@@ -747,7 +820,7 @@ mod tests {
     /// single-file pages before they moved to `assets/` (refactor step 6). A deliberate page
     /// change updates these numbers (the failure message prints the new ones). Step 8 added the
     /// farm panel's "worth farming" line; the dashboard sounds (2026-11-20) the ▾ sound picker
-    /// and the sound detection.
+    /// and the sound detection; the config page's "Loot filter" section (2026-11-20).
     #[test]
     fn served_pages_match_their_snapshot() {
         let dashboard = html_page("/");
@@ -759,7 +832,7 @@ mod tests {
         );
         assert_eq!(
             (config.len(), format!("{:#018x}", fnv1a(config.as_bytes()))),
-            (8_385, "0xd40f46a49bba9c05".to_owned()),
+            (10_613, "0xd31264b357429ae1".to_owned()),
             "config page"
         );
     }

@@ -45,6 +45,11 @@ Remote: `origin` = github.com/titaniumcoder/d2r-map-overlay (public). Push to `o
 - Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (`ptrace_scope=1`). After a release build the user runs
   `sudo setcap cap_sys_ptrace=ep target/release/d2r-map-overlay`. Ask the user for every sudo command;
   the agent has no password (any passwordless grant is temporary).
+- **Deploy with `scripts/deploy.sh`** (the user runs it; it restarts the overlay): release build,
+  a snapshot of `playstyles/` in `~/.local/share/d2r-map-overlay/playstyles-deployed/`, `sudo -n
+  setcap`, restart with `D2R_PLAYSTYLES_DIR` on the snapshot, dashboard opened. The running
+  binary never reads the repo's `playstyles/`, so editing build files can't hot-reload
+  half-done work (or a field the old binary doesn't know) into the live overlay.
 - `research/*.py` are the Python probes that established the offsets: run with `sudo python3 -I <script> …`;
   they are the reference to diff the Rust reader against.
 

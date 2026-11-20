@@ -506,8 +506,10 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - **Agent-authored build files**: `playstyles/summoner-fury/builds/<slug>.toml` since step 7 (was
   `~/.config/d2r-map-overlay/builds/`, still read as a fallback), one build per file
   (schema: `name`, `damages`, `notes`, `[slots]`, `[merc_slots]` — pieces as `"Name@<required level>"`,
-  ordered best→worst; optional `merc_act = 1 | 2 | 3 | 5`, default 2, the act of the build's
-  mercenary, from the source JSON's `merc.act` in `gen_build.py`). Loaded by `playstyle::files` (missing dir = no builds, no error), keyed by
+  ordered best→worst; optional `merc_acts = [2, 1]`, primary first (the older single
+  `merc_act = N` still reads), default `[2]`, the acts of the build's mercenaries, from the
+  source JSON's `merc.acts` / `merc.act` in `gen_build.py`; each merc runeword goes to the first
+  act that can carry it, `Build::merc_wearer`). Loaded by `playstyle::files` (missing dir = no builds, no error), keyed by
   lowercased build name — the slug a selection refers to. The webapp does NOT edit them.
 - **Selection-only config**: the webapp writes ONLY `build = "<slug>"` into `[bis."<char>"]` (toml_edit,
   comment-preserving; the tables are created if missing) — since step 7 in
@@ -677,6 +679,17 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each release build the user runs
 `sudo setcap cap_sys_ptrace=ep target/release/d2r-map-overlay` (a `just`/Makefile target). No sudo at runtime.
 
+**Deploy snapshot (2026-11-20).** An edit of the repo's build files (the new `merc_acts` field)
+hot-reloaded into the running release overlay, whose parser rejected the field: "playstyle
+reloaded (0 builds)", and the stash plan said to sell the Lawbringer bases. Two fixes:
+- `scripts/deploy.sh` (the user runs it): release build, copies `playstyles/` to
+  `~/.local/share/d2r-map-overlay/playstyles-deployed/` (replacing the old copy), `sudo -n setcap`,
+  restarts the overlay with `D2R_PLAYSTYLES_DIR` on that copy (log `~/.local/share/d2r-map-overlay/overlay.log`; it waits for the old process to exit and for the dashboard to answer), opens
+  the dashboard. The live overlay never reads files being edited.
+- The hot reload keeps every current build while any build file is unreadable or invalid
+  (`files::reload`, like the other files' keep-current rule); before, a broken build file was
+  only skipped, so two broken files left no builds.
+
 ## Plugin refactor (2026-11-20, user-approved)
 The map overlay is the base. How the game is read becomes a **reader plugin**; the user's leveling
 and farming strategy becomes a **playstyle plugin** (only Summoner Druid → Fury Druid). The
@@ -746,7 +759,7 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
 - **Keep · own**: pieces of the active build and its later stages (`BiS` slots, extras,
   `switch_requires`) and of the farm list, as many copies as needed minus the worn ones; one white
   base per (runeword, wearer, slot) need: allowed type, exactly the rune count of sockets, usable by
-  the player class or the merc of the build's `merc_act`; each copy of the runeword already held (worn, carried,
+  the player class or the merc of the build's act that carries it (`merc_acts`); each copy of the runeword already held (worn, carried,
   stashed, merc) drops one such need, and the narrowest need picks its base first. Each need
   keeps the **best** fitting base held (user, 2026-11-20: a better base for the same runeword
   replaces the old one): higher base damage for weapons (min + max, `weapons_data::DAMAGE` from
@@ -761,7 +774,28 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   stage that also has `offhand` pieces (`Wearer::PlayerWithOffhand`; `swap` keeps both hands) and
   for an Act 3 (shield) or Act 5 (dual wield) merc. Merc weapons per act: 1 bows (no crossbows),
   2 polearms and spears (no javelins), 3 swords + shields, 5 swords; the Act 5 merc's `offhand`
-  takes a second sword. A base that fits a need except for its hands is sold with the reason
+  takes a second sword. Class items (D2R patch 2.4, verified 2026-11-20): the Act 1 rogue also
+  uses amazon bows (not their javelins or spears), the Act 5 merc barbarian helms (Arreat's
+  Face); Act 2 and 3 none (`MercAct::class_items`).
+- **Several merc acts** (user, 2026-11-20: "sometimes I play the act 1 merc especially in normal
+  before I have the insight runeword ... or just for fun as she can give me the harmony buff
+  too"). `merc_acts = [2, 1]` on the summoner, `[5]` on the Fury. Gear any listed act can wear
+  is kept (`Scoring::merc_acts`); the merc grid and farm hints name each runeword's bases for its
+  act, prefixed "Act 1 merc:" when it isn't the primary (`web::merc_base_hint`). The summoner's
+  merc weapon list ends with Harmony for the rogue. **One Harmony, one base**: an alternative
+  act's runeword that another need already wants (the Fury's swap Harmony) adds no second need;
+  that need also takes the rogue's bases (`BaseNeed::also`, `Needs::share`): the one Harmony is
+  swapped between druid and rogue. Alone, it is a need of its own. The "merc helm with life
+  leech" switch group gained Arreat's Face and Demonhorn's Edge (barbarian helms).
+- [x] merc acts list + amazon bows / barbarian helms (2026-11-20)
+- **Loot filter** (2026-11-20): `playstyles/<name>/loot-filter.json`, a D2R in-game loot filter
+  profile (n0130dy v1.5 trimmed for the druid), served byte for byte at `GET /api/loot-filter`
+  (`Playstyle::loot_filter`, the user's `~/.config/d2r-map-overlay/playstyle/loot-filter.json`
+  wins); the `/config` page's "Loot filter" section shows "<profile name> — loot filter of this
+  playstyle" with a "Copy filter JSON" button (clipboard, else a selected read-only textarea).
+  The profile is named after the playstyle (user): `playstyle.toml`'s `filter_name = "Fury
+  Druid"` is the expected name; load and reload warn on stderr when the JSON's `name` differs.
+- [x] loot filter copy on /config (2026-11-20) A base that fits a need except for its hands is sold with the reason
   "two-handed". A slot-less want of a runeword a build places in a slot (a `switch_requires`
   condition, a farm entry) adds no looser need, and a farm runeword its group's build places takes
   that build's needs. Hints, map marks and the merc-wearable rule use the same act.

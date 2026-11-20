@@ -40,7 +40,8 @@ const CATEGORY_TYPES: [(&str, &str); 22] = [
 /// The act a mercenary was hired in: it decides the weapons the mercenary wields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MercAct {
-    /// Rogue Scout: bows (not crossbows).
+    /// Rogue Scout: bows (not crossbows), the amazon bows included (D2R patch 2.4), not the
+    /// amazon's javelins or spears.
     Act1,
     /// Desert Mercenary: polearms and spears (not javelins). The default: the live snapshot
     /// doesn't read the hireling's act, and a build file without `merc_act` means this one.
@@ -78,13 +79,25 @@ impl MercAct {
         }
     }
 
-    /// The item types it wields (class-only variants, such as amazon bows and spears, drop
-    /// out through the class check).
+    /// The item types it wields. Class-only variants drop out through the class check, except
+    /// those [`MercAct::class_items`] lets in (amazon bows are `bow`s).
     const fn weapons(self) -> &'static [&'static str] {
         match self {
             Self::Act1 => &["bow"],
             Self::Act2 => &["pole", "spea"],
             Self::Act3 | Self::Act5 => &["swor"],
+        }
+    }
+
+    /// The class-only bases it can use besides the classless ones, as (body slot, class id):
+    /// since D2R patch 2.4 the Act 1 rogue uses amazon bows (weapon slot; its weapon types
+    /// keep the amazon javelins and spears out) and the Act 5 barbarian barbarian helms
+    /// (Arreat's Face is a standard Act 5 merc helm).
+    const fn class_items(self) -> Option<(u8, u8)> {
+        match self {
+            Self::Act1 => Some((4, 0)),
+            Self::Act5 => Some((1, 4)),
+            Self::Act2 | Self::Act3 => None,
         }
     }
 
@@ -109,8 +122,9 @@ pub enum Wearer {
     /// The player character of this class with an off-hand piece (a shield) beside the weapon:
     /// as [`Wearer::Player`], but only one-handed weapons ([`two_handed_for`]).
     PlayerWithOffhand(u32),
-    /// The mercenary of this act. It can't wear class-only bases (pelts, barbarian helms, ...;
-    /// circlets have no class and stay in), and its weapons are its act's
+    /// The mercenary of this act. It can't wear class-only bases (pelts, amazon spears, ...;
+    /// circlets have no class and stay in) but those of its act ([`MercAct::class_items`]:
+    /// amazon bows for Act 1, barbarian helms for Act 5), and its weapons are its act's
     /// ([`MercAct::weapons`]); an Act 3 one also takes shields.
     Merc(MercAct),
 }
@@ -133,7 +147,7 @@ fn wearable(wearer: Wearer, ty: &str, slot: u8, class: Option<u8>) -> bool {
         Wearer::Player(c) | Wearer::PlayerWithOffhand(c) => class.is_none_or(|only| u32::from(only) == c),
         // Javelins are spears in itemtypes.txt (Equiv2), but no merc weapon.
         Wearer::Merc(act) => {
-            class.is_none()
+            class.is_none_or(|only| act.class_items() == Some((slot, only)))
                 && match slot {
                     4 => act.weapons().iter().any(|w| is_a(ty, w, 0)) && !is_a(ty, "jave", 0),
                     5 => act == MercAct::Act3,
@@ -168,7 +182,8 @@ fn in_hand(code: &str, wearer: Wearer) -> bool {
 }
 
 /// Whether the mercenary of `act` can wear the base with item code `code`: a helm or body
-/// armor of no class, a weapon of its act (one-handed for Act 3 and 5), and for Act 3 a shield.
+/// armor of no class (barbarian helms too for Act 5), a weapon of its act (one-handed for Act 3
+/// and 5; amazon bows too for Act 1), and for Act 3 a shield.
 #[must_use]
 pub fn merc_wears(code: &str, act: MercAct) -> bool {
     let wearer = Wearer::Merc(act);
@@ -340,6 +355,19 @@ pub fn carries(word: &Runeword, code: &str, wearer: Wearer, slot: Option<u8>) ->
     socketable_row(code).is_some_and(|&(_, _, ty, max, _, _)| {
         usize::from(max.min(type_cap(ty, u32::MAX))) >= word.runes.len()
     }) && fits(word, code, wearer, slot)
+}
+
+/// The first of `acts` whose mercenary can carry runeword `word` in body slot `slot` (`None`:
+/// any) on some base ([`carries`]): a build with several mercenaries (`merc_acts = [2, 1]`)
+/// plans Insight for the Act 2 one and Harmony, a bow runeword, for the Act 1 rogue. `None`
+/// when no act can.
+#[must_use]
+pub fn merc_act_for(word: &Runeword, acts: &[MercAct], slot: Option<u8>) -> Option<MercAct> {
+    acts.iter().copied().find(|&act| {
+        SOCKETABLE
+            .iter()
+            .any(|row| carries(word, row.0, Wearer::Merc(act), slot))
+    })
 }
 
 /// A base's requirement text: `"25/35"` (str/dex), `"43 Str"`, `"28 Dex"` or `"no req"`.
@@ -596,11 +624,19 @@ mod tests {
     #[test]
     fn each_merc_act_wields_its_own_weapons() {
         let weapons = |act| natural_bases(&["weapons"], 3, 99, Wearer::Merc(act), Some(4));
-        // Act 1 rogue: bows, no crossbows, no amazon bows.
+        // Act 1 rogue: bows and amazon bows (D2R 2.4), no crossbows, no amazon spears.
         let rogue = weapons(MercAct::Act1);
         assert!(names(&rogue).contains(&"Long Bow"), "{:?}", names(&rogue));
-        assert!(types(&rogue).iter().all(|&t| t == "bow"), "{:?}", types(&rogue));
-        assert!(!names(&rogue).contains(&"Stag Bow"));
+        assert!(names(&rogue).contains(&"Stag Bow"), "{:?}", names(&rogue));
+        assert!(
+            types(&rogue).iter().all(|&t| matches!(t, "bow" | "abow")),
+            "{:?}",
+            types(&rogue)
+        );
+        assert!(merc_wears("am1", MercAct::Act1) && !merc_wears("am1", MercAct::Act2));
+        assert!(!merc_wears("am3", MercAct::Act1), "Maiden Spear: amazon spear");
+        assert!(!merc_wears("am5", MercAct::Act1), "Maiden Javelin");
+        assert!(!merc_wears("lxb", MercAct::Act1), "Light Crossbow");
         // Act 3 and Act 5: one-handed swords only (the Act 5 one per the user: dual wield).
         for act in [MercAct::Act3, MercAct::Act5] {
             let swords = weapons(act);
@@ -633,6 +669,8 @@ mod tests {
         // Javelins are spears in itemtypes.txt, but never a merc weapon.
         assert!(!merc_wears("jav", MercAct::Act2));
         assert!(merc_wears("spr", MercAct::Act2) && !merc_wears("spr", MercAct::Act5));
+        // Barbarian helms only for the Act 5 merc (D2R 2.4: Arreat's Face is a standard one).
+        assert!(merc_wears("ba1", MercAct::Act5) && !merc_wears("ba1", MercAct::Act2));
         // Armor fits every act; a shield only the Act 3 merc.
         assert!(merc_wears("cap", MercAct::Act5) && merc_wears("qui", MercAct::Act1));
         assert!(merc_wears("lrg", MercAct::Act3) && !merc_wears("lrg", MercAct::Act5));
@@ -670,6 +708,43 @@ mod tests {
         assert!(!hint.contains("Claymore") && !hint.contains("Maul"), "{hint}");
         let free = super::hint(lawbringer, 99, DRUID, Some(4)).ok_or_else(|| anyhow::anyhow!("no hint"))?;
         assert!(free.contains("Claymore") && free.contains("Maul"), "{free}");
+        Ok(())
+    }
+
+    #[test]
+    fn the_act1_rogue_carries_harmony_on_an_amazon_bow() -> anyhow::Result<()> {
+        let harmony = crate::runewords_data::lookup("Harmony").ok_or_else(|| anyhow::anyhow!("Harmony"))?;
+        let rogue = Wearer::Merc(MercAct::Act1);
+        // Matriarchal Bow (`amb`): an amazon bow that can drop with 4 sockets.
+        assert!(carries(harmony, "amb", rogue, Some(4)));
+        assert!(carries(harmony, "hbw", rogue, Some(4)), "Hunter's Bow");
+        assert!(!carries(harmony, "amb", DRUID, Some(4)), "the druid can't");
+        let picks = names(&natural_bases(&["missile weapons"], 4, 99, rogue, Some(4)));
+        assert!(
+            picks.contains(&"Matriarchal Bow") && picks.contains(&"Hunter's Bow"),
+            "{picks:?}"
+        );
+        // A build with an Act 2 and an Act 1 merc: Insight for the Act 2 one, Harmony the rogue.
+        let insight = crate::runewords_data::lookup("Insight").ok_or_else(|| anyhow::anyhow!("Insight"))?;
+        let acts = [MercAct::Act2, MercAct::Act1];
+        assert_eq!(merc_act_for(insight, &acts, Some(4)), Some(MercAct::Act2));
+        assert_eq!(merc_act_for(harmony, &acts, Some(4)), Some(MercAct::Act1));
+        assert_eq!(merc_act_for(harmony, &[MercAct::Act5], Some(4)), None);
+        Ok(())
+    }
+
+    #[test]
+    fn the_act5_merc_helm_can_be_a_barbarian_helm() -> anyhow::Result<()> {
+        let bulwark = crate::runewords_data::lookup("Bulwark").ok_or_else(|| anyhow::anyhow!("Bulwark"))?;
+        let barbarian = Wearer::Merc(MercAct::Act5);
+        // Savage Helmet (`ba9`): a barbarian helm with 3 sockets.
+        assert!(carries(bulwark, "ba9", barbarian, Some(1)));
+        assert!(!carries(bulwark, "ba9", Wearer::Merc(MercAct::Act2), Some(1)));
+        let helms = names(&natural_bases(&["helms"], 3, 99, barbarian, Some(1)));
+        assert!(
+            helms.contains(&"Savage Helmet") && !helms.contains(&"Wolf Head"),
+            "{helms:?}"
+        );
         Ok(())
     }
 }

@@ -2659,6 +2659,54 @@ fn next_section_carries_the_route_step() -> Result<()> {
     Ok(())
 }
 
+/// The summoner's merc weapon column (`merc_acts = [2, 1]`): Insight's hint names the Act 2
+/// merc's polearms, Harmony's the Act 1 rogue's bows, marked as that act's.
+#[test]
+fn merc_hints_are_per_act() -> Result<()> {
+    let config = crate::files::load(&d2r_core::playstyle::Files {
+        shipped: Some(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury"),
+        ),
+        quiet: true,
+        ..d2r_core::playstyle::Files::default()
+    });
+    let build = config
+        .build_defs
+        .get("summoner druid")
+        .context("shipped summoner build")?;
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.live.char_level = Some(57);
+    info.live.difficulty = Some(1);
+    info.build = Some(build);
+    let weapon = build.merc_slots.get("weapon").context("merc weapon")?;
+    let pieces = grid_pieces(
+        weapon,
+        None,
+        &[],
+        (Some(4), Wearer::Merc(build.merc_act())),
+        &info,
+    );
+    let hint = |name: &str| {
+        pieces
+            .iter()
+            .find(|p| p.get("name") == Some(&serde_json::json!(name)))
+            .and_then(|p| p.get("base_hint")?.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    };
+    assert!(
+        hint("Insight").starts_with("4 sockets: Voulge"),
+        "{}",
+        hint("Insight")
+    );
+    assert!(
+        hint("Harmony").starts_with("Act 1 merc: 4 sockets: Hunter's Bow"),
+        "{}",
+        hint("Harmony")
+    );
+    Ok(())
+}
+
 /// The live case of 2026-11-20 on the shipped summoner build: a level-57 druid whose merc
 /// wears Insight, Smoke and Bulwark (solo game, so `merc_worn` is filled). Each worn piece is
 /// ticked ✓ (Insight although its leveling window ended at 40), the stash's Soul Harvest and
@@ -2707,9 +2755,10 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
 
     let weapon = column(&gear, "Merc weapon");
     let names: Vec<_> = weapon.iter().map(|p| field(p, "name")).collect();
+    // Harmony last: the Act 1 rogue's (the build's second merc act), with that act's bows.
     assert_eq!(
         names,
-        ["Insight", "Soul Harvest", "The Battlebranch"],
+        ["Insight", "Soul Harvest", "The Battlebranch", "Harmony"],
         "{weapon:?}"
     );
     assert_eq!(field(&at(&weapon, 0), "tick"), "worn");

@@ -4,11 +4,11 @@
 use crate::config::FarmItem;
 use crate::worth::Why;
 use d2r_core::game::Place;
-use d2r_core::socket_bases::{MercAct, Wearer};
+use d2r_core::socket_bases::Wearer;
 use d2r_core::web::LiveInfo;
 
 use super::recipes::{Input, need_totals, owned_materials, rune_count};
-use super::{PanelInfo, base_hint};
+use super::{PanelInfo, base_hint, merc_base_hint};
 
 /// Where a farm-list entry stands, across characters: `Done` once the shared stash holds
 /// `count` copies, `Found` while the played character carries a copy outside it, else
@@ -121,17 +121,16 @@ pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
         .farm
         .iter()
         .filter_map(|group| {
-            // The group's mercenary: the current stage's act when the group is for it, else
+            // The group's mercenaries: the current stage's acts when the group is for it, else
             // Act 2 (the panel has no other build file at hand; armor bases don't care).
-            let merc_act = info
+            let build = info
                 .build
-                .filter(|b| d2r_core::names::same_name(&b.name, &group.target))
-                .map_or_else(MercAct::default, |b| b.merc_act);
+                .filter(|b| d2r_core::names::same_name(&b.name, &group.target));
             let items: Vec<serde_json::Value> = group
                 .items
                 .iter()
                 .filter(|item| !farm_hidden(&group.target, item, info))
-                .map(|item| farm_item_json(item, info, merc_act, &materials, &mut wanted))
+                .map(|item| farm_item_json(item, info, build, &materials, &mut wanted))
                 .collect();
             // A group whose entries are all worn leaves the list.
             (!items.is_empty()).then(|| serde_json::json!({ "for": group.target, "items": items }))
@@ -218,11 +217,11 @@ pub fn farm_worn(target: &str, item: &FarmItem, info: &PanelInfo) -> bool {
 
 /// One farm entry's JSON ([`farm_json`]); a runeword still to build adds its rune needs to
 /// `wanted` (rune → total need, runewords needing it). A mercenary entry's base hint is for
-/// the mercenary of `merc_act`.
+/// the mercenary of `build` that carries it ([`merc_base_hint`]; Act 2 without a build).
 pub fn farm_item_json(
     item: &FarmItem,
     info: &PanelInfo,
-    merc_act: MercAct,
+    build: Option<&crate::config::Build>,
     materials: &[(String, u32)],
     wanted: &mut Vec<(&'static str, u32, Vec<String>)>,
 ) -> serde_json::Value {
@@ -284,8 +283,12 @@ pub fn farm_item_json(
         "needs": item.needs.iter().map(|n| n.name()).collect::<Vec<_>>(),
         "note": item.note,
         "base_hint": word.and_then(|w| {
-            let wearer = if item.merc { Wearer::Merc(merc_act) } else { Wearer::Player(info.live.class) };
-            base_hint(w, info, item.slot.map(crate::config::FarmSlot::body), wearer)
+            let slot = item.slot.map(crate::config::FarmSlot::body);
+            if item.merc {
+                merc_base_hint(w, info, slot, build)
+            } else {
+                base_hint(w, info, slot, Wearer::Player(info.live.class))
+            }
         }),
     })
 }

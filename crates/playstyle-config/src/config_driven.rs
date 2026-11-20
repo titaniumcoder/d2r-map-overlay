@@ -119,6 +119,10 @@ impl Playstyle for ConfigDriven {
         files::select_build(files, name, build)
     }
 
+    fn loot_filter(files: &Files) -> Option<Vec<u8>> {
+        files::loot_filter(files)
+    }
+
     fn remove_character(files: &Files, name: &str) -> anyhow::Result<()> {
         files::remove_character(files, name)
     }

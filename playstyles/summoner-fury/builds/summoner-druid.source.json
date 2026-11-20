@@ -58,7 +58,11 @@
     "respec": "optional, from 75 (Akara's free reset of any difficulty whose Den of Evil reward is still unused; stat points are refunded too): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20 (460 s form), Rabies 1, Oak Sage 5 = 86 points. Only once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) is owned; without it the summoner goes on to 99. Details in the Fury Druid stage."
   },
   "merc": {
-    "type": "Act 2 Desert Mercenary: Normal Prayer, from Nightmare (level 40) Might",
+    "acts": [
+      2,
+      1
+    ],
+    "type": "Act 2 Desert Mercenary: Normal Prayer, from Nightmare (level 40) Might; alternative: Act 1 Rogue Scout (bows, amazon bows too since D2R 2.4): in Normal before Insight, or for Harmony's Vigor aura",
     "why": "hireling.json: Normal Act 2 mercs have Prayer, Defiance or Blessed Aim; Might, Holy Freeze and Thorns only in Nightmare and Hell. Might raises physical damage of everyone in its radius (pets and, after the respec, the werewolf), so the same merc carries into the Fury stage."
   },
   "skill_plan": {
@@ -602,6 +606,26 @@
       ],
       "why": "In the stash: +20 all resistances for the merc; the other option until Insight.",
       "rank_in_slot": 3
+    },
+    {
+      "name": "Harmony",
+      "slot": "merc_weapon",
+      "setup": "lvl 39-99 (alternative merc: the Act 1 rogue)",
+      "kind": "runeword",
+      "req_level": 39,
+      "merc_act": 1,
+      "base": "bow that dropped with 4 sockets (Act 1 rogue: bows, amazon bows too since D2R 2.4, no crossbows): Hunter's Bow (28 Dex), Long Bow (22/19), Composite Bow, or an amazon bow (Stag Bow, Matriarchal Bow); bows drop with at most 3 sockets up to item level 25, 4 from 26",
+      "stats": [
+        "Level 10 Vigor Aura When Equipped",
+        "+2-6 to Valkyrie",
+        "+200-275% Enhanced Damage",
+        "Adds 55-160 Fire/Cold/Lightning Damage",
+        "Level 20 Revive (25 Charges)",
+        "Regenerate Mana 20%"
+      ],
+      "why": "Act 1 rogue: Harmony gives Vigor + Valkyrie (Vigor as the rogue's aura for the whole party, Valkyrie from the druid's weapon swap); the rogue in Normal before Insight, or for fun (user, 2026-11-20). The Act 2 merc keeps Insight as the main weapon.",
+      "notes": "One Harmony serves the Fury stage's weapon swap and the rogue: it is swapped between them, so one base is kept. A merc uses no oskills or charges (Valkyrie, Revive): on the rogue only the Vigor aura works. Below level 39 the rogue shoots a plain bow.",
+      "rank_in_slot": 4
     },
     {
       "name": "Heart of the Oak",

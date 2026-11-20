@@ -25,9 +25,12 @@ live in BUILDS below, keyed by the source file's stem (`druid-leveling.source` c
 - `--prerequisites` (the stage before a manual switch): the next stage's `prerequisites`
   become this stage's `switch_note`.
 
-- The source's `merc.act` (1, 2, 3 or 5; optional) becomes `merc_act = N` after `class`: the
-  act of the build's mercenary, which decides the weapons its merc slots take (the overlay
-  defaults to Act 2 when it is left out).
+- The source's `merc.acts` (a list of 1, 2, 3 or 5, primary first; or the single `merc.act`;
+  optional) becomes `merc_acts = [N, ...]` after `class`: the acts of the build's mercenaries,
+  which decide the weapons its merc slots take (the overlay defaults to Act 2 when it is left
+  out, and gives each merc runeword to the first act that can carry it). A merc item with its
+  own `merc_act` (an alternative act's piece: Harmony for the Act 1 rogue) sorts after the
+  primary act's pieces of its slot; the key itself isn't written out.
 
 Skill names are checked against crates/core/src/skills_data.rs (class skills); mismatches are reported
 on stderr and in the exit summary.
@@ -52,8 +55,9 @@ BUILDS = {
         # The user's conditions for the Fury switch (2026-11-19). "Cannot Be Frozen" and the merc
         # helm group are computed from d2data: every unique/set item (base props) and complete
         # runeword with the `nofreeze` / `lifesteal` property; items of another class's item type
-        # (itemtypes.json `Class`) are out: Arreat's Face, Demonhorn's Edge (barbarian), Cerebus'
-        # Bite (druid pelt, a merc can't wear class items). No circlet has life steal.
+        # (itemtypes.json `Class`) are out: Cerebus' Bite (druid pelt, a merc can't wear class
+        # items). Arreat's Face and Demonhorn's Edge (barbarian helms) are in: the Fury's Act 5
+        # merc wears barbarian helms since D2R patch 2.4. No circlet has life steal.
         switch_requires=[
             dict(label="Cannot Be Frozen", any=[
                 "Raven Frost", "Darksight Helm", "Duriel's Shell", "Hawkmail", "Kira's Guardian",
@@ -69,7 +73,8 @@ BUILDS = {
             "Smoke",
             dict(label="Merc helm with life leech", any=[
                 "Andariel's Visage", "Crown of Thieves", "Isenhart's Horns", "Stealskull",
-                "Tal Rasha's Horadric Crest", "Undead Crown", "Vampire Gaze", "Wormskull", "Bulwark"]),
+                "Tal Rasha's Horadric Crest", "Undead Crown", "Vampire Gaze", "Wormskull",
+                "Arreat's Face", "Demonhorn's Edge", "Bulwark"]),
         ],
         notes="Summoner Druid 1-99 (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Oak Sage). From level 75 an optional skill reset into Fury (next stage), only once the switch gear is owned: a Cannot Be Frozen item, a powerful weapon, Harmony, two Lawbringers for the merc, Smoke and a life-leech merc helm; without it the summoner goes on to 99. Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
         respec_note=("optional, from level 75 once the switch gear is owned (Cannot Be Frozen item, powerful weapon such as "
@@ -398,10 +403,14 @@ def main(argv):
         return i["name"] + (f"@{i['req_level']}" if i.get("req_level") else "")
 
     leveling_items = any(str(i.get("setup") or "").startswith("lvl") for i in d["items"])
+    merc_src = d.get("merc") or {}
+    merc_acts = merc_src.get("acts") or ([merc_src["act"]] if merc_src.get("act") is not None else [])
+    # An alternative merc act's piece (its own `merc_act`, not the primary) after the others.
+    alt = lambda i: i.get("merc_act") is not None and i["merc_act"] != (merc_acts or [2])[0]
     if leveling_items:
-        key = lambda i: (i["slot"], -(i.get("req_level") or 0), i.get("rank_in_slot") or 99)
+        key = lambda i: (i["slot"], alt(i), -(i.get("req_level") or 0), i.get("rank_in_slot") or 99)
     else:
-        key = lambda i: (i["slot"], i.get("rank_in_slot") if i.get("rank_in_slot") is not None else 999)
+        key = lambda i: (i["slot"], alt(i), i.get("rank_in_slot") if i.get("rank_in_slot") is not None else 999)
     slots, merc, extras = {}, {}, {}
     for i in sorted(d["items"], key=key):
         s = i["slot"]
@@ -510,11 +519,14 @@ def main(argv):
     L.append(f"class = {q(cfg['cls'])}")
     if cfg.get("default"):
         L.append("default_for_class = true")
-    merc_act = (d.get("merc") or {}).get("act")
-    if merc_act is not None:
-        if merc_act not in (1, 2, 3, 5):
-            problems.append(f"{stem}: merc act {merc_act!r} is not 1, 2, 3 or 5")
-        L.append(f"merc_act = {int(merc_act)}")
+    for act in merc_acts:
+        if act not in (1, 2, 3, 5):
+            problems.append(f"{stem}: merc act {act!r} is not 1, 2, 3 or 5")
+    for i in d["items"]:
+        if i.get("merc_act") is not None and i["merc_act"] not in (merc_acts or [2]):
+            problems.append(f"{stem}: {i['name']}: merc_act {i['merc_act']!r} is not in merc.acts")
+    if merc_acts:
+        L.append("merc_acts = [" + ", ".join(str(int(a)) for a in merc_acts) + "]")
     if cfg.get("next"):
         L += [f"next = {q(cfg['next'])}", f"switch_level = {cfg['switch_level']}",
               f"auto_switch = {'true' if cfg['auto_switch'] else 'false'}"]

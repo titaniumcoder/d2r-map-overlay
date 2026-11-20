@@ -7,7 +7,8 @@ use d2r_core::web::ShopNote;
 
 use super::recipes::{Input, need_totals, owned_materials};
 use super::{
-    PanelInfo, base_hint, equipped_level, is_worn, outgrown, piece_state, piece_window, slot_bodies,
+    PanelInfo, base_hint, equipped_level, is_worn, merc_base_hint, outgrown, piece_state, piece_window,
+    slot_bodies,
 };
 
 /// The part of a mercenary slot's `pieces` (stored best→worst) still worth getting: the pieces
@@ -496,9 +497,12 @@ pub fn gear_json(info: &PanelInfo) -> serde_json::Value {
     .iter()
     .filter_map(|&(title, slot, body)| {
         let pieces = info.bis.and_then(|b| b.merc_slots.get(slot))?;
-        // The mercenary of the stage's act (Act 2 without a build file): no class-only bases,
-        // its act's weapons only.
-        let act = info.build.map_or_else(MercAct::default, |b| b.merc_act);
+        // The mercenary of the stage's first act (Act 2 without a build file): no class-only
+        // bases but its act's, its act's weapons only; a runeword's hint is for the act that
+        // carries it ([`merc_base_hint`]).
+        let act = info
+            .build
+            .map_or_else(MercAct::default, crate::config::Build::merc_act);
         let worn_level = pieces
             .iter()
             .filter(|p| is_merc_worn(d2r_core::info::piece_name(p), info))
@@ -683,10 +687,11 @@ pub fn grid_pieces(
             {
                 obj.insert("runes".to_owned(), serde_json::json!(rw.runes));
                 obj.insert("bases".to_owned(), serde_json::json!(rw.bases));
-                obj.insert(
-                    "base_hint".to_owned(),
-                    serde_json::json!(base_hint(rw, info, slot, wearer)),
-                );
+                let hint = match wearer {
+                    Wearer::Merc(_) => merc_base_hint(rw, info, slot, info.build),
+                    _ => base_hint(rw, info, slot, wearer),
+                };
+                obj.insert("base_hint".to_owned(), serde_json::json!(hint));
             }
             add_piece_details(&mut json, d2r_core::info::piece_name(piece), info.build);
             if is_worn

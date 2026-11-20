@@ -154,6 +154,27 @@ pub fn base_hint(
     d2r_core::socket_bases::hint(word, max_mlvl, wearer, slot)
 }
 
+/// The base hint ([`base_hint`]) of mercenary runeword `word` in body slot `slot`, for the act
+/// of `build` that carries it ([`crate::config::Build::merc_wearer`]; Act 2 without a build).
+/// Prefixed `"Act 1 merc: "` when that isn't the build's first act (Harmony for the rogue of
+/// `merc_acts = [2, 1]`), so the hint says whose bases they are.
+#[must_use]
+pub fn merc_base_hint(
+    word: &d2r_core::runewords_data::Runeword,
+    info: &PanelInfo,
+    slot: Option<u8>,
+    build: Option<&crate::config::Build>,
+) -> Option<String> {
+    use d2r_core::socket_bases::MercAct;
+    let act = build.map_or_else(MercAct::default, |b| b.merc_wearer(word.name, slot));
+    let hint = base_hint(word, info, slot, Wearer::Merc(act))?;
+    Some(if build.is_some_and(|b| b.merc_act() != act) {
+        format!("Act {} merc: {hint}", act.number())
+    } else {
+        hint
+    })
+}
+
 /// The `ItemData::BODY` slots a build slot's equipped piece sits in (the merged ring column
 /// reads both rings).
 #[must_use]

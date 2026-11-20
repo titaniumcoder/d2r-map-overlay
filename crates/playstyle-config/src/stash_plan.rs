@@ -155,7 +155,7 @@ pub struct Scoring {
     pub worn: Vec<(u8, Option<String>, Vec<ItemStat>)>,
     /// items.txt weapon types (`swor`, `staf`, …); empty = no builds known, every type judged.
     pub weapon_types: Vec<&'static str>,
-    /// The mercenary acts of the chain's builds ([`Build::merc_act`]); empty = Act 2.
+    /// The mercenary acts of the chain's builds ([`Build::merc_acts`]); empty = Act 2.
     pub merc_acts: Vec<MercAct>,
 }
 
@@ -276,8 +276,12 @@ impl Scoring {
                 .collect(),
             weapon_types: build_weapon_types(builds(), class),
             merc_acts: {
-                let mut acts: Vec<MercAct> = builds().map(|b| b.merc_act).collect();
-                acts.dedup();
+                let mut acts: Vec<MercAct> = Vec::new();
+                for &act in builds().flat_map(|b| &b.merc_acts) {
+                    if !acts.contains(&act) {
+                        acts.push(act);
+                    }
+                }
                 acts
             },
         }
@@ -378,13 +382,23 @@ fn judge(item: &ItemDrop, scoring: &Scoring) -> Result<Option<&'static str>, &'s
     }
 }
 
-/// One runeword the player's builds want made, in a base for `wearer` worn in `slot`
-/// (`ItemData::BODY` numbering; `None` = any slot).
+/// One runeword the player's builds want made, in a base for `wearer` (or `also`) worn in
+/// `slot` (`ItemData::BODY` numbering; `None` = any slot).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct BaseNeed {
     word: &'static Runeword,
     wearer: Wearer,
     slot: Option<u8>,
+    /// A second wearer the same copy can go to: an alternative mercenary's (a build's second
+    /// `merc_acts` entry) for a runeword someone else wants too ([`Needs::share`]).
+    also: Option<Wearer>,
+}
+
+impl BaseNeed {
+    /// Its wearers: `wearer`, then `also`.
+    fn wearers(&self) -> impl Iterator<Item = Wearer> {
+        std::iter::once(self.wearer).chain(self.also)
+    }
 }
 
 /// What the player's own builds want ([`Needs::from_config`]).
@@ -435,7 +449,12 @@ impl Needs {
         let Some(word) = runewords_data::lookup(piece_name(entry)) else {
             return false;
         };
-        let need = BaseNeed { word, wearer, slot };
+        let need = BaseNeed {
+            word,
+            wearer,
+            slot,
+            also: None,
+        };
         if !self.bases.contains(&need) {
             self.bases.push(need);
         }
@@ -478,12 +497,104 @@ impl Needs {
         any
     }
 
+    /// Every piece of mercenary `slots` and a base for each runeword in it
+    /// ([`Needs::merc_bases`]).
+    fn merc_slots(
+        &mut self,
+        slots: &BTreeMap<String, Vec<String>>,
+        build: Option<&Build>,
+        spare: &mut Vec<BaseNeed>,
+    ) {
+        for entry in slots.values().flatten() {
+            self.piece(entry, 1);
+        }
+        self.merc_bases(slots, build, None, spare);
+    }
+
+    /// A base for each runeword in mercenary `slots` (only runeword `only` when set) of
+    /// `build` ([`Needs::merc_base`]); whether there was any.
+    fn merc_bases(
+        &mut self,
+        slots: &BTreeMap<String, Vec<String>>,
+        build: Option<&Build>,
+        only: Option<&str>,
+        spare: &mut Vec<BaseNeed>,
+    ) -> bool {
+        let mut any = false;
+        for (slot, pieces) in slots {
+            for entry in pieces {
+                if only.is_none_or(|word| same_name(piece_name(entry), word)) {
+                    any |= self.merc_base(entry, build, slot_body(slot), spare);
+                }
+            }
+        }
+        any
+    }
+
+    /// Wants a base for mercenary piece `entry` in `slot` if it names a runeword; whether it
+    /// does. The wearer is the mercenary of `build`'s act that can carry it
+    /// ([`Build::merc_wearer`]; Act 2 without a build). A need of an alternative act (not the
+    /// build's first: Harmony for the Act 1 rogue of `merc_acts = [2, 1]`) goes to `spare`
+    /// for [`Needs::share`].
+    fn merc_base(
+        &mut self,
+        entry: &str,
+        build: Option<&Build>,
+        slot: Option<u8>,
+        spare: &mut Vec<BaseNeed>,
+    ) -> bool {
+        let act = build.map_or_else(MercAct::default, |b| b.merc_wearer(entry, slot));
+        if build.is_none_or(|b| b.merc_act() == act) {
+            return self.base(entry, Wearer::Merc(act), slot);
+        }
+        let Some(word) = runewords_data::lookup(piece_name(entry)) else {
+            return false;
+        };
+        spare.push(BaseNeed {
+            word,
+            wearer: Wearer::Merc(act),
+            slot,
+            also: None,
+        });
+        true
+    }
+
+    /// Adds the alternative mercenaries' needs (`spare`, [`Needs::merc_base`]). One that a
+    /// need of the same runeword already covers (the same slot, else any slot) adds no second
+    /// base: one copy is swapped between them (user, 2026-11-20: Harmony on the druid's weapon
+    /// swap, or on the Act 1 rogue in Normal or for its buff; never both at once). That need
+    /// then also takes a base only the alternative mercenary can use (an amazon bow).
+    fn share(&mut self, spare: Vec<BaseNeed>) {
+        for need in spare {
+            // The same slot first: a slot-less need of a placed runeword is dropped later.
+            let at = |slot_less: bool| {
+                move |n: &BaseNeed| {
+                    n.word.name == need.word.name && (n.slot == need.slot || (slot_less && n.slot.is_none()))
+                }
+            };
+            let same = match self.bases.iter().position(at(false)) {
+                Some(i) => Some(i),
+                None => self.bases.iter().position(at(true)),
+            };
+            match same.and_then(|i| self.bases.get_mut(i)) {
+                Some(n) => {
+                    if n.wearer != need.wearer && n.also.is_none() {
+                        n.also = Some(need.wearer);
+                    }
+                }
+                None => self.bases.push(need),
+            }
+        }
+    }
+
     /// The player's own needs: the resolved `bis` (the current stage, or the character's
     /// inline slots), every build of the stage `chain` (the current stage and the later ones,
     /// by name: [`Settings::stage_chain`]) with its slots, extras and `switch_requires`, and the
     /// whole farm list. A player piece is for class `class` (a farm group's: its build's class);
-    /// a mercenary one for the mercenary of its build's act ([`Build::merc_act`]; Act 2 for
-    /// an inline `bis` without a build file). A farm runeword its group's build places in its
+    /// a mercenary one for the mercenary of its build's act that can carry it
+    /// ([`Build::merc_wearer`]; Act 2 for an inline `bis` without a build file), where an
+    /// alternative mercenary's runeword shares the need of the same runeword
+    /// ([`Needs::share`]). A farm runeword its group's build places in its
     /// own slots takes that build's base needs (the second Lawbringer is the Act 5 merc's
     /// one-handed sword), not a looser one for any slot. Copies `worn` by the character or its
     /// mercenary need no stash copy, and each runeword copy `owns` counts (worn, carried,
@@ -502,17 +613,11 @@ impl Needs {
         owns: &dyn Fn(&str) -> u32,
     ) -> Self {
         let mut needs = Self::default();
-        let merc_of = |build: &str| {
-            Wearer::Merc(
-                config
-                    .build_defs
-                    .get(&build.to_lowercase())
-                    .map_or_else(MercAct::default, |b| b.merc_act),
-            )
-        };
+        let mut spare = Vec::new();
+        let def = |build: &str| config.build_defs.get(&build.to_lowercase());
         if let Some(bis) = bis {
             needs.slots(&bis.slots, Wearer::Player(class));
-            needs.slots(&bis.merc_slots, merc_of(&bis.build));
+            needs.merc_slots(&bis.merc_slots, def(&bis.build), &mut spare);
         }
         for build in chain
             .iter()
@@ -520,7 +625,7 @@ impl Needs {
         {
             let player = Wearer::Player(build.class.unwrap_or(class));
             needs.slots(&build.slots, player);
-            needs.slots(&build.merc_slots, Wearer::Merc(build.merc_act));
+            needs.merc_slots(&build.merc_slots, Some(build), &mut spare);
             for entry in build.extras.values().flatten() {
                 needs.piece(entry, 1);
                 needs.base(entry, player, None);
@@ -545,19 +650,20 @@ impl Needs {
                     let player = Wearer::Player(farm_class);
                     let placed = needs.slot_bases(&build.slots, player, Some(&item.name));
                     let merc_placed =
-                        needs.slot_bases(&build.merc_slots, Wearer::Merc(build.merc_act), Some(&item.name));
+                        needs.merc_bases(&build.merc_slots, Some(build), Some(&item.name), &mut spare);
                     if placed || merc_placed {
                         continue;
                     }
                 }
-                let wearer = if item.merc {
-                    merc_of(&group.target)
+                let slot = item.slot.map(crate::config::FarmSlot::body);
+                if item.merc {
+                    needs.merc_base(&item.name, target, slot, &mut spare);
                 } else {
-                    Wearer::Player(farm_class)
-                };
-                needs.base(&item.name, wearer, item.slot.map(crate::config::FarmSlot::body));
+                    needs.base(&item.name, Wearer::Player(farm_class), slot);
+                }
             }
         }
+        needs.share(spare);
         // A runeword a build places in a slot wants its base for that slot (and hands); a
         // slot-less want of it (a `switch_requires` condition such as "2x Lawbringer", a farm
         // entry without a slot) adds no looser need that a two-hander could fill.
@@ -648,10 +754,10 @@ fn base_rank(item: &ItemDrop) -> Rank {
 /// base of its type the wearer can use in the slot ([`socket_bases::fits`]).
 fn fills(need: &BaseNeed, base: &ItemDrop) -> bool {
     usize::from(base.sockets) == need.word.runes.len()
-        && base
-            .code
-            .as_deref()
-            .is_some_and(|code| socket_bases::fits(need.word, code, need.wearer, need.slot))
+        && base.code.as_deref().is_some_and(|code| {
+            need.wearers()
+                .any(|w| socket_bases::fits(need.word, code, w, need.slot))
+        })
 }
 
 /// An item the plan leaves alone: gems and runes (their own tab), charms in the inventory
@@ -811,7 +917,8 @@ fn base_sell_reason(base: &ItemDrop, needs: &Needs) -> Option<&'static str> {
         .iter()
         .any(|n| {
             usize::from(base.sockets) == n.word.runes.len()
-                && socket_bases::two_handed_misfit(n.word, code, n.wearer, n.slot)
+                && n.wearers()
+                    .any(|w| socket_bases::two_handed_misfit(n.word, code, w, n.slot))
         })
         .then_some("two-handed")
 }
@@ -2171,12 +2278,16 @@ mod tests {
             .build_defs
             .get("fury druid")
             .ok_or_else(|| anyhow::anyhow!("fury"))?;
-        assert_eq!(fury.merc_act, MercAct::Act5);
+        assert_eq!(fury.merc_acts, vec![MercAct::Act5]);
         let summoner = config
             .build_defs
             .get("summoner druid")
             .ok_or_else(|| anyhow::anyhow!("summoner"))?;
-        assert_eq!(summoner.merc_act, MercAct::Act2, "the default");
+        assert_eq!(
+            summoner.merc_acts,
+            vec![MercAct::Act2, MercAct::Act1],
+            "Insight's Act 2 merc first, the Act 1 rogue for Harmony"
+        );
         for stage in ["summoner druid", "fury druid"] {
             let needs = shipped_needs(&config, stage)?;
             let lawbringer: Vec<(Wearer, Option<u8>)> = needs
@@ -2233,10 +2344,95 @@ mod tests {
     }
 
     #[test]
+    fn one_harmony_base_serves_the_druid_swap_and_the_act1_rogue() -> anyhow::Result<()> {
+        let config = shipped();
+        let needs = shipped_needs(&config, "summoner druid")?;
+        // The Fury's swap Harmony and the summoner's Act 1 rogue Harmony are one need: one
+        // copy is swapped between them.
+        let harmony: Vec<_> = needs
+            .bases
+            .iter()
+            .filter(|n| n.word.name == "Harmony")
+            .map(|n| (n.wearer, n.slot, n.also))
+            .collect();
+        assert_eq!(harmony, vec![(DRUID, Some(4), Some(Wearer::Merc(MercAct::Act1)))]);
+        let own = Action::Keep(Side::Own);
+        let mine = |n: &str, action| (n.to_owned(), Spot::Page(1), action, 1);
+        // A 4os Hunter's Bow is kept for Harmony; so is a 4os Stag Bow, an amazon bow
+        // only the rogue can use.
+        assert_eq!(
+            rows(&[at(base("hbw", 4), Spot::Page(1))], &needs),
+            vec![mine("Hunter's Bow 4os", own)]
+        );
+        assert_eq!(
+            rows(&[at(base("am1", 4), Spot::Page(1))], &needs),
+            vec![mine("Stag Bow 4os", own)]
+        );
+        // Both held: one Harmony, one base (the stronger amazon bow; a 4os Matriarchal Bow would go to trade); the other is sold.
+        assert_eq!(
+            rows(
+                &[
+                    at(base("hbw", 4), Spot::Page(1)),
+                    at(base("am1", 4), Spot::Page(1))
+                ],
+                &needs
+            ),
+            vec![mine("Hunter's Bow 4os", Action::Sell), mine("Stag Bow 4os", own)]
+        );
+        // On the Fury stage alone (Act 5 merc only) the amazon bow is no base: the druid
+        // can't use it.
+        let fury = config
+            .build_defs
+            .get("fury druid")
+            .ok_or_else(|| anyhow::anyhow!("fury"))?;
+        let bis = Bis {
+            build: fury.name.clone(),
+            slots: fury.slots.clone(),
+            merc_slots: fury.merc_slots.clone(),
+        };
+        let fury_needs = Needs::from_config(&config, &["fury druid".to_owned()], Some(&bis), 5, &[], &|_| 0);
+        assert_eq!(
+            rows(&[at(base("am1", 4), Spot::Page(1))], &fury_needs),
+            vec![mine("Stag Bow 4os", Action::Sell)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_alternative_merc_runeword_alone_is_its_own_need() -> anyhow::Result<()> {
+        // A build whose only Harmony is the Act 1 rogue's: a need of its own, for the rogue.
+        let (_, build, _) = crate::config::parse_build(
+            "name = \"B\"\nmerc_acts = [2, 1]\n[merc_slots]\nweapon = [\"Insight@27\", \"Harmony@39\"]\n",
+        )?;
+        let mut config = Settings::default();
+        config.build_defs.insert("b".to_owned(), build);
+        let needs = Needs::from_config(&config, &["b".to_owned()], None, 5, &[], &|_| 0);
+        let wanted: Vec<_> = needs
+            .bases
+            .iter()
+            .map(|n| (n.word.name, n.wearer, n.also))
+            .collect();
+        assert_eq!(
+            wanted,
+            vec![
+                ("Insight", Wearer::Merc(MercAct::Act2), None),
+                ("Harmony", Wearer::Merc(MercAct::Act1), None),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn live_two_broad_swords_kept_and_the_zweihander_sold_as_two_handed() -> anyhow::Result<()> {
         // The live stash (2026-11-20): two Broad Sword 3os on page 2, a Zweihander 3os in the
-        // inventory, no Lawbringer held.
+        // inventory, no Lawbringer held. Regression (2026-11-20): the shipped build files must
+        // load (a field the parser rejected dropped every build, and both swords were sold);
+        // the Fury in the chain has the Act 5 merc.
         let config = shipped();
+        assert_eq!(
+            config.build_defs.get("fury druid").map(|b| b.merc_acts.clone()),
+            Some(vec![MercAct::Act5])
+        );
         let needs = shipped_needs(&config, "summoner druid")?;
         let items = [
             at(base("bsd", 3), Spot::Page(2)),

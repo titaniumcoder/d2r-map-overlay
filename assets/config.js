@@ -108,9 +108,52 @@ async function saveBis(name, build) {
   await fetch("/api/bis", {method: "POST", body: JSON.stringify({name, build: build || null})});
   load();
 }
+// The playstyle's loot filter (GET /api/loot-filter): its profile name and a copy button. The
+// copied text is the response body as served (the exact file), never re-serialised.
+let filterText = null;
+async function loadFilter() {
+  const name = document.getElementById("filtername");
+  const button = document.getElementById("copyfilter");
+  try {
+    const r = await fetch("/api/loot-filter");
+    if (!r.ok) {
+      name.textContent = r.status === 404 ? "no loot filter in this playstyle" : `loot filter: ${await r.text()}`;
+      return;
+    }
+    filterText = await r.text();
+    let profile = "";
+    try { profile = JSON.parse(filterText).name || ""; } catch (e) { /* shown without a name */ }
+    name.textContent = `${profile || "unnamed profile"} \u2014 loot filter of this playstyle`;
+    button.hidden = false;
+  } catch (e) {
+    name.textContent = "loot filter not loaded (overlay not running?)";
+  }
+}
+let copiedTimer = null;
+// The click handler itself calls writeText (the clipboard needs the user's gesture; localhost
+// is a secure context). Refused: the JSON goes in a read-only, selected textarea instead.
+async function copyFilter() {
+  if (filterText == null) return;
+  const status = document.getElementById("filterstatus");
+  const box = document.getElementById("filterbox");
+  clearTimeout(copiedTimer);
+  try {
+    await navigator.clipboard.writeText(filterText);
+    box.hidden = true;
+    status.textContent = "Copied";
+    copiedTimer = setTimeout(() => { status.textContent = ""; }, 3000);
+  } catch (e) {
+    box.value = filterText;
+    box.hidden = false;
+    box.focus();
+    box.select();
+    status.textContent = "copy refused: the JSON is selected below, press Ctrl+C";
+  }
+}
 async function addChar() {
   const name = document.getElementById("newname").value.trim();
   const build = document.getElementById("newbuild").value;
   if (name && build) { await saveBis(name, build); }
 }
 load();
+loadFilter();

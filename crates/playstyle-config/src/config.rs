@@ -102,6 +102,10 @@ pub struct Tables {
     /// `[damages]` (`playstyle.toml`) or `[builds]` (an old `config.toml`).
     pub damages: Option<Builds>,
     pub bis: Option<BTreeMap<String, Bis>>,
+    /// `playstyle.toml`'s `filter_name`: the `name` its `loot-filter.json` profile should have
+    /// (the in-game filter is named after the playstyle it belongs to; a mismatch is warned
+    /// about, [`crate::files::loot_filter_mismatch`]). `None` elsewhere or when left out.
+    pub filter_name: Option<String>,
 }
 
 #[cfg(test)]
@@ -139,6 +143,7 @@ struct RawPlaystyle {
     _description: String,
     valuables: Option<Valuables>,
     damages: Option<RawBuilds>,
+    filter_name: Option<String>,
 }
 
 /// `[damages]` / `[builds]` as written: character name = damage names, plus the `class` table
@@ -280,11 +285,12 @@ pub fn parse_tables(text: &str) -> Result<(Tables, Vec<String>), toml::de::Error
         valuables: raw.valuables,
         damages: raw.builds.map(|raw| builds(raw, &mut warnings)),
         bis: raw.bis.map(|raw| bis_entries(raw, &mut warnings)),
+        filter_name: None,
     };
     Ok((tables, warnings))
 }
 
-/// Parses `playstyle.toml`: its display name, `[valuables]` and `[damages]` (its
+/// Parses `playstyle.toml`: its display name, `filter_name`, `[valuables]` and `[damages]` (its
 /// `description` is for people reading the folder), with warnings as [`parse_tables`].
 ///
 /// # Errors
@@ -296,6 +302,10 @@ pub fn parse_playstyle(text: &str) -> Result<((String, Tables), Vec<String>), to
         valuables: raw.valuables,
         damages: raw.damages.map(|raw| builds(raw, &mut warnings)),
         bis: None,
+        filter_name: raw
+            .filter_name
+            .map(|n| n.trim().to_owned())
+            .filter(|n| !n.is_empty()),
     };
     Ok(((raw.name, tables), warnings))
 }
@@ -315,9 +325,12 @@ pub struct Build {
     pub slots: BTreeMap<String, Vec<String>>,
     /// The mercenary's slot name → pieces.
     pub merc_slots: BTreeMap<String, Vec<String>>,
-    /// The act of the build's mercenary (`merc_act = 5`; Act 2 when left out or invalid): it
-    /// decides which weapons its `merc_slots` take ([`d2r_core::socket_bases::MercAct`]).
-    pub merc_act: MercAct,
+    /// The acts of the build's mercenaries, primary first (`merc_acts = [2, 1]`, or the single
+    /// `merc_act = 5`; `[Act 2]` when left out or invalid; empty only for a `Build` made in
+    /// code, read as Act 2): they decide which weapons its `merc_slots` take
+    /// ([`d2r_core::socket_bases::MercAct`], [`Build::merc_wearer`]), and gear any of them can
+    /// wear is kept (user, 2026-11-20: the Act 1 rogue in Normal or for the Harmony buff).
+    pub merc_acts: Vec<MercAct>,
     /// Per-piece details by piece name (`[pieces."<name>"]`): what the dashboard shows under
     /// each piece (kind, base, stats, why). A piece without an entry shows only its name.
     pub pieces: BTreeMap<String, PieceInfo>,
@@ -352,6 +365,25 @@ pub struct Build {
     pub tips: Vec<Tip>,
     /// How to spend stat points, one line per level range.
     pub stats_plan: Vec<String>,
+}
+
+impl Build {
+    /// The primary mercenary's act: the first of [`Build::merc_acts`], Act 2 when empty.
+    #[must_use]
+    pub fn merc_act(&self) -> MercAct {
+        self.merc_acts.first().copied().unwrap_or_default()
+    }
+
+    /// The act of the mercenary that wears merc piece `entry` (`"Name@<level>"` or a name) in
+    /// body slot `slot`: for a runeword the first of [`Build::merc_acts`] that can carry it
+    /// there ([`d2r_core::socket_bases::merc_act_for`]: Insight the Act 2 merc's, Harmony the
+    /// Act 1 rogue's), else the primary one ([`Build::merc_act`]).
+    #[must_use]
+    pub fn merc_wearer(&self, entry: &str, slot: Option<u8>) -> MercAct {
+        d2r_core::runewords_data::lookup(d2r_core::info::piece_name(entry))
+            .and_then(|word| d2r_core::socket_bases::merc_act_for(word, &self.merc_acts, slot))
+            .unwrap_or_else(|| self.merc_act())
+    }
 }
 
 /// One condition of a stage switch ([`Build::switch_requires`]): met when the account holds
@@ -489,8 +521,8 @@ pub struct FarmItem {
     /// How many copies the build needs (default 1; two Lawbringers for two weapon slots).
     #[serde(default = "one")]
     pub count: u32,
-    /// `merc = true`: the item is for the mercenary of the group's build (its `merc_act`, Act 2
-    /// by default), so a runeword's base hint skips class-only bases, keeps that act's weapons
+    /// `merc = true`: the item is for the mercenary of the group's build (the act of its
+    /// `merc_acts` that can carry it, [`Build::merc_wearer`]; Act 2 by default), so a runeword's base hint skips class-only bases, keeps that act's weapons
     /// and ranks helm and body bases by defense.
     #[serde(default)]
     pub merc: bool,
@@ -943,6 +975,7 @@ struct RawBuild {
     slots: BTreeMap<String, Vec<String>>,
     merc_slots: BTreeMap<String, Vec<String>>,
     merc_act: Option<u8>,
+    merc_acts: Vec<u8>,
     pieces: BTreeMap<String, PieceInfo>,
     targets: Vec<String>,
     extras: BTreeMap<String, Vec<String>>,
@@ -1056,6 +1089,30 @@ fn switch_groups(raw: Vec<RawSwitchGroup>, label: &str, warnings: &mut Vec<Strin
     groups
 }
 
+/// A build's mercenary acts, primary first: `merc_acts` when given, else the single
+/// `merc_act`; an unknown act or a repeat is warned about and dropped; none left = `[Act 2]`.
+fn merc_acts(single: Option<u8>, list: &[u8], label: &str, warnings: &mut Vec<String>) -> Vec<MercAct> {
+    let key = if list.is_empty() { "merc_act" } else { "merc_acts" };
+    if single.is_some() && !list.is_empty() {
+        warnings.push(format!(
+            "{label}: both merc_act and merc_acts given; merc_act ignored"
+        ));
+    }
+    let numbers = if list.is_empty() { single.as_slice() } else { list };
+    let mut acts: Vec<MercAct> = Vec::new();
+    for &n in numbers {
+        match MercAct::from_number(n) {
+            Some(act) if !acts.contains(&act) => acts.push(act),
+            Some(_) => warnings.push(format!("{label}: {key} lists act {n} twice")),
+            None => warnings.push(format!("{label}: {key} {n} unknown (known: 1, 2, 3, 5); ignored")),
+        }
+    }
+    if acts.is_empty() {
+        acts.push(MercAct::default());
+    }
+    acts
+}
+
 /// Parses one build file's text: the lowercased build name (the slug a `[bis.<name>]` `build`
 /// selection refers to), the [`Build`], and warnings about ignored entries.
 /// # Errors
@@ -1068,14 +1125,7 @@ pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de:
     let label = format!("build {name}");
     let slots = parse_slot_tables(raw.slots, &label, &mut warnings);
     let merc_slots = parse_slot_tables(raw.merc_slots, &label, &mut warnings);
-    let merc_act = raw.merc_act.map_or_else(MercAct::default, |n| {
-        MercAct::from_number(n).unwrap_or_else(|| {
-            warnings.push(format!(
-                "{label}: merc_act {n} unknown (known: 1, 2, 3, 5); taken as 2"
-            ));
-            MercAct::default()
-        })
-    });
+    let merc_acts = merc_acts(raw.merc_act, &raw.merc_acts, &label, &mut warnings);
     let notes = raw.notes.trim().to_owned();
     let class = class_of_build(&raw.class, &label, &mut warnings);
     check_skill_names(&raw.skill_plan, class, &label, &mut warnings);
@@ -1120,7 +1170,7 @@ pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de:
             notes: (!notes.is_empty()).then_some(notes),
             slots,
             merc_slots,
-            merc_act,
+            merc_acts,
             pieces: raw.pieces,
             targets: raw
                 .targets
@@ -1984,10 +2034,10 @@ mod tests {
     #[test]
     fn playstyle_toml_parses() -> Result<()> {
         let ((name, tables), warnings) = parse_playstyle(
-            "name = \"N\"\n[valuables]\ntrade = [\"S\"]\n[damages]\nVex = [\"fire\"]\n\
+            "name = \"N\"\nfilter_name = \" F \"\n[valuables]\ntrade = [\"S\"]\n[damages]\nVex = [\"fire\"]\n\
              [damages.class]\ndruid = [\"physical\"]\n",
         )?;
-        assert_eq!(name, "N");
+        assert_eq!((name.as_str(), tables.filter_name.as_deref()), ("N", Some("F")));
         assert_eq!(tables.valuables.map(|v| v.trade), Some(vec![Tier::S]));
         let damages = tables.damages.unwrap_or_default();
         assert_eq!(
@@ -2102,15 +2152,37 @@ mod tests {
     #[test]
     fn merc_act_defaults_to_act_2() -> Result<(), toml::de::Error> {
         let (_, five, warnings) = parse_build("name = \"B\"\nmerc_act = 5\n")?;
-        assert_eq!((five.merc_act, warnings), (MercAct::Act5, Vec::new()));
+        assert_eq!((five.merc_acts, warnings), (vec![MercAct::Act5], Vec::new()));
         let (_, none, _) = parse_build("name = \"B\"\n")?;
-        assert_eq!(none.merc_act, MercAct::Act2);
+        assert_eq!(
+            (none.merc_acts.clone(), none.merc_act()),
+            (vec![MercAct::Act2], MercAct::Act2)
+        );
+        assert_eq!(Build::default().merc_act(), MercAct::Act2, "empty: Act 2");
         let (_, four, warnings) = parse_build("name = \"B\"\nmerc_act = 4\n")?;
-        assert_eq!(four.merc_act, MercAct::Act2);
+        assert_eq!(four.merc_acts, vec![MercAct::Act2]);
         assert_eq!(
             warnings,
-            vec!["build B: merc_act 4 unknown (known: 1, 2, 3, 5); taken as 2".to_owned()]
+            vec!["build B: merc_act 4 unknown (known: 1, 2, 3, 5); ignored".to_owned()]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_build_lists_several_merc_acts_primary_first() -> Result<(), toml::de::Error> {
+        let text = "name = \"B\"\nmerc_acts = [2, 1]\n[merc_slots]\nweapon = [\"Insight@27\", \"Harmony@39\", \"Smoke@37\"]\n";
+        let (_, build, warnings) = parse_build(text)?;
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(build.merc_acts, vec![MercAct::Act2, MercAct::Act1]);
+        assert_eq!(build.merc_act(), MercAct::Act2);
+        // Each merc piece goes to the act that can carry it; a non-runeword to the primary.
+        assert_eq!(build.merc_wearer("Insight@27", Some(4)), MercAct::Act2);
+        assert_eq!(build.merc_wearer("Harmony@39", Some(4)), MercAct::Act1);
+        assert_eq!(build.merc_wearer("The Battlebranch@17", Some(4)), MercAct::Act2);
+        // Bad and repeated acts are dropped with a warning; merc_acts wins over merc_act.
+        let (_, odd, warnings) = parse_build("name = \"B\"\nmerc_act = 3\nmerc_acts = [5, 4, 5]\n")?;
+        assert_eq!(odd.merc_acts, vec![MercAct::Act5]);
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
         Ok(())
     }
 }

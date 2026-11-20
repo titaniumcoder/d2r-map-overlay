@@ -104,6 +104,13 @@ pub trait Playstyle {
     where
         Self: Sized;
 
+    /// The playstyle's D2R in-game loot filter profile (`GET /api/loot-filter`, the `/config`
+    /// page's copy button): the exact bytes the player imports into the game, `None` when the
+    /// playstyle has none.
+    fn loot_filter(files: &Files) -> Option<Vec<u8>>
+    where
+        Self: Sized;
+
     /// Forgets character `name` in the playstyle's files.
     ///
     /// # Errors
