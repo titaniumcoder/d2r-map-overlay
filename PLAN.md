@@ -25,14 +25,14 @@ The plan is written so work continues **from that directory** in a fresh session
 Rust via mise (`mise use rust@stable` pinned in the project's `mise.toml`). Implementation via the `rust-sys` agent.
 
 ## Tooling (cargo only, strict)
-- Build/test/run only through **cargo**: `cargo build --release`, `cargo test`, `cargo run -- --dump`.
-- **Strict lints in `Cargo.toml`**:
+- Build/test/run only through **cargo**: `cargo build --release`, `cargo test --workspace`, `cargo run -- --dump`.
+- **Strict lints in the root `Cargo.toml`** (`[workspace.lints]`, every crate has `[lints] workspace = true`):
   ```toml
-  [lints.rust]
+  [workspace.lints.rust]
   unsafe_code = "forbid"          # no unsafe needed: /proc/<pid>/mem via std::fs::File + read_at
   missing_debug_implementations = "warn"
   unused_must_use = "deny"
-  [lints.clippy]
+  [workspace.lints.clippy]
   all = { level = "deny", priority = -1 }
   pedantic = { level = "deny", priority = -1 }
   nursery = { level = "warn", priority = -1 }
@@ -41,9 +41,10 @@ Rust via mise (`mise use rust@stable` pinned in the project's `mise.toml`). Impl
   panic = "deny"
   indexing_slicing = "warn"        # memory parsing must use checked access
   cast_possible_truncation = "deny"
+  too_long_first_doc_paragraph = "allow"  # nursery; fires on exported items only (step 11)
   ```
   (If a dependency's API forces `unsafe`, it stays confined to one module with a documented `#[allow]`.)
-- **Gate before every commit**: `cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test`.
+- **Gate before every commit**: `cargo fmt --all --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace`.
   Clippy is the guard against invented APIs: code that doesn't compile/lint clean doesn't get committed.
   The `reviewer` agent runs this gate and reviews the diff before each commit.
 - `rustfmt.toml` with `max_width = 110`; `rust-toolchain` pinned via mise.
@@ -54,60 +55,71 @@ Rust via mise (`mise use rust@stable` pinned in the project's `mise.toml`). Impl
   each passing the gate. Conventional, descriptive messages; no push (no remote) unless asked.
 
 ```
-Cargo.toml
-src/main.rs        — arg/config, main loop (reader thread → channel → overlay)
-src/live.rs        — live tick loop over a `reader::GameReader` and a `playstyle::Playstyle`
-                     (session, guidance, render, dashboard)
-src/config.rs      — config.toml, core only (`[shrines]`, `playstyle = "<name>"`); old files'
-                     `[valuables]` / `[builds]` / `[bis]` accepted unread; re-exports the
-                     playstyle's types under their old paths
+Cargo.toml         — the workspace (members `crates/*`; `[workspace.lints]`, `[workspace.package]`,
+                     `[workspace.dependencies]`) and the binary package `d2r-map-overlay` at the root
+                     (so the release binary stays `target/release/d2r-map-overlay`). Features pick
+                     the plugins: `reader-proton`, `playstyle-config` (both default).
+src/main.rs        — the binary: args, `TheReader` / `ThePlaystyle` from the features, wiring
+                     (reader thread → channel → overlay), `--probe` / `--dump` / `--render` / `--show`
 playstyles/<name>/ — a playstyle folder (step 7); shipped: `summoner-fury/` = playstyle.toml (name,
                      description, `[valuables]`, `[damages]`), builds/*.toml + *.source.json
-                     (research/gen_build.py writes here by default), farm.toml, valuables.json
-                     (compiled in). Overrides per file: ~/.config/d2r-map-overlay/playstyle/
-src/playstyle/     — the playstyle plugin (step 5 of the plugin refactor)
-  mod.rs           — `Playstyle` (load / reload(&Files) / mark_drops / evaluate / panels /
-                     config_json / builds_json / select_build / remove_character), `Evaluation`
-                     (guidance, stage to latch, stage, chain); module map
-  config_driven.rs — `ConfigDriven`: this build's playstyle from its folder (Summoner → Fury Druid)
-  files.rs         — `Files` (shipped / user / old places / data dir) and the per-file precedence
-                     (user > old places > shipped), load / reload (a broken file keeps its part),
-                     `fingerprint` for the hot reload, bis.toml writes
-  config.rs        — `Settings`; playstyle.toml / old config.toml tables / builds/*.toml / farm.toml
-                     parsing, `Build`, `SwitchGroup`, `Stage`, the stage chain and latch logic
-                     (`Settings::stage`, `leads_to`, `resolved_bis`, damages)
-  guidance.rs      — `Guidance` (area rating, BiS, item plan, drop marks): what render/dashboard get
-  valuables.rs, stash_plan.rs, gear_score.rs, build.rs (damage types, area `rate`)
-  web/             — the dashboard's playstyle panels (step 6): `PanelInfo` (core `LiveInfo` +
-                     bis / build / stage / farm / chain) and `panels()` → `web::Panels`; mod.rs
-                     (sell / keep / bis lines, stage, shared piece helpers), gear.rs (grid,
-                     upgrades, gear_attention, vendor notes via gear_score), recipes.rs, farm.rs,
-                     config_page.rs (`/config` JSON, `[bis]` selection / character removal edits)
-src/web/           — the dashboard core (step 6 of the plugin refactor)
-  mod.rs           — `LiveInfo`, `Panels` (playstyle sections + skill plan + vendor notes),
-                     `live_json` (core keys, then the playstyle's sections merged in by key)
-  server.rs        — HTTP + SSE, live / gear cells, `/config` endpoints generic over the
-                     `Playstyle` (`serve::<P>(&Files)`, a fresh `P::load` per `/config` request;
-                     main.rs picks `P`)
-  page.rs          — the pages from `assets/{dashboard,config}.{html,js}` (`include_str!`;
-                     `node --check assets/*.js`); a hash test pins the served bytes
-  stash.rs, skills.rs (trees + `SkillTarget` plan marks), vendor.rs (`ShopNote`, `shop_json`)
-src/reader/        — the reader plugin (step 4 of the plugin refactor)
-  mod.rs           — `GameReader` (attach / attach_now / snapshot / quest flags / alive / save dir),
-                     `Platform` (find process, open memory, find image, heap regions, save dir),
-                     `ReadMem`; `ProtonReader = MemoryReader<Proton>`; Windows port notes
+                     (research/gen_build.py writes here by default), farm.toml, route.toml,
+                     valuables.json (compiled in). Overrides per file: ~/.config/d2r-map-overlay/playstyle/
+assets/            — the dashboard pages (`include_str!` from `crates/core/src/web/page.rs`)
+crates/core/       — `d2r-core` (lib `d2r_core`): everything both plugins and the binary share
+  reader.rs        — the reader interface: `GameReader` (attach / attach_now / snapshot / quest
+                     flags / alive / save dir), `Attach`, `ReadMem` (+ `is_user_ptr`)
+  playstyle/       — the playstyle interface: `Playstyle` (assoc. types `Wants` (kept by the core
+                     between ticks) and `Extra<'a>` (only its panels read it); load / reload(&Files)
+                     / mark_drops / evaluate / panels / config_json / builds_json / select_build /
+                     remove_character), `Evaluation<'a, W, X>` (guidance, wants, reached, extra),
+                     `EvaluationOf<'a, P>`; files.rs: `Files` (shipped / user / old places / data
+                     dir), the shipped-folder lookup (`$D2R_PLAYSTYLES_DIR`, else the workspace
+                     root's `playstyles/` via CARGO_MANIFEST_DIR/../.., else next to the binary),
+                     `fingerprint` for the hot reload
+  guidance.rs      — what a playstyle hands the core: `Guidance` (area rating, BiS, item plan,
+                     drop marks), `Mark` / `MarkKind` / `Marks`, `Tier`, `Category`, `Spot`, `Side`,
+                     `Action`, `Advice`, `Bis`
+  game.rs          — the snapshot model (`Snapshot`, `Player`, `Level`, `ItemDrop`, `Equipped`, …;
+                     serde = the `--dump` JSON); filled by the reader
+  offsets.rs, items.rs (item codes, kinds, the items-table scan), quests.rs (quest record) —
+                     game layout knowledge, platform-independent
+  build.rs         — damage types and the area `rate` (info line colour)
+  live.rs          — live tick loop over a `GameReader` and a `Playstyle` (session, guidance,
+                     render, dashboard, hot reload)
+  config.rs        — config.toml, core only (`[shrines]`, `playstyle = "<name>"`); old files'
+                     `[valuables]` / `[builds]` / `[bis]` accepted unread
+  web/             — the dashboard core (step 6): mod.rs (`LiveInfo`, `Panels`, `live_json`),
+                     server.rs (HTTP + SSE, `/config` endpoints generic over the `Playstyle`), page.rs
+                     (a hash test pins the served bytes), stash.rs, skills.rs (`SkillTarget`),
+                     vendor.rs; fixtures.rs (test data, also for the plugin crates' tests)
+  render.rs, info.rs, session.rs, journal.rs, overlay.rs, hypr.rs, names.rs, stash.rs, shop.rs, …,
+  *_data.rs (generated tables); testutil.rs (`FakeMem`, `temp_dir`; with fixtures.rs behind the
+                     `testutil` feature, a dev-dependency feature of the plugin crates)
+crates/reader-mem/ — `d2r-reader-mem`: the reader plugin
+  lib.rs           — `Platform` (find process, open memory, find image, heap regions, save dir);
+                     `ProtonReader = MemoryReader<Proton>`; Windows port notes
   memory_reader.rs — game layer driver over any `Platform`: unit-table retry/backoff + offset cache,
                      background items-table search, quest-global search budget
-  proton.rs        — Proton/Linux `Platform`: /proc, `ProcMem`, memfd image, WINEPREFIX save dir, ptrace hint
-  process.rs       — (platform) find D2R pid, maps parsing, heap regions, pread on /proc/<pid>/mem
-  image.rs         — `find_image` (platform: memfd alias); `Image::unit_table` / `quest_flags_global`
-                     (game layer: signature, cache, structural `.data` search)
-  game.rs          — (game layer) structs/offsets → Snapshot {level, player, rooms, markers, elites}
-  offsets.rs, offset_cache.rs, items.rs (items table scan over `Platform::heap_regions`), quests.rs
-src/markers.rs     — classify presets (waypoint/exit/superunique), per-game accumulation cache
-src/overlay.rs     — layer-shell window, tiny-skia drawing, iso projection
-src/hypr.rs        — Hyprland socket2: show only while D2R is the active window
+  game.rs          — the structure walk (generic over `ReadMem`) → `d2r_core::game::Snapshot`
+  image.rs         — `find_image` (memfd alias); `Image::unit_table` / `quest_flags_global`
+                     (signature, cache, structural `.data` search)
+  offset_cache.rs  — per-build offsets in the cache dir
+  process.rs       — /proc pid discovery, maps parsing, heap regions, pread on /proc/<pid>/mem
+  proton.rs        — (feature `proton`) the Proton/Linux `Platform`: `ProcMem`, memfd image,
+                     WINEPREFIX save dir, ptrace hint
+crates/playstyle-config/ — `d2r-playstyle-config`: the config-driven playstyle plugin
+  config_driven.rs — `ConfigDriven` (+ its `Extra`: stage, chain, route advice)
+  files.rs         — load / reload of a `Files` (per-file precedence user > old places > shipped;
+                     a broken file keeps its part), bis.toml writes
+  config.rs        — `Settings`; playstyle.toml / old config.toml tables / builds/*.toml / farm.toml
+                     parsing, `Build`, `SwitchGroup`, `Stage`, the stage chain and latch logic
+  marks.rs, stash_plan.rs (`Wants`), valuables.rs, gear_score.rs, route.rs, worth.rs
+  web/             — the playstyle's dashboard panels: `PanelInfo` and `panels()` → `Panels`; gear.rs,
+                     recipes.rs, farm.rs, config_page.rs (`/config` JSON, selection edits)
 ```
+Paths in the milestone history before step 11 (`src/reader/`, `src/playstyle/`, `src/web/`) now live under `crates/`.
+
 Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml` (config), `anyhow`. No async runtime.
 
 ## Memory layer (verified offsets; keep in one `offsets` module)
@@ -637,14 +649,16 @@ playstyle also owns the route ("where to go next") and the item marks on the map
 
 **The three parts**
 - **Core (map + dashboard)**: draws the map, info line and markers; runs the dashboard page and the
-  stash, skills and vendor panels; holds the game data tables. Today: overlay, render, session,
-  journal, web server, `*_data.rs`.
+  stash, skills and vendor panels; holds the game data tables, the snapshot model and the two
+  plugin traits. Since step 11: `crates/core/` (`d2r-core`).
 - **Reader plugin**: finds the game and reads memory (map, monsters, items, stash, quests). Since
-  step 4: `src/reader/` (process, image, offsets, game walk, items table, quest record). Split in two: a **platform layer**
+  step 11: `crates/reader-mem/` (process, image, game walk, offset cache; the Proton platform behind
+  the `proton` feature); the offsets, items table and quest record decoders are core. Split in two: a **platform layer**
   (find the process, read its memory; Proton-only, what Windows would replace) and a **game layer**
   (offsets and the structure walk; platform-independent, Windows would reuse it).
 - **Playstyle plugin**: builds and stages, gear choices, farm list, route, keep/sell/trade marks,
-  recipes. Today: config builds and farm, valuables, gear score, farm/recipe/upgrade/gear panels.
+  recipes. Since step 11: `crates/playstyle-config/` (config builds and farm, route, worth,
+  valuables, item plan, gear score, marks, farm/recipe/upgrade/gear panels).
 
 **How plugins work**: chosen at build time. Each plugin is its own Rust crate in one workspace and
 a build setting (Cargo feature) picks which go in. Runtime plugins are ruled out: they need unsafe
@@ -923,7 +937,28 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   "Raven Frost?" guess), unidentified unique Heavy Gloves → Farm "Bloodfist?" dashed; the
   character renamed "Testdruid") with a test in
   `config_driven.rs` and a render test for the green rings and the star.
-- [ ] 11. Split into separate crates; update PLAN.md and CLAUDE.md.
+- [x] 11. Split into a Cargo workspace; update PLAN.md, CLAUDE.md and README. Crates: `crates/core`
+  (`d2r-core`), `crates/reader-mem` (`d2r-reader-mem`, feature `proton`), `crates/playstyle-config`
+  (`d2r-playstyle-config`), and the binary `d2r-map-overlay` at the root (features `reader-proton`,
+  `playstyle-config`, both default; a build without either is a `compile_error!`). Files moved with
+  `git mv`; `src/reader/game.rs` split into the model (core `game.rs`) and the walk (reader
+  `game.rs`); the crate-root re-export shims and `config.rs`'s re-exports of the playstyle's types
+  are gone. To cut the cycles: `Playstyle` got associated types `Wants` and `Extra<'a>` (stage,
+  chain and route advice move into `ConfigDriven`'s `Extra`; `Evaluation<'a, W, X>`); the small
+  types the map and dashboard read (`Tier`, `Category`, `Spot`, `Side`, `Action`, `Advice`, `Bis`)
+  moved into core `guidance.rs` (re-exported from their old playstyle modules), `Spot::page_side`
+  became `stash_plan::page_side`; `Files` (where the files are, `fingerprint`, the shipped lookup)
+  is core, its loaders stay in the playstyle; `Platform` lives in the reader crate (only it uses
+  it), `GameReader` / `ReadMem` in core; `offset_cache::cache_dir` moved to `game_file::cache_dir`;
+  the stash pages' item names use the new core `names::display_name` (core tables only) instead
+  of `valuables::display_name`; `build.rs` (area rating) stays core: the info line and its tests
+  use it and it needs only core tables. Dashboard test fixtures moved to `web/fixtures.rs` and,
+  with `testutil` and `info::Band::plain`, are behind the core's `testutil` feature for the plugin
+  crates' tests. Library crates export their items, so 102 `#[must_use]` were added and the
+  nursery lint `too_long_first_doc_paragraph` (exported items only) is allowed workspace-wide.
+  Verified: 500 tests as before; `--render` of jail1, flayer-marks and the scratch flayer dump
+  byte-identical; the page snapshot test passes; `cargo build --release` still writes
+  `target/release/d2r-map-overlay`.
 
 ## Milestones
 - [x] **M0 setup**: mise Rust pin, `cargo init`, lint config, rustfmt, PLAN.md + CLAUDE.md + .gitignore, `git init`, first commit.

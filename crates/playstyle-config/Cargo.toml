@@ -1,0 +1,22 @@
+[package]
+name = "d2r-playstyle-config"
+description = "D2R map overlay playstyle plugin: builds, stages, farm list, route and item rules from a playstyle folder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+d2r-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+d2r-core = { workspace = true, features = ["testutil"] }
+
+[lints]
+workspace = true

@@ -125,7 +125,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
-name = "d2r-map-overlay"
+name = "d2r-core"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
@@ -137,7 +137,41 @@ dependencies = [
  "smithay-client-toolkit",
  "tiny-skia",
  "toml",
+]
+
+[[package]]
+name = "d2r-map-overlay"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "d2r-core",
+ "d2r-playstyle-config",
+ "d2r-reader-mem",
+ "serde_json",
+ "smithay-client-toolkit",
+]
+
+[[package]]
+name = "d2r-playstyle-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "d2r-core",
+ "serde",
+ "serde_json",
+ "toml",
  "toml_edit",
+]
+
+[[package]]
+name = "d2r-reader-mem"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "d2r-core",
+ "d2r-playstyle-config",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,0 +1,25 @@
+[package]
+name = "d2r-reader-mem"
+description = "D2R map overlay reader plugin: reads the game's memory over a platform layer (Proton/Linux)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# The Proton/Linux platform (`/proc`, Wine's image alias, the prefix's save directory).
+proton = []
+
+[dependencies]
+anyhow.workspace = true
+d2r-core.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+d2r-core = { workspace = true, features = ["testutil"] }
+d2r-playstyle-config.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

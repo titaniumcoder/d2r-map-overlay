@@ -7,13 +7,29 @@ waypoint, entry/exit, packs, uniques, superuniques. Normal monsters are out of s
 **`PLAN.md` is the source of truth** for architecture, verified memory offsets, and milestones.
 Read it before starting work; tick its milestone checkboxes as work lands.
 
+## Layout (Cargo workspace)
+
+- `crates/core/` (`d2r-core`): snapshot model, game data tables, map render, overlay, session,
+  journal, live loop, dashboard core, and the plugin traits (`reader::GameReader`,
+  `playstyle::Playstyle`) with the types they exchange (`guidance.rs`).
+- `crates/reader-mem/` (`d2r-reader-mem`): the memory reader (structure walk, image, offset cache,
+  `Platform`); the Proton platform behind its `proton` feature.
+- `crates/playstyle-config/` (`d2r-playstyle-config`): `ConfigDriven`, the playstyle read from
+  `playstyles/<name>/` (builds, farm list, route, item rules, its dashboard panels).
+- `src/main.rs`: the binary `d2r-map-overlay`, wiring one reader and one playstyle picked by Cargo
+  features (`reader-proton`, `playstyle-config`, both default). Kept at the root so the release
+  binary stays `target/release/d2r-map-overlay`.
+
+Plugins depend on core, never on each other (a dev-dependency for tests is fine); core depends
+on no plugin. Core test helpers for plugin tests sit behind core's `testutil` feature.
+
 ## Gate (every commit)
 
 ```
-cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test
+cargo fmt --all --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace
 ```
 
-The lint config in `Cargo.toml` is strict on purpose (pedantic deny, `unsafe_code = "forbid"`, no `unwrap`).
+The lint config (`[workspace.lints]` in the root `Cargo.toml`, inherited by every crate) is strict on purpose (pedantic deny, `unsafe_code = "forbid"`, no `unwrap`).
 Satisfy it with code changes; an `#[allow]` needs a one-line reason beside it.
 Have the `reviewer` agent run the gate and review the diff before committing.
 

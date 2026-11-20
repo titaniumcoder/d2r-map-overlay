@@ -1,14 +1,15 @@
-[package]
-name = "d2r-map-overlay"
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
-description = "Read-only Diablo II: Resurrected minimap overlay for Hyprland (Linux, Proton)"
 license = "MIT"
-readme = "README.md"
 publish = false
 
-[dependencies]
+[workspace.dependencies]
 ab_glyph = { version = "0.2.32", default-features = false, features = ["std"] }
 anyhow = "1.0.104"
 memchr = "2.8.3"
@@ -20,13 +21,16 @@ smithay-client-toolkit = { version = "0.21.1", default-features = false, feature
 tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "simd", "png-format"] }
 toml = { version = "1.2.1", default-features = false, features = ["parse", "serde", "std"] }
 toml_edit = "0.25.19"
+d2r-core = { path = "crates/core" }
+d2r-reader-mem = { path = "crates/reader-mem" }
+d2r-playstyle-config = { path = "crates/playstyle-config" }
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
 unused_must_use = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "warn", priority = -1 }
@@ -35,6 +39,40 @@ expect_used = "warn"
 panic = "deny"
 indexing_slicing = "warn"
 cast_possible_truncation = "deny"
+# Fires only on exported items, which the single binary crate never had; the workspace crates
+# are internal (publish = false) and keep the long first doc paragraphs the code was written with.
+too_long_first_doc_paragraph = "allow"
+
+# The binary: wires one reader plugin and one playstyle plugin into the core, picked by the
+# features below. Kept at the workspace root so the release binary stays at
+# `target/release/d2r-map-overlay` (the setcap / deploy flow depends on that path).
+[package]
+name = "d2r-map-overlay"
+description = "Read-only Diablo II: Resurrected minimap overlay for Hyprland (Linux, Proton)"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["reader-proton", "playstyle-config"]
+# The memory reader over the Proton/Linux platform.
+reader-proton = ["dep:d2r-reader-mem", "d2r-reader-mem/proton"]
+# The config-driven playstyle (`playstyles/<name>/` folders).
+playstyle-config = ["dep:d2r-playstyle-config"]
+
+[dependencies]
+anyhow.workspace = true
+d2r-core.workspace = true
+d2r-reader-mem = { workspace = true, optional = true }
+d2r-playstyle-config = { workspace = true, optional = true }
+serde_json.workspace = true
+smithay-client-toolkit.workspace = true
+
+[lints]
+workspace = true
 
 [profile.release]
 lto = "thin"
