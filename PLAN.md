@@ -644,12 +644,23 @@ trait; today `src/stash_plan.rs`, shown in the dashboard's Sell / Keep panel.
   `switch_requires`) and of the farm list, as many copies as needed minus the worn ones; one white
   base per (runeword, wearer, slot) need: allowed type, exactly the rune count of sockets, usable by
   the player class or the Act 2 merc; each copy of the runeword already held (worn, carried,
-  stashed, merc) drops one such need, and the narrowest need picks its base first. Fine on pages
-  1–2 and on the character.
-- **Keep · trade**: valuables rules S/A (certain, or uncertain S). A trade-worthy base goes to
-  trade, never own. Belongs on pages 3–5.
+  stashed, merc) drops one such need, and the narrowest need picks its base first. Each need
+  keeps the **best** fitting base held (user, 2026-11-20: a better base for the same runeword
+  replaces the old one): higher base damage for weapons (min + max, `weapons_data::DAMAGE` from
+  `gen_weapons.py`), higher max defense for armor, helms and shields; ties: superior or eth over
+  plain, then the lower str + dex requirement, then the better place. The worse bases are sold,
+  even one already kept on pages 1–2. Fine on pages 1–2 and on the character.
+- **Keep · trade**: valuables rules S/A (certain, or uncertain S), category trade; category twink
+  only S for a white base (an eth elite 4os polearm). A twink-A white base (Bill / Poleaxe 4os,
+  Crystal Sword 4os, Flail 4os, Paladin shields) is own gear, not a trade good: kept only as a
+  base need, else sold. The tradable A bases are category trade in `valuables.json` (user,
+  2026-11-20): Monarch 4os, Crystal Sword / Flail 5os (CTA), Berserker Axe … Hydra Bow 5–6os,
+  eth elite polearm 5os, eth elite armor 4os, other elite body armor 3–4os, Grand Matron /
+  Matriarchal Bow 4os. Twink-A non-bases (Sigon's set, keep one) still go to trade. A trade-worthy base goes
+  to trade, never own. Belongs on pages 3–5.
 - **Move**: an own keeper on pages 3–5 → "page N → 1–2"; a trade keeper anywhere else → "→ 3–5".
-- **Sell**: extra copies of own bases, plain bases nobody needs, uniques/sets no rule wants.
+- **Sell**: extra copies of own bases, worse bases for a runeword whose better base is held,
+  plain bases nobody needs (twink-A ones included), uniques/sets no rule wants.
   **Give away**: B-only uniques/sets and extra keep-one copies (Sigon's).
 - **Magic / rare / crafted** (user, 2026-11-20): trade rule first; unidentified or stats unread → keep own;
   identified → scored with `gear_score` for the build chain: keep own if ≥ 80% of the worn item in

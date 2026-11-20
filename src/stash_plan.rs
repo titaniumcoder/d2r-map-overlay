@@ -8,15 +8,17 @@
 //! - **Keep · own**: a piece of the active build or a later stage (`BiS` slots, extras,
 //!   `switch_requires`) or of the farm list, as many copies as needed beyond the worn ones;
 //!   and one white base per runeword need (the runeword's base type, exactly its socket count,
-//!   usable by the wearer: the player class or the Act 2 mercenary). Fine on pages 1–2 and on
-//!   the character (inventory, cube, personal stash).
+//!   usable by the wearer: the player class or the Act 2 mercenary), the best one held
+//!   ([`base_rank`]: damage or defense first). Fine on pages 1–2 and on the character
+//!   (inventory, cube, personal stash).
 //! - **Keep · trade**: what the valuables rules rate S or A ([`valuables::keep_tiers`]): trade
-//!   goods, valuable uniques and sets, good bases. A base that is trade-worthy goes to trade,
-//!   never own. Belongs on pages 3–5.
+//!   goods, valuable uniques and sets, good bases; but a white base of a twink A rule only as a
+//!   base need (own), else it is sold ([`trade_worthy`]). A base that is trade-worthy goes to
+//!   trade, never own. Belongs on pages 3–5.
 //! - **Move**: a keeper on the wrong side: an own item on pages 3–5, a trade item anywhere but
 //!   pages 3–5.
-//! - **Sell**: a white base nobody needs (another copy of an own-use base, a plain base on a
-//!   trade page) and a unique or set no rule wants ([`valuables::verdict`]).
+//! - **Sell**: a white base nobody needs (another copy of an own-use base, a worse base for a
+//!   runeword whose better base is held, a plain base on a trade page) and a unique or set no rule wants ([`valuables::verdict`]).
 //! - **Give away**: a unique or set only a B rule wants, and the extra copies of a keep-one
 //!   item (Sigon's pieces).
 //!
@@ -30,6 +32,7 @@
 //! Gems, runes, charms in the inventory (they work there), finished runewords that aren't
 //! build pieces, quest items and anything else no rule speaks about get no action.
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use crate::config::{Bis, Config};
@@ -465,9 +468,42 @@ fn plain_base(item: &ItemDrop) -> bool {
 
 /// What the valuables rules keep for trade: a certain S or A match, or an uncertain S (an
 /// unidentified unique on a valuable base); an uncertain A (a magic grand charm whose stats
-/// decide) is no keeper.
+/// decide) is no keeper. A white base matching only a twink A rule (a plain Bill 4os for the
+/// merc's Insight) is gear for the player's own characters, not worth trading (user rule,
+/// 2026-11-20): kept only when it fills a base need ([`assign_bases`]), else sold. Twink A
+/// items that aren't bases (Sigon's set, keep one) still go to trade.
 fn trade_worthy(item: &ItemDrop) -> bool {
-    valuables::best(item, &valuables::keep_tiers()).is_some_and(|h| !h.uncertain || h.tier == Tier::S)
+    let mut tiers = valuables::keep_tiers();
+    if plain_base(item) {
+        tiers.twink.retain(|&t| t == Tier::S);
+    }
+    valuables::best(item, &tiers).is_some_and(|h| !h.uncertain || h.tier == Tier::S)
+}
+
+/// How good a runeword base is, better is greater (user rule, 2026-11-20: a better base for the
+/// same runeword replaces the kept one): the base damage (min + max, [`weapons_data::damage`])
+/// of a weapon or the maximum base defense of an armor, helm or shield
+/// ([`socket_bases::max_defense`]); then superior or ethereal over normal over low quality;
+/// then the lower strength + dexterity requirement. A need open to both weapons and armor
+/// (Fortitude without a slot) compares damage with defense: rare, and either base works.
+fn base_rank(item: &ItemDrop) -> (u32, u8, Reverse<u32>) {
+    let code = item.code.as_deref().unwrap_or_default();
+    let raw = crate::weapons_data::damage(code)
+        .or_else(|| socket_bases::max_defense(code).map(u32::from))
+        .unwrap_or(0);
+    // Ethereal bases have +50% base damage / defense in game, so an eth base competes with that.
+    let power = if item.ethereal {
+        raw.saturating_mul(3) / 2
+    } else {
+        raw
+    };
+    let grade = if item.quality == item_data::QUALITY_SUPERIOR || item.ethereal {
+        2
+    } else {
+        u8::from(item.quality != item_data::QUALITY_LOW)
+    };
+    let req = crate::bases_data::base(code).map_or(0, |b| b.str.saturating_add(b.dex));
+    (power, grade, Reverse(req))
 }
 
 /// Whether `base` can be made into the runeword of `need`: exactly its socket count, and a
@@ -533,8 +569,10 @@ pub fn for_snapshot(snap: &Snapshot, config: &Config, chain: &[String], bis: Opt
 type Decided = (Action, Option<&'static str>);
 
 /// One base per runeword need, the needs with the fewest fitting bases first (a base that fits
-/// two needs must not starve the narrower one), each taking its best-placed free base (`order`,
-/// [`by_preference`]). A trade-worthy base is left for the trade side.
+/// two needs must not starve the narrower one), each taking its best free base ([`base_rank`];
+/// on a tie the best placed, `order`, [`by_preference`]). The other bases are sold by [`plan`],
+/// a worse one already kept on pages 1–2 included. A trade-worthy base is left for the trade
+/// side.
 fn assign_bases(items: &[Held], needs: &Needs, order: &[usize], actions: &mut [Option<Decided>]) {
     let candidates: Vec<usize> = order
         .iter()
@@ -559,9 +597,11 @@ fn assign_bases(items: &[Held], needs: &Needs, order: &[usize], actions: &mut [O
         .collect();
     by_choice.sort_by_key(Vec::len);
     for fits in by_choice {
+        // `min_by_key` keeps the first of equal keys: the best-placed of equal bases.
         let free = fits
             .into_iter()
-            .find(|&i| actions.get(i).is_some_and(Option::is_none));
+            .filter(|&i| actions.get(i).is_some_and(Option::is_none))
+            .min_by_key(|&i| Reverse(items.get(i).map(|h| base_rank(&h.item))));
         if let Some((h, slot)) = free.and_then(|i| items.get(i).zip(actions.get_mut(i))) {
             *slot = Some((keep_or_move(Side::Own, h.spot), None));
         }
@@ -744,7 +784,8 @@ mod tests {
     #[test]
     fn a_trade_base_on_page_1_moves_to_the_trade_pages() {
         // eth 4os Colossus Voulge: an S twink base, worth trading even though the merc could
-        // use it, and Crystal Sword 4os (A twink) ahead of a Spirit need.
+        // use it. Crystal Sword 4os is only A twink: one copy is the Spirit base, the other
+        // isn't worth trading and is sold.
         let mut voulge = base("7vo", 4);
         voulge.ethereal = true;
         let mut needs = Needs::default();
@@ -757,14 +798,149 @@ mod tests {
         assert_eq!(
             rows(&items, &needs),
             vec![
-                row("Crystal Sword 4os", Spot::Page(2), Action::Move(Side::Trade), 1),
+                row("Crystal Sword 4os", Spot::Page(3), Action::Sell, 1),
                 row(
                     "eth Colossus Voulge 4os",
                     Spot::Page(1),
                     Action::Move(Side::Trade),
                     1
                 ),
-                row("Crystal Sword 4os", Spot::Page(3), Action::Keep(Side::Trade), 1),
+                row("Crystal Sword 4os", Spot::Page(2), Action::Keep(Side::Own), 1),
+            ]
+        );
+    }
+
+    /// Insight wanted for the merc's weapon (farm list), `held` copies already owned.
+    fn insight_needs(held: u32) -> Needs {
+        use crate::config::{FarmGroup, FarmItem, FarmSlot};
+        let config = Config {
+            farm: vec![FarmGroup {
+                target: "Fury".to_owned(),
+                items: vec![FarmItem {
+                    name: "Insight".to_owned(),
+                    kind: crate::names::ItemKind::Runeword,
+                    count: 1,
+                    merc: true,
+                    slot: Some(FarmSlot::Weapon),
+                }],
+            }],
+            ..Config::default()
+        };
+        Needs::from_config(&config, &[], None, 5, &[], &move |n| {
+            u32::from(n == "Insight") * held
+        })
+    }
+
+    #[test]
+    fn a_twink_a_base_is_no_trade_good() {
+        // Bill / Poleaxe 4os match "Polearms 4os (any tier)", A twink: gear for the player's
+        // own characters. With Insight held they are sold, not moved to the trade pages.
+        let items = [
+            at(base("9vo", 4), Spot::Page(1)),
+            at(base("pax", 4), Spot::Page(4)),
+        ];
+        assert_eq!(
+            rows(&items, &insight_needs(1)),
+            vec![
+                row("Bill 4os", Spot::Page(1), Action::Sell, 1),
+                row("Poleaxe 4os", Spot::Page(4), Action::Sell, 1),
+            ]
+        );
+        // Insight still wanted: the better base (Bill 14–53 over Poleaxe 18–39) is kept, the other sold.
+        assert_eq!(
+            rows(&items, &insight_needs(0)),
+            vec![
+                row("Poleaxe 4os", Spot::Page(4), Action::Sell, 1),
+                row("Bill 4os", Spot::Page(1), Action::Keep(Side::Own), 1),
+            ]
+        );
+        // An eth elite 4os polearm is S twink: a trade good, need or not.
+        let mut voulge = base("7vo", 4);
+        voulge.ethereal = true;
+        for needs in [insight_needs(0), insight_needs(1)] {
+            assert_eq!(
+                rows(&[at(voulge.clone(), Spot::Inventory)], &needs),
+                vec![row(
+                    "eth Colossus Voulge 4os",
+                    Spot::Inventory,
+                    Action::Move(Side::Trade),
+                    1
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn tradable_a_bases_are_kept_for_trade_without_a_need() {
+        // Monarch 4os (Spirit shield) and Crystal Sword 5os (Call to Arms): A trade rules.
+        let items = [
+            at(base("uit", 4), Spot::Page(4)),
+            at(base("crs", 5), Spot::Inventory),
+        ];
+        assert_eq!(
+            rows(&items, &Needs::default()),
+            vec![
+                row("Crystal Sword 5os", Spot::Inventory, Action::Move(Side::Trade), 1),
+                row("Monarch 4os", Spot::Page(4), Action::Keep(Side::Trade), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_better_base_for_a_runeword_wins() {
+        // Spirit: Broad Sword (7–14) beats Crystal Sword (5–15) on average damage, even
+        // from a trade page against a sword already kept on page 1.
+        let mut spirit = Needs::default();
+        spirit.base("Spirit", DRUID, Some(4));
+        let swords = [
+            at(base("crs", 4), Spot::Page(1)),
+            at(base("bsd", 4), Spot::Page(4)),
+        ];
+        assert_eq!(
+            rows(&swords, &spirit),
+            vec![
+                row("Crystal Sword 4os", Spot::Page(1), Action::Sell, 1),
+                row("Broad Sword 4os", Spot::Page(4), Action::Move(Side::Own), 1),
+            ]
+        );
+        // Fortitude in the body slot: Ancient Armor (233 def) beats Full Plate Mail (161).
+        let mut fortitude = Needs::default();
+        fortitude.base("Fortitude", DRUID, Some(3));
+        let armors = [
+            at(base("ful", 4), Spot::Page(2)),
+            at(base("aar", 4), Spot::Inventory),
+        ];
+        assert_eq!(
+            rows(&armors, &fortitude),
+            vec![
+                row("Full Plate Mail 4os", Spot::Page(2), Action::Sell, 1),
+                row("Ancient Armor 4os", Spot::Inventory, Action::Keep(Side::Own), 1),
+            ]
+        );
+        // The same base: superior beats plain.
+        let mut superior = base("ful", 4);
+        superior.quality = item_data::QUALITY_SUPERIOR;
+        let plates = [at(base("ful", 4), Spot::Page(1)), at(superior, Spot::Page(5))];
+        let plates_plan = plan(&plates, &fortitude, &druid());
+        let actions: Vec<_> = plates_plan.iter().map(|a| (a.spot, a.action)).collect();
+        assert_eq!(
+            actions,
+            vec![
+                (Spot::Page(1), Action::Sell),
+                (Spot::Page(5), Action::Move(Side::Own)),
+            ]
+        );
+        // Ethereal counts +50%: an eth Full Plate Mail (161 × 1.5 = 241) beats Ancient Armor (233).
+        let mut eth = base("ful", 4);
+        eth.ethereal = true;
+        let mixed = [at(base("aar", 4), Spot::Page(1)), at(eth, Spot::Page(2))];
+        let eth_plan = plan(&mixed, &fortitude, &druid());
+        let actions: Vec<_> = eth_plan.iter().map(|a| (a.spot, a.action)).collect();
+        assert_eq!(
+            actions,
+            vec![
+                (Spot::Page(1), Action::Sell),
+                (Spot::Page(2), Action::Keep(Side::Own)),
             ]
         );
     }

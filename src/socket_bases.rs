@@ -190,6 +190,15 @@ pub fn socketable(code: &str) -> bool {
     socketable_row(code).is_some()
 }
 
+/// The maximum base defense of socketable armor `code` (armor.txt `maxac`); `None` for a
+/// weapon or a code that isn't a socketable base.
+#[must_use]
+pub fn max_defense(code: &str) -> Option<u16> {
+    socketable_row(code)
+        .map(|&(_, _, _, _, _, def)| def)
+        .filter(|&def| def > 0)
+}
+
 /// Whether the base with item code `code` can carry runeword `word` for `wearer` (the same
 /// category, class and mercenary checks as [`natural_bases`]) and, with `slot` set, is worn in
 /// that body slot. The socket count is the caller's check: this is about the base only.

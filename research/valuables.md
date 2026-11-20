@@ -109,36 +109,38 @@ Threshold: always pick up **Lem (r20) and above**. Ko, Fal, Hel, Io and Lum are 
 
 ## b) Twink and runeword bases
 
+Category **trade** marks the bases worth keeping for trade without a build need (user, 2026-11-20); **twink** A bases are cheap or player-specific and the item plan (`src/stash_plan.rs`) keeps them only as a build's runeword base, else sells them. S bases are kept for trade either way.
+
 All of these need a **white (normal or superior)** base. Superior means more defense or ED and is preferred for main-hand and armor bases. Use ethereal for **mercenary** gear and for runewords with *Indestructible* or *Repairs durability* (BotD, Death, Exile).
 
-| tier | base (code) | sockets | eth | runewords |
-|---|---|---|---|---|
-| S | Archon Plate `utp`, Dusk Shroud `uui` (superior) | 3 / 4 | – | Enigma (3), CoH / Fortitude (4) |
-| A | Other elite armor: Sacred Armor `uar`, Wyrmhide `uea`, Great Hauberk `urs`, Shadow Plate `uul`, Kraken `uld`, Hellforge `ult`, Balrog `upl`, Lacquered `uth` | 3–4 | – | Enigma, CoH, Fortitude |
-| A | Elite armor for the merc (eth Sacred Armor is best) | 4 | yes | Fortitude, CoH |
-| S | Thresher `7s8`, Giant Thresher `7wc`, Cryptic Axe `7pa`, Colossus Voulge `7vo`, Great Poleaxe `7h7`, Mancatcher `7br`, Matriarchal Spear `amd` | 4 | yes | Infinity, Insight (merc) |
-| A | Any polearm 4os, including Normal Voulge `vou`, Scythe `scy`, Poleaxe `pax`, Halberd `hal`, War Scythe `wsc` and the exceptional tier | 4 | preferred | Insight |
-| A | Elite polearms and spears (also Ghost Spear `7st`, War Pike `7p7`) | 5 | yes | Pride, Obedience, Doom |
-| S | Phase Blade `7cr` (superior) | 5 / 6 | n/a (no durability) | Grief (5), Last Wish / BotD (6) |
-| A | Berserker Axe `7wa`, Colossus Blade `7gd`, Thunder Maul `7gm`, Archon Staff `6ws`, War Pike `7p7`, Hydra Bow `6lw` | 5–6 | strongly | BotD (6), Death (5), Doom, Beast (5), Last Wish |
-| A | Crystal Sword `crs` / Dimensional `9cr` / Phase `7cr`, Long Sword `lsd/9ls`, Broad Sword `bsd/9bs` | 4 | – | Spirit sword, Phoenix, Hand of Justice |
-| A | Crystal Sword family, Flail `fla` / Knout `9fl` / Scourge `7fl` | 5 | style | Call to Arms |
-| A | Flail / Knout / Scourge | 4 | style | Heart of the Oak |
-| A | Monarch `uit` (superior) | 4 | – | Spirit shield, Phoenix |
-| A | Paladin shields `pa1–paf` (all tiers; value depends on the implicit res roll, needs stats) | 4 | – | Spirit, Phoenix |
-| A | Paladin shields, eth Sacred Targe `pab` / Vortex `paf` preferred | 4 | yes | Exile |
-| A | Grand Matron Bow `amc`, Matriarchal Bow `amb` | 4 | – | Faith, Insight |
-| B | Amazon bows `am1 am2 am6 am7 amb amc` | 5 | – | Mist |
-| B | Bone Visage `uh9`, Diadem `ci3`, Tiara `ci2`, Troll Nest `ush` | 3 | – | Dream, Coven (RotW), Flickering Flame, Metamorphosis |
-| B | Barbarian helms / Druid pelts with +3 skills (needs stats) | 2–3 | – | Dream, Lore, Metamorphosis, Coven |
-| B | Mage Plate `xtp` | 3 | eth for merc Treachery | Treachery, Duress, Smoke, Bone, Hustle, Authority (RotW) |
-| B | Quilted / Leather / Hard Leather / Studded (2os), Ring Mail / Breast Plate (3os) | 2–3 | – | Stealth; Smoke / Treachery / Authority twink |
-| B | Kite `kit`, Large `lrg`, Dragon `xit` shield and the exceptional Large Shield | 3 | – | Ancient's Pledge |
-| B | 2os helms (cap, skull cap, helm, full helm, war hat, Shako, Hydraskull, circlets) | 2 | – | Lore |
-| B | Claws `7lw 7tw 9lw clw` (+3 implicits need stats) | 3 | – | Mosaic, Plague |
-| B | Phase / Crystal / Legend Sword `72h` | 3 | – | Lawbringer, Crescent Moon |
-| B | Daggers `kri bld 9kr 9bl 7kr 7bl` | 3 | – | Void, Ritual (RotW Warlock) |
-| B | Grimoires `wa1–waf` | 2 | – | Vigilance (RotW) |
+| tier | category | base (code) | sockets | eth | runewords |
+|---|---|---|---|---|---|
+| S | twink | Archon Plate `utp`, Dusk Shroud `uui` (superior) | 3 / 4 | – | Enigma (3), CoH / Fortitude (4) |
+| A | trade | Other elite armor: Sacred Armor `uar`, Wyrmhide `uea`, Great Hauberk `urs`, Shadow Plate `uul`, Kraken `uld`, Hellforge `ult`, Balrog `upl`, Lacquered `uth` | 3–4 | – | Enigma, CoH, Fortitude |
+| A | trade | Elite armor for the merc (eth Sacred Armor is best) | 4 | yes | Fortitude, CoH |
+| S | twink | Thresher `7s8`, Giant Thresher `7wc`, Cryptic Axe `7pa`, Colossus Voulge `7vo`, Great Poleaxe `7h7`, Mancatcher `7br`, Matriarchal Spear `amd` | 4 | yes | Infinity, Insight (merc) |
+| A | twink | Any polearm 4os, including Normal Voulge `vou`, Scythe `scy`, Poleaxe `pax`, Halberd `hal`, War Scythe `wsc` and the exceptional tier | 4 | preferred | Insight |
+| A | trade | Elite polearms and spears (also Ghost Spear `7st`, War Pike `7p7`) | 5 | yes | Pride, Obedience, Doom |
+| S | twink | Phase Blade `7cr` (superior) | 5 / 6 | n/a (no durability) | Grief (5), Last Wish / BotD (6) |
+| A | trade | Berserker Axe `7wa`, Colossus Blade `7gd`, Thunder Maul `7gm`, Archon Staff `6ws`, War Pike `7p7`, Hydra Bow `6lw` | 5–6 | strongly | BotD (6), Death (5), Doom, Beast (5), Last Wish |
+| A | twink | Crystal Sword `crs` / Dimensional `9cr` / Phase `7cr`, Long Sword `lsd/9ls`, Broad Sword `bsd/9bs` | 4 | – | Spirit sword, Phoenix, Hand of Justice |
+| A | trade | Crystal Sword family, Flail `fla` / Knout `9fl` / Scourge `7fl` | 5 | style | Call to Arms |
+| A | twink | Flail / Knout / Scourge | 4 | style | Heart of the Oak |
+| A | trade | Monarch `uit` (superior) | 4 | – | Spirit shield, Phoenix |
+| A | twink | Paladin shields `pa1–paf` (all tiers; value depends on the implicit res roll, needs stats) | 4 | – | Spirit, Phoenix |
+| A | twink | Paladin shields, eth Sacred Targe `pab` / Vortex `paf` preferred | 4 | yes | Exile |
+| A | trade | Grand Matron Bow `amc`, Matriarchal Bow `amb` | 4 | – | Faith, Insight |
+| B | twink | Amazon bows `am1 am2 am6 am7 amb amc` | 5 | – | Mist |
+| B | twink | Bone Visage `uh9`, Diadem `ci3`, Tiara `ci2`, Troll Nest `ush` | 3 | – | Dream, Coven (RotW), Flickering Flame, Metamorphosis |
+| B | twink | Barbarian helms / Druid pelts with +3 skills (needs stats) | 2–3 | – | Dream, Lore, Metamorphosis, Coven |
+| B | twink | Mage Plate `xtp` | 3 | eth for merc Treachery | Treachery, Duress, Smoke, Bone, Hustle, Authority (RotW) |
+| B | twink | Quilted / Leather / Hard Leather / Studded (2os), Ring Mail / Breast Plate (3os) | 2–3 | – | Stealth; Smoke / Treachery / Authority twink |
+| B | twink | Kite `kit`, Large `lrg`, Dragon `xit` shield and the exceptional Large Shield | 3 | – | Ancient's Pledge |
+| B | twink | 2os helms (cap, skull cap, helm, full helm, war hat, Shako, Hydraskull, circlets) | 2 | – | Lore |
+| B | twink | Claws `7lw 7tw 9lw clw` (+3 implicits need stats) | 3 | – | Mosaic, Plague |
+| B | twink | Phase / Crystal / Legend Sword `72h` | 3 | – | Lawbringer, Crescent Moon |
+| B | twink | Daggers `kri bld 9kr 9bl 7kr 7bl` | 3 | – | Void, Ritual (RotW Warlock) |
+| B | twink | Grimoires `wa1–waf` | 2 | – | Vigilance (RotW) |
 
 RotW runeword recipes, from d2data `runes.json`:
 - Authority = Hel Shael Ral (body armor)

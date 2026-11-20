@@ -24,7 +24,8 @@ pub enum Tier {
     S,
 }
 
-/// What a drop is valuable for: selling (`trade`) or a runeword base for a twink (`twink`).
+/// What a drop is valuable for: selling (`trade`, tradable runeword bases included) or a runeword
+/// base for the player's own characters (`twink`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Category {

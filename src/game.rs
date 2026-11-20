@@ -4461,7 +4461,7 @@ mod tests {
         // The same in the stash (page 4), and equipped (mode 1, page 255): not listed.
         stored_item(&mut m, I2, (40, 7, id, 248), (stored, 4), &[], I3)?;
         stored_item(&mut m, I3, (40, 7, id, 248), (1, 255), &[], I4)?;
-        // A white 4os Crystal Sword in the inventory: A twink.
+        // A white 4os Crystal Sword in the inventory: A twink, sold without a Spirit need.
         stored_item(&mut m, I4, (30, 2, id, 0), (stored, 0), &[(194, 4)], I5)?;
         // A 3os one (B only): not kept.
         stored_item(&mut m, I5, (30, 2, id, 0), (stored, 0), &[(194, 3)], I6)?;
@@ -4484,13 +4484,13 @@ mod tests {
             item_plan(&s),
             vec![
                 "Crystal Sword 3os (inv)",
-                "Crystal Sword 4os (inv → 3–5)",
-                "Crystal Sword 4os (stash → 3–5)",
+                "Crystal Sword 4os (inv)",
+                "Crystal Sword 4os (stash)",
                 "Harlequin Crest (inv → 3–5)",
                 "Harlequin Crest (stash → 3–5)",
                 "Magic Crystal Sword (cube)",
             ],
-            "the 3os sword (B only) is sold; the equipped and Alice's Shakos aren't Bob's"
+            "the swords (B, A twink) are sold with no base need; the equipped and Alice's Shakos aren't Bob's"
         );
         Ok(())
     }

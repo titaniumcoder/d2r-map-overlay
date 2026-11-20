@@ -7,7 +7,8 @@ The "speed" column is the WSM (weapon speed modifier): negative faster, positive
 empty cells mean 0. wtype is the weapon class code (axe, bow, swor, pole, …) — carried but
 unused by the current reader. "levelreq" is the required character level and "2handed" (1) marks a
 two-handed weapon (staves, bows, xbows, polearms, two-hand swords/axes/hammers); both
-feed the dashboard's gear grid.
+feed the dashboard's gear grid. DAMAGE (min + max base damage) ranks two runeword bases
+(src/stash_plan.rs).
 """
 import json
 import sys
@@ -81,4 +82,35 @@ print("        .binary_search_by(|(c, _, _, _, _, _)| c.cmp(&code))")
 print("        .ok()")
 print("        .and_then(|i| WEAPONS.get(i))")
 print("        .map(|&(_, _, _, _, _, name)| name)")
+print("}")
+
+# Base damage (user request, 2026-11-20: of two runeword bases the higher damage one is kept).
+# One-handed damage where the row has it (swords usable in one hand count as one-handers),
+# else the two-handed damage; kept as min + max (twice the average) to stay an integer.
+damage = []
+for r in weapons:
+    if not r.get("code"):
+        continue
+    lo, hi = int(r.get("mindam") or 0), int(r.get("maxdam") or 0)
+    if hi == 0:
+        lo, hi = int(r.get("2handmindam") or 0), int(r.get("2handmaxdam") or 0)
+    if hi > 0:
+        damage.append((r["code"], lo + hi))
+damage.sort()
+print()
+print("/// (item code, base minimum + maximum damage) per weapons.txt row with damage: the")
+print("/// one-handed columns where the row has them, else the two-handed ones. Twice the average.")
+print(f"pub static DAMAGE: [(&str, u32); {len(damage)}] = [")
+for code, total in damage:
+    print(f'    ("{code}", {total}),')
+print("];")
+print()
+print("/// The base minimum + maximum damage of `code` ([`DAMAGE`]), `None` if it has none.")
+print("#[must_use]")
+print("pub fn damage(code: &str) -> Option<u32> {")
+print("    DAMAGE")
+print("        .binary_search_by(|(c, _)| c.cmp(&code))")
+print("        .ok()")
+print("        .and_then(|i| DAMAGE.get(i))")
+print("        .map(|&(_, total)| total)")
 print("}")
