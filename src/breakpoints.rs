@@ -83,17 +83,19 @@ fn next_threshold(
 }
 
 /// `(frames / current / next)` for one animation; without the third part past the last
-/// breakpoint.
+/// breakpoint. A negative total (gear with a negative FCR/FHR) is shown as is, but its frames
+/// and next breakpoint are those of 0: the guide's tables start at 0.
 fn stat_part(
     label: &str,
     base: u32,
     speed: u32,
-    current: u32,
+    current: i32,
     bound: u32,
     f: fn(u32, u32, u32) -> u32,
 ) -> String {
-    let frames = f(base, speed, current);
-    next_threshold(current, base, speed, f, bound).map_or_else(
+    let effective = u32::try_from(current).unwrap_or(0);
+    let frames = f(base, speed, effective);
+    next_threshold(effective, base, speed, f, bound).map_or_else(
         || format!("{label} ({frames} / {current})"),
         |next| format!("{label} ({frames} / {current} / {next})"),
     )
@@ -121,7 +123,7 @@ pub fn guide_band(player: &Player, difficulty: Option<u8>) -> Option<crate::info
     let penalty = difficulty
         .and_then(|d| RES_PENALTY.get(usize::from(d)).copied())
         .unwrap_or(0);
-    let res = |v: u32| i32::try_from(v).unwrap_or(i32::MAX) - penalty;
+    let res = |v: i32| v.saturating_sub(penalty);
     for (n, value) in [
         speed.res_fire,
         speed.res_cold,
@@ -163,7 +165,7 @@ mod tests {
     use crate::game::{Addr, SpeedStats};
     use anyhow::{Result, anyhow};
 
-    fn player(class: u32, fcr: u32, fhr: u32, ias: u32) -> Player {
+    fn player(class: u32, fcr: i32, fhr: i32, ias: i32) -> Player {
         Player {
             addr: Addr(0),
             id: 1,
@@ -288,6 +290,22 @@ mod tests {
             let rest = &band.text[*off..];
             assert!(rest.starts_with('-'), "a penalized value at {off}: {rest}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn negative_stats_show_as_negative() -> Result<()> {
+        // Warlock with -10 FCR: shown as -10, frames and next breakpoint as at 0 (15 / 9).
+        let mut p = player(7, -10, 0, -20);
+        if let Some(speed) = p.speed.as_mut() {
+            speed.res_fire = -10;
+        }
+        let Some(band) = guide_band(&p, Some(0)) else {
+            return Err(anyhow!("no guide band"));
+        };
+        assert!(band.text.starts_with("fcr (15 / -10 / 9)"), "{}", band.text);
+        assert!(band.text.contains("ias -20"), "{}", band.text);
+        assert!(band.text.ends_with("res -10/15/25/5"), "{}", band.text);
         Ok(())
     }
 

@@ -321,16 +321,17 @@ pub struct Player {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SpeedStats {
     /// `item_fastercastrate` (FCR, %).
-    pub fcr: u32,
+    pub fcr: i32,
     /// `item_fasterattackrate` (IAS, %).
-    pub ias: u32,
+    pub ias: i32,
     /// `item_fasterhitrecovery` (FHR, %).
-    pub fhr: u32,
+    pub fhr: i32,
     /// The four elemental resistances as granted by gear (fire, cold, lightning, poison).
-    pub res_fire: u32,
-    pub res_cold: u32,
-    pub res_lightning: u32,
-    pub res_poison: u32,
+    /// Signed like every field here: gear can carry negative values (e.g. -10 all resistances).
+    pub res_fire: i32,
+    pub res_cold: i32,
+    pub res_lightning: i32,
+    pub res_poison: i32,
 }
 
 /// The character level from the raw stat value: 1..=99, or the same shifted left by 8 (some D2
@@ -347,11 +348,16 @@ pub fn char_level_from_raw(raw: u32) -> Option<u8> {
 /// The plain value of a raw stat: most D2 stats are stored as-is, but some (life, mana, level…)
 /// in 1/256 units — a value far above the stat's realistic maximum with 8 trailing zeros is such
 /// an encoding. Good enough for the guide stats (FCR/IAS/FHR/resists, all ≤ 255 in practice).
-const fn plain_stat_from_raw(raw: u32) -> u32 {
-    if raw > 255 && raw.trailing_zeros() >= 8 {
-        raw >> 8
+///
+/// The raw word is a two's-complement `i32` (a -10 resist reads `0xFFFF_FFF6`); only positive
+/// values are 1/256-decoded, since a negative one like -256 (`0xFFFF_FF00`) also has 8 trailing
+/// zeros but is a plain value.
+const fn plain_stat_from_raw(raw: u32) -> i32 {
+    let value = raw.cast_signed();
+    if value > 255 && value.trailing_zeros() >= 8 {
+        value >> 8
     } else {
-        raw
+        value
     }
 }
 
@@ -2830,6 +2836,20 @@ mod tests {
     }
 
     #[test]
+    fn plain_stat_values_are_signed() {
+        // Positive cases: plain values as-is, 1/256-encoded ones decoded.
+        assert_eq!(plain_stat_from_raw(25), 25);
+        assert_eq!(plain_stat_from_raw(255), 255);
+        assert_eq!(plain_stat_from_raw(20 << 8), 20, "1/256 units");
+        assert_eq!(plain_stat_from_raw(0x1234), 0x1234, "not 8 trailing zeros");
+        // Negative values are two's complement and never 1/256-decoded: -256 = 0xFFFF_FF00
+        // has 8 trailing zeros but is a plain -256.
+        assert_eq!(plain_stat_from_raw((-10i32).cast_unsigned()), -10);
+        assert_eq!(plain_stat_from_raw((-256i32).cast_unsigned()), -256);
+        assert_eq!(plain_stat_from_raw(u32::MAX), -1);
+    }
+
+    #[test]
     fn char_level_values() {
         assert_eq!(char_level_from_raw(1), Some(1));
         assert_eq!(char_level_from_raw(34), Some(34));
@@ -3472,18 +3492,24 @@ mod tests {
             affixes,
             ring_id,
             0x40,
-            (affix_entries, 1),
+            (affix_entries, 2),
             (0, 0),
             foreign,
         )?;
-        entries(&mut m, affix_entries, &[(stat_list::FHR, 10)]);
+        // A negative affix (-10 fire resist, stored as its two's-complement word) lowers the sum.
+        let minus_ten = (-10i32).cast_unsigned();
+        entries(
+            &mut m,
+            affix_entries,
+            &[(stat_list::FHR, 10), (stat_list::RESIST_FIRE, minus_ten)],
+        );
         item_list(&mut m, foreign, ring_id + 1, 0x40, (affix_entries, 1), (0, 0), 0)?;
 
         let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
         let expected = SpeedStats {
             fcr: 25,
             fhr: 10,
-            res_fire: 48,
+            res_fire: 38,
             res_cold: 43,
             res_lightning: 48,
             res_poison: 48,
@@ -3518,7 +3544,13 @@ mod tests {
             ]
         );
         // The ring without the flag: the chain walk's affix list.
-        assert_eq!(stats(6), [stat(stat_list::FHR, 10, false)]);
+        assert_eq!(
+            stats(6),
+            [
+                stat(stat_list::FHR, 10, false),
+                stat(stat_list::RESIST_FIRE, -10, false),
+            ]
+        );
         Ok(())
     }
 
