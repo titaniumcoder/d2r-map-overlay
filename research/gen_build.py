@@ -39,8 +39,10 @@ BUILDS = {
     # practically all out of date"). A complete summoner 1-99 (user: "he can be summoner till 99
     # if he doesn't find what he needs"); the switch into Fury (werewolf) is possible from 75 and
     # only with the switch gear in switch_requires.
+    # Physical only (user 2026-11-20: physical immunes are bad for the summoner): the pets and
+    # ravens hit physical; Arctic Blast is a 1-point prerequisite, not a damage source.
     "summoner-druid": dict(
-        name="Summoner Druid", cls="druid", damages=["physical", "cold"], default=True,
+        name="Summoner Druid", cls="druid", damages=["physical"], default=True,
         next="fury druid", switch_level=75, auto_switch=True,
         # The user's conditions for the Fury switch (2026-11-19). "Cannot Be Frozen" and the merc
         # helm group are computed from d2data: every unique/set item (base props) and complete
