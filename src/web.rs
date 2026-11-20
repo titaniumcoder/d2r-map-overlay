@@ -2577,6 +2577,7 @@ a { color: var(--gold); text-decoration: none; } a:hover { text-decoration: unde
 .grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); margin-top: 16px; }
 .panel { background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
 .panel.full { grid-column: 1 / -1; }
+.wrap > .panel + .panel { margin-top: 16px; }
 .panel h2 { margin: 0 0 10px; font-size: 13px; font-weight: 650; letter-spacing: .08em;
   text-transform: uppercase; color: var(--gold); display: flex; align-items: baseline; gap: 10px; }
 .panel h2 .sub { color: var(--faint); font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 12px; }
@@ -2765,6 +2766,7 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
 </div></div>
 <div class="upbar" id="upgrades" hidden></div>
 <div class="wrap">
+<section class="panel full" id="sellpanel"><h2>Sell / Keep</h2><div id="sell" class="lines"></div></section>
 <section class="panel full" id="shoppanel" hidden><h2>Vendor <span class="sub" id="shopnpc"></span></h2><div class="shop" id="shop"></div></section>
 <section class="panel full"><h2>Gear <span class="sub" id="buildname"></span></h2>
 <details class="help"><summary>How to read this</summary>
@@ -2785,7 +2787,6 @@ Each card is a slot. The dashed box shows what is equipped (name and required le
 <div class="grid">
 <section class="panel"><h2>Where to go <span class="sub">monster level around yours</span></h2><div id="levels"></div></section>
 <section class="panel"><h2>Shared stash</h2><div id="stash"></div></section>
-<section class="panel full" id="sellpanel"><h2>Sell / Keep</h2><div id="sell" class="lines"></div></section>
 </div></div>
 "#;
 
