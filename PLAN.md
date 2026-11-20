@@ -580,6 +580,86 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each release build the user runs
 `sudo setcap cap_sys_ptrace=ep target/release/d2r-map-overlay` (a `just`/Makefile target). No sudo at runtime.
 
+## Plugin refactor (2026-11-20, user-approved)
+The map overlay is the base. How the game is read becomes a **reader plugin**; the user's leveling
+and farming strategy becomes a **playstyle plugin** (only Summoner Druid → Fury Druid). The
+playstyle also owns the route ("where to go next") and the item marks on the map.
+
+**The three parts**
+- **Core (map + dashboard)**: draws the map, info line and markers; runs the dashboard page and the
+  stash, skills and vendor panels; holds the game data tables. Today: overlay, render, session,
+  journal, web server, `*_data.rs`.
+- **Reader plugin**: finds the game and reads memory (map, monsters, items, stash, quests). Today:
+  process, image, offsets, game walk, items table, quest record. Split in two: a **platform layer**
+  (find the process, read its memory; Proton-only, what Windows would replace) and a **game layer**
+  (offsets and the structure walk; platform-independent, Windows would reuse it).
+- **Playstyle plugin**: builds and stages, gear choices, farm list, route, keep/sell/trade marks,
+  recipes. Today: config builds and farm, valuables, gear score, farm/recipe/upgrade/gear panels.
+
+**How plugins work**: chosen at build time. Each plugin is its own Rust crate in one workspace and
+a build setting (Cargo feature) picks which go in. Runtime plugins are ruled out: they need unsafe
+code (forbidden) or a heavy WASM runtime. The playstyle is **mostly data files** (route, builds,
+farm list, trade marks) that other players can copy and edit; they fork the code only for new logic.
+
+**Route as data**: each step says when it applies and when it's done (conditions: difficulty, level,
+quests done); the dashboard shows the current step.
+1. Normal: Tristram or Countess until level 15.
+2. Minimum quests to open the tombs: Sisters to the Slaughter, Tainted Sun, Arcane Sanctuary, The Summoner.
+3. Tombs until 24.
+4. Minimum quests up to the Ancients: Horadric Staff, Seven Tombs, Khalim's Will, The Guardian, Terror's End.
+5. Baal runs until 35.
+6. Valuable quests: Den of Evil, Radament, Izual, Anya, Larzuk (the socket is kept for an eth weapon + Zod), Malus.
+7. Nightmare: Cain.
+8. Countess until 45.
+9. Rush to Mephisto.
+10. Mephisto (NM mlvl 59) / Andariel (NM mlvl 49) while **worth farming**, until clvl 57.
+11. Diablo (not farmed).
+12. Ancients.
+13. Baal waves for XP.
+14. Hell: Countess.
+15. From 75: max areas (level-85 areas without physical immunes, terrorized good ones first).
+    Below 75, the Nightmare-style route.
+
+**Worth farming** is computed from the game's drop tables: a boss is worth it while any item still
+missing from the farm list has any chance to drop from it at its level; the dashboard names the
+item. Needs the drop tables generated into the project (a new data step).
+**Quest memory**: the game shows only the current difficulty's quests, so the overlay saves quest
+progress per character and difficulty (like the build stage in `played.json`).
+
+**Map marks**
+- **Keep**: bases for farm-list runewords that dropped with exactly the right sockets, plus
+  farm-list uniques and sets.
+- **Trade**: top and second tier of high-value online bases, e.g. eth elite polearms 4–5os, Monarch
+  4os, Archon Plate / Dusk Shroud 3–4os, Phase Blade 5os, superior or eth elite bases. Drawn
+  **dashed** while the overlay can't read their enhanced defense (unknown ED).
+- **Removed**: the "Ethereal Colossus Voulge 0os (Larzuk to 4)" rule (done in step 1).
+
+**User answers (2026-11-20)**
+- **Smoke is ALWAYS merc gear.** The summoner keeps Stealth (from 12 until Enigma) for its FCR.
+  Both druid build files put Smoke in `[merc_slots] body`; the Fury stage lists Stealth as its
+  last body fallback until Fortitude.
+- **Nightmare bosses (confirmed)**: Mephisto (NM level 59) and Andariel (NM level 49) are farmed
+  while worth it (any chance for a missing farm-list item), until clvl 57. From clvl 55 the route
+  notes Andariel as "items only, little XP": XP falls off when the monster is more than 5 levels
+  below the character (81/62/43/24/5% at 6/7/8/9/10+ below, `xp.rs`). From 57: Diablo, the
+  Ancients, then Shenk (61) / Eldritch (62), who give full XP from 57.
+- **No Larzuk for runeword bases** (the Larzuk quest socket is kept for an eth weapon + Zod).
+
+**Steps** (each passes the gate and leaves the overlay working; 1–7 change no visible behaviour,
+8–10 are the new features)
+- [x] 1. Delete the sorceress builds (only Summoner Druid → Fury Druid stay); drop the Larzuk
+  valuables rule; Smoke moved to merc body in both druid builds.
+- [ ] 2. Small moves that untangle shared pieces.
+- [ ] 3. The reader stops computing keep/sell: it returns raw items, the playstyle sorts them.
+- [ ] 4. Reader plugin trait plus the Proton reader.
+- [ ] 5. Playstyle plugin trait, wrapping today's builds, farm list and valuables.
+- [ ] 6. Split the dashboard into the core page and playstyle panels.
+- [ ] 7. New folder layout: `playstyle/<name>/` with route, builds, farm list and marks.
+- [ ] 8. Drop tables plus "worth farming".
+- [ ] 9. The route engine and a "Next" panel on the dashboard.
+- [ ] 10. Keep and trade marks v2.
+- [ ] 11. Split into separate crates; update PLAN.md and CLAUDE.md.
+
 ## Milestones
 - [x] **M0 setup**: mise Rust pin, `cargo init`, lint config, rustfmt, PLAN.md + CLAUDE.md + .gitignore, `git init`, first commit.
    From here on the user can start sessions directly in `~/Work/d2r_map_overlay`.

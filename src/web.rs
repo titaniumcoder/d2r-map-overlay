@@ -6051,8 +6051,8 @@ mod tests {
         // worn for the later Fury stage: hidden too. One Lawbringer of two: still listed.
         assert_eq!(names(&json), [("Fury Druid".to_owned(), fury_rest.clone())]);
         // Another build's character wearing the same items: everything stays.
-        let sorc_chain = ["Blizzard Sorceress".to_owned()];
-        info.stage_chain = &sorc_chain;
+        let other_chain = ["Other Build".to_owned()];
+        info.stage_chain = &other_chain;
         let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
         assert_eq!(
             names(&json),

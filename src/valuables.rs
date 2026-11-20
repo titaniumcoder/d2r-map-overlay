@@ -577,8 +577,8 @@ mod tests {
             (drop("crs", 2, 0, false), None, "unsocketed Crystal Sword"),
             (
                 drop("7vo", 2, 0, true),
-                Some((Tier::A, Category::Twink, false)),
-                "eth Colossus Voulge 0os",
+                None,
+                "eth Colossus Voulge 0os: no Larzuk rule",
             ),
             (drop("7vo", 2, 0, false), None, "non-eth Colossus Voulge 0os"),
             (
@@ -760,7 +760,7 @@ mod tests {
             identified(drop("r20", 2, 0, false), None),      // a second Lem
             identified(drop("r01", 2, 0, false), None),      // El: B, left out
             identified(drop("crs", 2, 3, false), None),      // 3os sword: B, left out
-            identified(drop("7vo", 2, 0, true), None),       // eth 0os Colossus Voulge: A
+            identified(drop("7vo", 2, 4, true), None),       // eth 4os Colossus Voulge: S
             identified(drop("cm3", 4, 0, false), None),      // magic grand charm: uncertain A, left out
             drop("cm3", 7, 0, false),                        // unidentified unique grand charm: uncertain S
             identified(drop("hax", 2, 0, false), None),      // no rule
@@ -776,8 +776,8 @@ mod tests {
             vec![
                 row("Grand Charm?", Tier::S, Category::Trade, 1),
                 row("Harlequin Crest", Tier::S, Category::Trade, 1),
+                row("eth Colossus Voulge 4os", Tier::S, Category::Twink, 1),
                 row("Lem Rune", Tier::A, Category::Trade, 2),
-                row("eth Colossus Voulge", Tier::A, Category::Twink, 1),
             ]
         );
         assert_eq!(keep_list(&[]), vec![]);

@@ -19,10 +19,6 @@ live in BUILDS below, keyed by the source file's stem (`druid-leveling.source` c
   a top-level `switch_requires = [...]` (strings, inline tables) after `auto_switch`, only when set.
 - `--prerequisites` (the stage before a manual switch): the next stage's `prerequisites`
   become this stage's `switch_note`.
-- `skill_plan.respec_after_leveling` (Blizzard Sorceress): with `--leveling`, a second respec
-  into `planner_allocations[allocation]` at `level` follows the leveling plan.
-- BUILDS `keep_standard_first` (Blizzard Sorceress, the MF farmer): this guide's standard
-  pieces stay first even when the leveling guide lists them too.
 
 Skill names are checked against src/skills_data.rs (class skills); mismatches are reported
 on stderr and in the exit summary.
@@ -78,20 +74,6 @@ BUILDS = {
     "fury-druid": dict(
         name="Fury Druid", cls="druid", damages=["physical"],
         notes="Fury Werewolf from the optional skill reset at 75 (Summoner Druid with Raven Frost); standard = the user's core (Ribcracker, Lawbringer, Fortitude, Smoke, Bulwark, Jalal's Mane, Laying of Hands, Raven Frost). Durations, breakpoints and skill order computed from the D2R game tables, not from a guide.",
-    ),
-    # The leveling guide respecs into Blizzard at level 26, after the Normal Throne waves and
-    # before entering Nightmare. This sorceress is the account's magic-find farmer (user, 2026-11-19).
-    "sorceress-leveling": dict(
-        name="Sorceress Leveling", cls="sorceress", damages=["lightning", "cold"], default=True,
-        next="blizzard sorceress", switch_level=26, auto_switch=True,
-        notes="Maxroll Sorceress Leveling (Teo1904): Charged Bolt / Nova to level 26, then respec to Blizzard (next stage). The account's magic-find farm character: cheap MF pieces (Chance Guards, Nagelring, Goldwrap, Splendor) are listed as alternatives.",
-        respec_note=("respec to Blizzard at level 26, after the Normal Throne of Destruction waves and before entering Nightmare (Akara): "
-                     "Static Field 5, Teleport 1, Frozen Armor 1, Ice Blast 7, Glacial Spike 9, Blizzard 3, plus 1 each in Telekinesis, "
-                     "Ice Bolt and Frost Nova; keep the Nightmare Den of Evil point for level 30 (Blizzard + Cold Mastery)"),
-    ),
-    "blizzard-sorceress": dict(
-        name="Blizzard Sorceress", cls="sorceress", damages=["cold", "fire"], keep_standard_first=True,
-        notes="Maxroll Blizzard Sorceress, geared as the account's magic-find farm character: the guide's Magic Find variant is the standard setup (Harlequin Crest, Oculus, 3 Tal Rasha pieces, Chance Guards, War Traveler, MF rings/charms, 105% FCR); the damage Standard, Set build and Gear Options fold as alternatives, Starter stays early. Levels 26-75 follow the leveling guide's post-respec plan (Blizzard + Meteor), then a respec at 75.",
     ),
 }
 
@@ -440,10 +422,6 @@ def main(argv):
                 and not str(i.get("setup", "")).startswith("lvl 1-")]
         late.sort(key=lambda i: -(i.get("req_level") or 0))
         names = {i["name"] for i in late} | {"Insight"}
-        # ... unless this guide's own standard setup uses it and BUILDS says to keep that first
-        # (Blizzard, MF-first: Spirit Monarch, merc Insight).
-        if cfg.get("keep_standard_first"):
-            names -= {i["name"] for i in d["items"] if short_setup(i.get("setup")) == "standard"}
         for lst in list(slots.values()) + list(merc.values()):
             lst.sort(key=lambda r: r.split("@")[0] in names)
         for i in late:
@@ -501,16 +479,6 @@ def main(argv):
                 left = (sp.get("leftover_points") or {}).get("skill")
                 if left:
                     order.append((left, MAX_POINTS))
-                # A second respec once the leveling plan ends (Blizzard: the leveling spec has
-                # Meteor, the endgame does not): the planner allocation is due at that level.
-                again = sp.get("respec_after_leveling")
-                if again:
-                    alloc = sp["planner_allocations"][again["allocation"]]
-                    for s in alloc:
-                        if s not in known:
-                            problems.append(f"{stem}: skill {s!r} is not a {cfg['cls']} skill in skills_data.rs")
-                    plan += allocation_at(alloc, again["level"], [s for s, _ in order], again["note"])
-                    current, last = dict(alloc), again["level"]
                 plan += simulate(current, max(last, 75), order, stem, known)
                 # The leveling stage's tips from its switch into this stage on.
                 lev_stem = os.path.basename(opts["--leveling"]).removesuffix(".json").removesuffix(".source")

@@ -32,8 +32,7 @@ The most sockets an item can have is `min(base gemsockets, ilvl cap)`. The ilvl 
 | Grimoires | 2 | 3 | 3 (base max 2) |
 
 What this means in practice:
-- An unsocketed ethereal **Colossus Voulge** (base max 4) always becomes 4 sockets at Larzuk, which is right for Infinity or Insight. Thresher, Giant Thresher and Great Poleaxe get 5–6 at Larzuk, which is too many for Infinity.
-- Unsocketed superior Monarch, Archon Plate and Dusk Shroud also become 4 sockets at Larzuk, which suits Spirit, CoH and Fortitude.
+- Larzuk's socket quest is not used for runeword bases (user, 2026-11-20), so unsocketed bases are not kept for it.
 - A 4-socket Crystal Sword can already drop in Normal from ilvl 26.
 
 ---
@@ -118,7 +117,6 @@ All of these need a **white (normal or superior)** base. Superior means more def
 | A | Other elite armor: Sacred Armor `uar`, Wyrmhide `uea`, Great Hauberk `urs`, Shadow Plate `uul`, Kraken `uld`, Hellforge `ult`, Balrog `upl`, Lacquered `uth` | 3–4 | – | Enigma, CoH, Fortitude |
 | A | Elite armor for the merc (eth Sacred Armor is best) | 4 | yes | Fortitude, CoH |
 | S | Thresher `7s8`, Giant Thresher `7wc`, Cryptic Axe `7pa`, Colossus Voulge `7vo`, Great Poleaxe `7h7`, Mancatcher `7br`, Matriarchal Spear `amd` | 4 | yes | Infinity, Insight (merc) |
-| A | Colossus Voulge `7vo`, unsocketed (Larzuk gives 4) | 0 | yes | Infinity, Insight |
 | A | Any polearm 4os, including Normal Voulge `vou`, Scythe `scy`, Poleaxe `pax`, Halberd `hal`, War Scythe `wsc` and the exceptional tier | 4 | preferred | Insight |
 | A | Elite polearms and spears (also Ghost Spear `7st`, War Pike `7p7`) | 5 | yes | Pride, Obedience, Doom |
 | S | Phase Blade `7cr` (superior) | 5 / 6 | n/a (no durability) | Grief (5), Last Wish / BotD (6) |
