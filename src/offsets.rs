@@ -321,11 +321,14 @@ pub mod item_data {
     /// Classic values; unique (7) live-verified 2026-11-15, set (5) still to see.
     pub const QUALITY_SET: u32 = 5;
     pub const QUALITY_UNIQUE: u32 = 7;
-    /// Other classic quality values (2 and 4 seen live).
+    /// Other classic quality values (2 and 4 seen live; 1 low quality is unverified).
+    pub const QUALITY_LOW: u32 = 1;
     pub const QUALITY_NORMAL: u32 = 2;
     pub const QUALITY_SUPERIOR: u32 = 3;
     pub const QUALITY_MAGIC: u32 = 4;
     pub const QUALITY_RARE: u32 = 6;
+    /// Crafted (classic 8; not seen live yet).
+    pub const QUALITY_CRAFTED: u32 = 8;
     /// u32 unit id of the player owning the item. Live 2026-11-15: every stash (page 4) and
     /// inventory (page 0) item carried the local player's unit id; ground items carry
     /// [`NO_OWNER`]. Only the local client's own stash is in memory, so the stash owner is the

@@ -23,7 +23,7 @@ use crate::session::Session;
 use ab_glyph::FontVec;
 
 use crate::{
-    config, cows, game_file, image, info, items, journal, offset_cache, played, process, render, valuables,
+    config, cows, game_file, image, info, items, journal, offset_cache, played, process, render, stash_plan,
     web,
 };
 
@@ -346,10 +346,9 @@ fn follow_game(
                 if snap.ground_items > 0 || snap.inventory_items > 0 {
                     items_table.search(pid);
                 }
-                // The playstyle's view of the snapshot: keep / sell / give-away from the owned
-                // items, then the drop marks (first: the journal records them with the drop).
-                let mut guidance = Guidance::with_item_lists(&snap);
-                guidance.marks = valuables::apply(&mut snap.drops, &config.valuables);
+                // The playstyle's view of the snapshot: the drop marks first (the journal records
+                // them with the drop); the item plan once the session's stash and the build are in.
+                let mut guidance = Guidance::marked(&mut snap.drops, &config.valuables);
                 // Before `apply` and the shrine filter: they drop monster presets and shrines
                 // the journal wants to see.
                 journal.observe(&snap, &guidance.marks);
@@ -385,6 +384,10 @@ fn follow_game(
                     last_played.reach(name, stage.slug);
                 }
                 (guidance.damages, guidance.bis) = (build, bis);
+                // The current stage and its later ones: the farm list drops what this character
+                // wears of them; the item plan (after `session.apply`: cached pages) keeps them.
+                let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
+                guidance.items = stash_plan::for_snapshot(&snap, config, &chain, guidance.bis.as_ref());
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }
@@ -407,16 +410,13 @@ fn follow_game(
                 // The config page annotates its resolved `BiS` view with the live ✓ and the
                 // equipped-quality pairs; published alongside the dashboard JSON.
                 web::publish_gear(web::GearInfo {
-                    worn: crate::game::worn_names(&snap.equipped_items),
+                    worn: game::worn_names(&snap.equipped_items),
                     owned: snap.owned_names.clone(),
                     stash: snap.stash_names.clone(),
                     equipped: snap.equipped.clone(),
                     merc_equipped: snap.merc_equipped.clone(),
                 });
                 let quests = quest_flags.read(pid, mem, update.new_game);
-                // The current stage and its later ones: a farm entry for any of them that this
-                // character wears leaves the list (it keeps the gear through a respec).
-                let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
                 publish_dashboard(&snap, &guidance, &blocks, stage, quests, &config.farm, &chain);
                 if let Some((tabs, items)) = update.stash_captured {
                     eprintln!("shared stash captured: {tabs} tabs, {items} items");

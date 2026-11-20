@@ -764,6 +764,9 @@ mod tests {
                     ethereal: false,
                     runeword: false,
                     quantity: None,
+                    sockets: 0,
+                    unique_index: None,
+                    stats: Vec::new(),
                 })
                 .collect(),
         }];
@@ -1797,6 +1800,9 @@ mod tests {
             runeword: false,
             code: None,
             quantity: None,
+            sockets: 0,
+            unique_index: None,
+            stats: Vec::new(),
         };
         let tab = |kind, items: Vec<StashItem>| StashTab { kind, items };
         let cached = vec![

@@ -39,6 +39,43 @@ pub struct StashItem {
     pub runeword: bool,
     /// Stack size ([`item_data::QUANTITY`]): only items of the gems/runes/materials tab.
     pub quantity: Option<u32>,
+    /// Socket count ([`ItemDrop::sockets`]); 0 in dumps written before it existed.
+    #[serde(default)]
+    pub sockets: u8,
+    /// uniqueitems / setitems row of a unique or set item ([`ItemDrop::unique_index`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unique_index: Option<u32>,
+    /// The stats of a magic, rare or crafted item ([`ItemDrop::stats`]); empty otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stats: Vec<crate::item_stats::ItemStat>,
+}
+
+impl StashItem {
+    /// The item as the playstyle's rules take it ([`crate::stash_plan`]): the fields the
+    /// reader had, the flags rebuilt from the identified / ethereal / runeword bits (the only
+    /// ones the rules look at), no unit id or position.
+    #[must_use]
+    pub fn to_drop(&self) -> ItemDrop {
+        let quality = u32::from(self.quality);
+        let flag = |on: bool, bit: u32| if on { bit } else { 0 };
+        ItemDrop {
+            id: 0,
+            code: self.code.clone(),
+            kind: items::classify(quality, self.code.as_deref().and_then(items::code_bytes))
+                .unwrap_or(DropKind::Base),
+            quality,
+            flags: flag(self.identified, item_data::FLAG_IDENTIFIED)
+                | flag(self.ethereal, item_data::FLAG_ETHEREAL)
+                | flag(self.runeword, item_data::FLAG_RUNEWORD),
+            ethereal: self.ethereal,
+            sockets: self.sockets,
+            unique_index: self.unique_index,
+            stats: self.stats.clone(),
+            item_data_head: String::new(),
+            x: 0,
+            y: 0,
+        }
+    }
 }
 
 /// Which shared-stash tab: a normal page, numbered 1-based in the game's UI order, or the
@@ -73,6 +110,9 @@ pub fn stash_item(drop: &ItemDrop, quantity: Option<u32>) -> StashItem {
         ethereal: drop.ethereal,
         runeword: drop.flags & item_data::FLAG_RUNEWORD != 0,
         quantity,
+        sockets: drop.sockets,
+        unique_index: drop.unique_index,
+        stats: drop.stats.clone(),
     }
 }
 
@@ -346,6 +386,9 @@ mod tests {
             ethereal: false,
             runeword: false,
             quantity: None,
+            sockets: 0,
+            unique_index: None,
+            stats: Vec::new(),
         }
     }
 
@@ -510,6 +553,7 @@ mod tests {
             ethereal: false,
             sockets,
             unique_index: None,
+            stats: Vec::new(),
             item_data_head: String::new(),
             x: 0,
             y: 0,

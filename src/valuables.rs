@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 
 use crate::config;
-use crate::game::{ItemDrop, Place};
+use crate::game::ItemDrop;
 use crate::guidance::Marks;
 use crate::names::{self, identity, shown};
 use crate::offsets::item_data;
@@ -69,7 +69,7 @@ enum Copies {
     /// Every copy (the field is absent).
     #[default]
     All,
-    /// One per unique/set name; further copies are give-aways (see [`surplus`]).
+    /// One per unique/set name; further copies are give-aways (see [`keep_one_name`]).
     One,
 }
 
@@ -235,56 +235,8 @@ pub fn keep_tiers() -> config::Valuables {
     }
 }
 
-/// An inventory item worth keeping (see [`keep_list`]).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Keep {
-    /// Display name: unique/set name when known, else the base name with sockets and "eth";
-    /// ends in `?` for an uncertain match.
-    pub name: String,
-    pub tier: Tier,
-    pub category: Category,
-    /// Identical entries are listed once with their count.
-    pub count: u32,
-}
-
-/// The keep list of the player's `items` in the inventory: every certain S or A match
-/// ([`keep_tiers`]) and uncertain S matches (an uncertain A, e.g. a magic grand charm, is left
-/// out), identical ones merged, best tier first, then by name. A surplus copy of a keep-one item
-/// ([`surplus`], decided over all places) is left out: it is a give-away.
-pub fn keep_list(items: &[(ItemDrop, Place)]) -> Vec<Keep> {
-    let tiers = keep_tiers();
-    let mut out: Vec<Keep> = Vec::new();
-    for ((item, place), spare) in items.iter().zip(surplus(items)) {
-        if *place != Place::Inventory || spare {
-            continue;
-        }
-        let Some(h) = best(item, &tiers) else { continue };
-        if h.uncertain && h.tier != Tier::S {
-            continue;
-        }
-        let mut name = display_name(item);
-        if h.uncertain {
-            name.push('?');
-        }
-        match out
-            .iter_mut()
-            .find(|k| k.name == name && k.tier == h.tier && k.category == h.category)
-        {
-            Some(k) => k.count = k.count.saturating_add(1),
-            None => out.push(Keep {
-                name,
-                tier: h.tier,
-                category: h.category,
-                count: 1,
-            }),
-        }
-    }
-    out.sort_by(|a, b| b.tier.cmp(&a.tier).then_with(|| a.name.cmp(&b.name)));
-    out
-}
-
-/// What to call `item` in the keep list: its unique/set name if known; else the base name
-/// (from the rules, else the item code), with "eth" before and the socket count after. The
+/// What to call `item` in the lists: its unique/set name if known; else the base name
+/// (from the rules, else the armor / weapon / misc tables, else the item code), with "eth" before and the socket count after. The
 /// stash panel names its items the same way (see [`crate::stash::stash_item`]).
 #[must_use]
 pub fn display_name(item: &ItemDrop) -> String {
@@ -298,7 +250,10 @@ pub fn display_name(item: &ItemDrop) -> String {
             let i = r.item_codes.iter().position(|c| c == code)?;
             r.base_names.get(i)
         })
-        .map_or(code, String::as_str);
+        .map(String::as_str)
+        .or_else(|| crate::item_levels_data::armor_name(code).or_else(|| crate::weapons_data::name(code)))
+        .or_else(|| crate::affixes_data::misc(code).map(|(_, name)| name))
+        .unwrap_or(code);
     let mut name = String::new();
     if item.ethereal {
         name.push_str("eth ");
@@ -310,17 +265,7 @@ pub fn display_name(item: &ItemDrop) -> String {
     name
 }
 
-/// A stored item that can go: sold to a vendor or given away (see [`spare_lists`]).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Spare {
-    /// The unique or set name.
-    pub name: String,
-    pub place: Place,
-    /// Identical entries (same name and place) are listed once with their count.
-    pub count: u32,
-}
-
-/// What to do with a stored item no S or A rule wants (or a [`surplus`] copy).
+/// What to do with a stored unique or set no S or A rule wants ([`verdict`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     /// No rule of any tier matches.
@@ -369,75 +314,12 @@ pub fn verdict(item: &ItemDrop) -> Option<Verdict> {
     }
 }
 
-/// The unique/set name of `item` if its best rule keeps only one copy per name.
-fn keep_one_name(item: &ItemDrop) -> Option<&'static str> {
+/// The unique/set name of `item` if its best rule keeps only one copy per name (the other
+/// copies are give-aways, [`crate::stash_plan`]).
+pub fn keep_one_name(item: &ItemDrop) -> Option<&'static str> {
     let name = identity(item.quality, item.flags, item.unique_index)?;
     let (rule, _) = best_rule(&RULES, item, Some(name), &EVERYTHING)?;
     (rule.keep == Copies::One).then_some(name)
-}
-
-/// For each of the player's `items`: true if it is a surplus copy of a keep-one item. Of the
-/// copies with one name the first in a stash (personal or shared) is kept, else the first in the
-/// cube, else the first in the inventory; every other copy is surplus.
-fn surplus(items: &[(ItemDrop, Place)]) -> Vec<bool> {
-    let rank = |p: Place| match p {
-        Place::Stash | Place::Shared => 0,
-        Place::Cube => 1,
-        Place::Inventory => 2,
-    };
-    let names: Vec<_> = items.iter().map(|(d, _)| keep_one_name(d)).collect();
-    names
-        .iter()
-        .enumerate()
-        .map(|(i, name)| {
-            if name.is_none() {
-                return false;
-            }
-            let kept = names
-                .iter()
-                .zip(items)
-                .enumerate()
-                .filter(|(_, (n, _))| *n == name)
-                .min_by_key(|&(j, (_, (_, p)))| (rank(*p), j))
-                .map(|(j, _)| j);
-            kept != Some(i)
-        })
-        .collect()
-}
-
-/// The sell and the give-away lists of the player's `items` (see [`verdict`]; [`surplus`]
-/// copies are give-aways), identical ones merged, each sorted by name, then place.
-pub fn spare_lists(items: &[(ItemDrop, Place)]) -> (Vec<Spare>, Vec<Spare>) {
-    let (mut sell, mut give): (Vec<Spare>, Vec<Spare>) = (Vec::new(), Vec::new());
-    for ((item, place), spare) in items.iter().zip(surplus(items)) {
-        let v = if spare {
-            Some(Verdict::GiveAway)
-        } else {
-            verdict(item)
-        };
-        let (Some(v), Some(name)) = (v, identity(item.quality, item.flags, item.unique_index)) else {
-            continue;
-        };
-        let list = match v {
-            Verdict::Sell => &mut sell,
-            Verdict::GiveAway => &mut give,
-        };
-        match list
-            .iter_mut()
-            .find(|s| s.name == shown(name) && s.place == *place)
-        {
-            Some(s) => s.count = s.count.saturating_add(1),
-            None => list.push(Spare {
-                name: shown(name).to_owned(),
-                place: *place,
-                count: 1,
-            }),
-        }
-    }
-    for list in [&mut sell, &mut give] {
-        list.sort_by(|a, b| a.name.cmp(&b.name).then(a.place.cmp(&b.place)));
-    }
-    (sell, give)
 }
 
 /// The marks of the drops from the tiers `enabled` turns on, by drop id; removes the drops that
@@ -470,6 +352,7 @@ mod tests {
             ethereal,
             sockets,
             unique_index: None,
+            stats: Vec::new(),
             item_data_head: String::new(),
             x: 0,
             y: 0,
@@ -478,6 +361,12 @@ mod tests {
 
     fn all() -> config::Valuables {
         config::Valuables::everything()
+    }
+
+    #[test]
+    fn misc_names_are_sorted_by_code() {
+        // `affixes_data::misc` (the misc base names of `display_name`) binary-searches it.
+        assert!(crate::affixes_data::MISC.is_sorted_by(|a, b| a.0 < b.0));
     }
 
     #[test]
@@ -675,42 +564,6 @@ mod tests {
         assert_eq!(best(&drop("7vo", 2, 4, true), &twink_off), None);
     }
 
-    #[test]
-    fn keep_list_is_s_and_a_merged_and_sorted() {
-        let identified = |mut d: ItemDrop, index: Option<u32>| {
-            d.flags = item_data::FLAG_IDENTIFIED;
-            d.unique_index = index;
-            d
-        };
-        let items = vec![
-            identified(drop("r20", 2, 0, false), None),      // Lem: A
-            identified(drop("uap", 7, 0, false), Some(248)), // Harlequin Crest: S
-            identified(drop("r20", 2, 0, false), None),      // a second Lem
-            identified(drop("r01", 2, 0, false), None),      // El: B, left out
-            identified(drop("crs", 2, 3, false), None),      // 3os sword: B, left out
-            identified(drop("7vo", 2, 4, true), None),       // eth 4os Colossus Voulge: S
-            identified(drop("cm3", 4, 0, false), None),      // magic grand charm: uncertain A, left out
-            drop("cm3", 7, 0, false),                        // unidentified unique grand charm: uncertain S
-            identified(drop("hax", 2, 0, false), None),      // no rule
-        ];
-        let items: Vec<_> = items.into_iter().map(|d| (d, Place::Inventory)).collect();
-        let keep: Vec<_> = keep_list(&items)
-            .into_iter()
-            .map(|k| (k.name, k.tier, k.category, k.count))
-            .collect();
-        let row = |n: &str, t, c, count| (n.to_owned(), t, c, count);
-        assert_eq!(
-            keep,
-            vec![
-                row("Grand Charm?", Tier::S, Category::Trade, 1),
-                row("Harlequin Crest", Tier::S, Category::Trade, 1),
-                row("eth Colossus Voulge 4os", Tier::S, Category::Twink, 1),
-                row("Lem Rune", Tier::A, Category::Trade, 2),
-            ]
-        );
-        assert_eq!(keep_list(&[]), vec![]);
-    }
-
     /// An identified unique (`quality` 7) or set (5) item of `code` and row `index`.
     fn named(code: &str, quality: u32, index: u32) -> ItemDrop {
         let mut d = drop(code, quality, 0, false);
@@ -773,33 +626,6 @@ mod tests {
         assert_eq!(verdict(&named("hax", 7, 99_999)), None, "unknown name");
     }
 
-    #[test]
-    fn spare_lists_merge_and_sort() {
-        let items = vec![
-            (named("tgl", 7, 105), Place::Stash),
-            (named("hax", 7, 12), Place::Shared),
-            (named("hax", 7, 12), Place::Inventory),
-            (named("hax", 7, 12), Place::Inventory),
-            (named("uap", 7, 248), Place::Inventory),
-            (named("bsw", 5, 13), Place::Cube),
-        ];
-        let (sell, give) = spare_lists(&items);
-        let spare = |n: &str, place, count| Spare {
-            name: n.into(),
-            place,
-            count,
-        };
-        assert_eq!(
-            sell,
-            vec![
-                spare("Gravenspine", Place::Inventory, 2),
-                spare("Gravenspine", Place::Shared, 1),
-                spare("Isenhart's Lightbrand", Place::Cube, 1),
-            ]
-        );
-        assert_eq!(give, vec![spare("Magefist", Place::Stash, 1)]);
-    }
-
     /// Sigon's Visor (Great Helm, setitems row 36), identified.
     fn visor() -> ItemDrop {
         named("ghm", 5, 36)
@@ -841,76 +667,6 @@ mod tests {
             keep_one_name(&named("uap", 7, 248)),
             None,
             "Shako: every copy counts"
-        );
-    }
-
-    #[test]
-    fn keep_one_in_the_inventory_only_is_kept() {
-        let items = vec![
-            (visor(), Place::Inventory),
-            (named("hgl", 5, 35), Place::Inventory),
-        ];
-        let keep: Vec<_> = keep_list(&items).into_iter().map(|k| (k.name, k.count)).collect();
-        assert_eq!(
-            keep,
-            vec![("Sigon's Gage".to_owned(), 1), ("Sigon's Visor".to_owned(), 1)]
-        );
-        assert_eq!(spare_lists(&items), (vec![], vec![]));
-    }
-
-    #[test]
-    fn keep_one_prefers_the_stashed_copy() {
-        let give = |place, count| Spare {
-            name: "Sigon's Visor".into(),
-            place,
-            count,
-        };
-        // A stashed copy: the inventory one is a give-away, the stashed one isn't listed.
-        let items = vec![(visor(), Place::Inventory), (visor(), Place::Shared)];
-        assert_eq!(keep_list(&items), vec![]);
-        assert_eq!(spare_lists(&items), (vec![], vec![give(Place::Inventory, 1)]));
-        // Cube beats the inventory; two in the inventory with one in the cube: both inventory
-        // ones go.
-        let items = vec![
-            (visor(), Place::Inventory),
-            (visor(), Place::Cube),
-            (visor(), Place::Inventory),
-        ];
-        assert_eq!(keep_list(&items), vec![]);
-        assert_eq!(spare_lists(&items), (vec![], vec![give(Place::Inventory, 2)]));
-        // Two in the stash: one goes; two inventory copies: one stays on the keep line.
-        let items = vec![(visor(), Place::Stash), (visor(), Place::Stash)];
-        assert_eq!(spare_lists(&items), (vec![], vec![give(Place::Stash, 1)]));
-        let items = vec![(visor(), Place::Inventory), (visor(), Place::Inventory)];
-        assert_eq!(
-            keep_list(&items).iter().map(|k| k.count).collect::<Vec<_>>(),
-            vec![1]
-        );
-        assert_eq!(spare_lists(&items), (vec![], vec![give(Place::Inventory, 1)]));
-    }
-
-    #[test]
-    fn keep_one_leaves_other_rules_alone() {
-        // Two Shakos (S, every copy counts) and two Magefists (B): unchanged by keep-one.
-        let items = vec![
-            (named("uap", 7, 248), Place::Inventory),
-            (named("uap", 7, 248), Place::Stash),
-            (named("uap", 7, 248), Place::Inventory),
-            (named("tgl", 7, 105), Place::Stash),
-            (named("tgl", 7, 105), Place::Stash),
-            (visor(), Place::Stash),
-        ];
-        let keep: Vec<_> = keep_list(&items).into_iter().map(|k| (k.name, k.count)).collect();
-        assert_eq!(keep, vec![("Harlequin Crest".to_owned(), 2)]);
-        let (sell, give) = spare_lists(&items);
-        assert_eq!(sell, vec![]);
-        assert_eq!(
-            give,
-            vec![Spare {
-                name: "Magefist".into(),
-                place: Place::Stash,
-                count: 2
-            }]
         );
     }
 

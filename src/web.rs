@@ -729,17 +729,17 @@ impl LiveInfo<'_> {
 /// Serializes one tick's dashboard data. Pure: the same input gives the same JSON, so the
 /// tests need no game. Shape:
 /// `{ "live": true, "updated_at": <unix secs>, "player": {"name", "class", "level",
-/// "difficulty"}, "area": …, "guide": […], "keep": […], "sell": […],
-/// "give": […], "bis": […], "equipped": […], "stash_pages": […], "stash_materials": {…},
+/// "difficulty"}, "area": …, "guide": […], "sell": […], "move": […], "keep_own": […],
+/// "keep_trade": […], "give": […], "bis": […], "equipped": […], "stash_pages": […], "stash_materials": {…},
 /// "stash_owned": […], "skills": {…} | null }`, where
 /// each line is `{ "text": …, "colour": "#rrggbb" }` (the overlay line's colour as hex; the
 /// guide's per-span colours are flattened to the base colour) — except the `bis` lines, which
 /// carry a structured `"tick": "worn" | "owned" | "stash" | null` (computed in Rust from the
 /// worn, owned and stash name lists, [`info::Tick`]): the page marks ✓(stash) from it instead of scraping the
 /// line text, and, for a runeword piece, `"runes"` and `"bases"` for the hint line under the
-/// piece. The `keep` / `sell` / `give` lines are one entry each, every entry (the page joins each list
-/// into one wrapping comma-separated run); the give-away lines have no panel of their own, so
-/// they ride with `sell` in the dashboard's Sell / Keep panel. `gear_attention` (bool) and
+/// piece. The `sell` / `move` / `keep_own` / `keep_trade` / `give` lines are the item plan's
+/// groups ([`crate::stash_plan`]), one entry each, every entry (the page joins each group into
+/// one wrapping comma-separated run in the Sell / Keep panel). `gear_attention` (bool) and
 /// `gear_attention_why` (text or `null`, [`gear_attention`]) open the Gear panel. The `gear` section is the 2×5 `BiS` grid: one column per
 /// gear slot ([`gear_json`]), each with the equipped piece in that slot and the build's
 /// pieces ordered best→worst, their `state` computed here (see [`grid_pieces`]). The shared
@@ -766,8 +766,10 @@ pub fn live_json(info: &LiveInfo) -> String {
         },
         "area": info.area,
         "guide": info.blocks.guide.iter().map(band_line).collect::<Vec<_>>(),
-        "keep": text_lines(&info.blocks.keep, crate::info::KEEP_TEXT),
         "sell": text_lines(&info.blocks.sell, crate::info::SELL_TEXT),
+        "move": text_lines(&info.blocks.moves, crate::info::MOVE_TEXT),
+        "keep_own": text_lines(&info.blocks.keep_own, crate::info::KEEP_TEXT),
+        "keep_trade": text_lines(&info.blocks.keep_trade, crate::info::TRADE_TEXT),
         "give": text_lines(&info.blocks.give, crate::info::GIVE_TEXT),
         "bis": info.blocks.bis.iter().map(bis_line).collect::<Vec<_>>(),
         "gear": gear_json(info),
@@ -3108,12 +3110,14 @@ function skillTrees(s) {
   }).join("");
   $("skills").innerHTML = (buttons ? `<div class="skbtns">${buttons}</div>` : "") + `<div class="trees">${trees}</div>`;
 }
-// Sell / Keep / Give away: every entry (one per JSON line), each list one comma-separated
-// run that wraps to the panel width.
+// Sell / Move / Keep · own / Keep · trade / Give away: every entry (one per JSON line), each
+// group one comma-separated run that wraps to the panel width.
 function sell(r) {
   const run = (label, list) => list && list.length
     ? `<div class="line run" style="color:${col(list[0].colour)}"><b>${label}:</b> ${list.map(e => esc(e.text)).join(", ")}</div>` : "";
-  $("sell").innerHTML = run("Sell", r.sell) + run("Keep", r.keep) + run("Give away", r.give)
+  $("sell").innerHTML = run("Sell", r.sell) + run("Move", r.move)
+    + run("Keep · own (pages 1–2)", r.keep_own) + run("Keep · trade (pages 3–5)", r.keep_trade)
+    + run("Give away", r.give)
     || '<div class="empty">nothing to sell or keep right now</div>';
 }
 // Upgrade chime: the bell toggles it (the click is the user gesture browsers need before audio
@@ -3949,6 +3953,9 @@ mod tests {
             ethereal: name.starts_with("eth "),
             runeword: false,
             quantity,
+            sockets: 0,
+            unique_index: None,
+            stats: Vec::new(),
         }
     }
 
@@ -4110,9 +4117,11 @@ mod tests {
     fn live_json_has_the_documented_shape() -> Result<()> {
         let blocks = crate::render::TextBlocks {
             guide: vec![crate::info::Band::plain("fcr (7 / 105)", crate::info::GUIDE_TEXT)],
-            keep: vec!["Harlequin Crest (S)".to_owned()],
             sell: vec!["Gravenspine (inv)".to_owned()],
-            give: vec!["Lem Rune (stash)".to_owned()],
+            moves: vec!["Hunter's Bow 4os (page 4 → 1–2)".to_owned()],
+            keep_own: vec!["Spirit (page 1)".to_owned()],
+            keep_trade: vec!["Harlequin Crest (page 3)".to_owned()],
+            give: vec!["Magefist (stash)".to_owned()],
             bis: vec![crate::info::BisLine {
                 text: "helm: Harlequin Crest (82)".to_owned(),
                 tick: None,
@@ -4150,16 +4159,25 @@ mod tests {
         );
         assert_eq!(json.get("levels"), None, "the level band is gone");
         assert_eq!(
-            colour_of("keep"),
-            vec![("Harlequin Crest (S)".to_owned(), "#5ae65a".to_owned())]
-        );
-        assert_eq!(
             colour_of("sell"),
             vec![("Gravenspine (inv)".to_owned(), "#afafaf".to_owned())]
         );
         assert_eq!(
+            colour_of("move"),
+            vec![("Hunter's Bow 4os (page 4 → 1–2)".to_owned(), "#ffa03c".to_owned())]
+        );
+        assert_eq!(
+            colour_of("keep_own"),
+            vec![("Spirit (page 1)".to_owned(), "#5ae65a".to_owned())]
+        );
+        assert_eq!(
+            colour_of("keep_trade"),
+            vec![("Harlequin Crest (page 3)".to_owned(), "#6ebeff".to_owned())]
+        );
+        assert_eq!(json.get("keep"), None, "the old keep list is gone");
+        assert_eq!(
             colour_of("give"),
-            vec![("Lem Rune (stash)".to_owned(), "#ffe13c".to_owned())]
+            vec![("Magefist (stash)".to_owned(), "#ffe13c".to_owned())]
         );
         assert_eq!(
             colour_of("bis"),
@@ -5739,7 +5757,7 @@ mod tests {
     fn live_json_sends_every_sell_and_keep_entry() -> Result<()> {
         let blocks = crate::render::TextBlocks {
             sell: (0..20).map(|i| format!("Item {i} (inv)")).collect(),
-            keep: (0..7).map(|i| format!("Rune {i} (A)")).collect(),
+            keep_trade: (0..7).map(|i| format!("Rune {i} (page 3)")).collect(),
             ..crate::render::TextBlocks::default()
         };
         let json: serde_json::Value =
@@ -5748,7 +5766,7 @@ mod tests {
         assert_eq!(sell.len(), 20, "one line per entry, no \"+N more\"");
         assert_eq!(sell.last().map(|(t, _)| t.as_str()), Some("Item 19 (inv)"));
         assert!(sell.iter().all(|(_, c)| c == "#afafaf"));
-        assert_eq!(lines_of(&json, "keep").len(), 7);
+        assert_eq!(lines_of(&json, "keep_trade").len(), 7);
         Ok(())
     }
 

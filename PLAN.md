@@ -634,6 +634,32 @@ progress per character and difficulty (like the build stage in `played.json`).
   **dashed** while the overlay can't read their enhanced defense (unknown ED).
 - **Removed**: the "Ethereal Colossus Voulge 0os (Larzuk to 4)" rule (done in step 1).
 
+**Item places: sell / move / keep (user rule, 2026-11-20)** — playstyle logic, part of step 5's
+trait; today `src/stash_plan.rs`, shown in the dashboard's Sell / Keep panel.
+- Shared stash pages 1–2 are the player's own (build pieces, simple bases until something good
+  drops), pages 3–5 are for trading. The gem / rune / materials tab is out of scope.
+- Judged: inventory, cube, personal stash and shared pages 1–5 (pages from the session-cached
+  stash; the reader now also reads stored white bases and magic / rare / crafted items with stats).
+- **Keep · own**: pieces of the active build and its later stages (`BiS` slots, extras,
+  `switch_requires`) and of the farm list, as many copies as needed minus the worn ones; one white
+  base per (runeword, wearer, slot) need: allowed type, exactly the rune count of sockets, usable by
+  the player class or the Act 2 merc; each copy of the runeword already held (worn, carried,
+  stashed, merc) drops one such need, and the narrowest need picks its base first. Fine on pages
+  1–2 and on the character.
+- **Keep · trade**: valuables rules S/A (certain, or uncertain S). A trade-worthy base goes to
+  trade, never own. Belongs on pages 3–5.
+- **Move**: an own keeper on pages 3–5 → "page N → 1–2"; a trade keeper anywhere else → "→ 3–5".
+- **Sell**: extra copies of own bases, plain bases nobody needs, uniques/sets no rule wants.
+  **Give away**: B-only uniques/sets and extra keep-one copies (Sigon's).
+- **Magic / rare / crafted** (user, 2026-11-20): trade rule first; unidentified or stats unread → keep own;
+  identified → scored with `gear_score` for the build chain: keep own if ≥ 80% of the worn item in
+  its slot or if its affixes alone score ≥ 20 (a planned skill, +1 class skill, 20 res/life);
+  charms and jewels if they score at all (charms carried in the inventory stay out); else sell with
+  a reason ("no build stats", "worse than worn", "other class"). The merc's gear has no stats in
+  the snapshot, so a merc-wearable base (helm, body, polearm, spear) failing the player's test is
+  kept unscored.
+- Left alone: gems, runes, carried charms, finished runewords that aren't build pieces, quest items.
+
 **User answers (2026-11-20)**
 - **Smoke is ALWAYS merc gear.** The summoner keeps Stealth (from 12 until Enigma) for its FCR.
   Both druid build files put Smoke in `[merc_slots] body`; the Fury stage lists Stealth as its

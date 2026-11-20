@@ -1,18 +1,17 @@
 //! What the playstyle makes of one snapshot: the build's damage types, the `BiS` list, the
-//! keep / sell / give-away lists and the ground-drop marks. The reader returns raw items
-//! ([`crate::game::Snapshot`]); live mode (and `--render`) computes this next to it and hands
-//! both to the renderer and the dashboard.
+//! sell / move / keep / give-away plan of the player's items and the ground-drop marks. The
+//! reader returns raw items ([`crate::game::Snapshot`]); live mode (and `--render`) computes
+//! this next to it and hands both to the renderer and the dashboard.
 
 use std::collections::HashMap;
 
-use crate::game::Snapshot;
-use crate::{build, config, valuables};
+use crate::{build, config, stash_plan, valuables};
 
 /// The valuables highlight of each marked ground drop, by the drop's unit id
 /// ([`crate::game::ItemDrop::id`]); drops without a mark aren't in it.
 pub type Marks = HashMap<u32, valuables::Highlight>;
 
-/// The playstyle's results for one snapshot. Kept apart from the reader's [`Snapshot`];
+/// The playstyle's results for one snapshot. Kept apart from the reader's [`crate::game::Snapshot`];
 /// compared with it to skip re-rendering an unchanged frame.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Guidance {
@@ -22,25 +21,19 @@ pub struct Guidance {
     /// The character's `BiS` build and gear list ([`config::Config::resolved_bis`]); the
     /// dashboard's chase list.
     pub bis: Option<config::Bis>,
-    /// Inventory items worth keeping ([`valuables::keep_list`]).
-    pub keep: Vec<valuables::Keep>,
-    /// Stored items to sell ([`valuables::spare_lists`]).
-    pub sell: Vec<valuables::Spare>,
-    /// Stored items to give away.
-    pub give_away: Vec<valuables::Spare>,
+    /// What to do with each of the player's items, merged and sorted for the dashboard
+    /// ([`stash_plan::plan`]).
+    pub items: Vec<stash_plan::Advice>,
     /// The ground-drop rings ([`valuables::apply`]).
     pub marks: Marks,
 }
 
 impl Guidance {
-    /// The keep, sell and give-away lists of the snapshot's owned items
-    /// ([`Snapshot::owned_items`]); the other fields stay empty.
-    pub fn with_item_lists(snap: &Snapshot) -> Self {
-        let (sell, give_away) = valuables::spare_lists(&snap.owned_items);
+    /// Only the drop marks of `drops` from the `enabled` tiers ([`valuables::apply`], which also
+    /// removes the unmarked bases); the other fields stay empty.
+    pub fn marked(drops: &mut Vec<crate::game::ItemDrop>, enabled: &config::Valuables) -> Self {
         Self {
-            keep: valuables::keep_list(&snap.owned_items),
-            sell,
-            give_away,
+            marks: valuables::apply(drops, enabled),
             ..Self::default()
         }
     }

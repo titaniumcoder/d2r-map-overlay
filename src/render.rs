@@ -13,6 +13,7 @@ use crate::game::{Bounds, Monster, Preset, PresetKind, Room, RoomRect, Snapshot}
 use crate::guidance::{Guidance, Marks};
 use crate::items::{CharmSize, DropKind, GemColour};
 use crate::offsets::monster_data;
+use crate::stash_plan::{Action, Side};
 use crate::valuables::Tier;
 use crate::{info, session, tombs, xp};
 
@@ -1132,21 +1133,36 @@ pub fn map_height(height: u32, font: Option<&FontVec>) -> u32 {
 }
 
 /// The text blocks below the info line, kept separate: the breakpoint guide bands, the level
-/// suggestions, the inventory keep list, the sell and give-away lists and the `BiS` chase list.
+/// suggestions, the item plan's sell / move / keep / give-away groups and the `BiS` chase list.
 /// The webapp's live dashboard (`live` publishes from the same tick) consumes all of them; the
 /// overlay draws none of them (only the info line; the guide moved to the dashboard, user
 /// request 2026-11-17).
 #[derive(Debug, Default)]
 pub struct TextBlocks {
     pub guide: Vec<info::Band>,
-    /// The keep, sell and give-away lists: every entry, one string each, no prefix (the
-    /// dashboard's Sell / Keep panel wraps them as comma-separated runs).
-    pub keep: Vec<String>,
+    /// The item plan's groups ([`crate::stash_plan`]): every entry, one string each, no prefix
+    /// (the dashboard's Sell / Keep panel wraps each group as a comma-separated run).
     pub sell: Vec<String>,
+    /// Keepers on the wrong place, with their target pages.
+    pub moves: Vec<String>,
+    /// Kept for the player's own builds (pages 1–2 or on the character).
+    pub keep_own: Vec<String>,
+    /// Kept for trading (pages 3–5).
+    pub keep_trade: Vec<String>,
     pub give: Vec<String>,
     /// The `BiS` chase lines with their structural tick ([`info::BisLine::tick`]): the
     /// dashboard marks ✓(stash) from the tick.
     pub bis: Vec<info::BisLine>,
+}
+
+/// The item plan's entries whose action `wanted` picks, as text ([`info::advice_entry`]).
+fn entries(guidance: &Guidance, wanted: impl Fn(Action) -> bool) -> Vec<String> {
+    guidance
+        .items
+        .iter()
+        .filter(|a| wanted(a.action))
+        .map(info::advice_entry)
+        .collect()
 }
 
 /// The dashboard's groups ([`TextBlocks`]) for a `width` px canvas from one snapshot. None of
@@ -1164,9 +1180,11 @@ pub fn text_blocks(snap: &Snapshot, guidance: &Guidance, width: u32, font: Optio
                 .map(|band| info::fit_band(band, f, max_width))
                 .collect(),
         // Every entry, one string each: the dashboard lays them out as one wrapping run.
-        keep: guidance.keep.iter().map(info::keep_entry).collect(),
-        sell: guidance.sell.iter().map(info::spare_entry).collect(),
-        give: guidance.give_away.iter().map(info::spare_entry).collect(),
+        sell: entries(guidance, |a| a == Action::Sell),
+        moves: entries(guidance, |a| matches!(a, Action::Move(_))),
+        keep_own: entries(guidance, |a| a == Action::Keep(Side::Own)),
+        keep_trade: entries(guidance, |a| a == Action::Keep(Side::Trade)),
+        give: entries(guidance, |a| a == Action::GiveAway),
         // The BiS chase list (user request, 2026-11-17): the tick is computed from the owned
         // and shared-stash names separately, so the dashboard can mark ✓(stash) distinctly.
         bis: guidance.bis.as_ref().map_or_else(Vec::new, |bis| {
@@ -2621,6 +2639,7 @@ mod tests {
             ethereal: false,
             sockets: 0,
             unique_index: None,
+            stats: Vec::new(),
             item_data_head: String::new(),
             x,
             y,
@@ -3000,8 +3019,7 @@ mod tests {
 
     #[test]
     fn text_blocks_holds_the_dashboard_blocks() -> Result<()> {
-        use crate::game::Place;
-        use crate::valuables::{Category, Keep, Spare, Tier};
+        use crate::stash_plan::{Advice, Spot};
         let Some(font) = info::font() else {
             eprintln!("skipped: no info-line font on this machine");
             return Ok(());
@@ -3009,9 +3027,11 @@ mod tests {
         let mut snap = fixture()?;
         snap.difficulty = Some(0);
         snap.player.char_level = Some(34);
-        let spare = |name: &str, place| Spare {
+        let advice = |name: &str, spot, action| Advice {
             name: name.into(),
-            place,
+            spot,
+            action,
+            reason: None,
             count: 1,
         };
         let guidance = Guidance {
@@ -3020,22 +3040,23 @@ mod tests {
                 slots: BTreeMap::from([("helm".to_owned(), vec!["Peasant Crown@28".to_owned()])]),
                 merc_slots: BTreeMap::new(),
             }),
-            keep: vec![Keep {
-                name: "Harlequin Crest".into(),
-                tier: Tier::S,
-                category: Category::Trade,
-                count: 1,
-            }],
-            sell: vec![spare("Gravenspine", Place::Inventory)],
-            give_away: vec![spare("Magefist", Place::Shared)],
+            items: vec![
+                advice("Gravenspine", Spot::Inventory, Action::Sell),
+                advice("Hunter's Bow 4os", Spot::Page(4), Action::Move(Side::Own)),
+                advice("Spirit", Spot::Page(1), Action::Keep(Side::Own)),
+                advice("Harlequin Crest", Spot::Page(3), Action::Keep(Side::Trade)),
+                advice("Magefist", Spot::Page(5), Action::GiveAway),
+            ],
             ..Guidance::default()
         };
         let blocks = text_blocks(&snap, &guidance, 400, Some(font));
         // The dashboard's JSON is built from these blocks (crate::web::live_json); the overlay
         // draws only the map and info line, so the lists are asserted here, not in a rendered frame.
-        assert_eq!(blocks.keep, vec!["Harlequin Crest (S)"]);
         assert_eq!(blocks.sell, vec!["Gravenspine (inv)"]);
-        assert_eq!(blocks.give, vec!["Magefist (shared)"]);
+        assert_eq!(blocks.moves, vec!["Hunter's Bow 4os (page 4 → 1–2)"]);
+        assert_eq!(blocks.keep_own, vec!["Spirit (page 1)"]);
+        assert_eq!(blocks.keep_trade, vec!["Harlequin Crest (page 3)"]);
+        assert_eq!(blocks.give, vec!["Magefist (page 5)"]);
         let Some(bis) = blocks.bis.first() else {
             anyhow::bail!("no helm chase line: {:?}", blocks.bis);
         };
@@ -3046,8 +3067,7 @@ mod tests {
 
     #[test]
     fn the_overlay_frame_draws_no_guide_or_lists() -> Result<()> {
-        use crate::game::Place;
-        use crate::valuables::{Category, Keep, Spare, Tier};
+        use crate::stash_plan::{Advice, Spot};
         let Some(font) = info::font() else {
             eprintln!("skipped: no info-line font on this machine");
             return Ok(());
@@ -3064,9 +3084,11 @@ mod tests {
             res_lightning: 10,
             res_poison: 75,
         });
-        let spare = |name: &str, place| Spare {
+        let advice = |name: &str, spot, action| Advice {
             name: name.into(),
-            place,
+            spot,
+            action,
+            reason: None,
             count: 1,
         };
         let guidance = Guidance {
@@ -3075,14 +3097,13 @@ mod tests {
                 slots: BTreeMap::from([("helm".to_owned(), vec!["Peasant Crown@28".to_owned()])]),
                 merc_slots: BTreeMap::new(),
             }),
-            keep: vec![Keep {
-                name: "Harlequin Crest".into(),
-                tier: Tier::S,
-                category: Category::Trade,
-                count: 1,
-            }],
-            sell: vec![spare("Gravenspine", Place::Inventory)],
-            give_away: vec![spare("Magefist", Place::Shared)],
+            items: vec![
+                advice("Gravenspine", Spot::Inventory, Action::Sell),
+                advice("Hunter's Bow 4os", Spot::Page(4), Action::Move(Side::Own)),
+                advice("Spirit", Spot::Page(1), Action::Keep(Side::Own)),
+                advice("Harlequin Crest", Spot::Page(3), Action::Keep(Side::Trade)),
+                advice("Magefist", Spot::Page(5), Action::GiveAway),
+            ],
             ..Guidance::default()
         };
         let (w, h) = (400, 400);

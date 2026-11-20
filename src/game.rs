@@ -171,9 +171,10 @@ pub struct Snapshot {
     #[serde(skip)]
     pub inventory_items: u32,
     /// The player's own items with their [`Place`]: every inventory item, and the cube and
-    /// stash items that are identified uniques or sets ([`identified_unique_or_set`]; only
-    /// these are read in full). The playstyle's keep / sell / give-away lists are computed from
-    /// them ([`crate::guidance::Guidance::with_item_lists`]). Left out of the JSON when empty;
+    /// stash items that are identified uniques or sets ([`identified_unique_or_set`]), magic or
+    /// better items with their stats, or white runeword bases (only these are read in full;
+    /// [`stored_kept`]). The playstyle's keep / sell / give-away lists are computed from
+    /// them ([`crate::stash_plan::held`]). Left out of the JSON when empty;
     /// older dumps carry the computed lists instead, which are ignored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned_items: Vec<(ItemDrop, Place)>,
@@ -457,7 +458,7 @@ struct ItemScan {
     /// All items on the inventory page, with their owner id (`None` if unreadable).
     inventory: Vec<(ItemDrop, Option<u32>)>,
     /// Stored items on the cube and stash pages that are identified uniques or sets
-    /// ([`identified_unique_or_set`]), any owner: the owner filter needs the chosen player.
+    /// ([`identified_unique_or_set`]) or white runeword bases ([`stored_kept`]), any owner: the owner filter needs the chosen player.
     /// Inventory items are in `inventory`.
     stored: Vec<Stored>,
     stash_owners: OwnerVotes,
@@ -530,18 +531,6 @@ pub enum Place {
     Shared,
 }
 
-impl Place {
-    /// The short label shown after the item name: `inv`, `cube`, `stash`, `shared`.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Inventory => "inv",
-            Self::Cube => "cube",
-            Self::Stash => "stash",
-            Self::Shared => "shared",
-        }
-    }
-}
-
 /// Cheap pre-check on the raw `ItemData` fields: an identified unique or set item, not a
 /// runeword. Of the cube and stash items only these are read in full (only they can be spare,
 /// [`crate::valuables::verdict`]).
@@ -549,6 +538,34 @@ pub const fn identified_unique_or_set(quality: u32, flags: u32) -> bool {
     (quality == item_data::QUALITY_UNIQUE || quality == item_data::QUALITY_SET)
         && flags & item_data::FLAG_IDENTIFIED != 0
         && flags & item_data::FLAG_RUNEWORD == 0
+}
+
+/// Cheap pre-check on the raw `ItemData` fields: a white (low, normal or superior quality)
+/// item without a runeword. Only its code tells a runeword base from a potion or a rune
+/// ([`stored_kept`]).
+pub const fn maybe_white_base(quality: u32, flags: u32) -> bool {
+    quality >= item_data::QUALITY_LOW
+        && quality <= item_data::QUALITY_SUPERIOR
+        && flags & item_data::FLAG_RUNEWORD == 0
+}
+
+/// A magic, rare or crafted item: the player's own ones get their stats read
+/// ([`ItemDrop::stats`]) for the playstyle's keep-or-sell scoring.
+pub const fn magic_or_better(quality: u32) -> bool {
+    matches!(
+        quality,
+        item_data::QUALITY_MAGIC | item_data::QUALITY_RARE | item_data::QUALITY_CRAFTED
+    )
+}
+
+/// Whether a stored item read in full is kept in [`Snapshot::owned_items`]: an identified
+/// unique or set, a magic / rare / crafted item ([`magic_or_better`]), or a white item whose
+/// code is a weapon or armor base that can have sockets ([`crate::socket_bases::socketable`]).
+fn stored_kept(item: &ItemDrop) -> bool {
+    identified_unique_or_set(item.quality, item.flags)
+        || magic_or_better(item.quality)
+        || (maybe_white_base(item.quality, item.flags)
+            && item.code.as_deref().is_some_and(crate::socket_bases::socketable))
 }
 
 /// Where a stored item on `page` with `owner` is, for the player with unit id `player`; `None`
@@ -818,6 +835,10 @@ pub struct ItemDrop {
     /// uniqueitems / setitems row of a unique or set item (`item_data::FILE_INDEX`).
     #[serde(default)]
     pub unique_index: Option<u32>,
+    /// The item's stats ([`Reader::item_stats`]), read only for the player's own magic, rare
+    /// and crafted items (the playstyle scores them, [`crate::stash_plan`]); empty elsewhere.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stats: Vec<crate::item_stats::ItemStat>,
     /// The first `item_data::HEAD_LEN` bytes of `ItemData` as hex, for checking offsets in the
     /// journal. Not part of the snapshot JSON.
     #[serde(skip)]
@@ -1450,7 +1471,7 @@ impl<M: ReadMem> Reader<'_, M> {
                     let Ok(head) = self.unit_head(addr, unit_table::ITEM) else {
                         continue;
                     };
-                    let Ok(item) = self.item_fields(addr, &head, items_table) else {
+                    let Ok(item) = self.owned_item_fields(addr, &head, items_table) else {
                         continue;
                     };
                     let quantity = head
@@ -1915,12 +1936,14 @@ impl<M: ReadMem> Reader<'_, M> {
             {
                 votes.add(owner);
             }
-            // Cube and stash: only the identified uniques and sets are read in full.
+            // Cube and stash: only the identified uniques and sets, magic or better items and the
+            // white runeword bases are read in full (the playstyle's keep / sell / move lists judge only those).
             if let (Some(p @ (item_data::PAGE_CUBE | item_data::PAGE_STASH)), Some(owner)) = (page, owner)
-                && self.is_identified_unique_or_set(&head)
+                && self.is_read_in_full(&head, items_table)
             {
-                match self.item_fields(addr, &head, items_table) {
-                    Ok(item) => scan.stored.push(Stored { item, page: p, owner }),
+                match self.owned_item_fields(addr, &head, items_table) {
+                    Ok(item) if stored_kept(&item) => scan.stored.push(Stored { item, page: p, owner }),
+                    Ok(_) => {}
                     Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
                 }
             }
@@ -1931,7 +1954,7 @@ impl<M: ReadMem> Reader<'_, M> {
                         .map(|d| d.map(|d| (d, true)))
                 }
                 item_mode::STORED if page == Some(item_data::PAGE_INVENTORY) => self
-                    .item_fields(addr, &head, items_table)
+                    .owned_item_fields(addr, &head, items_table)
                     .map(|d| Some((d, false))),
                 _ => Ok(None),
             };
@@ -2414,12 +2437,22 @@ impl<M: ReadMem> Reader<'_, M> {
     }
 
     /// True if the stored item `head` is an identified unique or set
-    /// ([`identified_unique_or_set`]); false if its quality or flags are unreadable.
-    fn is_identified_unique_or_set(&self, head: &UnitHead) -> bool {
+    /// ([`identified_unique_or_set`]), magic or better ([`magic_or_better`]), or a white item
+    /// ([`maybe_white_base`]) whose code (from `items_table`) is a socketable base: potions,
+    /// tomes, keys, gems and runes are left out before the full read. False if its quality or
+    /// flags are unreadable.
+    fn is_read_in_full(&self, head: &UnitHead, items_table: Option<u64>) -> bool {
+        let white_base = || {
+            items_table
+                .and_then(|t| items::read_code(self.mem, t, head.txt))
+                .is_some_and(|code| crate::socket_bases::socketable(&items::code_text(code)))
+        };
         head.unit_data.is_some_and(|d| {
             matches!(
                 (self.u32(d, item_data::QUALITY), self.u32(d, item_data::FLAGS)),
                 (Ok(q), Ok(f)) if identified_unique_or_set(q, f)
+                    || magic_or_better(q)
+                    || (maybe_white_base(q, f) && white_base())
             )
         })
     }
@@ -2450,10 +2483,21 @@ impl<M: ReadMem> Reader<'_, M> {
             // Optional data like `room_preset`: an unreadable stat list counts as no sockets.
             sockets: self.sockets(addr).unwrap_or(0),
             unique_index,
+            stats: Vec::new(),
             item_data_head: String::new(),
             x: 0,
             y: 0,
         })
+    }
+
+    /// [`Reader::item_fields`] of one of the player's own items, with its stats when it is
+    /// magic or better ([`magic_or_better`]; the playstyle scores those).
+    fn owned_item_fields(&self, addr: u64, head: &UnitHead, items_table: Option<u64>) -> Result<ItemDrop> {
+        let mut item = self.item_fields(addr, head, items_table)?;
+        if magic_or_better(item.quality) {
+            item.stats = self.item_stats(addr, head.id);
+        }
+        Ok(item)
     }
 
     /// The ground item `head` (unit at `addr`) as a drop, or `None` for a base without a known
@@ -4223,6 +4267,7 @@ mod tests {
             ethereal: false,
             sockets: 0,
             unique_index: None,
+            stats: Vec::new(),
             item_data_head: String::new(),
             x,
             y,
@@ -4284,6 +4329,9 @@ mod tests {
             list,
             0x40,
             &[
+                // The list's owner: an item unit with this unit's id ([`Reader::item_stats`]).
+                (0x08, &unit_table::ITEM.to_le_bytes()),
+                (0x0C, &(u32::try_from(addr >> 12)?).to_le_bytes()),
                 (stat_list::ENTRIES, &entries.to_le_bytes()),
                 (stat_list::COUNT, &count.to_le_bytes()),
             ],
@@ -4401,7 +4449,9 @@ mod tests {
     }
 
     #[test]
-    fn keep_list_reads_the_inventory_page_only() -> Result<()> {
+    fn item_plan_reads_the_players_own_items() -> Result<()> {
+        const I7: u64 = 0x80_7000;
+        const I8: u64 = 0x80_8000;
         let mut m = world()?;
         let id = item_data::FLAG_IDENTIFIED;
         let stored = item_mode::STORED;
@@ -4416,8 +4466,12 @@ mod tests {
         // A 3os one (B only): not kept.
         stored_item(&mut m, I5, (30, 2, id, 0), (stored, 0), &[(194, 3)], I6)?;
         // Another player's Shako in an inventory (group game): not kept.
-        stored_item(&mut m, I6, (40, 7, id, 248), (stored, 0), &[], 0)?;
-        for addr in [I1, I2, I4, I5] {
+        stored_item(&mut m, I6, (40, 7, id, 248), (stored, 0), &[], I7)?;
+        // Stored white bases and magic items are read in full too (the magic one with its
+        // stats): a 4os Crystal Sword in the stash, a magic one with 20 fire res in the cube.
+        stored_item(&mut m, I7, (30, 2, id, 0), (stored, 4), &[(194, 4)], I8)?;
+        stored_item(&mut m, I8, (30, 4, id, 0), (stored, 3), &[(39, 20)], 0)?;
+        for addr in [I1, I2, I4, I5, I7, I8] {
             set_owner(&mut m, addr, BOB_ID)?;
         }
         set_owner(&mut m, I6, ALICE_ID)?;
@@ -4426,20 +4480,28 @@ mod tests {
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
         assert_eq!((s.ground_items, s.drops.len()), (0, 0));
         assert_eq!(s.inventory_items, 4, "page-0 stored items, any owner");
-        let lists = crate::guidance::Guidance::with_item_lists(&s);
-        let keep: Vec<_> = lists
-            .keep
-            .iter()
-            .map(|k| (k.name.as_str(), k.tier, k.count))
-            .collect();
         assert_eq!(
-            keep,
+            item_plan(&s),
             vec![
-                ("Harlequin Crest", valuables::Tier::S, 1),
-                ("Crystal Sword 4os", valuables::Tier::A, 1),
-            ]
+                "Crystal Sword 3os (inv)",
+                "Crystal Sword 4os (inv → 3–5)",
+                "Crystal Sword 4os (stash → 3–5)",
+                "Harlequin Crest (inv → 3–5)",
+                "Harlequin Crest (stash → 3–5)",
+                "Magic Crystal Sword (cube)",
+            ],
+            "the 3os sword (B only) is sold; the equipped and Alice's Shakos aren't Bob's"
         );
         Ok(())
+    }
+
+    /// The playstyle's item plan of `s` ([`crate::stash_plan`]) without build needs, as text.
+    fn item_plan(s: &Snapshot) -> Vec<String> {
+        use crate::stash_plan::{Needs, Scoring, held, plan};
+        plan(&held(s), &Needs::default(), &Scoring::default())
+            .iter()
+            .map(crate::info::advice_entry)
+            .collect()
     }
 
     /// An identified unique of items.txt row `txt` and uniqueitems row `index`, stored on `page`
@@ -4684,6 +4746,9 @@ mod tests {
             ethereal: false,
             runeword: false,
             quantity,
+            sockets: 0,
+            unique_index: None,
+            stats: Vec::new(),
         };
         assert_eq!(
             s.stash,
@@ -4695,7 +4760,10 @@ mod tests {
                 StashTab {
                     kind: TabKind::Page(2),
                     items: vec![
-                        item("Harlequin Crest", "uap", 7, true, None),
+                        StashItem {
+                            unique_index: Some(248),
+                            ..item("Harlequin Crest", "uap", 7, true, None)
+                        },
                         item("Crystal Sword", "crs", 2, false, None),
                     ],
                 },
@@ -4843,15 +4911,11 @@ mod tests {
         m.add(ITEMS, b);
 
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
-        let lists = crate::guidance::Guidance::with_item_lists(&s);
-        let names =
-            |l: &[valuables::Spare]| -> Vec<String> { l.iter().map(crate::info::spare_entry).collect() };
-        assert_eq!(
-            names(&lists.sell),
-            vec!["Gravenspine (inv)", "Gravenspine (cube)"]
-        );
         // Other-owner page-4 items are not the shared stash (stale units); left out for now.
-        assert_eq!(names(&lists.give_away), vec!["Magefist (stash)"]);
+        assert_eq!(
+            item_plan(&s),
+            vec!["Gravenspine (inv)", "Gravenspine (cube)", "Magefist (stash)"]
+        );
         assert_eq!(
             s.inventory_items, 2,
             "the keep scan still sees every inventory item"
@@ -4891,12 +4955,11 @@ mod tests {
         m.add(ITEMS, b);
 
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
-        let names =
-            |l: &[valuables::Spare]| -> Vec<String> { l.iter().map(crate::info::spare_entry).collect() };
-        let lists = crate::guidance::Guidance::with_item_lists(&s);
-        assert_eq!(lists.keep, vec![], "the inventory copy is not kept");
-        assert_eq!(names(&lists.sell), Vec::<String>::new());
-        assert_eq!(names(&lists.give_away), vec!["Sigon's Visor (inv)"]);
+        assert_eq!(
+            item_plan(&s),
+            vec!["Sigon's Visor (stash → 3–5)", "Sigon's Visor (inv)"],
+            "the stashed copy is the one kept; the inventory one is a give-away"
+        );
         Ok(())
     }
 

@@ -412,6 +412,55 @@ fn usable(base: Base, stats: &[ItemStat], who: &Profile) -> bool {
     class_ok && meets(base.str, who.strength) && meets(base.dex, who.dexterity)
 }
 
+/// The scored parts of what equipment `item` would replace among the worn `(body slot, piece)`
+/// items (the slot rule in the module docs); `None` for non-equipment, an item `who` can't use
+/// (class, strength, dexterity; the level is the caller's check) and a shield beside a worn
+/// two-handed weapon.
+fn replaced(item: Piece<'_>, worn: &[(u8, Piece<'_>)], who: &Profile) -> Option<Vec<BTreeMap<Part, f64>>> {
+    let base = bases_data::base(item.code?)?;
+    if !usable(base, item.stats, who) {
+        return None;
+    }
+    let in_slot = |slot: u8| worn.iter().find(|(s, _)| *s == slot).map(|(_, p)| parts(*p, who));
+    let weapon_2h = |p: &Piece<'_>| p.code.and_then(crate::weapons_data::two_handed).unwrap_or(false);
+    let worn_2h = worn.iter().any(|(s, p)| *s == 4 && weapon_2h(p));
+    Some(match base.slot {
+        // Rings: the worse of the two (an empty finger is the worst).
+        6 => {
+            let rings = [in_slot(6), in_slot(7)].map(Option::unwrap_or_default);
+            let worse = rings
+                .into_iter()
+                .min_by(|a, b| score(a, who).total_cmp(&score(b, who)));
+            worse.into_iter().collect()
+        }
+        4 if weapon_2h(&item) => [in_slot(4), in_slot(5)].into_iter().flatten().collect(),
+        5 if worn_2h => return None,
+        slot => in_slot(slot).into_iter().collect(),
+    })
+}
+
+/// The score of `piece` for `who`: all of it, and the part outside defense and weapon damage
+/// (what its affixes are worth to the build: skills, resistances, FCR, life …). Works for
+/// charms and jewels too (no base needed).
+#[must_use]
+pub fn scores(piece: Piece<'_>, who: &Profile) -> (f64, f64) {
+    let parts = parts(piece, who);
+    let affixes = parts
+        .iter()
+        .filter(|(p, _)| !matches!(p, Part::Defense | Part::Damage))
+        .map(|(p, v)| p.weight(who) * v)
+        .sum();
+    (score(&parts, who), affixes)
+}
+
+/// The score of what equipment `item` would replace among the `worn` items ([`verdict`]'s
+/// slot rule; an empty slot scores 0); `None` when it isn't equipment `who` can use (class,
+/// strength, dexterity) or can't be compared (a shield beside a two-handed weapon).
+#[must_use]
+pub fn replaced_score(item: Piece<'_>, worn: &[(u8, Piece<'_>)], who: &Profile) -> Option<f64> {
+    Some(replaced(item, worn, who)?.iter().map(|p| score(p, who)).sum())
+}
+
 /// Whether the store item `item` (required level `req_level`) is better for `who` than what
 /// it would replace among the worn `(body slot, piece)` items, by at least [`MIN_GAIN`]; the
 /// `why` text ("+24 avg dmg, +2 Bow and Crossbow skills, +15 fire res": the three largest
@@ -424,26 +473,10 @@ pub fn verdict(
     worn: &[(u8, Piece<'_>)],
     who: &Profile,
 ) -> Option<String> {
-    let base = bases_data::base(item.code?)?;
-    if req_level.zip(who.level).is_some_and(|(req, lvl)| req > lvl) || !usable(base, item.stats, who) {
+    if req_level.zip(who.level).is_some_and(|(req, lvl)| req > lvl) {
         return None;
     }
-    let in_slot = |slot: u8| worn.iter().find(|(s, _)| *s == slot).map(|(_, p)| parts(*p, who));
-    let weapon_2h = |p: &Piece<'_>| p.code.and_then(crate::weapons_data::two_handed).unwrap_or(false);
-    let worn_2h = worn.iter().any(|(s, p)| *s == 4 && weapon_2h(p));
-    let old: Vec<BTreeMap<Part, f64>> = match base.slot {
-        // Rings: the worse of the two (an empty finger is the worst).
-        6 => {
-            let rings = [in_slot(6), in_slot(7)].map(Option::unwrap_or_default);
-            let worse = rings
-                .into_iter()
-                .min_by(|a, b| score(a, who).total_cmp(&score(b, who)));
-            worse.into_iter().collect()
-        }
-        4 if weapon_2h(&item) => [in_slot(4), in_slot(5)].into_iter().flatten().collect(),
-        5 if worn_2h => return None,
-        slot => in_slot(slot).into_iter().collect(),
-    };
+    let old = replaced(item, worn, who)?;
     let mut delta = parts(item, who);
     for (part, v) in old.iter().flatten() {
         *delta.entry(*part).or_insert(0.0) -= v;

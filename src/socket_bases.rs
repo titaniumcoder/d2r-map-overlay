@@ -65,6 +65,14 @@ fn wearable(wearer: Wearer, ty: &str, slot: u8, class: Option<u8>) -> bool {
     }
 }
 
+/// Whether the Act 2 mercenary can wear the base with item code `code`: a helm or body armor
+/// of no class, or a polearm or spear.
+#[must_use]
+pub fn merc_wears(code: &str) -> bool {
+    bases_data::base(code)
+        .is_some_and(|b| matches!(b.slot, 1 | 3 | 4) && wearable(Wearer::Act2Merc, b.kind, b.slot, b.class))
+}
+
 /// Whether the hint ranks by defense: the mercenary's helm or body armor (user request,
 /// 2026-11-20: the merc wants the strongest base, its strength is no concern of the player's).
 fn by_defense(wearer: Wearer, slot: Option<u8>) -> bool {
@@ -167,6 +175,36 @@ pub fn natural_bases(
         (def, p.str.saturating_add(p.dex), qlvl, name)
     });
     picks.into_iter().map(|(_, _, p)| p).collect()
+}
+
+/// The [`SOCKETABLE`] row of item code `code` (the table is sorted by code).
+fn socketable_row(code: &str) -> Option<&'static bases_data::SocketRow> {
+    let i = SOCKETABLE.binary_search_by(|row| row.0.cmp(code)).ok()?;
+    SOCKETABLE.get(i)
+}
+
+/// Whether item code `code` is a weapon or armor base that can have sockets ([`SOCKETABLE`]):
+/// a runeword base, as opposed to a potion, tome, gem or other plain white item.
+#[must_use]
+pub fn socketable(code: &str) -> bool {
+    socketable_row(code).is_some()
+}
+
+/// Whether the base with item code `code` can carry runeword `word` for `wearer` (the same
+/// category, class and mercenary checks as [`natural_bases`]) and, with `slot` set, is worn in
+/// that body slot. The socket count is the caller's check: this is about the base only.
+#[must_use]
+pub fn fits(word: &Runeword, code: &str, wearer: Wearer, slot: Option<u8>) -> bool {
+    let (Some(&(_, _, ty, _, _, _)), Some(base)) = (socketable_row(code), bases_data::base(code)) else {
+        return false;
+    };
+    let category = word.bases.iter().any(|c| {
+        CATEGORY_TYPES
+            .iter()
+            .find(|(name, _)| name == c)
+            .is_some_and(|&(_, want)| is_a(ty, want, 0))
+    });
+    category && wearable(wearer, ty, base.slot, base.class) && slot.is_none_or(|s| s == base.slot)
 }
 
 /// A base's requirement text: `"25/35"` (str/dex), `"43 Str"`, `"28 Dex"` or `"no req"`.
@@ -342,6 +380,27 @@ mod tests {
             body.windows(2)
                 .all(|w| w.first().map(|p| p.def) >= w.get(1).map(|p| p.def))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn fits_checks_category_wearer_and_slot() -> anyhow::Result<()> {
+        let harmony = crate::runewords_data::lookup("Harmony").ok_or_else(|| anyhow::anyhow!("Harmony"))?;
+        let spirit = crate::runewords_data::lookup("Spirit").ok_or_else(|| anyhow::anyhow!("Spirit"))?;
+        // Hunter's Bow (`hbw`): a missile weapon the druid can use, not the merc.
+        assert!(fits(harmony, "hbw", DRUID, None));
+        assert!(fits(harmony, "hbw", DRUID, Some(4)));
+        assert!(!fits(harmony, "hbw", DRUID, Some(5)), "not an off-hand");
+        assert!(
+            !fits(harmony, "hbw", Wearer::Act2Merc, None),
+            "merc: polearms and spears only"
+        );
+        assert!(!fits(harmony, "crs", DRUID, None), "a sword is no missile weapon");
+        // Spirit: a Crystal Sword in the weapon slot, not the shield slot.
+        assert!(fits(spirit, "crs", DRUID, Some(4)));
+        assert!(!fits(spirit, "crs", DRUID, Some(5)));
+        assert!(!fits(spirit, "hp1", DRUID, None), "a potion is no base");
+        assert!(socketable("crs") && !socketable("hp1"));
         Ok(())
     }
 

@@ -21,7 +21,7 @@ use crate::build::{self, Damage, Rating};
 use crate::cows::{COW_LEVEL, Tally};
 use crate::levels_data::{BOSSES, LEVELS};
 use crate::names::same_name;
-use crate::valuables::{Keep, Spare, Tier};
+use crate::stash_plan::{Action, Advice};
 
 /// Champions are this many levels above the area's monster level (D2 rule).
 const CHAMPION_BONUS: u8 = 2;
@@ -43,12 +43,16 @@ const TEXT_PX: f32 = 16.0;
 /// the text and the map above it.
 const PAD: u32 = 3;
 const TEXT: [u8; 4] = [255, 255, 255, 255];
-/// The inventory keep lines: green, same outline as the info line.
+/// The keep-for-own-use lines: green.
 pub const KEEP_TEXT: [u8; 4] = [90, 230, 90, 255];
 /// The sell lines: grey (dashboard Sell panel).
 pub const SELL_TEXT: [u8; 4] = [175, 175, 175, 255];
 /// The give-away lines: yellow (dashboard, riding with the Sell panel).
 pub const GIVE_TEXT: [u8; 4] = [255, 225, 60, 255];
+/// The move lines (a keeper on the wrong stash pages): orange.
+pub const MOVE_TEXT: [u8; 4] = [255, 160, 60, 255];
+/// The keep-for-trade lines: light blue (the own keep lines are [`KEEP_TEXT`]).
+pub const TRADE_TEXT: [u8; 4] = [110, 190, 255, 255];
 /// The breakpoint/gear/runeword guide lines (user request, 2026-11-17): light violet.
 pub const GUIDE_TEXT: [u8; 4] = [200, 130, 255, 255];
 /// The `BiS` chase list ([`bis_lines`]): light gold.
@@ -467,27 +471,21 @@ pub fn font() -> Option<&'static FontVec> {
     .as_ref()
 }
 
-/// One sell or give-away entry as text: `Gravenspine (inv)`, `Magefist ×2 (stash)`.
-pub fn spare_entry(s: &Spare) -> String {
-    let place = s.place.label();
-    if s.count > 1 {
-        format!("{} ×{} ({place})", s.name, s.count)
-    } else {
-        format!("{} ({place})", s.name)
+/// One Sell / Keep panel entry as text: `Gravenspine (inv)`, `Magefist ×2 (stash)`, a move
+/// with its target pages `Hunter's Bow 4os (page 4 → 1–2)`, a scored sell with its reason
+/// `Rare Ring (page 4, no build stats)`.
+pub fn advice_entry(a: &Advice) -> String {
+    let mut place = a.spot.label();
+    if let Action::Move(side) = a.action {
+        place = format!("{place} → {}", side.pages());
     }
-}
-
-/// One keep-list entry as text: `Harlequin Crest (S)`, `Lem Rune ×2 (A)`.
-pub fn keep_entry(k: &Keep) -> String {
-    let tier = match k.tier {
-        Tier::S => "S",
-        Tier::A => "A",
-        Tier::B => "B",
-    };
-    if k.count > 1 {
-        format!("{} ×{} ({tier})", k.name, k.count)
+    if let Some(reason) = a.reason {
+        place = format!("{place}, {reason}");
+    }
+    if a.count > 1 {
+        format!("{} ×{} ({place})", a.name, a.count)
     } else {
-        format!("{} ({tier})", k.name)
+        format!("{} ({place})", a.name)
     }
 }
 
@@ -1145,42 +1143,44 @@ mod tests {
         );
     }
 
-    fn keep(name: &str, tier: Tier, count: u32) -> Keep {
-        Keep {
-            name: name.into(),
-            tier,
-            category: crate::valuables::Category::Trade,
-            count,
-        }
-    }
-
     #[test]
-    fn keep_entries() {
-        assert_eq!(
-            keep_entry(&keep("Harlequin Crest", Tier::S, 1)),
-            "Harlequin Crest (S)"
-        );
-        assert_eq!(keep_entry(&keep("Lem Rune", Tier::A, 2)), "Lem Rune ×2 (A)");
-    }
-
-    #[test]
-    fn spare_entries() {
-        use crate::game::Place;
-        let spare = |name: &str, place, count| Spare {
+    fn advice_entries() {
+        use crate::stash_plan::{Side, Spot};
+        let advice = |name: &str, spot, action, count| Advice {
             name: name.into(),
-            place,
+            spot,
+            action,
+            reason: None,
             count,
         };
         assert_eq!(
-            spare_entry(&spare("Gravenspine", Place::Inventory, 1)),
+            advice_entry(&advice("Gravenspine", Spot::Inventory, Action::Sell, 1)),
             "Gravenspine (inv)"
         );
         assert_eq!(
-            spare_entry(&spare("Magefist", Place::Stash, 2)),
+            advice_entry(&advice("Magefist", Spot::Stash, Action::GiveAway, 2)),
             "Magefist ×2 (stash)"
         );
-        assert_eq!(spare_entry(&spare("a", Place::Cube, 1)), "a (cube)");
-        assert_eq!(spare_entry(&spare("a", Place::Shared, 1)), "a (shared)");
+        assert_eq!(
+            advice_entry(&advice(
+                "Hunter's Bow 4os",
+                Spot::Page(4),
+                Action::Move(Side::Own),
+                1
+            )),
+            "Hunter's Bow 4os (page 4 → 1–2)"
+        );
+        assert_eq!(
+            advice_entry(&advice("Shako", Spot::Cube, Action::Move(Side::Trade), 1)),
+            "Shako (cube → 3–5)"
+        );
+        assert_eq!(
+            advice_entry(&advice("a", Spot::Page(1), Action::Keep(Side::Own), 1)),
+            "a (page 1)"
+        );
+        let mut ring = advice("Rare Ring", Spot::Page(4), Action::Sell, 1);
+        ring.reason = Some("no build stats");
+        assert_eq!(advice_entry(&ring), "Rare Ring (page 4, no build stats)");
     }
 
     #[test]

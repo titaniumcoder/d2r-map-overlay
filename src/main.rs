@@ -42,6 +42,7 @@ mod shop;
 mod skills_data;
 mod socket_bases;
 mod stash;
+mod stash_plan;
 #[cfg(test)]
 mod testutil;
 mod tombs;
@@ -228,8 +229,7 @@ fn load_snapshot(path: &str) -> Result<game::Snapshot> {
 /// (drop marks, the build's damages).
 fn load_for_drawing(path: &str, config: &config::Config) -> Result<(game::Snapshot, guidance::Guidance)> {
     let mut snap = load_snapshot(path)?;
-    let mut guidance = guidance::Guidance::with_item_lists(&snap);
-    guidance.marks = valuables::apply(&mut snap.drops, &config.valuables);
+    let mut guidance = guidance::Guidance::marked(&mut snap.drops, &config.valuables);
     session::Session::default().apply(&mut snap);
     config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
     let holdings = snap.holdings();
