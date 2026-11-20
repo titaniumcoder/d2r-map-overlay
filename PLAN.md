@@ -647,8 +647,11 @@ progress per character and difficulty (like the build stage in `played.json`).
 **Item places: sell / move / keep (user rule, 2026-11-20)** — playstyle logic, part of step 5's
 trait; today `src/stash_plan.rs`, shown in the dashboard's Sell / Keep panel.
 - Shared stash pages 1–2 are the player's own (build pieces, simple bases until something good
-  drops), pages 3–5 are for trading. The gem / rune / materials tab is out of scope.
-- Judged: inventory, cube, personal stash and shared pages 1–5 (pages from the session-cached
+  drops), pages 3–4 are for trading. The gem / rune / materials tab is out of scope.
+- **Page 5 is the "ignore page"** (user, 2026-11-20: "things i keep around for stupidity"): its
+  items get no verdict and appear in no list, and nothing is ever moved there. They still count
+  as held (`Snapshot::holdings`), so a runeword on page 5 still drops its base need.
+- Judged: inventory, cube, personal stash and shared pages 1–4 (pages from the session-cached
   stash; the reader now also reads stored white bases and magic / rare / crafted items with stats).
 - **Keep · own**: pieces of the active build and its later stages (`BiS` slots, extras,
   `switch_requires`) and of the farm list, as many copies as needed minus the worn ones; one white
@@ -659,7 +662,8 @@ trait; today `src/stash_plan.rs`, shown in the dashboard's Sell / Keep panel.
   replaces the old one): higher base damage for weapons (min + max, `weapons_data::DAMAGE` from
   `gen_weapons.py`), higher max defense for armor, helms and shields; ties: superior or eth over
   plain, then the lower str + dex requirement, then the better place. The worse bases are sold,
-  even one already kept on pages 1–2. Fine on pages 1–2 and on the character.
+  even one already kept on pages 1–2. Fine on pages 1–2 and in the personal stash; in the
+  inventory or cube it is a move to 1–2 (user, 2026-11-20: "wrong place (inv, stash)").
 - **Keep · trade**: valuables rules S/A (certain, or uncertain S), category trade; category twink
   only S for a white base (an eth elite 4os polearm). A twink-A white base (Bill / Poleaxe 4os,
   Crystal Sword 4os, Flail 4os, Paladin shields) is own gear, not a trade good: kept only as a
@@ -667,12 +671,27 @@ trait; today `src/stash_plan.rs`, shown in the dashboard's Sell / Keep panel.
   2026-11-20): Monarch 4os, Crystal Sword / Flail 5os (CTA), Berserker Axe … Hydra Bow 5–6os,
   eth elite polearm 5os, eth elite armor 4os, other elite body armor 3–4os, Grand Matron /
   Matriarchal Bow 4os. Twink-A non-bases (Sigon's set, keep one) still go to trade. A trade-worthy base goes
-  to trade, never own. Belongs on pages 3–5.
-- **Move**: an own keeper on pages 3–5 → "page N → 1–2"; a trade keeper anywhere else → "→ 3–5".
+  to trade, never own. Belongs on pages 3–4.
+- **Move**: an own keeper on pages 3–4, in the inventory or in the cube → "inv → 1–2"; a trade
+  keeper anywhere else → "→ 3–4". Charms in the inventory and the materials tab stay out.
+  The dashboard shows the place part of every move in red (user, 2026-11-20); the live JSON
+  sends each entry's `name`, `count`, `place`, `target`, `wrong_place`, `reason` beside `text`.
 - **Sell**: extra copies of own bases, worse bases for a runeword whose better base is held,
   plain bases nobody needs (twink-A ones included), uniques/sets no rule wants.
   **Give away**: B-only uniques/sets and extra keep-one copies (Sigon's).
-- **Magic / rare / crafted** (user, 2026-11-20): trade rule first; unidentified or stats unread → keep own;
+- **Magic / rare / crafted** (user, 2026-11-20): trade rule first; then two hard rules
+  (user, 2026-11-20): a weapon whose items.txt type no build of the stage chain uses → sell
+  "not a build weapon", identified or not ("druids barely use javelins"). The types come from the
+  chain's weapon / swap / offhand pieces and its single-item `switch_requires` groups: a unique /
+  set its own base (`item_names_data::UNIQUE_CODES` / `SET_CODES`), a runeword every weapon base
+  that can carry its socket count for the class (`socket_bases::carries`). Groups with
+  alternatives don't count at all: their runewords (Breath of the Dying, Hustle, Eternity …)
+  allow almost any weapon, and their uniques (Rune Master, The Jade Tan Do, Tomb Reaver) are
+  kept by name, not for their base type. Summoner → Fury today: bow, club, hamm, mace, scep,
+  staf, swor, xbow. Axes, daggers, polearms, spears, javelins, claws, orbs, wands are out. The
+  merc's polearms and spears keep their rule (javelins don't count as its spears). No builds
+  known → no weapon rule. Identified boots without faster run/walk (stat 96) → sell "no run
+  speed", whatever else they roll; unidentified boots stay. Then: unidentified or stats unread → keep own;
   identified → scored with `gear_score` for the build chain: keep own if ≥ 80% of the worn item in
   its slot or if its affixes alone score ≥ 20 (a planned skill, +1 class skill, 20 res/life);
   charms and jewels if they score at all (charms carried in the inventory stay out); else sell with

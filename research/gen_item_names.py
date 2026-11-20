@@ -41,6 +41,27 @@ for const, file, what in [
         print(f"    ({i}, {rust_str(name)}),")
     print("];")
 
+
+
+def codes(name):
+    table = json.load(open(f"{src}/{name}"))
+    table = table if isinstance(table, list) else list(table.values())
+    # uniqueitems names the base `code`, setitems `item`.
+    base = lambda r: r.get("code") or r.get("item")
+    return sorted((r["*ID"], base(r)) for r in table if "*ID" in r and r.get("index") and base(r))
+
+
+for const, file, what in [
+    ("UNIQUE_CODES", "uniqueitems.json", "uniqueitems"),
+    ("SET_CODES", "setitems.json", "setitems"),
+]:
+    print()
+    print(f"/// ({what} row `*ID`, base item code), sorted by row.")
+    print(f"pub const {const}: &[(u32, &str)] = &[")
+    for i, code in codes(file):
+        print(f"    ({i}, {rust_str(code)}),")
+    print("];")
+
 strings = json.load(open(f"{src}/allstrings-eng.json"))
 pairs = sorted(
     {(name, strings[name]) for f in ("uniqueitems.json", "setitems.json") for _, name in rows(f)

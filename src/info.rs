@@ -1172,7 +1172,7 @@ mod tests {
         );
         assert_eq!(
             advice_entry(&advice("Shako", Spot::Cube, Action::Move(Side::Trade), 1)),
-            "Shako (cube → 3–5)"
+            "Shako (cube → 3–4)"
         );
         assert_eq!(
             advice_entry(&advice("a", Spot::Page(1), Action::Keep(Side::Own), 1)),

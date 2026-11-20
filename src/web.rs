@@ -739,7 +739,7 @@ impl LiveInfo<'_> {
 /// line text, and, for a runeword piece, `"runes"` and `"bases"` for the hint line under the
 /// piece. The `sell` / `move` / `keep_own` / `keep_trade` / `give` lines are the item plan's
 /// groups ([`crate::stash_plan`]), one entry each, every entry (the page joins each group into
-/// one wrapping comma-separated run in the Sell / Keep panel). `gear_attention` (bool) and
+/// one wrapping comma-separated run in the Sell / Keep panel), structured ([`advice_lines`]). `gear_attention` (bool) and
 /// `gear_attention_why` (text or `null`, [`gear_attention`]) open the Gear panel. The `gear` section is the 2×5 `BiS` grid: one column per
 /// gear slot ([`gear_json`]), each with the equipped piece in that slot and the build's
 /// pieces ordered best→worst, their `state` computed here (see [`grid_pieces`]). The shared
@@ -766,11 +766,11 @@ pub fn live_json(info: &LiveInfo) -> String {
         },
         "area": info.area,
         "guide": info.blocks.guide.iter().map(band_line).collect::<Vec<_>>(),
-        "sell": text_lines(&info.blocks.sell, crate::info::SELL_TEXT),
-        "move": text_lines(&info.blocks.moves, crate::info::MOVE_TEXT),
-        "keep_own": text_lines(&info.blocks.keep_own, crate::info::KEEP_TEXT),
-        "keep_trade": text_lines(&info.blocks.keep_trade, crate::info::TRADE_TEXT),
-        "give": text_lines(&info.blocks.give, crate::info::GIVE_TEXT),
+        "sell": advice_lines(&info.blocks.sell, crate::info::SELL_TEXT),
+        "move": advice_lines(&info.blocks.moves, crate::info::MOVE_TEXT),
+        "keep_own": advice_lines(&info.blocks.keep_own, crate::info::KEEP_TEXT),
+        "keep_trade": advice_lines(&info.blocks.keep_trade, crate::info::TRADE_TEXT),
+        "give": advice_lines(&info.blocks.give, crate::info::GIVE_TEXT),
         "bis": info.blocks.bis.iter().map(bis_line).collect::<Vec<_>>(),
         "gear": gear_json(info),
         "equipped": text_lines(&equipped_lines(info.equipped), [255, 255, 255, 255]),
@@ -2386,7 +2386,36 @@ fn equipped_name(equipped: &crate::game::Equipped) -> String {
     "(unknown)".to_owned()
 }
 
-/// `keep`/`sell`/… lines as `{ "text", "colour" }` objects in the block's colour.
+/// The item plan's entries as `{ "text", "colour", "name", "count", "place", "target",
+/// "wrong_place", "reason" }` objects in the block's colour: `text` is the whole entry
+/// ([`crate::info::advice_entry`]); `place` the spot (`inv`, `page 4`); `target` the pages a
+/// move goes to (`1–2`, else `null`); `wrong_place` whether the item sits where it doesn't
+/// belong (every move: the page shows the place in red, user request 2026-11-20); `reason` why
+/// a scored item is sold (else `null`).
+fn advice_lines(list: &[crate::stash_plan::Advice], colour: [u8; 4]) -> Vec<serde_json::Value> {
+    use crate::stash_plan::Action;
+    let hex = hex(colour);
+    list.iter()
+        .map(|a| {
+            let target = match a.action {
+                Action::Move(side) => Some(side.pages()),
+                Action::Sell | Action::Keep(_) | Action::GiveAway => None,
+            };
+            serde_json::json!({
+                "text": crate::info::advice_entry(a),
+                "colour": hex,
+                "name": a.name,
+                "count": a.count,
+                "place": a.spot.label(),
+                "target": target,
+                "wrong_place": target.is_some(),
+                "reason": a.reason,
+            })
+        })
+        .collect()
+}
+
+/// `equipped` lines as `{ "text", "colour" }` objects in the block's colour.
 fn text_lines(lines: &[String], colour: [u8; 4]) -> Vec<serde_json::Value> {
     let hex = hex(colour);
     lines
@@ -2823,6 +2852,7 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .lines .line { white-space: pre-wrap; font-size: 13px; }
 .lines .line.run { white-space: normal; overflow-wrap: anywhere; }
 .lines .line.run + .line.run { margin-top: 6px; }
+.lines .line.run .wrong { color: var(--bad); font-weight: 650; }
 
 /* Skills */
 .skbtns { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
@@ -3111,12 +3141,19 @@ function skillTrees(s) {
   $("skills").innerHTML = (buttons ? `<div class="skbtns">${buttons}</div>` : "") + `<div class="trees">${trees}</div>`;
 }
 // Sell / Move / Keep · own / Keep · trade / Give away: every entry (one per JSON line), each
-// group one comma-separated run that wraps to the panel width.
+// group one comma-separated run that wraps to the panel width. An item in the wrong place
+// shows its place in red: "Hunter's Bow 4os (page 4 → 1–2)".
+function adviceEntry(e) {
+  if (e.place == null) return esc(e.text);
+  const place = e.wrong_place ? `<span class="wrong">${esc(e.place)}</span>` : esc(e.place);
+  return esc(e.name) + (e.count > 1 ? ` ×${esc(e.count)}` : "") + ` (${place}`
+    + (e.target ? ` → ${esc(e.target)}` : "") + (e.reason ? `, ${esc(e.reason)}` : "") + ")";
+}
 function sell(r) {
   const run = (label, list) => list && list.length
-    ? `<div class="line run" style="color:${col(list[0].colour)}"><b>${label}:</b> ${list.map(e => esc(e.text)).join(", ")}</div>` : "";
+    ? `<div class="line run" style="color:${col(list[0].colour)}"><b>${label}:</b> ${list.map(adviceEntry).join(", ")}</div>` : "";
   $("sell").innerHTML = run("Sell", r.sell) + run("Move", r.move)
-    + run("Keep · own (pages 1–2)", r.keep_own) + run("Keep · trade (pages 3–5)", r.keep_trade)
+    + run("Keep · own (pages 1–2)", r.keep_own) + run("Keep · trade (pages 3–4)", r.keep_trade)
     + run("Give away", r.give)
     || '<div class="empty">nothing to sell or keep right now</div>';
 }
@@ -4113,15 +4150,35 @@ mod tests {
             })
     }
 
+    /// One item-plan entry, no reason.
+    fn advice(
+        name: &str,
+        spot: crate::stash_plan::Spot,
+        action: crate::stash_plan::Action,
+    ) -> crate::stash_plan::Advice {
+        crate::stash_plan::Advice {
+            name: name.to_owned(),
+            spot,
+            action,
+            reason: None,
+            count: 1,
+        }
+    }
+
     #[test]
     fn live_json_has_the_documented_shape() -> Result<()> {
+        use crate::stash_plan::{Action, Side, Spot};
         let blocks = crate::render::TextBlocks {
             guide: vec![crate::info::Band::plain("fcr (7 / 105)", crate::info::GUIDE_TEXT)],
-            sell: vec!["Gravenspine (inv)".to_owned()],
-            moves: vec!["Hunter's Bow 4os (page 4 → 1–2)".to_owned()],
-            keep_own: vec!["Spirit (page 1)".to_owned()],
-            keep_trade: vec!["Harlequin Crest (page 3)".to_owned()],
-            give: vec!["Magefist (stash)".to_owned()],
+            sell: vec![advice("Gravenspine", Spot::Inventory, Action::Sell)],
+            moves: vec![advice("Hunter's Bow 4os", Spot::Page(4), Action::Move(Side::Own))],
+            keep_own: vec![advice("Spirit", Spot::Page(1), Action::Keep(Side::Own))],
+            keep_trade: vec![advice(
+                "Harlequin Crest",
+                Spot::Page(3),
+                Action::Keep(Side::Trade),
+            )],
+            give: vec![advice("Magefist", Spot::Stash, Action::GiveAway)],
             bis: vec![crate::info::BisLine {
                 text: "helm: Harlequin Crest (82)".to_owned(),
                 tick: None,
@@ -5755,9 +5812,14 @@ mod tests {
 
     #[test]
     fn live_json_sends_every_sell_and_keep_entry() -> Result<()> {
+        use crate::stash_plan::{Action, Side, Spot};
         let blocks = crate::render::TextBlocks {
-            sell: (0..20).map(|i| format!("Item {i} (inv)")).collect(),
-            keep_trade: (0..7).map(|i| format!("Rune {i} (page 3)")).collect(),
+            sell: (0..20)
+                .map(|i| advice(&format!("Item {i}"), Spot::Inventory, Action::Sell))
+                .collect(),
+            keep_trade: (0..7)
+                .map(|i| advice(&format!("Rune {i}"), Spot::Page(3), Action::Keep(Side::Trade)))
+                .collect(),
             ..crate::render::TextBlocks::default()
         };
         let json: serde_json::Value =
@@ -5767,6 +5829,102 @@ mod tests {
         assert_eq!(sell.last().map(|(t, _)| t.as_str()), Some("Item 19 (inv)"));
         assert!(sell.iter().all(|(_, c)| c == "#afafaf"));
         assert_eq!(lines_of(&json, "keep_trade").len(), 7);
+        Ok(())
+    }
+
+    #[test]
+    fn live_json_sends_the_place_of_each_plan_entry_apart() -> Result<()> {
+        use crate::stash_plan::{Action, Side, Spot};
+        let mut ring = advice("Rare Ring", Spot::Page(4), Action::Sell);
+        ring.reason = Some("no build stats");
+        let mut shako = advice("Harlequin Crest", Spot::Cube, Action::Move(Side::Trade));
+        shako.count = 2;
+        let blocks = crate::render::TextBlocks {
+            sell: vec![ring],
+            moves: vec![
+                advice("Hunter's Bow 4os", Spot::Page(4), Action::Move(Side::Own)),
+                shako,
+            ],
+            keep_own: vec![advice("Spirit", Spot::Inventory, Action::Keep(Side::Own))],
+            ..crate::render::TextBlocks::default()
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&live_json(&live_info(5, &blocks, &[], &[], &[])))?;
+        let fields = |key: &str| -> Vec<serde_json::Value> {
+            json.get(key)
+                .and_then(|v| v.as_array())
+                .map_or_else(Vec::new, |lines| {
+                    lines
+                        .iter()
+                        .map(|l| {
+                            let pick = |k: &str| l.get(k).cloned().unwrap_or(serde_json::Value::Null);
+                            serde_json::json!([
+                                pick("text"),
+                                pick("name"),
+                                pick("count"),
+                                pick("place"),
+                                pick("target"),
+                                pick("wrong_place"),
+                                pick("reason"),
+                            ])
+                        })
+                        .collect()
+                })
+        };
+        assert_eq!(
+            fields("move"),
+            vec![
+                serde_json::json!([
+                    "Hunter's Bow 4os (page 4 → 1–2)",
+                    "Hunter's Bow 4os",
+                    1,
+                    "page 4",
+                    "1–2",
+                    true,
+                    null
+                ]),
+                serde_json::json!([
+                    "Harlequin Crest ×2 (cube → 3–4)",
+                    "Harlequin Crest",
+                    2,
+                    "cube",
+                    "3–4",
+                    true,
+                    null
+                ]),
+            ],
+            "a move is in the wrong place: its place goes red, the name doesn't"
+        );
+        assert_eq!(
+            fields("sell"),
+            vec![serde_json::json!([
+                "Rare Ring (page 4, no build stats)",
+                "Rare Ring",
+                1,
+                "page 4",
+                null,
+                false,
+                "no build stats"
+            ])]
+        );
+        assert_eq!(
+            fields("keep_own"),
+            vec![serde_json::json!([
+                "Spirit (inv)",
+                "Spirit",
+                1,
+                "inv",
+                null,
+                false,
+                null
+            ])],
+            "an own keeper on the character is where it may be"
+        );
+        // The page renders the place in its own span, red only when wrong.
+        let page = dashboard_page();
+        assert!(page.contains(r#"<span class="wrong">${esc(e.place)}</span>"#));
+        assert!(page.contains(".line.run .wrong { color: var(--bad);"));
+        assert!(page.contains("Keep · trade (pages 3–4)"));
         Ok(())
     }
 

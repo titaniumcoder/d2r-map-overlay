@@ -87,6 +87,28 @@ pub fn shown(index: &'static str) -> &'static str {
         .map_or(index, |&(_, name)| name)
 }
 
+/// The base item codes of the unique and set items named `name` (in-game or `index` spelling,
+/// [`same_name`]); empty for any other name. Several rows can share a name across tables.
+#[must_use]
+pub fn named_base_codes(name: &str) -> Vec<&'static str> {
+    let tables = [
+        (item_names_data::UNIQUE_NAMES, item_names_data::UNIQUE_CODES),
+        (item_names_data::SET_NAMES, item_names_data::SET_CODES),
+    ];
+    tables
+        .into_iter()
+        .flat_map(|(names, codes)| {
+            names
+                .iter()
+                .filter(|&&(_, index)| same_name(index, name) || same_name(shown(index), name))
+                .filter_map(move |&(row, _)| {
+                    let i = codes.binary_search_by_key(&row, |&(r, _)| r).ok()?;
+                    codes.get(i).map(|&(_, code)| code)
+                })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,13 +125,26 @@ mod tests {
 
     #[test]
     fn name_tables_are_sorted_by_row() {
-        for table in [item_names_data::UNIQUE_NAMES, item_names_data::SET_NAMES] {
+        for table in [
+            item_names_data::UNIQUE_NAMES,
+            item_names_data::SET_NAMES,
+            item_names_data::UNIQUE_CODES,
+            item_names_data::SET_CODES,
+        ] {
             assert!(
                 table.windows(2).all(|w| matches!(w, [a, b] if a.0 < b.0)),
                 "binary_search needs ascending, unique rows"
             );
             assert_ne!(table.len(), 0);
         }
+    }
+
+    #[test]
+    fn named_items_have_their_base_codes() {
+        // Ribcracker is a Quarterstaff (8ls), Sigon's Sabot (set) Greaves; a runeword has no row.
+        assert_eq!(named_base_codes("Ribcracker"), ["8ls"]);
+        assert_eq!(named_base_codes("Sigon's Sabot"), ["hbt"]);
+        assert_eq!(named_base_codes("Spirit"), Vec::<&str>::new());
     }
 
     #[test]

@@ -4486,11 +4486,12 @@ mod tests {
                 "Crystal Sword 3os (inv)",
                 "Crystal Sword 4os (inv)",
                 "Crystal Sword 4os (stash)",
-                "Harlequin Crest (inv → 3–5)",
-                "Harlequin Crest (stash → 3–5)",
-                "Magic Crystal Sword (cube)",
+                "Magic Crystal Sword (cube → 1–2)",
+                "Harlequin Crest (inv → 3–4)",
+                "Harlequin Crest (stash → 3–4)",
             ],
-            "the swords (B, A twink) are sold with no base need; the equipped and Alice's Shakos aren't Bob's"
+            "the swords (B, A twink) are sold with no base need; the equipped and Alice's Shakos \
+             aren't Bob's; the magic sword is kept, but not in the cube"
         );
         Ok(())
     }
@@ -4957,7 +4958,7 @@ mod tests {
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
         assert_eq!(
             item_plan(&s),
-            vec!["Sigon's Visor (stash → 3–5)", "Sigon's Visor (inv)"],
+            vec!["Sigon's Visor (stash → 3–4)", "Sigon's Visor (inv)"],
             "the stashed copy is the one kept; the inventory one is a give-away"
         );
         Ok(())

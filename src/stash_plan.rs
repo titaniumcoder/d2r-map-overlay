@@ -1,22 +1,25 @@
 //! Where each of the player's items belongs (user rule, 2026-11-20): shared-stash pages 1–2
-//! hold what the player keeps for their own builds, pages 3–5 what is kept for trading, and
-//! the rest is sold or given away. Playstyle logic (`PLAN.md`, plugin refactor step 5).
+//! hold what the player keeps for their own builds, pages 3–4 what is kept for trading, page 5
+//! is the player's own "ignore page" ([`IGNORED_PAGE`]), and the rest is sold or given away.
+//! Playstyle logic (`PLAN.md`, plugin refactor step 5).
 //!
 //! The items judged are the inventory, cube and personal stash ([`Snapshot::owned_items`]) and
-//! the shared stash's normal pages ([`Snapshot::stash`], session-cached); the gems / runes /
-//! materials tab is left alone. Each item gets one [`Action`]:
+//! the shared stash's normal pages 1–4 ([`Snapshot::stash`], session-cached); the gems / runes /
+//! materials tab and page 5 are left alone (page 5's items get no verdict, nothing is moved
+//! there, but they still count as held: a runeword there drops its base need). Each item gets
+//! one [`Action`]:
 //! - **Keep · own**: a piece of the active build or a later stage (`BiS` slots, extras,
 //!   `switch_requires`) or of the farm list, as many copies as needed beyond the worn ones;
 //!   and one white base per runeword need (the runeword's base type, exactly its socket count,
 //!   usable by the wearer: the player class or the Act 2 mercenary), the best one held
-//!   ([`base_rank`]: damage or defense first). Fine on pages 1–2 and on the character
-//!   (inventory, cube, personal stash).
+//!   ([`base_rank`]: damage or defense first). Fine on pages 1–2 and in the personal stash;
+//!   in the inventory or cube it is a Move to 1–2 (user rule, 2026-11-20).
 //! - **Keep · trade**: what the valuables rules rate S or A ([`valuables::keep_tiers`]): trade
 //!   goods, valuable uniques and sets, good bases; but a white base of a twink A rule only as a
 //!   base need (own), else it is sold ([`trade_worthy`]). A base that is trade-worthy goes to
-//!   trade, never own. Belongs on pages 3–5.
-//! - **Move**: a keeper on the wrong side: an own item on pages 3–5, a trade item anywhere but
-//!   pages 3–5.
+//!   trade, never own. Belongs on pages 3–4.
+//! - **Move**: a keeper in the wrong place: an own item on pages 3–4, in the inventory or in the
+//!   cube; a trade item anywhere but pages 3–4. The dashboard shows the place in red.
 //! - **Sell**: a white base nobody needs (another copy of an own-use base, a worse base for a
 //!   runeword whose better base is held, a plain base on a trade page) and a unique or set no rule wants ([`valuables::verdict`]).
 //! - **Give away**: a unique or set only a B rule wants, and the extra copies of a keep-one
@@ -29,16 +32,20 @@
 //! [`NOTABLE`] (skills, FCR, resistances …); a charm or jewel when it scores at all. The
 //! mercenary's gear has no stats in the snapshot, so a base it can wear (helm, body, polearm,
 //! spear) that fails the player's test is kept unscored. The rest is sold, with the reason.
+//! Two hard rules come first (user rules, 2026-11-20): a weapon whose type no build of the
+//! stage chain uses ([`build_weapon_types`]: axes, daggers, javelins, claws, orbs … for the
+//! druid) is sold as "not a build weapon", identified or not (the merc's polearms and spears
+//! excepted); identified boots without faster run/walk are sold as "no run speed".
 //! Gems, runes, charms in the inventory (they work there), finished runewords that aren't
 //! build pieces, quest items and anything else no rule speaks about get no action.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
-use crate::config::{Bis, Config};
+use crate::config::{Bis, Build, Config};
 use crate::game::{ItemDrop, Place, Snapshot};
 use crate::gear_score::{self, Piece, Profile};
-use crate::item_stats::ItemStat;
+use crate::item_stats::{ItemStat, stat};
 use crate::items::DropKind;
 use crate::names::same_name;
 use crate::offsets::item_data;
@@ -49,6 +56,11 @@ use crate::valuables::{self, Tier, Verdict};
 
 /// The last shared-stash page for the player's own items; the pages after it are for trade.
 const LAST_OWN_PAGE: u8 = 2;
+
+/// The shared-stash page the plan ignores (user rule, 2026-11-20: "things i keep around for
+/// stupidity"): its items get no verdict and nothing is moved there. They still count as held
+/// ([`Snapshot::holdings`]), so a runeword there still drops its base need.
+const IGNORED_PAGE: u8 = 5;
 
 /// Where an item is: on the character (inventory, Horadric Cube, personal stash) or on a
 /// shared-stash page (1-based, the game's UI order).
@@ -72,12 +84,12 @@ impl Spot {
         }
     }
 
-    /// The side a shared page is for; `None` on the character.
+    /// The side a shared page is for; `None` on the character and on the ignored page.
     const fn page_side(self) -> Option<Side> {
         match self {
             Self::Page(n) if n <= LAST_OWN_PAGE => Some(Side::Own),
-            Self::Page(_) => Some(Side::Trade),
-            Self::Inventory | Self::Cube | Self::Stash => None,
+            Self::Page(n) if n != IGNORED_PAGE => Some(Side::Trade),
+            Self::Page(_) | Self::Inventory | Self::Cube | Self::Stash => None,
         }
     }
 }
@@ -87,17 +99,17 @@ impl Spot {
 pub enum Side {
     /// The player's own builds: shared pages 1–2.
     Own,
-    /// Trading: shared pages 3–5.
+    /// Trading: shared pages 3–4.
     Trade,
 }
 
 impl Side {
-    /// The shared pages of the side, as shown: `1–2` / `3–5`.
+    /// The shared pages of the side, as shown: `1–2` / `3–4`.
     #[must_use]
     pub const fn pages(self) -> &'static str {
         match self {
             Self::Own => "1–2",
-            Self::Trade => "3–5",
+            Self::Trade => "3–4",
         }
     }
 }
@@ -191,27 +203,76 @@ fn label(item: &ItemDrop, name: String) -> String {
     format!("{quality} {name}")
 }
 
-/// What the magic / rare scoring needs: the build's [`Profile`] and the player's worn items
-/// `(body slot, code, stats)`.
+/// What the magic / rare scoring needs: the build's [`Profile`], the player's worn items
+/// `(body slot, code, stats)` and the weapon types the builds use ([`build_weapon_types`]).
 #[derive(Debug, Clone, Default)]
 pub struct Scoring {
     pub profile: Profile,
     pub worn: Vec<(u8, Option<String>, Vec<ItemStat>)>,
+    /// items.txt weapon types (`swor`, `staf`, …); empty = no builds known, every type judged.
+    pub weapon_types: Vec<&'static str>,
+}
+
+/// The items.txt types of the weapons `builds` use (user rule, 2026-11-20: "druids barely use
+/// javelins"): the weapon-slot bases of every piece in a weapon, swap or offhand slot and of
+/// the single-item `switch_requires` groups. A unique or set piece gives its own base's type; a
+/// runeword every weapon base that can carry it for the build's class (`class` when the build
+/// names none, [`socket_bases::carries`]). A `switch_requires` group with alternatives counts
+/// not at all: its runewords (Breath of the Dying, Hustle, Eternity …) allow almost any weapon,
+/// and its uniques (Rune Master, The Jade Tan Do, Tomb Reaver) are wanted by name, not their
+/// base type (user rule, 2026-11-20: "a rare axe or dagger is useless to this druid").
+/// Mercenary slots are left out: its weapons have their own rule ([`socket_bases::merc_wears`]).
+fn build_weapon_types<'a>(builds: impl Iterator<Item = &'a Build>, class: u32) -> Vec<&'static str> {
+    let mut types: Vec<&'static str> = Vec::new();
+    for build in builds {
+        let wearer = Wearer::Player(build.class.unwrap_or(class));
+        let held = build
+            .slots
+            .iter()
+            .filter(|(slot, _)| matches!(slot_body(slot), Some(4 | 5)))
+            .flat_map(|(_, pieces)| pieces);
+        let switch = build
+            .switch_requires
+            .iter()
+            .filter(|g| g.any.len() == 1)
+            .flat_map(|g| &g.any);
+        for entry in held.chain(switch) {
+            let name = piece_name(entry);
+            let carriers = |word| {
+                crate::bases_data::SOCKETABLE
+                    .iter()
+                    .map(|row| row.0)
+                    .filter(|code| socket_bases::carries(word, code, wearer, Some(4)))
+                    .collect()
+            };
+            let codes: Vec<&str> =
+                runewords_data::lookup(name).map_or_else(|| crate::names::named_base_codes(name), carriers);
+            for base in codes.into_iter().filter_map(crate::bases_data::base) {
+                if base.slot == 4 && !types.contains(&base.kind) {
+                    types.push(base.kind);
+                }
+            }
+        }
+    }
+    types.sort_unstable();
+    types
 }
 
 impl Scoring {
     /// The scoring for `snap`'s character: its class, its allocated skills plus the skill plans
     /// of every build in the stage `chain` (by name, [`Config::stage_chain`]), the worn
-    /// weapon's kind. Level, strength and dexterity are left out: keeping an item doesn't
+    /// weapon's kind, the chain's weapon types ([`build_weapon_types`]). Level, strength and dexterity are left out: keeping an item doesn't
     /// need it wearable today.
     #[must_use]
     pub fn new(snap: &Snapshot, config: &Config, chain: &[String]) -> Self {
         let class = snap.player.class;
         let mut skills: Vec<u16> = snap.skills.points.iter().map(|&(id, _)| id).collect();
-        let plans = chain
-            .iter()
-            .filter_map(|name| config.build_defs.get(&name.to_lowercase()))
-            .flat_map(|b| &b.skill_plan);
+        let builds = || {
+            chain
+                .iter()
+                .filter_map(|name| config.build_defs.get(&name.to_lowercase()))
+        };
+        let plans = builds().flat_map(|b| &b.skill_plan);
         for target in plans {
             let planned = crate::skills_data::SKILLS
                 .iter()
@@ -243,6 +304,7 @@ impl Scoring {
                 .iter()
                 .map(|e| (e.body, e.code.clone(), e.stats.clone()))
                 .collect(),
+            weapon_types: build_weapon_types(builds(), class),
         }
     }
 }
@@ -257,10 +319,29 @@ pub const NOTABLE: f64 = 20.0;
 /// The own-use verdict on a magic, rare or crafted item no trade rule wants: `Ok(())` keep,
 /// `Err(reason)` sell.
 fn judge(item: &ItemDrop, scoring: &Scoring) -> Result<(), &'static str> {
+    let code = item.code.as_deref();
+    let base = code.and_then(crate::bases_data::base);
+    let merc = code.is_some_and(socket_bases::merc_wears);
+    // A weapon of a type no build uses (user rule, 2026-11-20): sold, identified or not (no
+    // point identifying it). The mercenary's polearms and spears keep their rule below;
+    // javelins are a kind of spear in itemtypes.txt, but not one to keep for the merc.
+    if let Some(b) = base
+        && b.slot == 4
+        && !(merc && b.kind != "jave")
+        && !scoring.weapon_types.is_empty()
+        && !scoring.weapon_types.contains(&b.kind)
+    {
+        return Err("not a build weapon");
+    }
     // Unidentified, or stats unread (a real magic / rare item always has affix stats): it
     // can't be judged yet.
     if item.flags & item_data::FLAG_IDENTIFIED == 0 || item.stats.is_empty() {
         return Ok(());
+    }
+    // Boots without faster run/walk (user rule, 2026-11-20: "a must on the boots"), whatever
+    // else they roll.
+    if base.is_some_and(|b| b.slot == 9) && !item.stats.iter().any(|s| s.id == stat::FRW && s.value > 0) {
+        return Err("no run speed");
     }
     let who = &scoring.profile;
     let piece = Piece {
@@ -285,7 +366,6 @@ fn judge(item: &ItemDrop, scoring: &Scoring) -> Result<(), &'static str> {
             )
         })
         .collect();
-    let merc = item.code.as_deref().is_some_and(socket_bases::merc_wears);
     match gear_score::replaced_score(piece, &worn, who) {
         Some(old) if (total > 0.0 && total >= NEAR_WORN * old) || affixes >= NOTABLE => Ok(()),
         _ if merc => Ok(()),
@@ -526,26 +606,33 @@ fn left_alone(h: &Held) -> bool {
     }
 }
 
-/// Keep for `side` where the item is, or move it there.
+/// Keep for `side` where the item is, or move it there. Own items belong on pages 1–2 or in
+/// the personal stash; one in the inventory or cube is in the wrong place too (user rule,
+/// 2026-11-20: "if something is at the wrong place (inv, stash)": move it to 1–2).
 const fn keep_or_move(side: Side, spot: Spot) -> Action {
-    match (spot.page_side(), side) {
-        (Some(Side::Own) | None, Side::Own) | (Some(Side::Trade), Side::Trade) => Action::Keep(side),
+    match (spot, spot.page_side(), side) {
+        (Spot::Stash, _, Side::Own)
+        | (_, Some(Side::Own), Side::Own)
+        | (_, Some(Side::Trade), Side::Trade) => Action::Keep(side),
         _ => Action::Move(side),
     }
 }
 
 /// The indices of `items`, best place for `side` first (then in input order): for own items
-/// pages 1–2, then the character, then the trade pages; for trade items the trade pages, then
-/// pages 1–2, the personal stash, the cube and the inventory.
+/// pages 1–2, then the personal stash, the inventory and cube, the trade pages; for trade items
+/// the trade pages, then pages 1–2, the personal stash, the cube and the inventory. Items on
+/// the ignored page ([`IGNORED_PAGE`]) are left out: nothing about them is decided.
 fn by_preference(items: &[Held], side: Side) -> Vec<usize> {
     let rank = |spot: Spot| match (side, spot.page_side(), spot) {
         (Side::Own, Some(Side::Own), _) | (Side::Trade, Some(Side::Trade), _) => 0,
-        (Side::Own, None, _) | (Side::Trade, Some(Side::Own), _) => 1,
-        (Side::Own, Some(Side::Trade), _) | (Side::Trade, None, Spot::Stash) => 2,
-        (Side::Trade, None, Spot::Cube) => 3,
+        (Side::Own, None, Spot::Stash) | (Side::Trade, Some(Side::Own), _) => 1,
+        (Side::Own, None, _) | (Side::Trade, None, Spot::Stash) => 2,
+        (Side::Own, Some(Side::Trade), _) | (Side::Trade, None, Spot::Cube) => 3,
         (Side::Trade, None, _) => 4,
     };
-    let mut order: Vec<usize> = (0..items.len()).collect();
+    let mut order: Vec<usize> = (0..items.len())
+        .filter(|&i| items.get(i).is_some_and(|h| h.spot != Spot::Page(IGNORED_PAGE)))
+        .collect();
     order.sort_by_key(|&i| (items.get(i).map_or(u8::MAX, |h| rank(h.spot)), i));
     order
 }
@@ -914,20 +1001,20 @@ mod tests {
             rows(&armors, &fortitude),
             vec![
                 row("Full Plate Mail 4os", Spot::Page(2), Action::Sell, 1),
-                row("Ancient Armor 4os", Spot::Inventory, Action::Keep(Side::Own), 1),
+                row("Ancient Armor 4os", Spot::Inventory, Action::Move(Side::Own), 1),
             ]
         );
         // The same base: superior beats plain.
         let mut superior = base("ful", 4);
         superior.quality = item_data::QUALITY_SUPERIOR;
-        let plates = [at(base("ful", 4), Spot::Page(1)), at(superior, Spot::Page(5))];
+        let plates = [at(base("ful", 4), Spot::Page(1)), at(superior, Spot::Page(4))];
         let plates_plan = plan(&plates, &fortitude, &druid());
         let actions: Vec<_> = plates_plan.iter().map(|a| (a.spot, a.action)).collect();
         assert_eq!(
             actions,
             vec![
                 (Spot::Page(1), Action::Sell),
-                (Spot::Page(5), Action::Move(Side::Own)),
+                (Spot::Page(4), Action::Move(Side::Own)),
             ]
         );
         // Ethereal counts +50%: an eth Full Plate Mail (161 × 1.5 = 241) beats Ancient Armor (233).
@@ -949,20 +1036,20 @@ mod tests {
     fn a_junk_base_on_a_trade_page_is_sold() {
         let items = [
             at(base("crs", 2), Spot::Page(4)),
-            at(base("hbw", 0), Spot::Page(5)),
-            at(base("hbw", 0), Spot::Page(5)),
+            at(base("hbw", 0), Spot::Page(3)),
+            at(base("hbw", 0), Spot::Page(3)),
         ];
         assert_eq!(
             rows(&items, &harmony_needs()),
             vec![
                 row("Crystal Sword 2os", Spot::Page(4), Action::Sell, 1),
-                row("Hunter's Bow", Spot::Page(5), Action::Sell, 2),
+                row("Hunter's Bow", Spot::Page(3), Action::Sell, 2),
             ]
         );
     }
 
     #[test]
-    fn a_build_piece_in_the_inventory_is_kept_for_own_use() {
+    fn a_build_piece_in_the_inventory_moves_to_the_own_pages() {
         // Gravenspine: no valuables rule (sold when nobody needs it).
         let grave = || named("hax", 7, 12);
         let mut needs = Needs::default();
@@ -971,9 +1058,19 @@ mod tests {
             vec![row("Gravenspine", Spot::Inventory, Action::Sell, 1)]
         );
         needs.piece("Gravenspine@31", 1);
+        // Kept, but the inventory (or cube) is the wrong place: moved to 1–2. The personal
+        // stash is as good as pages 1–2.
         assert_eq!(
             rows(&[at(grave(), Spot::Inventory)], &needs),
-            vec![row("Gravenspine", Spot::Inventory, Action::Keep(Side::Own), 1)]
+            vec![row("Gravenspine", Spot::Inventory, Action::Move(Side::Own), 1)]
+        );
+        assert_eq!(
+            rows(&[at(grave(), Spot::Cube)], &needs),
+            vec![row("Gravenspine", Spot::Cube, Action::Move(Side::Own), 1)]
+        );
+        assert_eq!(
+            rows(&[at(grave(), Spot::Stash)], &needs),
+            vec![row("Gravenspine", Spot::Stash, Action::Keep(Side::Own), 1)]
         );
         // One copy wanted: the one on page 2 is it; the inventory and page-4 copies are spare.
         let items = [
@@ -991,8 +1088,8 @@ mod tests {
         );
         // Only on a trade page: moved to 1–2.
         assert_eq!(
-            rows(&[at(grave(), Spot::Page(5))], &needs),
-            vec![row("Gravenspine", Spot::Page(5), Action::Move(Side::Own), 1)]
+            rows(&[at(grave(), Spot::Page(3))], &needs),
+            vec![row("Gravenspine", Spot::Page(3), Action::Move(Side::Own), 1)]
         );
     }
 
@@ -1018,14 +1115,14 @@ mod tests {
         );
     }
 
-    /// A druid with nothing worn.
+    /// A druid with nothing worn and no builds (every weapon type judged).
     fn druid() -> Scoring {
         Scoring {
             profile: Profile {
                 class: 5,
                 ..Profile::default()
             },
-            worn: Vec::new(),
+            ..Scoring::default()
         }
     }
 
@@ -1054,7 +1151,6 @@ mod tests {
             .collect()
     }
 
-    use crate::item_stats::stat;
     use item_data::{QUALITY_MAGIC, QUALITY_RARE};
 
     /// Light radius: a stat no build weighs.
@@ -1114,7 +1210,7 @@ mod tests {
             vec![(
                 "Rare Ring".to_owned(),
                 Spot::Inventory,
-                Action::Keep(Side::Own),
+                Action::Move(Side::Own),
                 None
             )]
         );
@@ -1132,8 +1228,16 @@ mod tests {
             }]
         };
         scoring.worn = vec![(9, Some("lbt".to_owned()), boots(30))];
-        let weak = rolled("lbt", QUALITY_MAGIC, &[(stat::RES_FIRE, 0, 10)]);
-        let near = rolled("lbt", QUALITY_MAGIC, &[(stat::RES_FIRE, 0, 25)]);
+        let weak = rolled(
+            "lbt",
+            QUALITY_MAGIC,
+            &[(stat::FRW, 0, 10), (stat::RES_FIRE, 0, 10)],
+        );
+        let near = rolled(
+            "lbt",
+            QUALITY_MAGIC,
+            &[(stat::FRW, 0, 10), (stat::RES_FIRE, 0, 25)],
+        );
         assert_eq!(
             judged(&[at(weak, Spot::Page(1)), at(near, Spot::Page(2))], &scoring),
             vec![
@@ -1155,14 +1259,14 @@ mod tests {
     }
 
     #[test]
-    fn a_magic_item_with_build_stats_in_the_inventory_is_kept() {
+    fn a_magic_item_with_build_stats_in_the_inventory_is_kept_on_the_own_pages() {
         let amulet = rolled("amu", QUALITY_MAGIC, &[(stat::RES_FIRE, 0, 15)]);
         assert_eq!(
             judged(&[at(amulet, Spot::Inventory)], &druid()),
             vec![(
                 "Magic Amulet".to_owned(),
                 Spot::Inventory,
-                Action::Keep(Side::Own),
+                Action::Move(Side::Own),
                 None
             )],
             "nothing worn: any score beats an empty slot"
@@ -1174,10 +1278,10 @@ mod tests {
         let mut ring = rolled("rin", QUALITY_RARE, &[(LIGHT_RADIUS, 0, 2)]);
         ring.flags = 0;
         assert_eq!(
-            judged(&[at(ring, Spot::Page(5))], &druid()),
+            judged(&[at(ring, Spot::Page(4))], &druid()),
             vec![(
                 "Rare Ring".to_owned(),
-                Spot::Page(5),
+                Spot::Page(4),
                 Action::Move(Side::Own),
                 None
             )]
@@ -1467,6 +1571,173 @@ mod tests {
                 row("Crystal Sword 3os", Spot::Page(1), Action::Keep(Side::Own), 1),
                 row("Large Axe 3os", Spot::Page(2), Action::Keep(Side::Own), 1),
             ]
+        );
+    }
+
+    #[test]
+    fn page_5_is_ignored() {
+        // A junk base there gets no entry; a trade item on page 1 moves to 3–4, not 5.
+        let mut voulge = base("7vo", 4);
+        voulge.ethereal = true;
+        let items = [
+            at(base("crs", 2), Spot::Page(5)),
+            at(named("uap", 7, 248), Spot::Page(5)),
+            at(voulge, Spot::Page(1)),
+        ];
+        let advice = plan(&items, &Needs::default(), &druid());
+        assert_eq!(
+            advice
+                .iter()
+                .map(|a| (a.name.as_str(), a.spot, a.action))
+                .collect::<Vec<_>>(),
+            vec![(
+                "eth Colossus Voulge 4os",
+                Spot::Page(1),
+                Action::Move(Side::Trade)
+            )]
+        );
+        assert_eq!(Side::Trade.pages(), "3–4");
+        // A needed build piece only on page 5 is neither kept nor moved from there.
+        let mut needs = Needs::default();
+        needs.piece("Gravenspine@31", 1);
+        assert_eq!(rows(&[at(named("hax", 7, 12), Spot::Page(5))], &needs), vec![]);
+    }
+
+    #[test]
+    fn a_runeword_on_page_5_still_satisfies_its_base_need() {
+        use crate::config::{FarmGroup, FarmItem, FarmSlot};
+        use crate::stash::StashItem;
+        let config = Config {
+            farm: vec![FarmGroup {
+                target: "Fury".to_owned(),
+                items: vec![FarmItem {
+                    name: "Harmony".to_owned(),
+                    kind: crate::names::ItemKind::Runeword,
+                    count: 1,
+                    merc: false,
+                    slot: Some(FarmSlot::Weapon),
+                }],
+            }],
+            ..Config::default()
+        };
+        // Harmony in a Hunter's Bow on page 5: counted by the holdings like any stash item.
+        let stash = [StashTab {
+            kind: TabKind::Page(5),
+            items: vec![StashItem {
+                name: "Harmony".to_owned(),
+                code: Some("hbw".to_owned()),
+                quality: 2,
+                identified: true,
+                ethereal: false,
+                runeword: true,
+                quantity: None,
+                sockets: 4,
+                unique_index: None,
+                stats: Vec::new(),
+            }],
+        }];
+        let holdings = crate::stash::Holdings {
+            stash: &stash,
+            owned: &[],
+            runeword_copies: &[],
+            merc_worn: &[],
+        };
+        let needs = Needs::from_config(&config, &[], None, 5, &[], &|n| holdings.count(n));
+        assert_eq!(needs.bases.len(), 0, "Harmony on page 5 is held: no base wanted");
+        assert_eq!(
+            rows(&[at(base("hbw", 4), Spot::Page(1))], &needs),
+            vec![row("Hunter's Bow 4os", Spot::Page(1), Action::Sell, 1)]
+        );
+    }
+
+    /// The druid scored with the weapon types of a summoner whose weapon is Spirit (swords).
+    fn summoner() -> Scoring {
+        let build = Build {
+            class: Some(5),
+            slots: BTreeMap::from([("weapon".to_owned(), vec!["Spirit@25".to_owned()])]),
+            ..Build::default()
+        };
+        Scoring {
+            weapon_types: build_weapon_types([&build].into_iter(), 5),
+            ..druid()
+        }
+    }
+
+    #[test]
+    fn a_weapon_of_a_type_no_build_uses_is_sold() {
+        let scoring = summoner();
+        assert_eq!(scoring.weapon_types, ["swor"], "Spirit: swords (4 sockets) only");
+        let javelin = rolled("jav", QUALITY_RARE, &[(stat::CLASS_SKILLS, 5, 2)]);
+        let mut unid = javelin.clone();
+        unid.flags = 0;
+        let sword = rolled("crs", QUALITY_RARE, &[(stat::CLASS_SKILLS, 5, 2)]);
+        let junk_sword = rolled("crs", QUALITY_RARE, &[(LIGHT_RADIUS, 0, 2)]);
+        let spear = rolled("spr", QUALITY_RARE, &[(LIGHT_RADIUS, 0, 2)]);
+        let reasons: Vec<_> = [javelin, unid, sword, junk_sword, spear]
+            .iter()
+            .map(|item| judge(item, &scoring))
+            .collect();
+        assert_eq!(
+            reasons,
+            vec![
+                Err("not a build weapon"),
+                Err("not a build weapon"),
+                Ok(()),
+                Err("no build stats"),
+                Ok(()),
+            ],
+            "javelins sold even with druid skills or unidentified; swords judged normally; \
+             the merc's spear keeps its rule"
+        );
+        // An alternatives group counts not at all, neither its uniques (Tomb Reaver: a
+        // polearm) nor a runeword open to any weapon (Breath of the Dying); a single required
+        // runeword (Harmony: bows, crossbows) counts in full.
+        let fury = Build {
+            class: Some(5),
+            switch_requires: vec![
+                crate::config::SwitchGroup {
+                    label: "Powerful weapon".to_owned(),
+                    any: vec!["Tomb Reaver".to_owned(), "Breath of the Dying".to_owned()],
+                    count: 1,
+                },
+                crate::config::SwitchGroup {
+                    label: "Harmony".to_owned(),
+                    any: vec!["Harmony".to_owned()],
+                    count: 1,
+                },
+            ],
+            ..Build::default()
+        };
+        assert_eq!(build_weapon_types([&fury].into_iter(), 5), ["bow", "xbow"]);
+        // No builds known: every weapon type is judged.
+        let javelin = rolled("jav", QUALITY_RARE, &[(stat::CLASS_SKILLS, 5, 2)]);
+        assert_eq!(judge(&javelin, &druid()), Ok(()));
+    }
+
+    #[test]
+    fn boots_without_run_speed_are_sold() {
+        let res = rolled("lbt", QUALITY_RARE, &[(stat::RES_COLD, 0, 24)]);
+        let fast = rolled(
+            "lbt",
+            QUALITY_RARE,
+            &[(stat::FRW, 0, 20), (stat::RES_COLD, 0, 24)],
+        );
+        let mut unid = res.clone();
+        unid.flags = 0;
+        assert_eq!(
+            [res, fast, unid]
+                .iter()
+                .map(|b| judge(b, &druid()))
+                .collect::<Vec<_>>(),
+            vec![Err("no run speed"), Ok(()), Ok(())],
+            "24 cold res without FRW is sold; 20 FRW + res judged normally; unidentified kept"
+        );
+        // Named boots (Sigon's Sabot) are build pieces or valuables, never judged.
+        let mut needs = Needs::default();
+        needs.piece("Sigon's Sabot@6", 1);
+        assert_eq!(
+            rows(&[at(named("hbt", 5, 38), Spot::Page(1))], &needs),
+            vec![row("Sigon's Sabot", Spot::Page(1), Action::Keep(Side::Own), 1)]
         );
     }
 }

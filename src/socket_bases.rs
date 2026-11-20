@@ -216,6 +216,15 @@ pub fn fits(word: &Runeword, code: &str, wearer: Wearer, slot: Option<u8>) -> bo
     category && wearable(wearer, ty, base.slot, base.class) && slot.is_none_or(|s| s == base.slot)
 }
 
+/// Whether base `code` can carry runeword `word` at all: it [`fits`] and can have the
+/// runeword's socket count (its `gemsockets` within the type cap at the highest item level).
+#[must_use]
+pub fn carries(word: &Runeword, code: &str, wearer: Wearer, slot: Option<u8>) -> bool {
+    socketable_row(code).is_some_and(|&(_, _, ty, max, _, _)| {
+        usize::from(max.min(type_cap(ty, u32::MAX))) >= word.runes.len()
+    }) && fits(word, code, wearer, slot)
+}
+
 /// A base's requirement text: `"25/35"` (str/dex), `"43 Str"`, `"28 Dex"` or `"no req"`.
 fn requirement(p: &Pick) -> String {
     match (p.str, p.dex) {

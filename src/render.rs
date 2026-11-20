@@ -13,7 +13,7 @@ use crate::game::{Bounds, Monster, Preset, PresetKind, Room, RoomRect, Snapshot}
 use crate::guidance::{Guidance, Marks};
 use crate::items::{CharmSize, DropKind, GemColour};
 use crate::offsets::monster_data;
-use crate::stash_plan::{Action, Side};
+use crate::stash_plan::{Action, Advice, Side};
 use crate::valuables::Tier;
 use crate::{info, session, tombs, xp};
 
@@ -1140,28 +1140,29 @@ pub fn map_height(height: u32, font: Option<&FontVec>) -> u32 {
 #[derive(Debug, Default)]
 pub struct TextBlocks {
     pub guide: Vec<info::Band>,
-    /// The item plan's groups ([`crate::stash_plan`]): every entry, one string each, no prefix
-    /// (the dashboard's Sell / Keep panel wraps each group as a comma-separated run).
-    pub sell: Vec<String>,
+    /// The item plan's groups ([`crate::stash_plan`]): every entry, structured (the dashboard
+    /// sends the text, [`info::advice_entry`], and the place parts separately, and its Sell /
+    /// Keep panel wraps each group as a comma-separated run).
+    pub sell: Vec<Advice>,
     /// Keepers on the wrong place, with their target pages.
-    pub moves: Vec<String>,
+    pub moves: Vec<Advice>,
     /// Kept for the player's own builds (pages 1–2 or on the character).
-    pub keep_own: Vec<String>,
-    /// Kept for trading (pages 3–5).
-    pub keep_trade: Vec<String>,
-    pub give: Vec<String>,
+    pub keep_own: Vec<Advice>,
+    /// Kept for trading (pages 3–4).
+    pub keep_trade: Vec<Advice>,
+    pub give: Vec<Advice>,
     /// The `BiS` chase lines with their structural tick ([`info::BisLine::tick`]): the
     /// dashboard marks ✓(stash) from the tick.
     pub bis: Vec<info::BisLine>,
 }
 
-/// The item plan's entries whose action `wanted` picks, as text ([`info::advice_entry`]).
-fn entries(guidance: &Guidance, wanted: impl Fn(Action) -> bool) -> Vec<String> {
+/// The item plan's entries whose action `wanted` picks.
+fn entries(guidance: &Guidance, wanted: impl Fn(Action) -> bool) -> Vec<Advice> {
     guidance
         .items
         .iter()
         .filter(|a| wanted(a.action))
-        .map(info::advice_entry)
+        .cloned()
         .collect()
 }
 
@@ -1179,7 +1180,7 @@ pub fn text_blocks(snap: &Snapshot, guidance: &Guidance, width: u32, font: Optio
                 .into_iter()
                 .map(|band| info::fit_band(band, f, max_width))
                 .collect(),
-        // Every entry, one string each: the dashboard lays them out as one wrapping run.
+        // Every entry: the dashboard lays them out as one wrapping run.
         sell: entries(guidance, |a| a == Action::Sell),
         moves: entries(guidance, |a| matches!(a, Action::Move(_))),
         keep_own: entries(guidance, |a| a == Action::Keep(Side::Own)),
@@ -3045,18 +3046,19 @@ mod tests {
                 advice("Hunter's Bow 4os", Spot::Page(4), Action::Move(Side::Own)),
                 advice("Spirit", Spot::Page(1), Action::Keep(Side::Own)),
                 advice("Harlequin Crest", Spot::Page(3), Action::Keep(Side::Trade)),
-                advice("Magefist", Spot::Page(5), Action::GiveAway),
+                advice("Magefist", Spot::Stash, Action::GiveAway),
             ],
             ..Guidance::default()
         };
         let blocks = text_blocks(&snap, &guidance, 400, Some(font));
         // The dashboard's JSON is built from these blocks (crate::web::live_json); the overlay
         // draws only the map and info line, so the lists are asserted here, not in a rendered frame.
-        assert_eq!(blocks.sell, vec!["Gravenspine (inv)"]);
-        assert_eq!(blocks.moves, vec!["Hunter's Bow 4os (page 4 → 1–2)"]);
-        assert_eq!(blocks.keep_own, vec!["Spirit (page 1)"]);
-        assert_eq!(blocks.keep_trade, vec!["Harlequin Crest (page 3)"]);
-        assert_eq!(blocks.give, vec!["Magefist (page 5)"]);
+        let text = |list: &[Advice]| list.iter().map(info::advice_entry).collect::<Vec<_>>();
+        assert_eq!(text(&blocks.sell), vec!["Gravenspine (inv)"]);
+        assert_eq!(text(&blocks.moves), vec!["Hunter's Bow 4os (page 4 → 1–2)"]);
+        assert_eq!(text(&blocks.keep_own), vec!["Spirit (page 1)"]);
+        assert_eq!(text(&blocks.keep_trade), vec!["Harlequin Crest (page 3)"]);
+        assert_eq!(text(&blocks.give), vec!["Magefist (stash)"]);
         let Some(bis) = blocks.bis.first() else {
             anyhow::bail!("no helm chase line: {:?}", blocks.bis);
         };
@@ -3102,7 +3104,7 @@ mod tests {
                 advice("Hunter's Bow 4os", Spot::Page(4), Action::Move(Side::Own)),
                 advice("Spirit", Spot::Page(1), Action::Keep(Side::Own)),
                 advice("Harlequin Crest", Spot::Page(3), Action::Keep(Side::Trade)),
-                advice("Magefist", Spot::Page(5), Action::GiveAway),
+                advice("Magefist", Spot::Stash, Action::GiveAway),
             ],
             ..Guidance::default()
         };
