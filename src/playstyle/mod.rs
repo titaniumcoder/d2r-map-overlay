@@ -13,6 +13,8 @@
 //! - [`stash_plan`]: sell / move / keep of the player's items, with [`gear_score`] for magic and
 //!   rare items;
 //! - [`build`]: the area rating of the info line from the build's damage types;
+//! - [`route`]: the leveling and farming route (`route.toml`) and its current step, from the
+//!   character's quests per difficulty (remembered by the core: [`crate::quest_log`]);
 //! - [`web`]: the dashboard's playstyle panels (gear grid, upgrades, recipes, tips, stage, farm
 //!   list, sell / keep entries, the vendor notes and the skill plan for the core panels) and the
 //!   `/config` page's JSON and build selection.
@@ -23,6 +25,7 @@ mod config_driven;
 pub mod files;
 pub mod gear_score;
 pub mod guidance;
+pub mod route;
 pub mod stash_plan;
 pub mod valuables;
 pub mod web;
@@ -34,6 +37,7 @@ pub use files::Files;
 use crate::config::Stage;
 use crate::game::{ItemDrop, Snapshot};
 use crate::played::Played;
+use crate::quest_log::QuestsDone;
 use crate::web::{GearInfo, LiveInfo, Panels};
 use guidance::{Guidance, Marks};
 
@@ -50,6 +54,9 @@ pub struct Evaluation<'a> {
     pub stage: Option<Stage<'a>>,
     /// The names of the current stage and its later ones, for the dashboard's farm panel.
     pub chain: Vec<String>,
+    /// The route's current step, for the dashboard's "Next" panel (`None` without a route,
+    /// or with the character level, difficulty or quests unknown).
+    pub route: Option<route::Advice>,
 }
 
 /// What the core needs from a playstyle.
@@ -70,8 +77,11 @@ pub trait Playstyle {
 
     /// The guidance for `snap` (after the session merge: cached stash pages are in).
     /// `reached` is the state stored for the character ([`Evaluation::reached`] of an earlier
-    /// call), `None` when there is none.
-    fn evaluate(&self, snap: &Snapshot, reached: Option<&str>) -> Evaluation<'_>;
+    /// call), `None` when there is none; `quests` the quests it finished per difficulty
+    /// (remembered across games, [`crate::quest_log::Memory`]), `None` while unknown (no
+    /// record read yet): then no route advice.
+    fn evaluate(&self, snap: &Snapshot, reached: Option<&str>, quests: Option<&QuestsDone>)
+    -> Evaluation<'_>;
 
     /// The playstyle's part of one tick's dashboard ([`crate::web::live_json`]) for the
     /// evaluation of the snapshot `info` was gathered from.

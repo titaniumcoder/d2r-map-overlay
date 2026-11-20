@@ -12,7 +12,8 @@
 //! `BiS` grid, [`gear::gear_json`]), `gear_attention` (bool) and `gear_attention_why` (text or
 //! `null`, [`gear::gear_attention`]), `upgrades` ([`gear::upgrades_json`]), `stage`
 //! ([`stage_json`]), `recipes` ([`recipes::recipes_json`]) and `farm` (the cross-character farm
-//! list, [`farm::farm_json`], `null` without one).
+//! list, [`farm::farm_json`], `null` without one) and `next` (the route's current step,
+//! [`crate::playstyle::route::Advice::json`], `null` without one).
 
 pub mod config_page;
 pub mod farm;
@@ -46,6 +47,8 @@ pub struct PanelInfo<'a> {
     /// ([`crate::playstyle::config::Settings::stage_chain`]): a farm entry for one of them that the
     /// character wears enough copies of is hidden ([`farm::farm_worn`]).
     pub stage_chain: &'a [String],
+    /// The route's current step ([`crate::playstyle::route::current`]): the `next` section.
+    pub next: Option<&'a crate::playstyle::route::Advice>,
 }
 
 /// The playstyle's part of one tick's dashboard (see the module docs for its sections).
@@ -68,6 +71,7 @@ pub fn panels<'a>(info: &PanelInfo<'a>) -> Panels<'a> {
         "gear_attention_why": attention,
         "upgrades": upgrades,
         "farm": farm::farm_json(info),
+        "next": info.next.map(crate::playstyle::route::Advice::json),
     });
     let serde_json::Value::Object(sections) = sections else {
         // `json!` with braces always builds an object.

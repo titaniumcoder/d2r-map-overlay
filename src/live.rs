@@ -20,7 +20,7 @@ use crate::reader::{Attach, GameReader};
 use crate::session::Session;
 use ab_glyph::FontVec;
 
-use crate::{config, cows, game_file, info, journal, played, render, web};
+use crate::{config, cows, game_file, info, journal, played, quest_log, render, web};
 
 /// Snapshot interval (~5 Hz).
 const TICK: Duration = Duration::from_millis(200);
@@ -251,6 +251,8 @@ fn follow_game(
             .save_dir()
             .map_or_else(played::Played::new, |dir| played::seed_from_saves(&dir))
     });
+    // Each difficulty's finished quests per character: the game shows only the current one's.
+    let mut quest_memory = quest_log::Memory::open(quest_log::default_path());
     let mut dedup = Dedup::default();
     loop {
         let start = Instant::now();
@@ -276,8 +278,12 @@ fn follow_game(
                 );
                 let update = session.apply(&mut snap);
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
+                // Before the evaluation: the route reads the quests done.
+                let quests = reader.quest_flags(update.new_game);
+                let quests_done = quest_memory.observe(&snap.player.name, snap.difficulty, quests);
                 // After `session.apply`: the item plan counts the cached stash pages.
-                let mut evaluation = playstyle.evaluate(&snap, last_played.reached(&snap.player.name));
+                let mut evaluation =
+                    playstyle.evaluate(&snap, last_played.reached(&snap.player.name), quests_done);
                 if let Some(slug) = evaluation.reached {
                     last_played.reach(&snap.player.name, slug);
                 }
@@ -310,7 +316,6 @@ fn follow_game(
                     equipped: snap.equipped.clone(),
                     merc_equipped: snap.merc_equipped.clone(),
                 });
-                let quests = reader.quest_flags(update.new_game);
                 publish_dashboard(&snap, &*playstyle, &evaluation, &blocks, quests);
                 if let Some((tabs, items)) = update.stash_captured {
                     eprintln!("shared stash captured: {tabs} tabs, {items} items");

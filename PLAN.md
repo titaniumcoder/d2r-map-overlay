@@ -857,7 +857,40 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   Stealth (Tal Eth), Bloodfist, …; Mephisto → …". Every boss worth it is listed; picking which
   to run is the route's job (step 9: Mephisto / Andariel in NM until 57, Andariel "items only"
   from 55, then Diablo, the Ancients, Shenk / Eldritch). Page snapshot numbers updated.
-- [ ] 9. The route engine and a "Next" panel on the dashboard.
+- [x] 9. The route engine and a "Next" panel on the dashboard. **Data**:
+  `playstyles/summoner-fury/route.toml` (user override `~/.config/d2r-map-overlay/playstyle/route.toml`
+  wins whole; no old place; hot-reloaded, a broken file keeps the current route). Format (the
+  file's header documents it too): `[options]` (named bool switches), `[quest_sets]` (set name →
+  quest names as in `quests::QUESTS`: canyon, mephisto, ancients, valuable) and `[[step]]` in
+  order, each with `id`, `title`, `when` and optional `done_when` conditions (`difficulty`
+  normal / nightmare / hell, `level_min`, `level_below`, `quests_done` = set name or list,
+  `options` = `["x", "!y"]`, `not_worth` = none of the step's worth bosses is worth farming), an
+  action (any mix of `farm` = areas, `quests` = set or list (missing ones listed), `rush` =
+  target, `[[step.boss]]` `name` / `worth` (default true: shown while worth farming, with the
+  items) / `late_from` + `late_note`, `max_areas = true`) and a `note`. The **current step** is
+  the first whose `when` holds and whose `done_when` doesn't; with none left in the difficulty,
+  "<difficulty> done: on to <next>". The "then" line is the next later step not outleveled, its
+  options on and (same difficulty only) not done. 16 steps: the user's 15, with item 15 split in
+  `hell-max-areas` (from 75) and `hell-basic` (below 75: Mephisto / Andariel while worth, Baal
+  waves, Shenk / Eldritch). Parse warnings: unknown quests, sets, options, bosses without drop
+  data, duplicate ids. **Engine**: `src/playstyle/route.rs`, pure `current(route, Facts{level,
+  difficulty, quests per difficulty, worth, max areas}) → Advice{id, title, todo, note, then}`;
+  `worth_for` is the route's single call of `worth::worth` (bosses named in the route, current
+  difficulty; the pending rune-count refinement changes `worth` only); `max_areas(damages)` =
+  Hell areas of monster level 85 rated Good by `build::rate` (no type immune to the primary
+  damage; no damages: physical). Terror zones: not readable beyond the current area's state,
+  said in the step's note. **Quest memory** (core, `src/quest_log.rs`): `quests.json` in the
+  data dir, per character `{name, normal, nightmare, hell}` (quest names done = reward ready or
+  taken, `quests::done`); every tick's record is merged in for the current difficulty, only
+  adding (temp file + rename, only when something new). A name and difficulty count only after
+  3 consecutive equal observations (no half-read names, no one-tick mismatch at a difficulty
+  change); until a record with words was read for the character in this difficulty the quests
+  are unknown (`observe` → `None`, no Next panel). A `quests.json` that doesn't parse is moved
+  to `quests.json.bad` (logged) before a fresh one is written; an unreadable one is never
+  written. The live loop reads the quest record
+  before `evaluate`, which now takes `Option<&QuestsDone>`; `Evaluation::route` → `PanelInfo::next` →
+  the live JSON's `next` section. **Dashboard**: a compact "Next" panel at the top (title, todo
+  lines, note, "then: …"); page snapshot updated.
 - [ ] 10. Keep and trade marks v2.
 - [ ] 11. Split into separate crates; update PLAN.md and CLAUDE.md.
 

@@ -29,6 +29,7 @@ fn live_info<'a>(
         stage: None,
         farm: &[],
         stage_chain: &[],
+        next: None,
     }
 }
 
@@ -658,6 +659,7 @@ fn gear_grid<'a>(
         stage: None,
         farm: &[],
         stage_chain: &[],
+        next: None,
     };
     gear_json(&info)
 }
@@ -1543,6 +1545,7 @@ fn shop_marks_items_better_than_the_worn_ones() {
         stage: None,
         farm: &[],
         stage_chain: &[],
+        next: None,
     };
     let rows = shop_better_rows(&shop_json(&info));
     assert_eq!(
@@ -1612,6 +1615,7 @@ fn score_profile_takes_the_weapon_kind_from_gear_or_build() {
             stage: None,
             farm: &[],
             stage_chain: &[],
+            next: None,
         });
         (profile.weapon, profile.caster)
     };
@@ -2498,5 +2502,33 @@ fn no_farm_list_is_null() -> Result<()> {
     let info = live_info(5, &blocks, &[], &[], &[]);
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(json.get("farm"), Some(&serde_json::Value::Null));
+    Ok(())
+}
+
+#[test]
+fn next_section_carries_the_route_step() -> Result<()> {
+    let blocks = crate::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    assert_eq!(json.get("next"), Some(&serde_json::Value::Null), "no route");
+    let advice = crate::playstyle::route::Advice {
+        id: "nm-diablo".to_owned(),
+        title: "Finish Diablo".to_owned(),
+        todo: vec!["Quests left: Terror's End".to_owned()],
+        note: "Not worth farming.".to_owned(),
+        then: Some("The Ancients".to_owned()),
+    };
+    info.next = Some(&advice);
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    assert_eq!(
+        json.get("next"),
+        Some(&serde_json::json!({
+            "id": "nm-diablo",
+            "title": "Finish Diablo",
+            "todo": ["Quests left: Terror's End"],
+            "note": "Not worth farming.",
+            "then": "The Ancients",
+        }))
+    );
     Ok(())
 }

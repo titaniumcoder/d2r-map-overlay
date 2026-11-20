@@ -126,10 +126,14 @@ pub fn title_case(text: &str) -> String {
 /// The runes and gems the character has: the shared materials tab's stacks plus the ones
 /// held in inventory, cube and stash pages, `(name, count)` merged by name.
 pub fn owned_materials(info: &PanelInfo) -> Vec<(String, u32)> {
-    let mut out: Vec<(String, u32)> = info.live.held_materials.to_vec();
-    let stacks = info
-        .live
-        .stash
+    materials_of(info.live.held_materials, info.live.stash)
+}
+
+/// [`owned_materials`] from the runes and gems `held` outside the shared stash and its `stash`
+/// tabs.
+pub fn materials_of(held: &[(String, u32)], stash: &[crate::stash::StashTab]) -> Vec<(String, u32)> {
+    let mut out: Vec<(String, u32)> = held.to_vec();
+    let stacks = stash
         .iter()
         .filter(|t| t.kind == crate::stash::TabKind::Materials)
         .flat_map(|t| &t.items);

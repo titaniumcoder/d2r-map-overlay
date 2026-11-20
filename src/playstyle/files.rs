@@ -7,6 +7,7 @@
 //! - `builds/*.toml`: the build definitions (next to the `*.source.json` they are generated
 //!   from by `research/gen_build.py`);
 //! - `farm.toml`: the farm list;
+//! - `route.toml`: the leveling and farming route ([`super::route`]);
 //! - `valuables.json`: the drop mark rules, compiled in ([`crate::valuables`]; no override).
 //!
 //! Each file is looked up in three places; the first that has it wins, per file (per build
@@ -38,6 +39,7 @@ use super::config::{
     Bis, Build, Builds, FarmGroup, Settings, Valuables, parse_build, parse_farm, parse_playstyle,
     parse_tables,
 };
+use super::route::{Route, parse_route};
 use super::web::config_page;
 
 /// A new `bis.toml` (the comment heads the `[bis]` table, so it stays on top).
@@ -114,7 +116,7 @@ impl Files {
     pub fn fingerprint(&self) -> Vec<(PathBuf, Option<SystemTime>)> {
         let mut paths = Vec::new();
         for dir in [&self.user, &self.legacy, &self.shipped].into_iter().flatten() {
-            paths.extend(["playstyle.toml", "farm.toml", "config.toml"].map(|f| dir.join(f)));
+            paths.extend(["playstyle.toml", "farm.toml", "route.toml", "config.toml"].map(|f| dir.join(f)));
             if let Ok(entries) = std::fs::read_dir(dir.join("builds")) {
                 paths.extend(
                     entries
@@ -258,6 +260,7 @@ struct Loaded {
     bis: Option<BTreeMap<String, Bis>>,
     build_defs: BTreeMap<String, Build>,
     farm: Option<Vec<FarmGroup>>,
+    route: Option<Route>,
     /// The old-place files in use (for the notice).
     old: Vec<String>,
 }
@@ -314,6 +317,10 @@ fn read_all(files: &Files) -> Loaded {
     if from == Some(OLD_PLACES) {
         old.push("farm.toml".to_owned());
     }
+    // No old place for the route: it is newer than the folder layout.
+    let [user_route, _, shipped_route] = files.layers("route.toml");
+    let (route, _) =
+        decide([user_route, shipped_route].map(|path| read(files, path.as_deref(), parse_route)));
     let build_defs = load_builds(files, &mut old);
     Loaded {
         name,
@@ -322,6 +329,7 @@ fn read_all(files: &Files) -> Loaded {
         bis,
         build_defs,
         farm,
+        route,
         old,
     }
 }
@@ -409,6 +417,7 @@ pub fn load(files: &Files) -> Settings {
         bis: loaded.bis.unwrap_or_default(),
         build_defs: loaded.build_defs,
         farm: loaded.farm.unwrap_or_default(),
+        route: loaded.route.unwrap_or_default(),
     }
 }
 
@@ -429,6 +438,7 @@ pub fn reload(settings: &mut Settings, files: &Files) {
     replace(files, &mut settings.bis, loaded.bis, "build selections");
     let farm_groups = loaded.farm.as_ref().map(Vec::len);
     replace(files, &mut settings.farm, loaded.farm, "farm list");
+    replace(files, &mut settings.route, loaded.route, "route");
     settings.build_defs = loaded.build_defs;
     files.say(format_args!(
         "playstyle reloaded ({} builds{})",
@@ -571,6 +581,8 @@ mod tests {
             );
         }
         assert!(dir.join("valuables.json").is_file(), "the compiled-in mark rules");
+        let (_, warnings) = parse_route(&std::fs::read_to_string(dir.join("route.toml"))?)?;
+        assert_eq!(warnings, Vec::<String>::new(), "route.toml");
         // Loaded alone, the summoner is the druid's default and chains into Fury.
         let files = Files {
             shipped: Some(dir),
@@ -582,6 +594,7 @@ mod tests {
             ["fury druid", "summoner druid"]
         );
         assert_eq!(settings.farm.len(), 2);
+        assert_eq!(settings.route.step.len(), 16);
         assert_eq!(
             settings.class_default(5).map(|(slug, _)| slug),
             Some("summoner druid")
@@ -626,8 +639,14 @@ mod tests {
         write(&dir.join("shipped/builds/b.toml"), &build("B", "shipped"))?;
         write(&dir.join("shipped/builds/c.toml"), &build("C", "shipped"))?;
         write(&dir.join("shipped/builds/c.source.json"), "{}")?;
+        let route = |id: &str| format!("[[step]]\nid = \"{id}\"\n");
+        let route_ids = |settings: &Settings| -> Vec<String> {
+            settings.route.step.iter().map(|s| s.id.clone()).collect()
+        };
+        write(&dir.join("shipped/route.toml"), &route("shipped"))?;
         // Shipped only.
         let settings = load(&files);
+        assert_eq!(route_ids(&settings), ["shipped"]);
         assert_eq!(settings.valuables.trade, [Tier::B]);
         assert_eq!(farm_targets(&settings), ["shipped"]);
         assert_eq!(settings.build_defs.len(), 3, "only the .toml files");
@@ -638,7 +657,9 @@ mod tests {
         )?;
         write(&dir.join("config/farm.toml"), &farm("old"))?;
         write(&dir.join("config/builds/b.toml"), &build("B", "old"))?;
+        write(&dir.join("config/route.toml"), &route("old"))?;
         let settings = load(&files);
+        assert_eq!(route_ids(&settings), ["shipped"], "no old place for the route");
         assert_eq!(settings.valuables.trade, [Tier::A], "config.toml [valuables]");
         assert_eq!(
             settings.builds.names.get("vex").map(Vec::as_slice),
@@ -653,7 +674,9 @@ mod tests {
         write(&dir.join("config/playstyle/farm.toml"), &farm("user"))?;
         write(&dir.join("config/playstyle/builds/a.toml"), &build("A", "user"))?;
         write(&dir.join("config/playstyle/builds/b.toml"), &build("B", "user"))?;
+        write(&dir.join("config/playstyle/route.toml"), &route("user"))?;
         let settings = load(&files);
+        assert_eq!(route_ids(&settings), ["user"]);
         assert_eq!(
             settings.valuables,
             Valuables::default(),

@@ -3,12 +3,15 @@
 
 use crate::game::{ItemDrop, Snapshot};
 use crate::played::Played;
+use crate::quest_log::QuestsDone;
+use crate::stash::Holdings;
 use crate::web::{GearInfo, LiveInfo, Panels};
 
+use super::build::Damage;
 use super::config::Settings;
 use super::files::{self, Files};
 use super::guidance::{Guidance, Marks};
-use super::{Evaluation, Playstyle, build, stash_plan, valuables, web};
+use super::{Evaluation, Playstyle, build, route, stash_plan, valuables, web};
 
 /// The playstyle of the folder's files: the character's selected build (else its class's
 /// default) followed along its stage chain, the farm list and the valuables tiers.
@@ -32,7 +35,12 @@ impl Playstyle for ConfigDriven {
         valuables::apply(drops, &self.config.valuables)
     }
 
-    fn evaluate(&self, snap: &Snapshot, reached: Option<&str>) -> Evaluation<'_> {
+    fn evaluate(
+        &self,
+        snap: &Snapshot,
+        reached: Option<&str>,
+        quests: Option<&QuestsDone>,
+    ) -> Evaluation<'_> {
         let config = &self.config;
         // Damages: the character's own `[builds]` entry, else the selected build's, else its
         // class's. `BiS`: inline slots when present, else the selected build's (user decision,
@@ -56,6 +64,7 @@ impl Playstyle for ConfigDriven {
         // of them; the item plan keeps them.
         let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
         let items = stash_plan::for_snapshot(snap, config, &chain, bis.as_ref());
+        let route = advise(config, snap, &holdings, damages, quests);
         Evaluation {
             guidance: Guidance {
                 rating: build::rate(snap.level.id, snap.difficulty, damages),
@@ -66,6 +75,7 @@ impl Playstyle for ConfigDriven {
             reached: moved_on,
             stage,
             chain,
+            route,
         }
     }
 
@@ -77,6 +87,7 @@ impl Playstyle for ConfigDriven {
             stage: evaluation.stage,
             farm: &self.config.farm,
             stage_chain: &evaluation.chain,
+            next: evaluation.route.as_ref(),
         })
     }
 
@@ -94,5 +105,63 @@ impl Playstyle for ConfigDriven {
 
     fn remove_character(files: &Files, name: &str) -> anyhow::Result<()> {
         files::remove_character(files, name)
+    }
+}
+
+/// The route's current step for `snap`'s character ([`route::current`]); `None` without
+/// steps or with the level, difficulty or quests unknown (no false advice before the quest
+/// record is read).
+fn advise(
+    config: &Settings,
+    snap: &Snapshot,
+    holdings: &Holdings,
+    damages: &[Damage],
+    quests: Option<&QuestsDone>,
+) -> Option<route::Advice> {
+    let (Some(level), Some(difficulty), Some(quests)) = (snap.player.char_level, snap.difficulty, quests)
+    else {
+        return None;
+    };
+    if config.route.step.is_empty() {
+        return None;
+    }
+    let materials = web::recipes::materials_of(&snap.held_materials, &snap.stash);
+    let worth = route::worth_for(&config.route, difficulty, &config.farm, holdings, &materials);
+    let max_areas = route::max_areas(damages);
+    route::current(
+        &config.route,
+        &route::Facts {
+            level,
+            difficulty,
+            quests,
+            worth: &worth,
+            max_areas: &max_areas,
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::{Context, Result};
+
+    #[test]
+    fn no_route_advice_while_the_quests_are_unknown() -> Result<()> {
+        let mut snap: Snapshot =
+            serde_json::from_str(include_str!("../../tests/fixtures/jail1-snapshot.json"))
+                .context("parsing fixture")?;
+        snap.player.char_level = Some(10);
+        snap.difficulty = Some(0);
+        let playstyle = ConfigDriven::load(&Files {
+            shipped: Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("playstyles/summoner-fury")),
+            quiet: true,
+            ..Files::default()
+        });
+        assert_eq!(playstyle.evaluate(&snap, None, None).route, None, "unread record");
+        let advice = playstyle
+            .evaluate(&snap, None, Some(&QuestsDone::default()))
+            .route;
+        assert_eq!(advice.map(|a| a.id).as_deref(), Some("normal-tristram"));
+        Ok(())
     }
 }

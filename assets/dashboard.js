@@ -286,6 +286,16 @@ function farm(f) {
     return `<h3 class="row-h">for ${esc(g.for)} · ${done}/${items.length} done</h3><div class="fms">${cards}</div>`;
   }).join("");
 }
+// The route's current step: its title, what to do, why, and the step after it.
+function next(n) {
+  $("nextpanel").hidden = !n;
+  $("next").innerHTML = n
+    ? `<div class="step">${esc(n.title)}</div>`
+      + ((n.todo || []).length ? `<ul class="todo">${n.todo.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : "")
+      + (n.note ? `<div class="note">${esc(n.note)}</div>` : "")
+      + (n.then ? `<div class="then">then: ${esc(n.then)}</div>` : "")
+    : "";
+}
 // The open trade window: one column per store tab, the build's pieces first and bold (with
 // their slot), then the items whose stats beat the worn ones ("▲ better" and why), the ones
 // above the character level dimmed.
@@ -330,6 +340,7 @@ function render(r) {
     for (const id of ["guide", "gear", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm", "worth"]) $(id).innerHTML = "";
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
+    next(null);
     shop(null);
     // The upgrade keys stay remembered: coming back from the menu must not chime again.
     $("upgrades").hidden = true;
@@ -347,6 +358,7 @@ function render(r) {
   document.title = `${r.offline ? "(offline) " : ""}${p.name}${p.level != null ? " L" + p.level : ""} · ${r.area || "?"} — D2R Dashboard`;
   guide(r.guide);
   upgrades(r.upgrades, p.name);
+  next(r.next);
   shop(r.shop);
   gear(r.gear);
   skillTrees(r.skills);

@@ -111,7 +111,7 @@ fn save_owner(file_name: &str) -> Option<&str> {
 
 /// A D2R character name: 2–15 ASCII letters, `-` or `_` (guards against a half-read name
 /// during loading being persisted).
-fn plausible_name(name: &str) -> bool {
+pub fn plausible_name(name: &str) -> bool {
     (2..=15).contains(&name.len())
         && name
             .bytes()

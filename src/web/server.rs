@@ -640,12 +640,18 @@ mod tests {
             crate::guidance::Marks::new()
         }
 
-        fn evaluate(&self, _: &crate::game::Snapshot, _: Option<&str>) -> crate::playstyle::Evaluation<'_> {
+        fn evaluate(
+            &self,
+            _: &crate::game::Snapshot,
+            _: Option<&str>,
+            _: Option<&crate::quest_log::QuestsDone>,
+        ) -> crate::playstyle::Evaluation<'_> {
             crate::playstyle::Evaluation {
                 guidance: crate::guidance::Guidance::default(),
                 reached: None,
                 stage: None,
                 chain: Vec::new(),
+                route: None,
             }
         }
 
@@ -745,7 +751,7 @@ mod tests {
         let config = html_page("/config");
         assert_eq!(
             (dashboard.len(), format!("{:#018x}", fnv1a(dashboard.as_bytes()))),
-            (42_268, "0xa42b3f72a38e15a1".to_owned()),
+            (43_366, "0x67069102fc358a2d".to_owned()),
             "dashboard page"
         );
         assert_eq!(

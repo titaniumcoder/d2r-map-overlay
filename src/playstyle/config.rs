@@ -37,6 +37,9 @@ pub struct Settings {
     /// The cross-character farm list from `farm.toml` (see [`parse_farm`]); empty when the
     /// file is missing or invalid.
     pub farm: Vec<FarmGroup>,
+    /// The leveling and farming route from `route.toml` ([`crate::playstyle::route`]); empty
+    /// when the file is missing or invalid.
+    pub route: crate::playstyle::route::Route,
 }
 
 /// A character's `BiS` selection and (legacy) inline gear list: `[bis.<name>]` (user request,

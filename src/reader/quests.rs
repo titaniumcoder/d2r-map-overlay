@@ -74,6 +74,16 @@ pub fn reward(words: &[u16], word: usize) -> Option<Reward> {
     })
 }
 
+/// The quests `words` shows as done (reward taken or ready to take), in [`QUESTS`] order;
+/// Akara's respec is no quest and left out. Empty when the record is unread.
+pub fn done(words: &[u16]) -> impl Iterator<Item = &'static str> + '_ {
+    QUESTS
+        .iter()
+        .filter(|&&(name, _)| name != "Akara respec")
+        .filter(|&&(_, word)| matches!(reward(words, word), Some(Reward::Ready | Reward::Used)))
+        .map(|&(name, _)| name)
+}
+
 /// Reads the record through the `.data` global at `global` (live address).
 ///
 /// # Errors
@@ -155,6 +165,17 @@ mod tests {
         );
         assert_eq!(reward(&ELEMENTAL, 41), Some(Reward::Ready), "respec not used");
         assert_eq!(reward(&[], 3), None, "unread");
+    }
+
+    #[test]
+    fn done_lists_finished_quests_only() {
+        let done: Vec<&str> = done(&ELEMENTAL).collect();
+        assert!(done.contains(&"Den of Evil"));
+        assert!(done.contains(&"The Seven Tombs"));
+        assert!(!done.contains(&"Sisters' Burial Grounds"), "skipped");
+        assert!(!done.contains(&"Akara respec"), "no quest");
+        assert!(!done.contains(&"The Guardian"), "Act 3 not done");
+        assert_eq!(super::done(&[]).count(), 0, "unread");
     }
 
     #[test]

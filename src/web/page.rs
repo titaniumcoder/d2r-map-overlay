@@ -12,7 +12,7 @@ pub const CONFIG_PAGE: &str = concat!(
 );
 
 /// The live dashboard page, dark-themed. Layout: a sticky character bar with the breakpoint
-/// chips, then Sell / Keep, the vendor, the collapsible gear grid (equipped piece on top of
+/// chips, then the route's Next step, Sell / Keep, the vendor, the collapsible gear grid (equipped piece on top of
 /// each slot card, the build's pieces below with their stats; open while `gear_attention` says
 /// so, until the viewer clicks), skills, recipes, the farm list and the shared stash. The
 /// script does the first-paint fetch, then follows the SSE stream (`render` is the onmessage

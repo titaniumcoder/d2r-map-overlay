@@ -27,6 +27,7 @@ mod objects_data;
 mod overlay;
 mod played;
 mod playstyle;
+mod quest_log;
 mod reader;
 mod render;
 mod runewords_data;
@@ -235,7 +236,7 @@ fn load_for_drawing(
     let marks = playstyle.mark_drops(&mut snap.drops);
     session::Session::default().apply(&mut snap);
     config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
-    let mut guidance = playstyle.evaluate(&snap, None).guidance;
+    let mut guidance = playstyle.evaluate(&snap, None, None).guidance;
     guidance.marks = marks;
     Ok((snap, guidance))
 }
