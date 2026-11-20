@@ -213,6 +213,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   candidate rule: every 595–604 clearing without the waypoint gets a "?", and once object 252's preset is
   loaded only its exact quest-object star shows. Landmark markers are now one per connected piece (rooms of
   one preset id joined by shared edges), so two copies of a preset no longer get one marker between them.
+- **Live-confirmed 2026-11-20** (Nightmare): with two candidate stars, the altar's clearing kept the
+  marker once the altar came near and the other star disappeared.
 - **Elimination 2026-11-20** (user's choice): the candidates are gold stars, not "?". A clearing is ruled
   out once **every** room of it has been seen loaded (Room2 `+0x58` Room1 non-null) with no object 252 in the
   snapshot; the session remembers candidate rooms seen loaded per level for the game (`GameState::loaded_rooms`,
