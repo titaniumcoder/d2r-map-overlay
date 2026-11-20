@@ -550,15 +550,12 @@ mod tests {
         // NM 50, Mephisto worth it (Andariel not): Mephisto.
         let rushed = done(&route, [normal, &["The Search for Cain", "mephisto"], &[]]);
         let meph = worth_of(&[
-            ("Mephisto", &["Bloodfist", "Heart of the Oak (Ko, Pul)"]),
+            ("Mephisto", &["Bloodfist", "Heart of the Oak (Pul)"]),
             ("Andariel", &[]),
         ]);
         let a = advise(&route, 50, NIGHTMARE, &rushed, &meph)?;
         assert_eq!(a.id, "nm-bosses");
-        assert_eq!(
-            a.todo,
-            ["Mephisto (59) for: Bloodfist, Heart of the Oak (Ko, Pul)"]
-        );
+        assert_eq!(a.todo, ["Mephisto (59) for: Bloodfist, Heart of the Oak (Pul)"]);
         assert_eq!(a.then.as_deref(), Some("Finish Diablo"));
         // NM 56, both worth it: Andariel gets her note.
         let both = worth_of(&[("Mephisto", &["Bloodfist"]), ("Andariel", &["Ribcracker"])]);

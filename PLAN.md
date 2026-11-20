@@ -686,7 +686,7 @@ quests done); the dashboard shows the current step.
 
 **Worth farming** is computed from the game's drop tables: a boss is worth it while any item still
 missing from the farm list has any chance to drop from it at its level; the dashboard names the
-item. Needs the drop tables generated into the project (a new data step).
+item. Runes count only above what the Countess drops in that difficulty (user, 2026-11-20). Needs the drop tables generated into the project (a new data step).
 **Quest memory**: the game shows only the current difficulty's quests, so the overlay saves quest
 progress per character and difficulty (like the build stage in `played.json`).
 
@@ -867,7 +867,12 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   **Worth** (`src/playstyle/worth.rs`, `worth(boss, difficulty, farm, holdings, materials)` →
   `(farm item, Why)`): a unique / set whose base code drops and qlvl ≤ boss level
   (`Why::Drops`); a runeword with a still-missing rune (owned runes < per copy × copies to
-  build) that drops (`Why::Runes`, those runes); entries done or held (`farm_status` ≠
+  build) that drops (`Why::Runes`, those runes); **rune rule** (the user, 2026-11-20: "uniques
+  and sets, plus runes above what the Countess drops in that difficulty"): for any boss but the
+  Countess a rune counts only if ranked above her highest droppable rune in the same difficulty
+  (Normal: Ral, Nightmare: Ko, Hell: Lo; so NM Mephisto counts Lem and up); the Countess counts every
+  missing rune she drops (the rune farm stays worth it while runes are missing); without her
+  data for a difficulty every rune counts; entries done or held (`farm_status` ≠
   missing) skipped. **Dashboard**: the farm JSON's `worth` section (difficulty name, bosses
   with items) renders as one line above the farm groups: "Nightmare worth farming: Andariel →
   Stealth (Tal Eth), Bloodfist, …; Mephisto → …". Every boss worth it is listed; picking which

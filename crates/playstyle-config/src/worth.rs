@@ -5,7 +5,13 @@
 //!
 //! - A unique or set item can drop when its base code is one the boss's treasure class reaches
 //!   and its quality level is at most the boss's level (the drop's item level).
-//! - A runeword can drop when a rune it still misses does.
+//! - A runeword counts through its still-missing runes that drop, but (the user's rule,
+//!   2026-11-20: "uniques and sets, plus runes above what the Countess drops in that
+//!   difficulty") only runes ranked above the Countess's highest droppable rune in the same
+//!   difficulty: she is the rune farm for the low ones (Nightmare: El..Ko, so Nightmare
+//!   Mephisto counts from Lem up). The Countess herself counts every missing rune she drops, so
+//!   she stays worth it while runes are missing. Without Countess data for the difficulty
+//!   (none today), every dropping rune counts, as before the rule.
 //! - Entries already done (enough copies in the shared stash) or held by the played character
 //!   are skipped, as the farm panel counts them ([`farm_status`]).
 
@@ -59,6 +65,13 @@ pub fn worth(
         return Vec::new();
     };
     let drops_code = |code: &str| drops.binary_search(&code).is_ok();
+    // Runes ranked at or below this one are left to the Countess (`None`: all count).
+    let rune_floor = if same_name(boss, COUNTESS) {
+        None
+    } else {
+        countess_top_rune(difficulty)
+    };
+    let counts = |rune: &str| rune_rank(rune).is_some_and(|rank| rune_floor.is_none_or(|floor| rank > floor));
     let mut out: Vec<(String, Why)> = Vec::new();
     for item in farm.iter().flat_map(|g| &g.items) {
         if out.iter().any(|(name, _)| same_name(name, &item.name)) {
@@ -77,7 +90,7 @@ pub fn worth(
                 let runes = missing_runes(&item.name, to_build, materials);
                 let dropping: Vec<&'static str> = runes
                     .into_iter()
-                    .filter(|r| rune_code(r).is_some_and(|c| drops_code(&c)))
+                    .filter(|r| counts(r) && rune_code(r).is_some_and(|c| drops_code(&c)))
                     .collect();
                 (!dropping.is_empty()).then_some(Why::Runes(dropping))
             }
@@ -131,12 +144,31 @@ fn missing_runes(name: &str, to_build: u32, materials: &[(String, u32)]) -> Vec<
     out
 }
 
+/// The boss whose rune drops set the floor for every other boss's runes.
+const COUNTESS: &str = "The Countess";
+
+/// The rank (0 = El) of the Countess's highest droppable rune in `difficulty`; `None` without
+/// her drop data there (then every rune counts).
+fn countess_top_rune(difficulty: u8) -> Option<usize> {
+    let (_, drops) = boss_drops(COUNTESS, difficulty)?;
+    (0..RUNE_NAMES.len())
+        .rev()
+        .find(|&i| drops.binary_search(&rune_code_at(i).as_str()).is_ok())
+}
+
+/// The rank of rune `name` (`"El"` → 0, `"Zod"` → 32).
+fn rune_rank(name: &str) -> Option<usize> {
+    RUNE_NAMES.iter().position(|r| r.eq_ignore_ascii_case(name))
+}
+
+/// The item code of the rune of rank `rank` (17 → `"r18"`).
+fn rune_code_at(rank: usize) -> String {
+    format!("r{:02}", rank.saturating_add(1))
+}
+
 /// The item code of rune `name` (`"Ko"` → `"r18"`).
 fn rune_code(name: &str) -> Option<String> {
-    RUNE_NAMES
-        .iter()
-        .position(|r| r.eq_ignore_ascii_case(name))
-        .map(|i| format!("r{:02}", i.saturating_add(1)))
+    rune_rank(name).map(rune_code_at)
 }
 
 #[cfg(test)]
@@ -265,6 +297,32 @@ mod tests {
     }
 
     #[test]
+    fn nightmare_mephisto_leaves_the_countess_runes_to_her() -> Result<()> {
+        // NM Countess tops out at Ko: Insight (Ral Tir Tal Sol) is her job, not Mephisto's.
+        let low = farm_of("{ name = \"Insight\", kind = \"runeword\" },")?;
+        assert_eq!(shown_worth("Mephisto", &low, &[]), Vec::<String>::new());
+        assert_eq!(
+            shown_worth("The Countess", &low, &[]),
+            ["Insight (Ral, Tir, Tal, Sol)"]
+        );
+        // Wealth is Lem Ko Tir: only Lem, above Ko, counts for Mephisto.
+        let lem = farm_of("{ name = \"Wealth\", kind = \"runeword\" },")?;
+        assert_eq!(shown_worth("Mephisto", &lem, &[]), ["Wealth (Lem)"]);
+        Ok(())
+    }
+
+    #[test]
+    fn countess_counts_every_rune_she_drops() -> Result<()> {
+        // Stealth is Tal Eth: both low, both hers.
+        let farm = farm_of("{ name = \"Stealth\", kind = \"runeword\" },")?;
+        assert_eq!(shown_worth("The Countess", &farm, &[]), ["Stealth (Tal, Eth)"]);
+        let top = |d: u8| countess_top_rune(d).and_then(|i| RUNE_NAMES.get(i).copied());
+        assert_eq!([0, 1, 2].map(top), [Some("Ral"), Some("Ko"), Some("Lo")]);
+        assert_eq!(countess_top_rune(3), None, "no data: every rune counts");
+        Ok(())
+    }
+
+    #[test]
     fn impossible_drops_give_nothing() -> Result<()> {
         // Arachnid Mesh (Spiderweb Sash, qlvl 87) can't drop from Normal Andariel (level 12),
         // nor its elite base at all; Jah and Ber don't drop there either.
@@ -313,6 +371,9 @@ mod tests {
         assert!(andariel.iter().any(|w| w == "Bloodfist"));
         assert!(mephisto.iter().any(|w| w == "Bloodfist"));
         assert!(!andariel.iter().any(|w| w == "Arachnid Mesh"), "qlvl 87");
+        // NM Andariel drops no rune above the Countess's Ko; Mephisto keeps only Lem and up.
+        assert!(!andariel.iter().any(|w| w.contains('(')), "{andariel:?}");
+        assert!(mephisto.iter().any(|w| w == "Heart of the Oak (Pul)"));
         Ok(())
     }
 }

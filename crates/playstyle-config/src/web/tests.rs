@@ -2011,12 +2011,31 @@ fn farm_names_the_bosses_worth_farming() -> Result<()> {
         json.pointer("/farm/worth/difficulty"),
         Some(&serde_json::json!("Normal"))
     );
-    // Normal Andariel (level 12) drops runes up to Nef: Fortitude's El and Smoke's Nef.
+    // Normal Countess (level 11) drops runes up to Ral and keeps them all: Fortitude's El and
+    // Smoke's Nef. Normal Andariel (12) drops no rune above Ral, so she is not listed;
+    // Mephisto (26) is the first boss worth it, for runes above Ral.
+    let boss = |i: usize| json.pointer(&format!("/farm/worth/bosses/{i}/boss")).cloned();
+    assert!(
+        (0..20).all(|i| boss(i) != Some(serde_json::json!("Andariel"))),
+        "{json}"
+    );
     assert_eq!(
         json.pointer("/farm/worth/bosses/0"),
         Some(&serde_json::json!({
-            "boss": "Andariel",
-            "level": 12,
+            "boss": "Mephisto",
+            "level": 26,
+            "items": [
+                { "name": "Fortitude", "runes": ["Sol"] },
+                { "name": "Lawbringer", "runes": ["Amn"] },
+                { "name": "Bulwark", "runes": ["Sol"] },
+            ],
+        }))
+    );
+    assert_eq!(
+        json.pointer("/farm/worth/bosses/5"),
+        Some(&serde_json::json!({
+            "boss": "The Countess",
+            "level": 11,
             "items": [
                 { "name": "Fortitude", "runes": ["El"] },
                 { "name": "Smoke", "runes": ["Nef"] },
