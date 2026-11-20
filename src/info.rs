@@ -60,9 +60,11 @@ const MAX_BIS_LINES: usize = 12;
 /// From this character level on no areas are suggested (everywhere is fine).
 pub const SUGGEST_UNTIL: u8 = 75;
 /// The suggested areas' monster level is at most this many above the character level (the top of
-/// the band; such areas rank last). User-specified with the example "clvl 23 → monsters 18–27",
-/// i.e. −5…+4 (2026-11-17) — one less than the −5 floor's symmetric +5.
-const SUGGEST_BONUS: u8 = 4;
+/// the band; such areas rank last). Unique monsters are area level +3 and the experience penalty
+/// starts above clvl +5, so +2 keeps an area's uniques at or under clvl +5: a level-43 character
+/// gets areas up to 45, whose uniques are 48 (user request, 2026-11-20: "if I am 43 then the
+/// unique monsters in a 47 level area would be 50, too high").
+const SUGGEST_BONUS: u8 = 2;
 /// The suggested areas' monster level is at least this many below the character level (monsters
 /// more than this many levels below give heavily penalized experience).
 const SUGGEST_FLOOR: u8 = 5;
@@ -507,13 +509,11 @@ const RUNEWORD_LEVELS: [(&str, u32); 20] = [
 /// One dashboard level-suggestion entry ([`level_lines_full`]): the rendered line, the area's
 /// monster level, and which of the dashboard's three columns it belongs to — `below` / `equal`
 /// / `above` the character level (`equal` = `mlvl == char_level`). The suggestions are ordered
-/// own-level-first (the overlay's reading order); the bucket lets the dashboard's "Where to
-/// go" panel re-group them into its below / equal / above columns.
+/// areas-that-aren't-bad first, then own-level-first; the bucket lets the dashboard's "Where
+/// to go" panel re-group them into its below / equal / above columns.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LevelEntry {
-    /// The rendered line (`Level 34 → Halls of Pain (34)` for the band's first
-    /// entry, `Halls of Anguish (33)` for the rest) — the overlay's own-level-first reading
-    /// order, kept as the text even when the dashboard re-groups by [`LevelEntry::bucket`].
+    /// The rendered line: `Halls of Pain (34)`, or a merged dungeon `Catacombs 3–4 (43)`.
     pub text: String,
     pub mlvl: u8,
     pub bucket: &'static str,
@@ -522,32 +522,103 @@ pub struct LevelEntry {
     pub bad: Option<String>,
 }
 
-/// The whole level-suggestion band for the dashboard: one entry per area (the first carries
-/// the `Level N →` prefix), in the same usefulness order, uncapped within the band; the
-/// nearest-areas fallback (empty band) keeps its 5-entry cap. `build` (primary damage first)
-/// marks the areas bad for it ([`LevelEntry::bad`]).
+/// The whole level-suggestion band for the dashboard, uncapped within the band (the
+/// nearest-areas fallback keeps its 5-entry cap). `build` (primary damage first) marks the
+/// areas bad for it ([`LevelEntry::bad`]), per area before merging. The levels of one dungeon
+/// with the same monster level and the same badness merge into one entry
+/// ([`merge_dungeon_levels`]: `Catacombs 3–4 (43)`), and within each bucket the areas that
+/// aren't bad come first (stable: otherwise the own-level-first usefulness order).
 pub fn level_lines_full(char_level: Option<u8>, difficulty: Option<u8>, build: &[Damage]) -> Vec<LevelEntry> {
     let (Some(lvl), areas) = (char_level, level_suggestions(char_level, difficulty)) else {
         return Vec::new();
     };
-    areas
+    let areas: Vec<(&str, u8, Option<String>)> = areas
         .iter()
-        .enumerate()
-        .map(|(i, &(name, mlvl))| LevelEntry {
-            text: if i == 0 {
-                format!("Level {lvl} → {name} ({mlvl})")
-            } else {
-                format!("{name} ({mlvl})")
-            },
+        .map(|&(name, mlvl)| {
+            let bad =
+                level_id(name, mlvl, difficulty).and_then(|id| build::bad_reason(id, difficulty, build));
+            (name, mlvl, bad)
+        })
+        .collect();
+    let mut entries: Vec<LevelEntry> = merge_dungeon_levels(&areas)
+        .into_iter()
+        .map(|(text, mlvl, bad)| LevelEntry {
+            text: format!("{text} ({mlvl})"),
             mlvl,
             bucket: match mlvl {
                 m if m == lvl => "equal",
                 m if m < lvl => "below",
                 _ => "above",
             },
-            bad: level_id(name, mlvl, difficulty).and_then(|id| build::bad_reason(id, difficulty, build)),
+            bad,
+        })
+        .collect();
+    // Stable: the dashboard filters by bucket keeping this order, so within each column the
+    // areas that aren't bad come first and the greyed-out ones last.
+    entries.sort_by_key(|e| e.bad.is_some());
+    entries
+}
+
+/// `(name, mlvl, bad)` areas with the levels of one dungeon (`<dungeon> Level N`) that share
+/// the monster level and the badness merged into one `(display name, mlvl, bad)` at the first
+/// level's place: consecutive levels as a range, gaps with a comma (`Catacombs 1, 3–4`). A
+/// dungeon level left on its own and areas without a level suffix keep their name.
+fn merge_dungeon_levels(areas: &[(&str, u8, Option<String>)]) -> Vec<(String, u8, Option<String>)> {
+    // (dungeon or full name, mlvl, bad, level numbers); a full name has no level numbers.
+    let mut groups: Vec<(&str, u8, Option<String>, Vec<u8>)> = Vec::new();
+    for (name, mlvl, bad) in areas {
+        let Some((dungeon, n)) = dungeon_level(name) else {
+            groups.push((name, *mlvl, bad.clone(), Vec::new()));
+            continue;
+        };
+        match groups
+            .iter_mut()
+            .find(|(d, m, b, ns)| !ns.is_empty() && *d == dungeon && m == mlvl && b == bad)
+        {
+            Some((_, _, _, ns)) => ns.push(n),
+            None => groups.push((dungeon, *mlvl, bad.clone(), vec![n])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(name, mlvl, bad, mut ns)| {
+            ns.sort_unstable();
+            ns.dedup();
+            let text = match ns.as_slice() {
+                [] => name.to_owned(),
+                [n] => format!("{name} Level {n}"),
+                _ => format!("{name} {}", level_ranges(&ns)),
+            };
+            (text, mlvl, bad)
         })
         .collect()
+}
+
+/// `Catacombs Level 3` → `("Catacombs", 3)`; `None` for a name without a `Level N` suffix.
+fn dungeon_level(name: &str) -> Option<(&str, u8)> {
+    let (dungeon, n) = name.rsplit_once(" Level ")?;
+    Some((dungeon, n.parse().ok()?))
+}
+
+/// Sorted, distinct level numbers as ranges: `[1, 3, 4, 5]` → `1, 3–5`.
+fn level_ranges(ns: &[u8]) -> String {
+    let mut runs: Vec<(u8, u8)> = Vec::new();
+    for &n in ns {
+        match runs.last_mut() {
+            Some((_, end)) if end.checked_add(1) == Some(n) => *end = n,
+            _ => runs.push((n, n)),
+        }
+    }
+    runs.iter()
+        .map(|&(a, b)| {
+            if a == b {
+                a.to_string()
+            } else {
+                format!("{a}–{b}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The id of the area called `name` with monster level `mlvl` in `difficulty`: the first such
@@ -1364,18 +1435,12 @@ mod tests {
                 ("Cave Level 2", 2),
                 ("Burial Grounds", 3),
                 ("Crypt", 3),
-                ("Mausoleum", 3),
-                ("Stony Field", 4),
-                ("Underground Passage Level 1", 4),
-                ("Underground Passage Level 2", 4),
-                ("Dark Wood", 5),
-                ("Hole Level 1", 5),
-                ("Hole Level 2", 5)
+                ("Mausoleum", 3)
             ]
         );
         // Normal 34: the below-level areas first (34, 33, 32, then the mlvl 29 areas in id
-        // order), the above-level areas last and mildest first (36, 37); the mlvl 39 areas are
-        // +5 above and out of the band (user example: 23 → 18–27, i.e. −5…+4).
+        // order), the above-level areas last (36); Arreat Summit (37) is +3 above and out of
+        // the −5…+2 band.
         let areas = level_suggestions(Some(34), Some(0));
         let head: &[(&str, u8)] = &[
             ("Halls of Pain", 34),
@@ -1389,15 +1454,14 @@ mod tests {
             ("Icy Cellar", 29),
         ];
         assert_eq!(areas.get(..9), Some(head));
-        let tail: &[(&str, u8)] = &[("Halls of Vaught", 36), ("Arreat Summit", 37)];
+        let tail: &[(&str, u8)] = &[("Halls of Vaught", 36)];
         assert_eq!(areas.get(9..), Some(tail));
     }
 
     #[test]
     fn level_suggestions_band_edges_and_skip_the_cow_level() {
-        // Normal 23: the user-specified band is 18–27 (23 − 5 … 23 + 4, user example
-        // 2026-11-17): the mlvl 17 areas and the mlvl 28 Chaos Sanctuary are out, the own-level
-        // areas first, the above-level ones last and mildest first.
+        // Normal 23: the band is 18–25 (23 − 5 … 23 + 2): the mlvl 17 and 26+ areas are out,
+        // the own-level areas first, the above-level ones last and mildest first.
         let areas = level_suggestions(Some(23), Some(0));
         let head: &[(&str, u8)] = &[
             ("Upper Kurast", 23),
@@ -1408,15 +1472,14 @@ mod tests {
         ];
         assert_eq!(areas.get(..5), Some(head));
         assert!(areas.iter().any(|&(_, mlvl)| mlvl == 18), "band floor");
-        assert!(areas.iter().any(|&(_, mlvl)| mlvl == 27), "band top (+4)");
+        assert!(areas.iter().any(|&(_, mlvl)| mlvl == 25), "band top (+2)");
         assert!(
-            !areas.iter().any(|&(_, mlvl)| mlvl == 17 || mlvl == 28),
+            !areas.iter().any(|&(_, mlvl)| mlvl == 17 || mlvl > 25),
             "out of band"
         );
         assert!(!areas.iter().any(|&(name, _)| name == "Moo Moo Farm"));
-        // Normal 18: the band is 13–22; nothing at mlvl 19/20, so 18 first, then the mlvl 17
-        // areas in id order (the seven Tal Rasha's Tombs deduplicated to one entry), the mlvl
-        // 21/22 areas last.
+        // Normal 18: the band is 13–20; nothing at mlvl 19/20, so 18 first, then the mlvl 17
+        // areas in id order (the seven Tal Rasha's Tombs deduplicated to one entry).
         let areas = level_suggestions(Some(18), Some(0));
         let head: &[(&str, u8)] = &[
             ("Valley of Snakes", 18),
@@ -1439,9 +1502,8 @@ mod tests {
 
     #[test]
     fn level_suggestions_use_the_difficulty_and_stop_at_75() {
-        // Nightmare 46: the mlvl 46 areas first (own level), then 45 downwards; the mlvl 47–50
-        // areas rank last and mildest first (the whole 41–50 band is returned for the
-        // dashboard; the overlay caps at five).
+        // Nightmare 46: the mlvl 46 areas first (own level), then 45 downwards; the mlvl 47–48
+        // areas rank last and mildest first (the whole 41–48 band is returned).
         let areas = level_suggestions(Some(46), Some(1));
         let head: &[(&str, u8)] = &[
             ("Lost City", 46),
@@ -1452,10 +1514,10 @@ mod tests {
         ];
         assert_eq!(areas.get(..5), Some(head));
         assert!(
-            areas.iter().all(|&(_, mlvl)| (41..=50).contains(&mlvl)),
-            "the 46 − 5 … 46 + 4 band: {areas:?}"
+            areas.iter().all(|&(_, mlvl)| (41..=48).contains(&mlvl)),
+            "the 46 − 5 … 46 + 2 band: {areas:?}"
         );
-        // Hell 74: the last level with suggestions; the band is 69–78 and the mlvl 74 areas
+        // Hell 74: the last level with suggestions; the band is 69–76 and the mlvl 74 areas
         // come first (the Act 2 and Act 3 Sewers share name and level, so one entry).
         let areas = level_suggestions(Some(74), Some(2));
         let head: &[(&str, u8)] = &[
@@ -1467,8 +1529,8 @@ mod tests {
         ];
         assert_eq!(areas.get(..5), Some(head));
         assert!(
-            areas.iter().all(|&(_, mlvl)| (69..=78).contains(&mlvl)),
-            "the 74 − 5 … 74 + 4 band: {areas:?}"
+            areas.iter().all(|&(_, mlvl)| (69..=76).contains(&mlvl)),
+            "the 74 − 5 … 74 + 2 band: {areas:?}"
         );
         assert!(
             level_suggestions(Some(75), Some(2)).is_empty(),
@@ -1512,24 +1574,83 @@ mod tests {
 
     #[test]
     fn level_lines_full_lists_the_whole_band_one_per_line() {
-        // One line per area in the usefulness order, the `Level N →` prefix only on the first;
-        // no `+N more` tail, no cap.
+        // One entry per area (dungeon levels merged) in the usefulness order; no prefix, no
+        // `+N more` tail, no cap.
         let full = level_lines_full(Some(1), Some(0), &[]);
-        assert_eq!(full.len(), 14, "the whole −5…+4 band: {full:?}");
-        let first = full.first().map_or_else(LevelEntry::default, Clone::clone);
-        assert_eq!(first.text, "Level 1 → Blood Moor (1)");
-        assert_eq!(first.mlvl, 1);
-        assert_eq!(first.bucket, "equal");
-        let second = full.get(1).map_or_else(LevelEntry::default, Clone::clone);
-        assert_eq!(second.text, "Den of Evil (1)");
-        assert_eq!(second.mlvl, 1);
-        assert_eq!(second.bucket, "equal");
-        let last = full.get(13).map_or_else(LevelEntry::default, Clone::clone);
-        assert_eq!(last.text, "Hole Level 2 (5)");
-        assert_eq!(last.mlvl, 5);
-        assert_eq!(last.bucket, "above");
+        let texts: Vec<(&str, &str)> = full.iter().map(|e| (e.text.as_str(), e.bucket)).collect();
+        assert_eq!(
+            texts,
+            [
+                ("Blood Moor (1)", "equal"),
+                ("Den of Evil (1)", "equal"),
+                ("Cold Plains (2)", "above"),
+                ("Cave 1–2 (2)", "above"),
+                ("Burial Grounds (3)", "above"),
+                ("Crypt (3)", "above"),
+                ("Mausoleum (3)", "above"),
+            ]
+        );
         assert_eq!(level_lines_full(Some(80), Some(0), &[]), Vec::<LevelEntry>::new());
         assert_eq!(level_lines_full(None, Some(0), &[]), Vec::<LevelEntry>::new());
+    }
+
+    #[test]
+    fn level_band_tops_out_two_above_the_character_level() {
+        // Nightmare 43 (user example, 2026-11-20): uniques are area level +3, so the band stops
+        // at 45 (uniques 48 = clvl +5, the XP-penalty edge) and nothing at 46+ is offered.
+        let full = level_lines_full(Some(43), Some(1), &[]);
+        assert_eq!(full.iter().map(|e| e.mlvl).max(), Some(45), "{full:?}");
+        assert_eq!(full.iter().map(|e| e.mlvl).min(), Some(38), "{full:?}");
+    }
+
+    #[test]
+    fn level_lines_full_merges_dungeon_levels() {
+        // Nightmare 43: Catacombs 3 and 4 are both 43 → one range; 1 and 2 (42) are a separate
+        // entry in the other column; the Tower Cellar levels all differ and stay apart.
+        let full = level_lines_full(Some(43), Some(1), &[]);
+        let texts: Vec<&str> = full.iter().map(|e| e.text.as_str()).collect();
+        for merged in [
+            "Catacombs 3–4 (43)",
+            "Catacombs 1–2 (42)",
+            "Sewers 1–2 (43)",
+            "Jail 1–3 (41)",
+        ] {
+            assert!(texts.contains(&merged), "{merged}: {texts:?}");
+        }
+        assert!(texts.contains(&"Tower Cellar Level 5 (42)"), "{texts:?}");
+        assert!(texts.contains(&"Tower Cellar Level 4 (41)"), "{texts:?}");
+        assert!(
+            !texts.iter().any(|t| t.starts_with("Catacombs Level")),
+            "{texts:?}"
+        );
+        // A gap: non-adjacent levels join with a comma, a level on its own keeps its full name,
+        // and an area without a level suffix is untouched.
+        let merged = merge_dungeon_levels(&[
+            ("Catacombs Level 1", 42, None),
+            ("Rocky Waste", 42, None),
+            ("Catacombs Level 3", 42, None),
+            ("Catacombs Level 4", 43, None),
+            ("Catacombs Level 5", 42, None),
+        ]);
+        assert_eq!(
+            merged,
+            [
+                ("Catacombs 1, 3, 5".to_owned(), 42, None),
+                ("Rocky Waste".to_owned(), 42, None),
+                ("Catacombs Level 4".to_owned(), 43, None),
+            ]
+        );
+        assert_eq!(level_ranges(&[1, 3, 4, 5, 7]), "1, 3–5, 7");
+        // Different badness doesn't merge either.
+        let bad = Some("physical immunes".to_owned());
+        let merged = merge_dungeon_levels(&[("Jail Level 1", 71, bad.clone()), ("Jail Level 2", 71, None)]);
+        assert_eq!(
+            merged,
+            [
+                ("Jail Level 1".to_owned(), 71, bad),
+                ("Jail Level 2".to_owned(), 71, None)
+            ]
+        );
     }
 
     #[test]
@@ -1545,10 +1666,23 @@ mod tests {
         assert_eq!(
             bad,
             [
-                ("Jail Level 1 (71)", "physical immunes: 1 of 5 types"),
-                ("Jail Level 2 (71)", "physical immunes: 1 of 5 types"),
-                ("Jail Level 3 (71)", "physical immunes: 1 of 5 types"),
+                ("Jail 1–3 (71)", "physical immunes: 1 of 5 types"),
                 ("Cathedral (72)", "physical immunes: 1 of 3 types"),
+            ]
+        );
+        // Within the `above` column the bad areas come last, after the mlvl 72 good ones.
+        let above: Vec<(&str, bool)> = full
+            .iter()
+            .filter(|e| e.bucket == "above")
+            .map(|e| (e.text.as_str(), e.bad.is_some()))
+            .collect();
+        assert_eq!(
+            above,
+            [
+                ("Inner Cloister (72)", false),
+                ("Catacombs Level 1 (72)", false),
+                ("Jail 1–3 (71)", true),
+                ("Cathedral (72)", true),
             ]
         );
         // Without a build nothing is flagged. The summoner (physical, cold) isn't either: no
@@ -1575,7 +1709,7 @@ mod tests {
     fn level_lines_full_buckets_areas_below_equal_and_above_the_level() {
         // The dashboard's three "Where to go" columns come from the `bucket` field: below /
         // equal / above the character level (`equal` = mlvl == char_level, user request,
-        // 2026-11-17). Normal 23: the band is 18–27, own-level-first in `text`.
+        // 2026-11-17). Normal 23: the band is 18–25.
         let full = level_lines_full(Some(23), Some(0), &[]);
         assert!(!full.is_empty(), "the band is not empty for clvl 23");
         for entry in &full {
@@ -1588,11 +1722,8 @@ mod tests {
             assert_eq!(entry.bucket, expected, "entry: {entry:?}");
             assert!(entry.text.contains(&format!("({mlvl})")), "{entry:?}");
         }
-        // Own level first: the first entry carries the `Level N →` prefix and is `equal`.
-        if let Some(first) = full.first() {
-            assert_eq!(first.bucket, "equal");
-            assert!(first.text.starts_with("Level 23 → "), "{first:?}");
-        }
+        // Own level first.
+        assert_eq!(full.first().map(|e| e.bucket), Some("equal"));
         // The band's edges are represented: at least one `below` and one `above` entry.
         assert!(full.iter().any(|e| e.bucket == "below"), "{full:?}");
         assert!(full.iter().any(|e| e.bucket == "above"), "{full:?}");

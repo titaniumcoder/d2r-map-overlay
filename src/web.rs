@@ -734,9 +734,9 @@ impl LiveInfo<'_> {
 /// carry a structured `"tick": "worn" | "owned" | "stash" | null` (computed in Rust from the
 /// worn, owned and stash name lists, [`info::Tick`]): the page marks ✓(stash) from it instead of scraping the
 /// line text, and, for a runeword piece, `"runes"` and `"bases"` for the hint line under the
-/// piece. The `levels` lines are the whole level-suggestion band, one area per line, each as
-/// `{ "text", "colour", "mlvl", "bucket" }` ([`crate::info::LevelEntry`]: the own-level-first
-/// order in `text`, and the `below`/`equal`/`above` bucket the dashboard lays its "Where to
+/// piece. The `levels` lines are the whole level-suggestion band, one area (or merged dungeon
+/// levels) per line, each as `{ "text", "colour", "mlvl", "bucket" }`
+/// ([`crate::info::LevelEntry`]: the area name in `text`, and the `below`/`equal`/`above` bucket the dashboard lays its "Where to
 /// go" panel out in three columns from, plus `bad`: why the area is bad for the build). The
 /// `keep` / `sell` / `give` lines are one entry each, every entry (the page joins each list
 /// into one wrapping comma-separated run); the give-away lines have no panel of their own, so
@@ -2363,7 +2363,7 @@ fn text_lines(lines: &[String], colour: [u8; 4]) -> Vec<serde_json::Value> {
 }
 
 /// The whole level-suggestion band as `{ "text", "colour", "mlvl", "bucket", "bad" }` objects
-/// ([`crate::info::LevelEntry`]): the own-level-first reading order in `text`, the
+/// ([`crate::info::LevelEntry`]): the area name in `text` (not-bad areas first), the
 /// structured `mlvl` + `below`/`equal`/`above` bucket the dashboard re-groups its "Where to
 /// go" panel's three columns from, and `bad`: why the area is bad for the build (the page
 /// greys it out), else `null`.

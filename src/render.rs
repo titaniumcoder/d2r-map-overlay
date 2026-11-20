@@ -2905,7 +2905,7 @@ mod tests {
             blocks
                 .level_full
                 .first()
-                .is_some_and(|e| e.text.starts_with("Level 34 → ")),
+                .is_some_and(|e| e.bucket == "equal" && e.mlvl == 34),
             "level suggestions for clvl 34: {:?}",
             blocks.level_full
         );
