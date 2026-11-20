@@ -10,7 +10,11 @@ the screen. The minimap shows:
 - **Monsters:** superuniques, bosses, champion and unique packs.
 - **Landmarks:** quest spots such as the Summoner, the real Tal Rasha tomb's orifice, the Horadric Cube,
   Radament and the Cairn Stones.
-- **Shrines and wells, and valuable drops.**
+- **Shrines and wells, and marked drops:** a green ring for what your own builds need (a runeword
+  base with the right sockets, better than the one you hold; a build unique or set), a small star on
+  it for a still-missing farm-list item; red / orange / yellow rings for trade value (top, second,
+  third tier). Dashed: not sure yet (an unidentified unique, a superior base's unknown enhanced
+  defense or damage).
 - **Info line** under the map: area, monster level (coloured by the build's damage types), terror.
   The breakpoint guide (cast/hit-recovery frames, resistances), level suggestions, gear and
   keep / sell / give-away lists live on the web dashboard (`/`, served by the overlay's localhost

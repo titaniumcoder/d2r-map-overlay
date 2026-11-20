@@ -4431,19 +4431,21 @@ mod tests {
         assert_eq!(s.owned_items, vec![], "nothing in the inventory");
         assert!(head.starts_with("02000000"), "quality first: {head}");
 
-        let marks = valuables::apply(&mut s.drops, &config::Valuables::default());
+        let wants = crate::stash_plan::Wants::default();
+        let marks = crate::playstyle::marks::apply(&mut s.drops, &config::Valuables::default(), &wants);
         let tiers: Vec<_> = s
             .drops
             .iter()
-            .map(|d| marks.get(&d.id).map(|h| (h.tier, h.uncertain)))
+            .map(|d| marks.get(&d.id).map(|m| (m.trade, m.uncertain)))
             .collect();
         assert_eq!(
             tiers,
-            vec![
-                Some((valuables::Tier::A, false)),
-                Some((valuables::Tier::S, false))
-            ],
-            "4os sword A, identified Shako S (certain); the 2os and 3os swords are gone"
+            vec![Some((
+                Some((valuables::Tier::S, valuables::Category::Trade)),
+                false
+            ))],
+            "identified Shako S (certain); the swords are gone (the 4os one is a twink A base \
+             no need wants: no trade good)"
         );
         Ok(())
     }
@@ -4500,6 +4502,7 @@ mod tests {
     fn item_plan(s: &Snapshot) -> Vec<String> {
         use crate::stash_plan::{Needs, Scoring, held, plan};
         plan(&held(s), &Needs::default(), &Scoring::default())
+            .0
             .iter()
             .map(crate::info::advice_entry)
             .collect()

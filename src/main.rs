@@ -197,8 +197,11 @@ fn dump(player: Option<&str>, files: &playstyle::Files) -> Result<()> {
     // The quest record goes to stderr: the snapshot JSON on stdout stays as it was.
     eprintln!("quest flags: {:04x?}", reader.quest_flags(true));
     let mut snap = reader.snapshot(player, None)?;
-    // Only the marked bases, as live mode shows them; the marks themselves go to stderr.
-    let marks = ThePlaystyle::load(files).mark_drops(&mut snap.drops);
+    // Only the marked bases, as live mode shows them; the marks themselves go to stderr. The
+    // keep marks from this snapshot's own wants (no cached stash pages: what the reader sees).
+    let playstyle = ThePlaystyle::load(files);
+    let wants = playstyle.evaluate(&snap, None, None).wants;
+    let marks = playstyle.mark_drops(&mut snap.drops, &wants);
     if !marks.is_empty() {
         eprintln!("marks: {marks:?}");
     }
@@ -226,17 +229,21 @@ fn load_snapshot(path: &str) -> Result<game::Snapshot> {
 
 /// Loads a `--dump` snapshot and filters it like live mode does (superunique and quest monster
 /// presets only, drop marks from the playstyle, shown shrines from `config`), with the guidance
-/// the map draws (drop marks, the area rating; no stage was reached before).
+/// the map draws (drop marks, the area rating; no stage was reached before). The keep marks
+/// use the snapshot's own evaluation (live mode: the previous tick's).
 fn load_for_drawing(
     path: &str,
     (config, files): &(config::Config, playstyle::Files),
 ) -> Result<(game::Snapshot, guidance::Guidance)> {
     let mut snap = load_snapshot(path)?;
     let playstyle = ThePlaystyle::load(files);
-    let marks = playstyle.mark_drops(&mut snap.drops);
     session::Session::default().apply(&mut snap);
     config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
-    let mut guidance = playstyle.evaluate(&snap, None, None).guidance;
+    // Neither the session merge nor the evaluation reads the drops, so the marks can come last,
+    // with this snapshot's own wants.
+    let evaluation = playstyle.evaluate(&snap, None, None);
+    let marks = playstyle.mark_drops(&mut snap.drops, &evaluation.wants);
+    let mut guidance = evaluation.guidance;
     guidance.marks = marks;
     Ok((snap, guidance))
 }

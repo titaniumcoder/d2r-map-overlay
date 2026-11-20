@@ -49,7 +49,8 @@ use crate::item_stats::{ItemStat, stat};
 use crate::items::DropKind;
 use crate::names::same_name;
 use crate::offsets::item_data;
-use crate::playstyle::config::Settings;
+use crate::playstyle::config::{FarmKind, Settings};
+use crate::playstyle::web::farm::{FarmStatus, farm_status};
 use crate::runewords_data::{self, Runeword};
 use crate::socket_bases::{self, Wearer};
 use crate::stash::{StashTab, TabKind};
@@ -553,7 +554,7 @@ impl Needs {
 
 /// A white (low, normal or superior) item without a runeword whose code is a socketable
 /// weapon or armor base.
-fn plain_base(item: &ItemDrop) -> bool {
+pub fn plain_base(item: &ItemDrop) -> bool {
     crate::game::maybe_white_base(item.quality, item.flags)
         && item.code.as_deref().is_some_and(socket_bases::socketable)
 }
@@ -572,13 +573,16 @@ fn trade_worthy(item: &ItemDrop) -> bool {
     valuables::best(item, &tiers).is_some_and(|h| !h.uncertain || h.tier == Tier::S)
 }
 
+/// [`base_rank`]'s key: power, grade, requirement (lower is better).
+type Rank = (u32, u8, Reverse<u32>);
+
 /// How good a runeword base is, better is greater (user rule, 2026-11-20: a better base for the
 /// same runeword replaces the kept one): the base damage (min + max, [`weapons_data::damage`])
 /// of a weapon or the maximum base defense of an armor, helm or shield
 /// ([`socket_bases::max_defense`]); then superior or ethereal over normal over low quality;
 /// then the lower strength + dexterity requirement. A need open to both weapons and armor
 /// (Fortitude without a slot) compares damage with defense: rare, and either base works.
-fn base_rank(item: &ItemDrop) -> (u32, u8, Reverse<u32>) {
+fn base_rank(item: &ItemDrop) -> Rank {
     let code = item.code.as_deref().unwrap_or_default();
     let raw = crate::weapons_data::damage(code)
         .or_else(|| socket_bases::max_defense(code).map(u32::from))
@@ -651,9 +655,15 @@ fn by_preference(items: &[Held], side: Side) -> Vec<usize> {
 
 /// The item plan of `snap`'s character ([`held`], [`plan`]): needs from the resolved `bis`,
 /// the stage `chain` ([`Settings::stage_chain`]) and the farm list, minus the copies the
-/// character and its mercenary wear; magic / rare items scored for the chain's builds.
+/// character and its mercenary wear; magic / rare items scored for the chain's builds. With it
+/// what a ground drop would still add ([`Wants`], the map's keep and farm marks).
 #[must_use]
-pub fn for_snapshot(snap: &Snapshot, config: &Settings, chain: &[String], bis: Option<&Bis>) -> Vec<Advice> {
+pub fn for_snapshot(
+    snap: &Snapshot,
+    config: &Settings,
+    chain: &[String],
+    bis: Option<&Bis>,
+) -> (Vec<Advice>, Wants) {
     let worn: Vec<String> = crate::game::worn_names(&snap.equipped_items)
         .into_iter()
         .chain(snap.merc_worn.iter().cloned())
@@ -661,7 +671,93 @@ pub fn for_snapshot(snap: &Snapshot, config: &Settings, chain: &[String], bis: O
     let holdings = snap.holdings();
     let owns = |name: &str| holdings.count(name);
     let needs = Needs::from_config(config, chain, bis, snap.player.class, &worn, &owns);
-    plan(&held(snap), &needs, &Scoring::new(snap, config, chain))
+    let (advice, mut wants) = plan(&held(snap), &needs, &Scoring::new(snap, config, chain));
+    // A farm-list unique or set nobody holds yet (the farm panel's "missing").
+    let missing = |name: &str| {
+        config.farm.iter().flat_map(|g| &g.items).any(|item| {
+            matches!(item.kind, FarmKind::Unique | FarmKind::Set) && same_name(&item.name, name) && {
+                let (stashed, carried) = holdings.copies(&item.name, Some(item.kind));
+                farm_status(item.count, stashed, carried) == FarmStatus::Missing
+            }
+        })
+    };
+    for piece in &mut wants.pieces {
+        piece.farm = missing(&piece.name);
+    }
+    (advice, wants)
+}
+
+/// What a ground drop would add to the item plan ([`for_snapshot`]), computed once per
+/// evaluation and asked per drop and tick ([`crate::playstyle::marks`]): a base for an open
+/// runeword need better than the one kept for it, a unique or set build piece still wanted.
+/// Magic and rare drops are not judged: their stats aren't known before pickup.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Wants {
+    /// Every runeword base need with the rank of the base the plan keeps for it (`None`: none
+    /// held).
+    bases: Vec<(BaseNeed, Option<Rank>)>,
+    /// The unique and set build pieces with copies still wanted.
+    pieces: Vec<WantedPiece>,
+}
+
+/// A unique or set piece of [`Wants`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WantedPiece {
+    name: String,
+    /// Quality and base code of each unique / set row of that name ([`crate::names::named_bases_cached`]):
+    /// what an unidentified copy looks like.
+    bases: &'static [(u32, &'static str)],
+    /// A still-missing farm-list entry ([`farm_status`]).
+    farm: bool,
+}
+
+impl Wants {
+    /// The wanted piece `drop` is: `(rule, farm entry, uncertain)`. An identified unique or
+    /// set by its name (the rule is the name); an unidentified one (no name yet) by its quality
+    /// and base code, uncertain: the rule names every wanted piece on that base with a "?"
+    /// ("Raven Frost? / Nagelring?"), the farm entries only when any is one.
+    #[must_use]
+    pub fn piece(&self, drop: &ItemDrop) -> Option<(String, bool, bool)> {
+        if !matches!(drop.quality, item_data::QUALITY_UNIQUE | item_data::QUALITY_SET) {
+            return None;
+        }
+        if let Some(index) = crate::names::identity(drop.quality, drop.flags, drop.unique_index) {
+            let shown = crate::names::shown(index);
+            return self
+                .pieces
+                .iter()
+                .find(|p| same_name(&p.name, index) || same_name(&p.name, shown))
+                .map(|p| (p.name.clone(), p.farm, false));
+        }
+        let code = drop.code.as_deref()?;
+        let fits = |p: &&WantedPiece| p.bases.contains(&(drop.quality, code));
+        let farm = self.pieces.iter().filter(fits).any(|p| p.farm);
+        let names: Vec<String> = self
+            .pieces
+            .iter()
+            .filter(fits)
+            .filter(|p| p.farm || !farm)
+            .map(|p| format!("{}?", p.name))
+            .collect();
+        (!names.is_empty()).then(|| (names.join(" / "), farm, true))
+    }
+
+    /// The runeword whose open base need `drop` fills ([`fills`]: exactly its sockets, which
+    /// on a ground drop are natural ones) better than the base kept for it ([`base_rank`]),
+    /// `None` for anything else. A trade-worthy base is no own base ([`trade_worthy`]).
+    #[must_use]
+    pub fn base(&self, drop: &ItemDrop) -> Option<&'static str> {
+        if !plain_base(drop) {
+            return None;
+        }
+        let rank = base_rank(drop);
+        let (need, _) = self
+            .bases
+            .iter()
+            .find(|(need, kept)| fills(need, drop) && kept.as_ref().is_none_or(|k| rank > *k))?;
+        // Last: the rules lookup is the costly part.
+        (!trade_worthy(drop)).then_some(need.word.name)
+    }
 }
 
 /// An item's action with the reason of a scored sell.
@@ -672,7 +768,12 @@ type Decided = (Action, Option<&'static str>);
 /// on a tie the best placed, `order`, [`by_preference`]). The other bases are sold by [`plan`],
 /// a worse one already kept on pages 1–2 included. A trade-worthy base is left for the trade
 /// side.
-fn assign_bases(items: &[Held], needs: &Needs, order: &[usize], actions: &mut [Option<Decided>]) {
+fn assign_bases(
+    items: &[Held],
+    needs: &Needs,
+    order: &[usize],
+    actions: &mut [Option<Decided>],
+) -> Vec<Option<usize>> {
     let candidates: Vec<usize> = order
         .iter()
         .copied()
@@ -683,34 +784,42 @@ fn assign_bases(items: &[Held], needs: &Needs, order: &[usize], actions: &mut [O
                 && actions.get(i).is_some_and(Option::is_none)
         })
         .collect();
-    let mut by_choice: Vec<Vec<usize>> = needs
+    let mut by_choice: Vec<(usize, Vec<usize>)> = needs
         .bases
         .iter()
-        .map(|need| {
-            candidates
+        .enumerate()
+        .map(|(n, need)| {
+            let fits = candidates
                 .iter()
                 .copied()
                 .filter(|&i| items.get(i).is_some_and(|h| fills(need, &h.item)))
-                .collect()
+                .collect();
+            (n, fits)
         })
         .collect();
-    by_choice.sort_by_key(Vec::len);
-    for fits in by_choice {
+    by_choice.sort_by_key(|(_, fits)| fits.len());
+    let mut kept = vec![None; needs.bases.len()];
+    for (n, fits) in by_choice {
         // `min_by_key` keeps the first of equal keys: the best-placed of equal bases.
         let free = fits
             .into_iter()
             .filter(|&i| actions.get(i).is_some_and(Option::is_none))
             .min_by_key(|&i| Reverse(items.get(i).map(|h| base_rank(&h.item))));
-        if let Some((h, slot)) = free.and_then(|i| items.get(i).zip(actions.get_mut(i))) {
+        if let Some((i, (h, slot))) = free.and_then(|i| Some((i, items.get(i).zip(actions.get_mut(i))?))) {
             *slot = Some((keep_or_move(Side::Own, h.spot), None));
+            if let Some(k) = kept.get_mut(n) {
+                *k = Some(i);
+            }
         }
     }
+    kept
 }
 
 /// The action for each of `items` (see the module docs), merged into dashboard lines and
 /// sorted by action, then name, then spot.
+/// With them the [`Wants`] left after the plan (farm flags unset: [`for_snapshot`] sets them).
 #[must_use]
-pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> Vec<Advice> {
+pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> (Vec<Advice>, Wants) {
     let mut actions: Vec<Option<Decided>> = vec![None; items.len()];
     let own_order = by_preference(items, Side::Own);
     // Build pieces first: they win over trade (the player needs them). A keep-one item kept
@@ -734,7 +843,26 @@ pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> Vec<Advice> {
             kept_one.extend(valuables::keep_one_name(&h.item));
         }
     }
-    assign_bases(items, needs, &own_order, &mut actions);
+    let kept = assign_bases(items, needs, &own_order, &mut actions);
+    let wants = Wants {
+        bases: needs
+            .bases
+            .iter()
+            .zip(kept)
+            .map(|(need, k)| (*need, k.and_then(|i| items.get(i)).map(|h| base_rank(&h.item))))
+            .collect(),
+        pieces: needs
+            .pieces
+            .iter()
+            .zip(&wanted)
+            .filter(|&((name, _), &left)| left > 0 && runewords_data::lookup(name).is_none())
+            .map(|((name, _), _)| WantedPiece {
+                name: name.clone(),
+                bases: crate::names::named_bases_cached(name),
+                farm: false,
+            })
+            .collect(),
+    };
     // The rest: trade, sell or give away. A keep-one item keeps its copy best placed for trade.
     for i in by_preference(items, Side::Trade) {
         let (Some(h), Some(slot)) = (items.get(i), actions.get_mut(i)) else {
@@ -790,7 +918,7 @@ pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> Vec<Advice> {
             .then_with(|| a.name.cmp(&b.name))
             .then(a.spot.cmp(&b.spot))
     });
-    out
+    (out, wants)
 }
 
 #[cfg(test)]
@@ -839,6 +967,7 @@ mod tests {
     /// The plan as `(name, spot, action, count)` rows.
     fn rows(items: &[Held], needs: &Needs) -> Vec<(String, Spot, Action, u32)> {
         plan(items, needs, &druid())
+            .0
             .into_iter()
             .map(|a| (a.name, a.spot, a.action, a.count))
             .collect()
@@ -970,6 +1099,71 @@ mod tests {
     }
 
     #[test]
+    fn a_ground_base_is_wanted_only_when_better_than_the_kept_one() {
+        // Spirit in the weapon slot, a Crystal Sword 4os kept on page 1.
+        let mut spirit = Needs::default();
+        spirit.base("Spirit", DRUID, Some(4));
+        let (_, wants) = plan(&[at(base("crs", 4), Spot::Page(1))], &spirit, &druid());
+        assert_eq!(
+            wants.base(&base("bsd", 4)),
+            Some("Spirit"),
+            "Broad Sword beats it"
+        );
+        assert_eq!(wants.base(&base("crs", 4)), None, "the same base: no better");
+        assert_eq!(wants.base(&base("bsd", 3)), None, "wrong socket count");
+        assert_eq!(wants.base(&base("crs", 5)), None, "5os: no Spirit");
+        let mut magic = base("bsd", 4);
+        magic.quality = item_data::QUALITY_MAGIC;
+        assert_eq!(wants.base(&magic), None, "a magic item takes no runeword");
+        // Nothing kept yet: any fitting base is wanted.
+        let (_, open) = plan(&[], &spirit, &druid());
+        assert_eq!(open.base(&base("crs", 4)), Some("Spirit"));
+        // A trade-worthy base is never an own base: eth elite polearm 4os (twink S) for Insight.
+        let mut insight = Needs::default();
+        insight.base("Insight", Wearer::Act2Merc, Some(4));
+        let (_, merc) = plan(&[], &insight, &druid());
+        assert_eq!(merc.base(&base("9vo", 4)), Some("Insight"), "a plain Bill 4os");
+        let mut eth = base("7vo", 4);
+        eth.ethereal = true;
+        assert_eq!(merc.base(&eth), None, "an eth Colossus Voulge 4os goes to trade");
+    }
+
+    #[test]
+    fn a_ground_unique_is_wanted_while_copies_are_missing() {
+        let mut needs = Needs::default();
+        needs.piece("Harlequin Crest", 1);
+        needs.piece("Spirit", 1);
+        let (_, wants) = plan(&[], &needs, &druid());
+        let shako = named("uap", item_data::QUALITY_UNIQUE, 248);
+        assert_eq!(
+            wants.piece(&shako),
+            Some(("Harlequin Crest".to_owned(), false, false)),
+            "by name"
+        );
+        let unidentified = ItemDrop {
+            flags: 0,
+            unique_index: None,
+            ..shako.clone()
+        };
+        assert_eq!(
+            wants.piece(&unidentified),
+            Some(("Harlequin Crest?".to_owned(), false, true)),
+            "by quality and base, uncertain"
+        );
+        let mut set_cap = unidentified;
+        set_cap.quality = item_data::QUALITY_SET;
+        assert_eq!(wants.piece(&set_cap), None, "a set item on the same base");
+        assert_eq!(wants.piece(&base("uap", 0)), None, "a white Shako");
+        // One copy held: no more wanted.
+        let (_, held) = plan(&[at(shako.clone(), Spot::Page(1))], &needs, &druid());
+        assert_eq!(held.piece(&shako), None);
+        assert!(
+            wants.pieces.iter().all(|p| p.name != "Spirit"),
+            "runewords don't drop"
+        );
+    }
+
+    #[test]
     fn tradable_a_bases_are_kept_for_trade_without_a_need() {
         // Monarch 4os (Spirit shield) and Crystal Sword 5os (Call to Arms): A trade rules.
         let items = [
@@ -1020,7 +1214,7 @@ mod tests {
         let mut superior = base("ful", 4);
         superior.quality = item_data::QUALITY_SUPERIOR;
         let plates = [at(base("ful", 4), Spot::Page(1)), at(superior, Spot::Page(4))];
-        let plates_plan = plan(&plates, &fortitude, &druid());
+        let plates_plan = plan(&plates, &fortitude, &druid()).0;
         let actions: Vec<_> = plates_plan.iter().map(|a| (a.spot, a.action)).collect();
         assert_eq!(
             actions,
@@ -1033,7 +1227,7 @@ mod tests {
         let mut eth = base("ful", 4);
         eth.ethereal = true;
         let mixed = [at(base("aar", 4), Spot::Page(1)), at(eth, Spot::Page(2))];
-        let eth_plan = plan(&mixed, &fortitude, &druid());
+        let eth_plan = plan(&mixed, &fortitude, &druid()).0;
         let actions: Vec<_> = eth_plan.iter().map(|a| (a.spot, a.action)).collect();
         assert_eq!(
             actions,
@@ -1158,6 +1352,7 @@ mod tests {
     /// The plan of `items` as `(name, spot, action, reason)` rows.
     fn judged(items: &[Held], scoring: &Scoring) -> Vec<(String, Spot, Action, Option<&'static str>)> {
         plan(items, &Needs::default(), scoring)
+            .0
             .into_iter()
             .map(|a| (a.name, a.spot, a.action, a.reason))
             .collect()
@@ -1597,7 +1792,7 @@ mod tests {
             at(named("uap", 7, 248), Spot::Page(5)),
             at(voulge, Spot::Page(1)),
         ];
-        let advice = plan(&items, &Needs::default(), &druid());
+        let advice = plan(&items, &Needs::default(), &druid()).0;
         assert_eq!(
             advice
                 .iter()

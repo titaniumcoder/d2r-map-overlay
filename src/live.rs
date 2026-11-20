@@ -20,7 +20,7 @@ use crate::reader::{Attach, GameReader};
 use crate::session::Session;
 use ab_glyph::FontVec;
 
-use crate::{config, cows, game_file, info, journal, played, quest_log, render, web};
+use crate::{config, cows, game_file, info, journal, played, quest_log, render, stash_plan, web};
 
 /// Snapshot interval (~5 Hz).
 const TICK: Duration = Duration::from_millis(200);
@@ -254,6 +254,12 @@ fn follow_game(
     // Each difficulty's finished quests per character: the game shows only the current one's.
     let mut quest_memory = quest_log::Memory::open(quest_log::default_path());
     let mut dedup = Dedup::default();
+    // The last evaluation's wants, with the player unit they were computed for. The marks are
+    // needed before the session merge (the journal records them) and the evaluation needs the
+    // merge, so a tick's keep marks use the previous tick's wants: one tick (~200 ms) late.
+    // Another player unit (a new game, another character) starts from none (trade marks only)
+    // instead of the old character's keep marks.
+    let mut wants = (None, stash_plan::Wants::default());
     loop {
         let start = Instant::now();
         // Hot-reload here, not only in `run`: this loop is where every consumer (the shrines,
@@ -266,7 +272,10 @@ fn follow_game(
             Ok(mut snap) => {
                 // The playstyle's view of the snapshot: the drop marks first (the journal records
                 // them with the drop); the rest once the session's stash is in.
-                let marks = playstyle.mark_drops(&mut snap.drops);
+                if wants.0 != Some(snap.player.id) {
+                    wants = (None, stash_plan::Wants::default());
+                }
+                let marks = playstyle.mark_drops(&mut snap.drops, &wants.1);
                 // Before `apply` and the shrine filter: they drop monster presets and shrines
                 // the journal wants to see.
                 journal.observe(&snap, &marks);
@@ -288,6 +297,7 @@ fn follow_game(
                     last_played.reach(&snap.player.name, slug);
                 }
                 evaluation.guidance.marks = marks;
+                wants = (Some(snap.player.id), std::mem::take(&mut evaluation.wants));
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }

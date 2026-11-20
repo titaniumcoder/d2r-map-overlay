@@ -5,11 +5,40 @@
 
 use std::collections::HashMap;
 
-use crate::{build, config, stash_plan, valuables};
+use serde::{Deserialize, Serialize};
 
-/// The valuables highlight of each marked ground drop, by the drop's unit id
+use crate::valuables::{Category, Tier};
+use crate::{build, config, stash_plan};
+
+/// The mark of each marked ground drop, by the drop's unit id
 /// ([`crate::game::ItemDrop::id`]); drops without a mark aren't in it.
-pub type Marks = HashMap<u32, valuables::Highlight>;
+pub type Marks = HashMap<u32, Mark>;
+
+/// What a ground drop is marked for ([`crate::playstyle::marks`]); the map draws each kind in
+/// its own style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkKind {
+    /// For the player's own builds: a base for an open runeword need, a build piece.
+    Keep,
+    /// A farm-list unique or set still missing (a keep too, drawn with a star).
+    Farm,
+    /// Worth trading: a valuables rule ([`crate::valuables`]).
+    Trade,
+}
+
+/// Why a ground drop is marked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mark {
+    pub kind: MarkKind,
+    /// A trade mark's valuables tier and category (the ring colour); `None` for keep and farm.
+    pub trade: Option<(Tier, Category)>,
+    /// The valuables rule's name, the piece's name, or "<runeword> base".
+    pub rule: String,
+    /// The match rests on what the overlay can't check (an unidentified unique's name, the
+    /// item's stats such as an unknown enhanced defense): drawn dashed.
+    pub uncertain: bool,
+}
 
 /// The playstyle's results for one snapshot. Kept apart from the reader's [`crate::game::Snapshot`];
 /// compared with it to skip re-rendering an unchanged frame.
@@ -24,6 +53,6 @@ pub struct Guidance {
     /// What to do with each of the player's items, merged and sorted for the dashboard
     /// ([`stash_plan::plan`]).
     pub items: Vec<stash_plan::Advice>,
-    /// The ground-drop rings ([`valuables::apply`]).
+    /// The ground-drop rings ([`crate::playstyle::marks::apply`]).
     pub marks: Marks,
 }

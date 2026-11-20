@@ -2,6 +2,9 @@
 //! name comes from ([`ItemKind`]) and the display name of an identified unique or set item
 //! ([`unique_set_name_parts`]).
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex, PoisonError};
+
 use serde::Deserialize;
 
 use crate::item_names_data;
@@ -91,19 +94,56 @@ pub fn shown(index: &'static str) -> &'static str {
 /// [`same_name`]); empty for any other name. Several rows can share a name across tables.
 #[must_use]
 pub fn named_base_codes(name: &str) -> Vec<&'static str> {
+    named_bases(name).into_iter().map(|(_, code)| code).collect()
+}
+
+/// A unique or set row's quality and base code ([`named_bases`]).
+pub type NamedBase = (u32, &'static str);
+
+/// [`named_bases`], resolved once per name and kept for the process (the item plan asks for
+/// every wanted piece on each evaluation, five times a second). The names come from the
+/// playstyle's files, so the cache stays small; each entry is leaked once to hand out a
+/// `'static` slice without a copy per call.
+#[must_use]
+pub fn named_bases_cached(name: &str) -> &'static [NamedBase] {
+    static CACHE: LazyLock<Mutex<HashMap<String, &'static [NamedBase]>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    // A panic while holding the lock can't leave the map half-written (one insert), so a
+    // poisoned lock is still usable.
+    let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(&bases) = cache.get(name) {
+        return bases;
+    }
+    let bases: &'static [NamedBase] = Box::leak(named_bases(name).into_boxed_slice());
+    cache.insert(name.to_owned(), bases);
+    bases
+}
+
+/// [`named_base_codes`] with each code's quality (`item_data::QUALITY_UNIQUE` or
+/// `QUALITY_SET`): what an unidentified drop of that item looks like.
+#[must_use]
+pub fn named_bases(name: &str) -> Vec<(u32, &'static str)> {
     let tables = [
-        (item_names_data::UNIQUE_NAMES, item_names_data::UNIQUE_CODES),
-        (item_names_data::SET_NAMES, item_names_data::SET_CODES),
+        (
+            item_data::QUALITY_UNIQUE,
+            item_names_data::UNIQUE_NAMES,
+            item_names_data::UNIQUE_CODES,
+        ),
+        (
+            item_data::QUALITY_SET,
+            item_names_data::SET_NAMES,
+            item_names_data::SET_CODES,
+        ),
     ];
     tables
         .into_iter()
-        .flat_map(|(names, codes)| {
+        .flat_map(|(quality, names, codes)| {
             names
                 .iter()
                 .filter(|&&(_, index)| same_name(index, name) || same_name(shown(index), name))
                 .filter_map(move |&(row, _)| {
                     let i = codes.binary_search_by_key(&row, |&(r, _)| r).ok()?;
-                    codes.get(i).map(|&(_, code)| code)
+                    codes.get(i).map(|&(_, code)| (quality, code))
                 })
         })
         .collect()

@@ -10,7 +10,7 @@ use tiny_skia::{
 };
 
 use crate::game::{Bounds, Monster, Preset, PresetKind, Room, RoomRect, Snapshot};
-use crate::guidance::{Guidance, Marks};
+use crate::guidance::{Guidance, Mark, MarkKind, Marks};
 use crate::items::{CharmSize, DropKind, GemColour};
 use crate::offsets::monster_data;
 use crate::stash_plan::{Action, Advice, Side};
@@ -480,6 +480,11 @@ const BASE_WHITE: Rgba = [240, 240, 240, 255];
 const RING_GAP: f32 = 4.0;
 const RING_WIDTH: f32 = 2.0;
 const RING_DASH: [f32; 2] = [3.0, 2.5];
+/// Keep and farm rings ("for me"): a mint green, apart from the set items' pure green diamond,
+/// the player's green dot and the trade tiers' red / orange / yellow.
+const KEEP_GREEN: Rgba = [60, 240, 150, 255];
+/// The farm ring's star: size (tip radius, px), sitting on the ring at its upper right.
+const FARM_STAR: f32 = 3.5;
 /// Live elites: the dot and the superunique and boss skulls.
 const ELITE_RED: Rgba = [230, 30, 30, 255];
 /// Skull icons: the dark outline is stroked under the fill, so about 1 px of it shows around the
@@ -582,13 +587,44 @@ pub enum Marker {
     Player,
     /// An item on the ground worth picking up.
     Drop(DropKind),
-    /// A valuables highlight around the drop marker of `kind`: a ring coloured by tier, dashed
-    /// when the match is uncertain. Drawn after all drop markers, so no drop hides a ring.
+    /// A mark around the drop marker of `kind` ([`crate::guidance::Mark`]): a ring in the
+    /// colour of its [`RingLook`], dashed when the match is uncertain. Drawn after all drop
+    /// markers, so no drop hides a ring.
     Ring {
         kind: DropKind,
-        tier: Tier,
+        look: RingLook,
         uncertain: bool,
     },
+}
+
+/// How a drop mark looks: "for me" (green) apart from "for trade" (the tier colours).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RingLook {
+    /// For the player's own builds: a green ring.
+    Keep,
+    /// A still-missing farm-list item: the green ring with a small green star on it.
+    Farm,
+    /// Worth trading: S red, A orange, B yellow.
+    Trade(Tier),
+}
+
+impl RingLook {
+    const fn of(mark: &Mark) -> Self {
+        match (mark.trade, mark.kind) {
+            (Some((tier, _)), _) => Self::Trade(tier),
+            (None, MarkKind::Farm) => Self::Farm,
+            (None, MarkKind::Keep | MarkKind::Trade) => Self::Keep,
+        }
+    }
+
+    const fn colour(self) -> Rgba {
+        match self {
+            Self::Keep | Self::Farm => KEEP_GREEN,
+            Self::Trade(Tier::S) => [230, 40, 40, 255],
+            Self::Trade(Tier::A) => [255, 140, 0, 255],
+            Self::Trade(Tier::B) => [255, 220, 0, 255],
+        }
+    }
 }
 
 impl Marker {
@@ -629,22 +665,13 @@ impl Marker {
             }
             Self::Drop(DropKind::Gem(colour)) => (gem_colour(colour), 3.5, Shape::Diamond),
             Self::Drop(DropKind::Base) => (BASE_WHITE, 3.5, Shape::Diamond),
-            Self::Ring { kind, tier, .. } => {
+            Self::Ring { kind, look, .. } => {
                 let radius = Self::Drop(kind).style().1 + RING_GAP;
-                (tier_colour(tier), radius, Shape::Circle)
+                (look.colour(), radius, Shape::Circle)
             }
             Self::Merc => ([150, 255, 190, 255], 2.5, Shape::Circle),
             Self::Player => ([40, 255, 60, 255], 2.5, Shape::Circle),
         }
-    }
-}
-
-/// Ring colour of a valuables tier.
-const fn tier_colour(t: Tier) -> Rgba {
-    match t {
-        Tier::S => [230, 40, 40, 255],
-        Tier::A => [255, 140, 0, 255],
-        Tier::B => [255, 220, 0, 255],
     }
 }
 
@@ -1092,11 +1119,11 @@ fn markers_with(snap: &Snapshot, marks: &Marks, rules: &[LandmarkRule]) -> Vec<(
                 .map(|d| (Marker::Drop(d.kind), f64::from(d.x), f64::from(d.y))),
         )
         .chain(snap.drops.iter().filter_map(|d| {
-            let h = marks.get(&d.id)?;
+            let mark = marks.get(&d.id)?;
             let ring = Marker::Ring {
                 kind: d.kind,
-                tier: h.tier,
-                uncertain: h.uncertain,
+                look: RingLook::of(mark),
+                uncertain: mark.uncertain,
             };
             Some((ring, f64::from(d.x), f64::from(d.y)))
         }))
@@ -1273,8 +1300,11 @@ fn render_rules(
             draw_suspected(&mut pm, font, &dot, cx, cy);
         } else if shape == Shape::Worm || marker == Marker::Orifice {
             draw_figure(&mut pm, marker, &dot, colour, (cx, cy, size));
-        } else if let Marker::Ring { uncertain, .. } = marker {
+        } else if let Marker::Ring { look, uncertain, .. } = marker {
             draw_ring(&mut pm, &dot, colour, uncertain);
+            if look == RingLook::Farm {
+                draw_farm_star(&mut pm, (cx, cy, size), colour);
+            }
         } else if marker == Marker::Well {
             draw_well(&mut pm, &dot, colour);
         } else if let Marker::Shrine(_) = marker {
@@ -1571,6 +1601,28 @@ fn draw_ring(pm: &mut Pixmap, circle: &Path, colour: Rgba, uncertain: bool) {
         ..Stroke::default()
     };
     pm.stroke_path(circle, &paint(colour), &stroke, Transform::identity(), None);
+}
+
+/// The farm ring's star: on the ring of radius `size` around (`cx`, `cy`) at 45° up-right, so
+/// it reads as "this ring, starred"; dark outline under the fill, as the quest-object star.
+fn draw_farm_star(pm: &mut Pixmap, (cx, cy, size): (f32, f32, f32), colour: Rgba) {
+    let at = size * std::f32::consts::FRAC_1_SQRT_2;
+    let Some(star) = marker_path(Shape::Star, cx + at, cy - at, FARM_STAR) else {
+        return;
+    };
+    let outline = Stroke {
+        width: 3.0,
+        line_join: LineJoin::Round,
+        ..Stroke::default()
+    };
+    pm.stroke_path(
+        &star,
+        &paint(MARKER_OUTLINE),
+        &outline,
+        Transform::identity(),
+        None,
+    );
+    solid(pm, &star, colour);
 }
 
 /// A well: the hollow `circle` in `colour` on a wider dark ring, so it reads on any background.
@@ -2695,18 +2747,20 @@ mod tests {
         Ok((hits, dx, dy))
     }
 
-    /// A drop of `kind` at (`x`, 30) with unit id 1000 + `x`, and its mark.
-    fn highlighted(
-        kind: DropKind,
-        x: u32,
-        tier: Tier,
-        uncertain: bool,
-    ) -> (ItemDrop, (u32, crate::valuables::Highlight)) {
+    /// A drop of `kind` at (`x`, 30) with unit id 1000 + `x`, and its mark of `look`.
+    fn highlighted(kind: DropKind, x: u32, look: RingLook, uncertain: bool) -> (ItemDrop, (u32, Mark)) {
         let mut d = drop_at(kind, x, 30);
         d.id = 1000 + x;
-        let mark = crate::valuables::Highlight {
-            tier,
-            category: crate::valuables::Category::Trade,
+        let mark = Mark {
+            kind: match look {
+                RingLook::Keep => MarkKind::Keep,
+                RingLook::Farm => MarkKind::Farm,
+                RingLook::Trade(_) => MarkKind::Trade,
+            },
+            trade: match look {
+                RingLook::Trade(tier) => Some((tier, crate::valuables::Category::Trade)),
+                RingLook::Keep | RingLook::Farm => None,
+            },
             rule: "test".into(),
             uncertain,
         };
@@ -2739,7 +2793,7 @@ mod tests {
     #[test]
     fn rings_come_after_drops_and_the_player() {
         let mut snap = empty_snapshot(5, 5);
-        let (ringed, mark) = highlighted(DropKind::Base, 1, Tier::A, false);
+        let (ringed, mark) = highlighted(DropKind::Base, 1, RingLook::Trade(Tier::A), false);
         snap.drops = vec![ringed, drop_at(DropKind::Rune(1), 2, 2)];
         let kinds: Vec<Marker> = markers_with(&snap, &Marks::from([mark]), LANDMARKS)
             .into_iter()
@@ -2753,7 +2807,7 @@ mod tests {
                 Marker::Drop(DropKind::Rune(1)),
                 Marker::Ring {
                     kind: DropKind::Base,
-                    tier: Tier::A,
+                    look: RingLook::Trade(Tier::A),
                     uncertain: false
                 },
             ]
@@ -2776,10 +2830,10 @@ mod tests {
         snap.level.rooms = vec![room(0, 0, false), room(60, 0, true)];
         let marks: Marks;
         (snap.drops, marks) = [
-            highlighted(DropKind::Unique, 20, Tier::S, false),
-            highlighted(DropKind::Base, 60, Tier::A, false),
-            highlighted(DropKind::Base, 100, Tier::B, false),
-            highlighted(DropKind::Set, 140, Tier::S, true),
+            highlighted(DropKind::Unique, 20, RingLook::Trade(Tier::S), false),
+            highlighted(DropKind::Base, 60, RingLook::Trade(Tier::A), false),
+            highlighted(DropKind::Base, 100, RingLook::Trade(Tier::B), false),
+            highlighted(DropKind::Set, 140, RingLook::Trade(Tier::S), true),
         ]
         .into_iter()
         .unzip();
@@ -2808,6 +2862,44 @@ mod tests {
         let radius = Marker::Drop(DropKind::Set).style().1 + RING_GAP;
         let hits = ring_hits(&pm, at, radius, [230, 40, 40, 255], 72)?;
         assert!((20..=60).contains(&hits), "dashed ring: {hits}/72 on the ring");
+        Ok(())
+    }
+
+    #[test]
+    fn keep_and_farm_rings_are_green_and_the_farm_ring_has_a_star() -> Result<()> {
+        let mut snap = empty_snapshot(5, 115);
+        snap.level.rooms = vec![room(0, 0, false), room(60, 0, true)];
+        let marks: Marks;
+        (snap.drops, marks) = [
+            highlighted(DropKind::Base, 20, RingLook::Keep, false),
+            highlighted(DropKind::Unique, 100, RingLook::Farm, true),
+        ]
+        .into_iter()
+        .unzip();
+        let (w, h) = (400, 400);
+        let guidance = Guidance {
+            marks,
+            ..Guidance::default()
+        };
+        let pm = render_with(&snap, &guidance, w, h, None)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+        let at = v.to_screen(20.0, 30.0);
+        let radius = Marker::Drop(DropKind::Base).style().1 + RING_GAP;
+        let hits = ring_hits(&pm, at, radius, KEEP_GREEN, 72)?;
+        assert!(hits >= 68, "solid green keep ring: {hits}/72");
+        // The farm ring: dashed (an unidentified unique), green, a green star at its upper right.
+        let at = v.to_screen(100.0, 30.0);
+        let radius = Marker::Drop(DropKind::Unique).style().1 + RING_GAP;
+        let hits = ring_hits(&pm, at, radius, KEEP_GREEN, 72)?;
+        assert!((20..=60).contains(&hits), "dashed farm ring: {hits}/72");
+        let star = radius * std::f32::consts::FRAC_1_SQRT_2;
+        let star_hits = ring_hits(&pm, (at.0 + star, at.1 - star), 1.5, KEEP_GREEN, 12)?;
+        assert!(star_hits >= 10, "the star's body is green: {star_hits}/12");
+        assert_ne!(
+            KEEP_GREEN,
+            Marker::Drop(DropKind::Set).style().0,
+            "apart from set diamonds"
+        );
         Ok(())
     }
 

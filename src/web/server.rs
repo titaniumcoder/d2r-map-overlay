@@ -636,7 +636,11 @@ mod tests {
 
         fn reload(&mut self, _: &Files) {}
 
-        fn mark_drops(&self, _: &mut Vec<crate::game::ItemDrop>) -> crate::guidance::Marks {
+        fn mark_drops(
+            &self,
+            _: &mut Vec<crate::game::ItemDrop>,
+            _: &crate::stash_plan::Wants,
+        ) -> crate::guidance::Marks {
             crate::guidance::Marks::new()
         }
 
@@ -648,6 +652,7 @@ mod tests {
         ) -> crate::playstyle::Evaluation<'_> {
             crate::playstyle::Evaluation {
                 guidance: crate::guidance::Guidance::default(),
+                wants: crate::stash_plan::Wants::default(),
                 reached: None,
                 stage: None,
                 chain: Vec::new(),

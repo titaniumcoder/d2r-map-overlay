@@ -18,7 +18,7 @@ use serde::Serialize;
 
 use crate::config::SHRINE_NAMES;
 use crate::game::{Bounds, PresetKind, Room, Snapshot};
-use crate::guidance::Marks;
+use crate::guidance::{MarkKind, Marks};
 use crate::items::DropKind;
 use crate::session;
 use crate::valuables::{Category, Tier};
@@ -104,8 +104,10 @@ pub enum Event {
         y: u16,
         piece: Option<u32>,
     },
-    /// A shown ground item (unique, set, gem, rune, charm, valuable base) on first sight, with
-    /// its highlight (`null` tier: none) and raw fields for checking unverified offsets.
+    /// A shown ground item (unique, set, gem, rune, charm, marked base) on first sight, with
+    /// its mark (`mark` keep / farm / trade, `null`: none; `tier` and `category` only for a
+    /// trade mark; `rule` the valuables rule, the piece or "<runeword> base") and raw fields
+    /// for checking unverified offsets.
     Drop {
         level: u32,
         id: u32,
@@ -114,6 +116,9 @@ pub enum Event {
         quality: u32,
         x: u32,
         y: u32,
+        /// Journals written before marks v2 have no `mark` (their marks were all trade); a
+        /// reader of old lines takes a missing one as `null` (`Event` is only written here).
+        mark: Option<MarkKind>,
         tier: Option<Tier>,
         category: Option<Category>,
         rule: Option<String>,
@@ -323,8 +328,9 @@ impl Recorder {
                     quality: d.quality,
                     x: d.x,
                     y: d.y,
-                    tier: h.map(|h| h.tier),
-                    category: h.map(|h| h.category),
+                    mark: h.map(|h| h.kind),
+                    tier: h.and_then(|h| h.trade).map(|(tier, _)| tier),
+                    category: h.and_then(|h| h.trade).map(|(_, category)| category),
                     rule: h.map(|h| h.rule.clone()),
                     uncertain: h.is_some_and(|h| h.uncertain),
                     sockets: d.sockets,
@@ -602,8 +608,8 @@ fn utc_date(t: u64) -> String {
 mod tests {
     use super::*;
     use crate::game::{Addr, ItemDrop, Level, Monster, Player, Preset, RoomLink, RoomPos};
+    use crate::guidance::Mark;
     use crate::items::CharmSize;
-    use crate::valuables::Highlight;
     use anyhow::{Context, Result};
     use serde_json::json;
 
@@ -861,9 +867,9 @@ mod tests {
         }];
         let marks = Marks::from([(
             9,
-            Highlight {
-                tier: Tier::S,
-                category: Category::Trade,
+            Mark {
+                kind: MarkKind::Trade,
+                trade: Some((Tier::S, Category::Trade)),
                 rule: "Unique grand charms".into(),
                 uncertain: true,
             },
@@ -877,7 +883,8 @@ mod tests {
             serde_json::to_value(drop)?,
             json!({"ev": "drop", "level": 74, "id": 9, "code": "cm3",
                 "kind": {"charm": {"size": "grand", "unique": true}}, "quality": 7, "x": 12, "y": 13,
-                "tier": "S", "category": "trade", "rule": "Unique grand charms", "uncertain": true,
+                "mark": "trade", "tier": "S", "category": "trade", "rule": "Unique grand charms",
+                "uncertain": true,
                 "sockets": 0, "ethereal": false, "flags": 0x0080_0000, "unique_index": 370,
                 "item_data_head": "07000000"})
         );
@@ -936,7 +943,7 @@ mod tests {
                 "txt": 250, "flags": 2, "x": 45, "y": 5, "piece": 510, "mode": 1}),
             json!({"t": 100, "game": "0000beef-a000", "ev": "drop", "level": 74, "id": 9,
                 "code": "r01", "kind": {"rune": 1}, "quality": 2, "x": 12, "y": 13,
-                "tier": null, "category": null, "rule": null, "uncertain": false, "sockets": 0,
+                "mark": null, "tier": null, "category": null, "rule": null, "uncertain": false, "sockets": 0,
                 "ethereal": false, "flags": 0, "unique_index": null, "item_data_head": ""}),
             json!({"t": 100, "game": "0000beef-a000", "ev": "arrival", "level": 74, "x": 85,
                 "y": 3, "piece": null}),

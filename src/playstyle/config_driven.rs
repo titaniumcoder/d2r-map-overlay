@@ -11,7 +11,8 @@ use super::build::Damage;
 use super::config::Settings;
 use super::files::{self, Files};
 use super::guidance::{Guidance, Marks};
-use super::{Evaluation, Playstyle, build, route, stash_plan, valuables, web};
+use super::stash_plan::Wants;
+use super::{Evaluation, Playstyle, build, marks, route, stash_plan, web};
 
 /// The playstyle of the folder's files: the character's selected build (else its class's
 /// default) followed along its stage chain, the farm list and the valuables tiers.
@@ -31,8 +32,8 @@ impl Playstyle for ConfigDriven {
         files::reload(&mut self.config, files);
     }
 
-    fn mark_drops(&self, drops: &mut Vec<ItemDrop>) -> Marks {
-        valuables::apply(drops, &self.config.valuables)
+    fn mark_drops(&self, drops: &mut Vec<ItemDrop>, wants: &Wants) -> Marks {
+        marks::apply(drops, &self.config.valuables, wants)
     }
 
     fn evaluate(
@@ -63,7 +64,7 @@ impl Playstyle for ConfigDriven {
         // The current stage and its later ones: the farm list drops what this character wears
         // of them; the item plan keeps them.
         let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
-        let items = stash_plan::for_snapshot(snap, config, &chain, bis.as_ref());
+        let (items, wants) = stash_plan::for_snapshot(snap, config, &chain, bis.as_ref());
         let route = advise(config, snap, &holdings, damages, quests);
         Evaluation {
             guidance: Guidance {
@@ -72,6 +73,7 @@ impl Playstyle for ConfigDriven {
                 items,
                 marks: Marks::new(),
             },
+            wants,
             reached: moved_on,
             stage,
             chain,
@@ -162,6 +164,66 @@ mod tests {
             .evaluate(&snap, None, Some(&QuestsDone::default()))
             .route;
         assert_eq!(advice.map(|a| a.id).as_deref(), Some("normal-tristram"));
+        Ok(())
+    }
+
+    #[test]
+    fn ground_drops_get_keep_farm_and_trade_marks() -> Result<()> {
+        use crate::guidance::MarkKind;
+        // The Flayer Jungle dump (a level-50 Summoner holding no Harmony) with five drops:
+        // a white 4os Hunter's Bow, a Monarch 4os, a Long Sword 0os, an unidentified unique ring
+        // and unidentified unique Heavy Gloves.
+        let snap: Snapshot =
+            serde_json::from_str(include_str!("../../tests/fixtures/flayer-marks-snapshot.json"))
+                .context("parsing fixture")?;
+        let playstyle = ConfigDriven::load(&Files {
+            shipped: Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("playstyles/summoner-fury")),
+            quiet: true,
+            ..Files::default()
+        });
+        let wants = playstyle.evaluate(&snap, None, None).wants;
+        let mut drops = snap.drops.clone();
+        let marks = playstyle.mark_drops(&mut drops, &wants);
+        let got: Vec<_> = drops
+            .iter()
+            .map(|d| {
+                let m = marks.get(&d.id);
+                (
+                    d.code.as_deref(),
+                    m.map(|m| m.kind),
+                    m.map(|m| m.rule.as_str()),
+                    m.is_some_and(|m| m.uncertain),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (Some("hbw"), Some(MarkKind::Keep), Some("Harmony base"), false),
+                (Some("uit"), Some(MarkKind::Trade), Some("Monarch 4os"), false),
+                // Raven Frost or Manald Heal by its base, but the S unique-ring trade rule wins
+                // over a guess.
+                (Some("rin"), Some(MarkKind::Trade), Some("Stone of Jordan"), true),
+                (Some("vgl"), Some(MarkKind::Farm), Some("Bloodfist?"), true),
+            ],
+            "the Long Sword 0os is gone"
+        );
+        // Without wants (before the first evaluation, another player unit): trade marks only.
+        let mut drops = snap.drops;
+        let marks = playstyle.mark_drops(&mut drops, &Wants::default());
+        let kinds: Vec<_> = drops
+            .iter()
+            .map(|d| (d.code.as_deref(), marks.get(&d.id).map(|m| m.kind)))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (Some("uit"), Some(MarkKind::Trade)),
+                (Some("rin"), Some(MarkKind::Trade)),
+                (Some("vgl"), None),
+            ],
+            "the gloves stay shown (a unique), without a ring"
+        );
         Ok(())
     }
 }

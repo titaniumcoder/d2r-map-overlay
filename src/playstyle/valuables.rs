@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::config;
 use crate::game::ItemDrop;
-use crate::guidance::Marks;
 use crate::names::{self, identity, shown};
 use crate::offsets::item_data;
 
@@ -322,21 +321,6 @@ pub fn keep_one_name(item: &ItemDrop) -> Option<&'static str> {
     let name = identity(item.quality, item.flags, item.unique_index)?;
     let (rule, _) = best_rule(&RULES, item, Some(name), &EVERYTHING)?;
     (rule.keep == Copies::One).then_some(name)
-}
-
-/// The marks of the drops from the tiers `enabled` turns on, by drop id; removes the drops that
-/// are only shown for a rule ([`crate::items::DropKind::Base`]) when no enabled rule matches.
-/// The reader keeps every base with a code, so this is the only filter on them.
-pub fn apply(drops: &mut Vec<ItemDrop>, enabled: &config::Valuables) -> Marks {
-    let mut marks = Marks::new();
-    drops.retain(|d| {
-        let Some(h) = best(d, enabled) else {
-            return d.kind != crate::items::DropKind::Base;
-        };
-        marks.insert(d.id, h);
-        true
-    });
-    marks
 }
 
 #[cfg(test)]
@@ -673,6 +657,11 @@ mod tests {
         );
     }
 
+    /// The map's marks without any build wants: trade marks only.
+    fn apply(drops: &mut Vec<ItemDrop>, enabled: &config::Valuables) -> crate::guidance::Marks {
+        crate::playstyle::marks::apply(drops, enabled, &crate::stash_plan::Wants::default())
+    }
+
     #[test]
     fn apply_drops_unmatched_bases_only() {
         let mut gem = drop("gcg", 2, 0, false);
@@ -680,16 +669,28 @@ mod tests {
         gem.id = 3;
         let mut three = drop("crs", 2, 3, false);
         three.id = 2;
-        let mut drops = vec![drop("crs", 2, 4, false), three, gem];
+        let mut monarch = drop("uit", 2, 4, false);
+        monarch.id = 4;
+        let mut drops = vec![drop("crs", 2, 4, false), three, gem, monarch];
         let marks = apply(&mut drops, &config::Valuables::default());
         let left: Vec<_> = drops
             .iter()
-            .map(|d| (d.code.as_deref(), d.sockets, marks.get(&d.id).map(|h| h.tier)))
+            .map(|d| {
+                (
+                    d.code.as_deref(),
+                    d.sockets,
+                    marks.get(&d.id).and_then(|m| m.trade),
+                )
+            })
             .collect();
         assert_eq!(
             left,
-            vec![(Some("crs"), 4, Some(Tier::A)), (Some("gcg"), 0, None)],
-            "the 3os base is gone (B is off), the gem stays without a ring"
+            vec![
+                (Some("gcg"), 0, None),
+                (Some("uit"), 4, Some((Tier::A, Category::Trade)))
+            ],
+            "the 3os base is gone (B is off), the 4os Crystal Sword too (a twink A base is no \
+             trade good and no need wants it), the gem stays without a ring"
         );
     }
 

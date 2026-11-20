@@ -293,8 +293,9 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   list), `+0x68/+0x70` sibling links (unused).
 - Valuables: playstyles/summoner-fury/valuables.json (67 rules, S/A/B, trade/twink; was research/
   until step 7) embedded; tiers per category in the playstyle's `playstyle.toml` `[valuables]`
-  (default S+A both). Ground: ring by tier
-  (S red, A orange, dashed = uncertain). Inventory keep list (dashboard; formerly green lines on the overlay): certain
+  (default S+A both). Ground: trade ring by tier
+  (S red, A orange, dashed = uncertain); since step 10 also keep (green) and farm (green + star)
+  rings, see the plugin refactor's step 10. Inventory keep list (dashboard; formerly green lines on the overlay): certain
   S/A, uncertain only S — moved to the dashboard with the 2026-11-17 text-stack migration (see Overlay), the
   reader and its tiers unchanged. Unique/set names from src/item_names_data.rs (research/gen_item_names.py).
 
@@ -675,9 +676,10 @@ item. Needs the drop tables generated into the project (a new data step).
 **Quest memory**: the game shows only the current difficulty's quests, so the overlay saves quest
 progress per character and difficulty (like the build stage in `played.json`).
 
-**Map marks**
-- **Keep**: bases for farm-list runewords that dropped with exactly the right sockets, plus
-  farm-list uniques and sets.
+**Map marks** (done in step 10)
+- **Keep** (green ring): bases for open runeword needs that dropped with exactly the right
+  sockets and beat the base held, plus build-piece uniques and sets still wanted; **Farm**
+  (green ring with a star): farm-list uniques and sets still missing.
 - **Trade**: top and second tier of high-value online bases, e.g. eth elite polearms 4–5os, Monarch
   4os, Archon Plate / Dusk Shroud 3–4os, Phase Blade 5os, superior or eth elite bases. Drawn
   **dashed** while the overlay can't read their enhanced defense (unknown ED).
@@ -891,7 +893,36 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   before `evaluate`, which now takes `Option<&QuestsDone>`; `Evaluation::route` → `PanelInfo::next` →
   the live JSON's `next` section. **Dashboard**: a compact "Next" panel at the top (title, todo
   lines, note, "then: …"); page snapshot updated.
-- [ ] 10. Keep and trade marks v2.
+- [x] 10. Keep and trade marks v2. `Playstyle::mark_drops(drops, &Wants)` returns marks of three
+  **kinds** (`guidance::Mark { kind, trade: Option<(tier, category)>, rule, uncertain }`), drawn
+  by the core per kind (`render::RingLook`): **Keep** (for the player's own builds: a mint-green
+  ring), **Farm** (a still-missing farm-list unique / set: the green ring with a small green star
+  at its upper right), **Trade** (the valuables tier colours, S red / A orange / B yellow).
+  Dashed = uncertain. Logic in `src/playstyle/marks.rs`, reusing the item plan's "Keep · own":
+  `stash_plan::plan` also returns `Wants` (computed once per evaluate, `Evaluation::wants`):
+  every runeword base need with the `base_rank` of the base the plan keeps for it, and the
+  unique / set pieces with copies still wanted (with their `names::named_bases_cached`, resolved
+  once per name for the process; farm flag from the farm panel's `farm_status`). Per drop and
+  tick: a wanted piece first (identified: by name; unidentified: by quality and base code, a
+  guess: dashed, rule "Bloodfist?", several pieces on the base "A? / B?", farm ones only when
+  any is farm; an S or A trade match on the same drop wins over a guess); else a white base filling an open need
+  with exactly its socket count (natural on the ground) and better than the kept base, never a
+  trade-worthy one; else the valuables rules of the enabled tiers, but for a white base twink
+  only S (a twink-A base like a plain 4os Crystal Sword is own gear: a Keep mark when a need
+  wants it, else no mark and removed, as the item plan sells it). A superior trade base is
+  dashed while its roll is unknown (enhanced defense for armor / helms / shields, enhanced
+  damage for weapons; ground items carry no stats). Magic / rare drops get no keep mark. `mark_drops` runs before the session merge (the
+  journal records the marks), so live mode uses the previous tick's `Wants` (one tick late;
+  reset to `Wants::default`, trade only, whenever the player unit differs from the one they
+  were computed for: a new game or another character); `--render` / `--dump` evaluate first. Journal drop events
+  gain `mark` (`keep` / `farm` / `trade`, `null`; absent in older journals), `tier` / `category`
+  only for trade. Verified: `--render` of flayer, Jail 1, flayer-602-loaded and now dumps
+  byte-identical before / after; new fixture `tests/fixtures/flayer-marks-snapshot.json`
+  (flayer + a 4os Hunter's Bow → Keep "Harmony base", Monarch 4os → Trade A, Long Sword 0os
+  → removed, unidentified unique ring → Trade S "Stone of Jordan" dashed (beats the
+  "Raven Frost?" guess), unidentified unique Heavy Gloves → Farm "Bloodfist?" dashed; the
+  character renamed "Testdruid") with a test in
+  `config_driven.rs` and a render test for the green rings and the star.
 - [ ] 11. Split into separate crates; update PLAN.md and CLAUDE.md.
 
 ## Milestones

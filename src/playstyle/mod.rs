@@ -7,7 +7,8 @@
 //! picked at build time (`main.rs`), the folder at run time (`config.toml`'s `playstyle`).
 //!
 //! What sits behind the trait:
-//! - [`valuables`]: the ground-drop marks (rules from the folder's `valuables.json`);
+//! - [`marks`]: the ground-drop marks: keep and farm from the item plan's wants
+//!   ([`stash_plan::Wants`]), trade from [`valuables`] (rules from the folder's `valuables.json`);
 //! - the builds, their stage chain and its latch (`config::Settings::stage`; the reached stage
 //!   is persisted by the core in `played.json` as one opaque string per character);
 //! - [`stash_plan`]: sell / move / keep of the player's items, with [`gear_score`] for magic and
@@ -25,6 +26,7 @@ mod config_driven;
 pub mod files;
 pub mod gear_score;
 pub mod guidance;
+pub mod marks;
 pub mod route;
 pub mod stash_plan;
 pub mod valuables;
@@ -47,6 +49,9 @@ pub struct Evaluation<'a> {
     /// What the map and the dashboard show (the marks stay empty: see
     /// [`Playstyle::mark_drops`]).
     pub guidance: Guidance,
+    /// What a ground drop would still add to the item plan: the input of the next
+    /// [`Playstyle::mark_drops`] calls (owned, so the caller can keep it across ticks).
+    pub wants: stash_plan::Wants,
     /// The playstyle state to persist for this character (the stage it reached), when it moved
     /// on from the state passed in; the caller stores it and passes it back next time.
     pub reached: Option<&'a str>,
@@ -71,9 +76,11 @@ pub trait Playstyle {
     fn reload(&mut self, files: &Files);
 
     /// The marks of the ground drops worth a ring, by unit id; removes the plain bases no mark
-    /// wants (the map draws every drop left). Runs before the session merge: the journal
-    /// records the marks with the drops.
-    fn mark_drops(&self, drops: &mut Vec<ItemDrop>) -> Marks;
+    /// wants (the map draws every drop left). Runs before the session merge (the journal
+    /// records the marks with the drops), so the keep marks use the `wants` of an earlier
+    /// [`Playstyle::evaluate`] (live: the previous tick's; [`stash_plan::Wants::default`]
+    /// before the first: trade marks only).
+    fn mark_drops(&self, drops: &mut Vec<ItemDrop>, wants: &stash_plan::Wants) -> Marks;
 
     /// The guidance for `snap` (after the session merge: cached stash pages are in).
     /// `reached` is the state stored for the character ([`Evaluation::reached`] of an earlier
