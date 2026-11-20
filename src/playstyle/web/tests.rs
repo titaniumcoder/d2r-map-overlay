@@ -1988,6 +1988,37 @@ fn farm_counts_split_and_multiply_rune_needs() -> Result<()> {
 }
 
 #[test]
+fn farm_names_the_bosses_worth_farming() -> Result<()> {
+    let farm = fury_farm()?;
+    let blocks = crate::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.farm = &farm;
+    info.live.difficulty = Some(0);
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    assert_eq!(
+        json.pointer("/farm/worth/difficulty"),
+        Some(&serde_json::json!("Normal"))
+    );
+    // Normal Andariel (level 12) drops runes up to Nef: Fortitude's El and Smoke's Nef.
+    assert_eq!(
+        json.pointer("/farm/worth/bosses/0"),
+        Some(&serde_json::json!({
+            "boss": "Andariel",
+            "level": 12,
+            "items": [
+                { "name": "Fortitude", "runes": ["El"] },
+                { "name": "Smoke", "runes": ["Nef"] },
+            ],
+        }))
+    );
+    // Unknown difficulty: no note.
+    info.live.difficulty = None;
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    assert_eq!(json.pointer("/farm/worth"), Some(&serde_json::Value::Null));
+    Ok(())
+}
+
+#[test]
 fn live_json_sends_every_sell_and_keep_entry() -> Result<()> {
     use crate::stash_plan::{Action, Side, Spot};
     let blocks = crate::render::TextBlocks {

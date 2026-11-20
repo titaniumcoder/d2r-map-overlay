@@ -264,6 +264,12 @@ function recipes(list) {
 function farm(f) {
   const groups = (f && f.groups) || [];
   $("farmpanel").hidden = !groups.length;
+  // "Nightmare worth farming: Mephisto → Bloodfist, Heart of the Oak (Ko); Andariel → …"
+  const w = f && f.worth, bosses = (w && w.bosses) || [];
+  $("worth").innerHTML = bosses.length
+    ? `${esc(w.difficulty || "")} worth farming: ` + bosses.map(b => `<b>${esc(b.boss)}</b> → `
+      + b.items.map(i => esc(i.name) + (i.runes.length ? ` (${esc(i.runes.join(" "))})` : "")).join(", ")).join("; ")
+    : "";
   $("farm").innerHTML = groups.map(g => {
     const items = g.items || [];
     const done = items.filter(i => i.status === "done").length;
@@ -321,7 +327,7 @@ function render(r) {
   gearFold(r);
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
-    for (const id of ["guide", "gear", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
+    for (const id of ["guide", "gear", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm", "worth"]) $(id).innerHTML = "";
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
     shop(null);

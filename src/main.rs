@@ -7,6 +7,7 @@ mod bases_data;
 mod breakpoints;
 mod config;
 mod cows;
+mod drops_data;
 mod game_file;
 mod hypr;
 mod info;

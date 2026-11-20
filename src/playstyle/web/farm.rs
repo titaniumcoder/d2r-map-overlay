@@ -1,6 +1,7 @@
 //! The farm list panel: the cross-character farm list (`farm.toml`) with the copies held and
 //! the runes still needed.
 
+use crate::playstyle::worth::Why;
 use crate::socket_bases::Wearer;
 use crate::web::LiveInfo;
 
@@ -49,7 +50,7 @@ pub const fn farm_status(count: u32, stashed: u32, carried: u32) -> FarmStatus {
 /// wears for its own build are left out, and a group left empty with them ([`farm_worn`]):
 /// `{ "groups": [{ "for", "items": [{ "name", "kind", "count", "stashed", "carried",
 /// "status", "runes", "bases" }] }], "runes": [{ "rune", "code", "need", "have", "stash",
-/// "for" }] }`.
+/// "for" }], "worth": … }` (`worth`: [`worth_json`]).
 /// `status` is `"done"` / `"found"` / `"missing"` ([`farm_status`]). A runeword not done
 /// with copies still to build (`count` minus stashed and carried) lists its `runes` as
 /// `{ "rune", "need", "have", "status" }` (need = per copy × copies to build, have from
@@ -104,7 +105,41 @@ pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
             })
         })
         .collect();
-    serde_json::json!({ "groups": groups, "runes": runes })
+    serde_json::json!({ "groups": groups, "runes": runes, "worth": worth_json(info, &materials) })
+}
+
+/// The bosses worth farming in the current difficulty ([`crate::playstyle::worth`]):
+/// `{ "difficulty": "Nightmare", "bosses": [{ "boss", "level", "items": [{ "name", "runes" }] }] }`,
+/// only bosses with at least one item, in the drop data's order; `runes` are a runeword's
+/// missing runes that drop (empty for a unique / set). `null` with the difficulty unknown.
+pub fn worth_json(info: &PanelInfo, materials: &[(String, u32)]) -> serde_json::Value {
+    let Some(difficulty) = info.live.difficulty else {
+        return serde_json::Value::Null;
+    };
+    let holdings = info.live.holdings();
+    let bosses: Vec<serde_json::Value> = crate::playstyle::worth::bosses()
+        .filter_map(|boss| {
+            let (level, _) = crate::playstyle::worth::boss_drops(boss, difficulty)?;
+            let items = crate::playstyle::worth::worth(boss, difficulty, info.farm, &holdings, materials);
+            (!items.is_empty()).then(|| {
+                let items: Vec<serde_json::Value> = items
+                    .into_iter()
+                    .map(|(name, why)| {
+                        let runes = match why {
+                            Why::Drops => Vec::new(),
+                            Why::Runes(runes) => runes,
+                        };
+                        serde_json::json!({ "name": name, "runes": runes })
+                    })
+                    .collect();
+                serde_json::json!({ "boss": boss, "level": level, "items": items })
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "difficulty": crate::info::difficulty_name(difficulty),
+        "bosses": bosses,
+    })
 }
 
 /// Whether farm entry `item` of the group for build `target` is hidden (user request,

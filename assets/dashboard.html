@@ -188,6 +188,7 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .rc .res { font-size: 12px; color: #b9c4ff; overflow-wrap: anywhere; }
 .rc .note { font-size: 11px; color: var(--faint); margin-top: 3px; }
 /* Farm list: per planned build, each item's cross-character status */
+.worth { font-size: 12px; color: var(--dim); margin: 0 0 8px; line-height: 1.5; } .worth b { color: var(--accent); font-weight: 600; }
 .fms { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 .fm { background: var(--panel2); border: 1px solid var(--line2); border-left: 3px solid var(--line); border-radius: 0 6px 6px 0; padding: 6px 10px; min-width: 0; }
 .fm.unique { border-left-color: var(--unique); } .fm.unique .nm { color: var(--unique); }
@@ -245,6 +246,7 @@ Each card is a slot. The dashed box shows what is equipped (name and required le
 <section class="panel full" id="recipepanel" hidden><h2>Recipes <span class="sub">✓ = you have it (shared stash, inventory, cube, stash) · bases can't be read: check them</span></h2>
 <div id="recipes"></div></section>
 <section class="panel full" id="farmpanel" hidden><h2>Farm list <span class="sub">across characters · done = in the shared stash · found = on this character · ⚑ in the stash runes = needed</span></h2>
+<div id="worth" class="worth"></div>
 <div id="farm"></div></section>
 <section class="panel full"><h2>Shared stash</h2><div id="stash"></div></section>
 </div>

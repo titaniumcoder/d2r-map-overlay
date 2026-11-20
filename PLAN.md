@@ -828,7 +828,35 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   flayer and Jail 1 snapshots byte-identical before / after (with the old files and shipped
   only), the page snapshot test. Route data (step 9) and marks v2 (step 10) will add their files
   to the folder.
-- [ ] 8. Drop tables plus "worth farming".
+- [x] 8. Drop tables plus "worth farming". **Data**: `research/gen_treasure.py` (d2data
+  treasureclassex, monstats, superuniques, levels, itemtypes, armor, weapons, misc) →
+  `src/drops_data.rs` (~117 KB; 42 deduplicated sorted code lists): `BOSS_DROPS` = per boss
+  (name, level per difficulty = the drop's item level, the item codes its TC reaches per
+  difficulty, bases + runes + gems + jewelry). Bosses: Andariel, Duriel, Mephisto, Diablo, Baal,
+  Blood Raven, Griswold, Radament, Summoner, Izual, Nihlathak, the Countess, Bishibosh, the
+  Council (one entry: all six share the `Council` TC; Toorc's Travincal level), Pindleskin,
+  Shenk, Eldritch, Thresh Socket. **Rules** (generator docstring): the REPEAT-run TC (monstats
+  `TreasureClass` columns; superuniques.json `TC`; Andariel has `Andarielq` in every column in
+  D2R, so her repeat runs drop like the quest kill); terror-zone columns left out; a TC with a
+  `group` (superuniques' "Act N Super X") is upgraded to the highest TC of its group with
+  `level` ≤ mlvl, the boss's own TC only (groups span difficulties: Normal Pindleskin, level
+  45, gets "Act 2 (N) Super Bx"); sub-TCs followed through every item with prob > 0; the
+  auto groups `armoN` / `weapN` / `bowN` / `meleN` hold the spawnable armor/weapons of qlvl
+  N-2..N whose type (with `Equiv1/2`) has itemtypes `TreasureClass = 1`. Levels: quest bosses
+  (monstats `boss = 1`) their fixed monstats `Level` columns (= `levels_data::BOSSES`);
+  superuniques monstats `Level` + 3 in Normal, area `MonLvlEx(N/H)` + 3 in Nightmare / Hell
+  (NM: Countess 45, Shenk 61, Eldritch 62, Pindleskin 66). Unique / set base codes and qlvls
+  come from the existing `item_names_data` / `item_levels_data` tables. Countess NM: her rune
+  TC (Runes 8) stops at Io, her item TC's "Act 2 (N) Good" (Runes 9) reaches Ko.
+  **Worth** (`src/playstyle/worth.rs`, `worth(boss, difficulty, farm, holdings, materials)` →
+  `(farm item, Why)`): a unique / set whose base code drops and qlvl ≤ boss level
+  (`Why::Drops`); a runeword with a still-missing rune (owned runes < per copy × copies to
+  build) that drops (`Why::Runes`, those runes); entries done or held (`farm_status` ≠
+  missing) skipped. **Dashboard**: the farm JSON's `worth` section (difficulty name, bosses
+  with items) renders as one line above the farm groups: "Nightmare worth farming: Andariel →
+  Stealth (Tal Eth), Bloodfist, …; Mephisto → …". Every boss worth it is listed; picking which
+  to run is the route's job (step 9: Mephisto / Andariel in NM until 57, Andariel "items only"
+  from 55, then Diablo, the Ancients, Shenk / Eldritch). Page snapshot numbers updated.
 - [ ] 9. The route engine and a "Next" panel on the dashboard.
 - [ ] 10. Keep and trade marks v2.
 - [ ] 11. Split into separate crates; update PLAN.md and CLAUDE.md.

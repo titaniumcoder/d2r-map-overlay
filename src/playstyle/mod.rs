@@ -26,6 +26,7 @@ pub mod guidance;
 pub mod stash_plan;
 pub mod valuables;
 pub mod web;
+pub mod worth;
 
 pub use config_driven::ConfigDriven;
 pub use files::Files;

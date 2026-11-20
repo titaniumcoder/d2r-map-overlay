@@ -737,14 +737,15 @@ mod tests {
 
     /// The served pages, headers included, byte for byte: the snapshot taken from the
     /// single-file pages before they moved to `assets/` (refactor step 6). A deliberate page
-    /// change updates these numbers (the failure message prints the new ones).
+    /// change updates these numbers (the failure message prints the new ones). Step 8 added the
+    /// farm panel's "worth farming" line.
     #[test]
     fn served_pages_match_their_snapshot() {
         let dashboard = html_page("/");
         let config = html_page("/config");
         assert_eq!(
             (dashboard.len(), format!("{:#018x}", fnv1a(dashboard.as_bytes()))),
-            (41_668, "0xb5460938b1662255".to_owned()),
+            (42_268, "0xa42b3f72a38e15a1".to_owned()),
             "dashboard page"
         );
         assert_eq!(
