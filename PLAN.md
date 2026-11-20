@@ -1008,9 +1008,16 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   rare, by rank; `countess_parts` = the text form. **Dashboard**: her farm JSON boss adds
   `reliable` / `rare` (`{rune, one_in, for}`); the worth line shows her on her own line:
   "The Countess (82) — reliable: Ko (1 in 43: Heart of the Oak, Lawbringer), …; rare: Vex
-  (Heart of the Oak); items: …". **Route**: her boss line (Next panel) uses the same parts
-  ("The Countess (82) — reliable: …; rare: …"); `normal-tristram` and `nm-countess` now name her
+  (Heart of the Oak); items: …". **Route**: `normal-tristram` and `nm-countess` now name her
   as a `[[step.boss]]` too, so Normal and Nightmare show the list while she is worth it.
+- [x] 8c. The Countess's Next-panel line, runes only (user, 2026-11-20: "too complicated for
+  the next. … just the runes that I am still missing and how many for her"): "The Countess: Ko
+  ×3 (1 in 43), Lem ×2 (1 in 82), Pul (1 in 108), Um (1 in 162) · rare: Vex, Lo" (no level, no
+  farm entries, no items; ×1 left out; "The Countess: no runes missing" when she is worth it for
+  items only). `worth::countess_missing` counts each rune she drops over the whole farm list
+  (every still-missing runeword entry's runes × copies still to build, summed, minus the owned
+  runes), reliable first then rare, by rank; `countess_next` = the text. The farm panel's worth
+  line keeps the detailed `countess_parts` form.
 - [x] 9. The route engine and a "Next" panel on the dashboard. **Data**:
   `playstyles/summoner-fury/route.toml` (user override `~/.config/d2r-map-overlay/playstyle/route.toml`
   wins whole; no old place; hot-reloaded, a broken file keeps the current route). Format (the

@@ -174,8 +174,8 @@ pub struct Facts<'a> {
     /// game): then every `quests_done` condition is unknown ([`current`]).
     pub quests: Option<&'a QuestsDone>,
     /// The bosses worth farming in this difficulty, each with the items it is worth it for
-    /// (as shown: `"Heart of the Oak (Ko, Pul)"`; the Countess's are the parts of
-    /// [`worth::countess_parts`]); bosses not worth it are absent.
+    /// (as shown: `"Heart of the Oak (Ko, Pul)"`; the Countess's is one line, her missing runes
+    /// [`worth::countess_next`]); bosses not worth it are absent.
     pub worth: &'a [(String, Vec<String>)],
     /// The max areas' names ([`max_areas`]).
     pub max_areas: &'a [&'static str],
@@ -363,6 +363,13 @@ fn todo(route: &Route, step: &Step, facts: &Facts) -> Vec<String> {
         out.push(format!("Farm: {}", step.farm.join(" · ")));
     }
     for boss in &step.boss {
+        if boss.worth && worth::is_countess(&boss.name) {
+            // One line, her missing runes only ([`worth::countess_next`]): no level, no entries.
+            if let Some(items) = worth_items(boss, facts) {
+                out.push(format!("{}: {}", boss.name, items.join(" · ")));
+            }
+            continue;
+        }
         let level = worth::boss_drops(&boss.name, facts.difficulty).map(|(l, _)| l);
         let mut line = level.map_or_else(|| boss.name.clone(), |l| format!("{} ({l})", boss.name));
         if boss.late_from.is_some_and(|from| facts.level >= from) && !boss.late_note.is_empty() {
@@ -372,12 +379,7 @@ fn todo(route: &Route, step: &Step, facts: &Facts) -> Vec<String> {
             let Some(items) = worth_items(boss, facts) else {
                 continue;
             };
-            line = if worth::is_countess(&boss.name) {
-                // Parts "reliable: …", "rare: …", "items: …" ([`worth::countess_parts`]).
-                format!("{line} — {}", items.join("; "))
-            } else {
-                format!("{line} for: {}", items.join(", "))
-            };
+            line = format!("{line} for: {}", items.join(", "));
         }
         out.push(line);
     }
@@ -411,9 +413,14 @@ pub fn worth_for(
             continue;
         }
         let worth = worth::worth(&boss.name, difficulty, farm, holdings, materials);
-        // The Countess: her runes split into reliable and rare ([`worth::countess_parts`]).
+        // The Countess, while worth it: one line of her missing runes ([`worth::countess_next`]).
         let items = if worth::is_countess(&boss.name) {
-            worth::countess_parts(difficulty, &worth)
+            if worth.is_empty() {
+                Vec::new()
+            } else {
+                let missing = worth::countess_missing(difficulty, farm, holdings, materials);
+                vec![worth::countess_next(difficulty, &missing)]
+            }
         } else {
             worth
                 .into_iter()
@@ -691,10 +698,7 @@ mod tests {
         let worth = worth_for(&route, HELL, &farm, &holdings, &owned);
         let a = advise(&route, 70, HELL, &QuestsDone::default(), &worth)?;
         assert_eq!(a.id, "hell-countess");
-        assert_eq!(
-            a.todo,
-            ["The Countess (82) — reliable: Ko (1 in 43: Heart of the Oak); rare: Vex (Heart of the Oak)"]
-        );
+        assert_eq!(a.todo, ["The Countess: Ko (1 in 43) · rare: Vex"]);
         // Nightmare: Ko is rare there (her rune TC stops at Io).
         let worth = worth_for(&route, NIGHTMARE, &farm, &holdings, &owned);
         let a = advise(
@@ -710,11 +714,59 @@ mod tests {
         assert_eq!(a.id, "nm-countess");
         assert_eq!(
             a.todo,
+            ["Farm: Forgotten Tower (the Countess)", "The Countess: rare: Ko"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_countess_step_counts_her_missing_runes_over_the_farm_list() -> Result<()> {
+        let route = shipped()?;
+        // Ko for Heart of the Oak, Lawbringer and Harmony; Lem for Lawbringer and Treachery;
+        // Pul and Vex for Heart of the Oak; Um for Duress; Lo for Fortitude. All else owned.
+        let (farm, _) = crate::config::parse_farm(
+            "[[farm]]\nfor = \"Test\"\nitems = [\n\
+             { name = \"Heart of the Oak\", kind = \"runeword\" },\n\
+             { name = \"Lawbringer\", kind = \"runeword\" },\n\
+             { name = \"Harmony\", kind = \"runeword\" },\n\
+             { name = \"Treachery\", kind = \"runeword\" },\n\
+             { name = \"Duress\", kind = \"runeword\" },\n\
+             { name = \"Fortitude\", kind = \"runeword\" },\n]\n",
+        )?;
+        let holdings = Holdings {
+            stash: &[],
+            owned: &[],
+            runeword_copies: &[],
+            merc_worn: &[],
+        };
+        let owned: Vec<(String, u32)> = [
+            ("Thul", 3),
+            ("Amn", 1),
+            ("Tir", 1),
+            ("Ith", 1),
+            ("Sol", 2),
+            ("Shael", 2),
+            ("El", 1),
+            ("Dol", 1),
+        ]
+        .iter()
+        .map(|&(r, n)| (format!("{r} Rune"), n))
+        .collect();
+        let worth = worth_for(&route, HELL, &farm, &holdings, &owned);
+        let a = advise(&route, 70, HELL, &QuestsDone::default(), &worth)?;
+        assert_eq!(
+            a.todo,
             [
-                "Farm: Forgotten Tower (the Countess)",
-                "The Countess (45) — rare: Ko (Heart of the Oak)"
+                "The Countess: Ko ×3 (1 in 43), Lem ×2 (1 in 82), Pul (1 in 108), Um (1 in 162) · rare: Vex, Lo"
             ]
         );
+        // One Ko owned: two left.
+        let mut more = owned;
+        more.push(("Ko Rune".to_owned(), 1));
+        let worth = worth_for(&route, HELL, &farm, &holdings, &more);
+        let a = advise(&route, 70, HELL, &QuestsDone::default(), &worth)?;
+        let line = a.todo.first().context("countess")?;
+        assert!(line.starts_with("The Countess: Ko ×2 (1 in 43), "), "{line}");
         Ok(())
     }
 
