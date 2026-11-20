@@ -2739,6 +2739,9 @@ a { color: var(--gold); text-decoration: none; } a:hover { text-decoration: unde
 .panel { background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
 .panel.full { grid-column: 1 / -1; }
 .wrap > .panel + .panel { margin-top: 16px; }
+/* Top row: Sell / Keep beside Skills (user 2026-11-20); one column on narrow screens. */
+.toprow { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); align-items: start; }
+.wrap > .toprow + .panel { margin-top: 16px; }
 /* The Gear panel's fold: the heading's button toggles the body. */
 .panel h2 .fold { all: unset; cursor: pointer; display: inline-flex; align-items: baseline; gap: 6px; }
 .panel h2 .fold::before { content: "▸"; display: inline-block; transition: transform .15s; }
@@ -2910,7 +2913,7 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .stk.absent { opacity: .5; } .stk.absent .nm { color: var(--dim); }
 details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer; font-size: 12px; color: var(--dim); margin-bottom: 8px; }
 
-@media (max-width: 1200px) { .gear { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1200px) { .gear { grid-template-columns: repeat(3, minmax(0, 1fr)); } .toprow { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 900px) {
   .gear, .pages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .trees { grid-template-columns: minmax(0, 1fr); }
@@ -2925,7 +2928,11 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
 </div></div>
 <div class="upbar" id="upgrades" hidden></div>
 <div class="wrap">
-<section class="panel full" id="sellpanel"><h2>Sell / Keep</h2><div id="sell" class="lines"></div></section>
+<div class="toprow">
+<section class="panel" id="sellpanel"><h2>Sell / Keep</h2><div id="sell" class="lines"></div></section>
+<section class="panel" id="skillpanel"><h2>Skills <span class="sub" id="skillsum"></span></h2>
+<div id="skills"></div></section>
+</div>
 <section class="panel full" id="shoppanel" hidden><h2>Vendor <span class="sub" id="shopnpc"></span></h2><div class="shop" id="shop"></div></section>
 <section class="panel full" id="gearpanel"><h2><button type="button" class="fold" id="gearfold" aria-expanded="false" aria-controls="gearbody">Gear</button> <span class="sub" id="buildname"></span> <span class="sub attn" id="gearwhy"></span></h2>
 <div id="gearbody" hidden>
@@ -2938,8 +2945,6 @@ Each card is a slot. The dashed box shows what is equipped (name and required le
 <div class="gear" id="gear"></div>
 <div id="mercbox"><h3 class="row-h">Mercenary · charms · sockets</h3>
 <div class="gear" id="merc"></div><div class="gear extras" id="extras"></div></div></div></section>
-<section class="panel full" id="skillpanel"><h2>Skills <span class="sub" id="skillsum"></span></h2>
-<div id="skills"></div></section>
 <section class="panel full" id="recipepanel" hidden><h2>Recipes <span class="sub">✓ = you have it (shared stash, inventory, cube, stash) · bases can't be read: check them</span></h2>
 <div id="recipes"></div></section>
 <section class="panel full" id="farmpanel" hidden><h2>Farm list <span class="sub">across characters · done = in the shared stash · found = on this character · ⚑ in the stash runes = needed</span></h2>
