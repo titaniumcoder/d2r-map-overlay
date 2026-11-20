@@ -962,7 +962,7 @@ fn shop_match(item: &crate::shop::ShopItem, info: &LiveInfo) -> Option<(String, 
 /// The guide stage (`live_json`'s `stage` section): `{ "slug", "name", "class_default",
 /// "next": { "slug", "name", "level", "auto", "note", "requires": [{ "label", "count",
 /// "have", "met", "any": [{ "name", "owned" }] }] } | null }`, `null` without a build.
-/// `requires` lists the current stage's `switch_requires` groups ([`crate::config::SwitchGroup`]):
+/// `requires` lists the current stage's `switch_requires` groups ([`crate::playstyle::config::SwitchGroup`]):
 /// `have` copies of the group's items (`copies` per item, [`crate::stash::Holdings::count`]),
 /// met at `count`; `owned` = at least one copy of that item.
 fn stage_json(stage: Option<&crate::config::Stage>, copies: &dyn Fn(&str) -> u32) -> serde_json::Value {
@@ -4550,11 +4550,11 @@ mod tests {
             extras: [("charms".to_owned(), vec!["Annihilus@70".to_owned()])].into(),
             pieces: [(
                 "Harlequin Crest".to_owned(),
-                crate::config::PieceInfo {
+                crate::playstyle::config::PieceInfo {
                     kind: "unique".to_owned(),
                     base: "Shako".to_owned(),
                     stats: vec!["+2 to All Skills".to_owned()],
-                    ..crate::config::PieceInfo::default()
+                    ..crate::playstyle::config::PieceInfo::default()
                 },
             )]
             .into(),
@@ -4599,10 +4599,10 @@ mod tests {
 
     #[test]
     fn outgrown_leveling_pieces_leave_and_runes_never_expire() {
-        let window = |kind: &str, setup: &str| crate::config::PieceInfo {
+        let window = |kind: &str, setup: &str| crate::playstyle::config::PieceInfo {
             kind: kind.to_owned(),
             setup: setup.to_owned(),
-            ..crate::config::PieceInfo::default()
+            ..crate::playstyle::config::PieceInfo::default()
         };
         let build = crate::config::Build {
             name: "Druid leveling".to_owned(),
@@ -5497,17 +5497,17 @@ mod tests {
             auto_switch: false,
             switch_note: Some("you have Spirit".to_owned()),
             switch_requires: vec![
-                config::SwitchGroup {
+                crate::playstyle::config::SwitchGroup {
                     label: "Cannot Be Frozen".to_owned(),
                     any: vec!["Raven Frost".to_owned(), "Nosferatu's Coil".to_owned()],
                     count: 1,
                 },
-                config::SwitchGroup {
+                crate::playstyle::config::SwitchGroup {
                     label: "Physical immunes".to_owned(),
                     any: vec!["Lawbringer".to_owned()],
                     count: 2,
                 },
-                config::SwitchGroup::item("Enigma"),
+                crate::playstyle::config::SwitchGroup::item("Enigma"),
             ],
             ..config::Build::default()
         };
@@ -5616,7 +5616,7 @@ mod tests {
 
     /// The Fury Druid farm list of `farm.toml`, parsed like the real file.
     fn fury_farm() -> Result<Vec<config::FarmGroup>> {
-        let (groups, warnings) = config::parse_farm(
+        let (groups, warnings) = crate::playstyle::config::parse_farm(
             "[[farm]]\nfor = \"Fury Druid\"\nitems = [\n\
              { name = \"Fortitude\", kind = \"runeword\" },\n\
              { name = \"Raven Frost\", kind = \"unique\" },\n\
@@ -6099,7 +6099,7 @@ mod tests {
     #[test]
     fn farm_merc_and_slot_fields_steer_the_base_hint() -> Result<()> {
         let blocks = crate::render::TextBlocks::default();
-        let (farm, warnings) = config::parse_farm(
+        let (farm, warnings) = crate::playstyle::config::parse_farm(
             "[[farm]]\nfor = \"Fury Druid\"\nitems = [\n\
              { name = \"Fortitude\", kind = \"runeword\", slot = \"body\" },\n\
              { name = \"Bulwark\", kind = \"runeword\", merc = true, slot = \"helm\" },\n\
@@ -6177,7 +6177,7 @@ mod tests {
 
     #[test]
     fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
-        let (mut farm, _) = config::parse_farm(
+        let (mut farm, _) = crate::playstyle::config::parse_farm(
             "[[farm]]\nfor = \"Summoner Druid\"\nitems = [{ name = \"Spirit\", kind = \"runeword\" }]\n",
         )?;
         farm.extend(fury_farm()?);

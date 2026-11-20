@@ -222,21 +222,29 @@ pub struct Scoring {
 /// and its uniques (Rune Master, The Jade Tan Do, Tomb Reaver) are wanted by name, not their
 /// base type (user rule, 2026-11-20: "a rare axe or dagger is useless to this druid").
 /// Mercenary slots are left out: its weapons have their own rule ([`socket_bases::merc_wears`]).
+/// A runeword in a weapon or swap slot that no weapon base can carry for the class (an
+/// unknown class, a runeword of another class's weapons) leaves the set incomplete: the rule
+/// is off then (empty), rather than selling the weapons that piece stands for.
 fn build_weapon_types<'a>(builds: impl Iterator<Item = &'a Build>, class: u32) -> Vec<&'static str> {
     let mut types: Vec<&'static str> = Vec::new();
     for build in builds {
         let wearer = Wearer::Player(build.class.unwrap_or(class));
+        // (piece, in the weapon or swap slot): only there must a runeword have carriers.
         let held = build
             .slots
             .iter()
-            .filter(|(slot, _)| matches!(slot_body(slot), Some(4 | 5)))
-            .flat_map(|(_, pieces)| pieces);
+            .filter_map(|(slot, pieces)| match slot_body(slot) {
+                Some(body @ (4 | 5)) => Some((body == 4, pieces)),
+                _ => None,
+            })
+            .flat_map(|(weapon, pieces)| pieces.iter().map(move |p| (p, weapon)));
         let switch = build
             .switch_requires
             .iter()
             .filter(|g| g.any.len() == 1)
-            .flat_map(|g| &g.any);
-        for entry in held.chain(switch) {
+            .flat_map(|g| &g.any)
+            .map(|p| (p, false));
+        for (entry, weapon_slot) in held.chain(switch) {
             let name = piece_name(entry);
             let carriers = |word| {
                 crate::bases_data::SOCKETABLE
@@ -245,8 +253,11 @@ fn build_weapon_types<'a>(builds: impl Iterator<Item = &'a Build>, class: u32) -
                     .filter(|code| socket_bases::carries(word, code, wearer, Some(4)))
                     .collect()
             };
-            let codes: Vec<&str> =
-                runewords_data::lookup(name).map_or_else(|| crate::names::named_base_codes(name), carriers);
+            let word = runewords_data::lookup(name);
+            let codes: Vec<&str> = word.map_or_else(|| crate::names::named_base_codes(name), carriers);
+            if weapon_slot && word.is_some() && codes.is_empty() {
+                return Vec::new();
+            }
             for base in codes.into_iter().filter_map(crate::bases_data::base) {
                 if base.slot == 4 && !types.contains(&base.kind) {
                     types.push(base.kind);
@@ -1409,7 +1420,8 @@ mod tests {
 
     #[test]
     fn needs_come_from_the_bis_chain_farm_list_and_worn_copies() {
-        use crate::config::{Build, FarmGroup, FarmItem, FarmSlot, SwitchGroup};
+        use crate::config::{Build, FarmGroup, FarmItem, FarmSlot};
+        use crate::playstyle::config::SwitchGroup;
         let slots = |pairs: &[(&str, &[&str])]| -> BTreeMap<String, Vec<String>> {
             pairs
                 .iter()
@@ -1695,12 +1707,12 @@ mod tests {
         let fury = Build {
             class: Some(5),
             switch_requires: vec![
-                crate::config::SwitchGroup {
+                crate::playstyle::config::SwitchGroup {
                     label: "Powerful weapon".to_owned(),
                     any: vec!["Tomb Reaver".to_owned(), "Breath of the Dying".to_owned()],
                     count: 1,
                 },
-                crate::config::SwitchGroup {
+                crate::playstyle::config::SwitchGroup {
                     label: "Harmony".to_owned(),
                     any: vec!["Harmony".to_owned()],
                     count: 1,
@@ -1709,6 +1721,33 @@ mod tests {
             ..Build::default()
         };
         assert_eq!(build_weapon_types([&fury].into_iter(), 5), ["bow", "xbow"]);
+        // A weapon-slot runeword no base can carry for the class (an unknown class, here a
+        // claw runeword for a druid) turns the rule off instead of selling everything but swords.
+        for (class, label) in [(None, "druid"), (Some(99), "unknown class")] {
+            let partial = Build {
+                class,
+                slots: BTreeMap::from([(
+                    "weapon".to_owned(),
+                    vec!["Chaos@57".to_owned(), "Spirit@25".to_owned()],
+                )]),
+                ..Build::default()
+            };
+            assert_eq!(
+                build_weapon_types([&partial].into_iter(), class.unwrap_or(5)),
+                Vec::<&str>::new(),
+                "{label}"
+            );
+        }
+        // An off-hand runeword without weapon carriers (a shield runeword) is no gap.
+        let shield = Build {
+            class: Some(5),
+            slots: BTreeMap::from([
+                ("weapon".to_owned(), vec!["Spirit@25".to_owned()]),
+                ("offhand".to_owned(), vec!["Rhyme@29".to_owned()]),
+            ]),
+            ..Build::default()
+        };
+        assert_eq!(build_weapon_types([&shield].into_iter(), 5), ["swor"]);
         // No builds known: every weapon type is judged.
         let javelin = rolled("jav", QUALITY_RARE, &[(stat::CLASS_SKILLS, 5, 2)]);
         assert_eq!(judge(&javelin, &druid()), Ok(()));

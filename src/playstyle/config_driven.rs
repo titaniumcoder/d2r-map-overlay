@@ -1,0 +1,74 @@
+//! Today's playstyle: everything read from the config files (see [`crate::config`]).
+
+use crate::config::{Config, FarmGroup};
+use crate::game::{ItemDrop, Snapshot};
+
+use super::guidance::{Guidance, Marks};
+use super::{Evaluation, Playstyle, build, stash_plan, valuables};
+
+/// The playstyle of the config files: the character's selected build (else its class's
+/// default) followed along its stage chain, the farm list and the valuables tiers.
+#[derive(Debug, Clone, Default)]
+pub struct ConfigDriven {
+    config: Config,
+}
+
+impl ConfigDriven {
+    #[must_use]
+    pub fn new(config: &Config) -> Self {
+        Self {
+            config: config.clone(),
+        }
+    }
+}
+
+impl Playstyle for ConfigDriven {
+    fn reload(&mut self, config: &Config) {
+        self.config.clone_from(config);
+    }
+
+    fn mark_drops(&self, drops: &mut Vec<ItemDrop>) -> Marks {
+        valuables::apply(drops, &self.config.valuables)
+    }
+
+    fn evaluate(&self, snap: &Snapshot, reached: Option<&str>) -> Evaluation<'_> {
+        let config = &self.config;
+        // Damages: the character's own `[builds]` entry, else the selected build's, else its
+        // class's. `BiS`: inline slots when present, else the selected build's (user decision,
+        // 2026-11-17). A `switch_requires` group is met by the copies held in the shared stash
+        // (session-cached), by this character or worn by its mercenary, or when the character
+        // reached the stage before (played.json): the shared stash is unread each new game
+        // until opened, and a switch is one-way.
+        let (class, level) = (Some(snap.player.class), snap.player.char_level);
+        let holdings = snap.holdings();
+        let owns = |item: &str| holdings.count(item);
+        let name = snap.player.name.as_str();
+        let damages = config.damages_for_player(name, class, level, &owns, reached);
+        let stage = config.stage(name, class, level, &owns, reached);
+        let bis = config.resolved_bis(name, class, level, &owns, reached);
+        // Remember a stage further along (or off the remembered one's chain, e.g. a new
+        // selection); never one behind it (a level not yet read, an earlier stage).
+        let moved_on = stage
+            .map(|s| s.slug)
+            .filter(|&slug| !reached.is_some_and(|reached| config.leads_to(slug, reached)));
+        // The current stage and its later ones: the farm list drops what this character wears
+        // of them; the item plan keeps them.
+        let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
+        let items = stash_plan::for_snapshot(snap, config, &chain, bis.as_ref());
+        Evaluation {
+            guidance: Guidance {
+                rating: build::rate(snap.level.id, snap.difficulty, damages),
+                bis,
+                items,
+                marks: Marks::new(),
+            },
+            reached: moved_on,
+            stage,
+            chain,
+        }
+    }
+
+    fn farm(&self) -> &[FarmGroup] {
+        &self.config.farm
+    }
+}

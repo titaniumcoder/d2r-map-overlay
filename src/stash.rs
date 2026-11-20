@@ -309,7 +309,7 @@ pub fn stash_names(tabs: &[StashTab]) -> Vec<String> {
 
 /// What the account holds of named uniques, sets and runewords, for counting copies: the
 /// farm list's status and the stage switch's `switch_requires` groups
-/// ([`crate::config::SwitchGroup`]).
+/// ([`crate::playstyle::config::SwitchGroup`]).
 #[derive(Debug, Clone, Copy)]
 pub struct Holdings<'a> {
     /// The (session-cached) shared-stash tabs.

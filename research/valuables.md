@@ -109,7 +109,7 @@ Threshold: always pick up **Lem (r20) and above**. Ko, Fal, Hel, Io and Lum are 
 
 ## b) Twink and runeword bases
 
-Category **trade** marks the bases worth keeping for trade without a build need (user, 2026-11-20); **twink** A bases are cheap or player-specific and the item plan (`src/stash_plan.rs`) keeps them only as a build's runeword base, else sells them. S bases are kept for trade either way.
+Category **trade** marks the bases worth keeping for trade without a build need (user, 2026-11-20); **twink** A bases are cheap or player-specific and the item plan (`src/playstyle/stash_plan.rs`) keeps them only as a build's runeword base, else sells them. S bases are kept for trade either way.
 
 All of these need a **white (normal or superior)** base. Superior means more defense or ED and is preferred for main-hand and armor bases. Use ethereal for **mercenary** gear and for runewords with *Indestructible* or *Repairs durability* (BotD, Death, Exile).
 

@@ -8,7 +8,7 @@ empty cells mean 0. wtype is the weapon class code (axe, bow, swor, pole, â€¦) â
 unused by the current reader. "levelreq" is the required character level and "2handed" (1) marks a
 two-handed weapon (staves, bows, xbows, polearms, two-hand swords/axes/hammers); both
 feed the dashboard's gear grid. DAMAGE (min + max base damage) ranks two runeword bases
-(src/stash_plan.rs).
+(src/playstyle/stash_plan.rs).
 """
 import json
 import sys

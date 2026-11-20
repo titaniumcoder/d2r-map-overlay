@@ -1323,7 +1323,7 @@ fn render_rules(
     }
     if let Some(font) = font {
         draw_labels(&mut pm, view, font, snap, &tagged);
-        draw_info_line(&mut pm, font, snap, &guidance.damages);
+        draw_info_line(&mut pm, font, snap, guidance.rating);
     }
     Ok(pm)
 }
@@ -1502,14 +1502,8 @@ fn marker_label_colour([r, g, b, _]: Rgba) -> Rgba {
 
 /// The info line at the bottom of the frame. A terrorized level's monster levels follow the
 /// character, so its name is never greyed.
-fn draw_info_line(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, damages: &[crate::build::Damage]) {
-    let mut line = info::info_line(
-        snap.level.id,
-        snap.difficulty,
-        snap.terrorized,
-        snap.cows,
-        damages,
-    );
+fn draw_info_line(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, rating: crate::build::Rating) {
+    let mut line = info::info_line(snap.level.id, snap.difficulty, snap.terrorized, snap.cows, rating);
     line.low_xp = !snap.terrorized && xp::is_low(snap.level.id, snap.difficulty, snap.player.char_level);
     info::draw(pm, font, &line);
 }

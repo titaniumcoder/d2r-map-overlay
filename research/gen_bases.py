@@ -10,7 +10,7 @@ One row per equippable base (weapons, armor, rings, amulets): the body slot it g
 weapon kind (the item type, with the class-only variants folded into the generic one:
 abow -> bow, ajav -> jave, aspe -> spea, h2h2 -> h2h; "" for armor), the class it is
 restricted to (itemtypes.txt `Class` of its type: 0 amazon .. 7 warlock) and its strength and
-dexterity requirements. The vendor panel's stat comparison (src/gear_score.rs) reads it; the
+dexterity requirements. The vendor panel's stat comparison (src/playstyle/gear_score.rs) reads it; the
 item's damage and defense come from its own stat list, not from here.
 
 Two more tables feed the natural-socket base hints (src/socket_bases.rs):

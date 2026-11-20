@@ -70,7 +70,7 @@ rule('B','trade',sorted(cls),'magic','Class-specific magic items','+3 skill/+6 s
 
 # ---------------- TWINK: runeword bases (quality normal => white base, normal OR superior) ----------------
 # Category "trade" on an A base rule: worth keeping for trade without a build need (user, 2026-11-20);
-# "twink" A bases are cheap or player-specific and only kept when a build needs them (src/stash_plan.rs).
+# "twink" A bases are cheap or player-specific and only kept when a build needs them (src/playstyle/stash_plan.rs).
 POLE_ELITE = ['7s8','7wc','7pa','7vo','7h7']
 rule('S','twink',['utp','uui'],'normal','Archon Plate / Dusk Shroud 3-4os','3os: Enigma (Jah Ith Ber). 4os: Chains of Honor / Fortitude. Superior (+def%) preferred.',sockets=[3,4],runewords=['Enigma','Chains of Honor','Fortitude'])
 rule('A','trade',['uar','uea','urs','uul','uld','ult','upl','uth'],'normal','Other elite body armor 3-4os','Enigma/CoH/Fortitude on Sacred Armor, Wyrmhide, Great Hauberk, Shadow/Lacquered/Hellforge/Balrog, Kraken. Superior preferred.',sockets=[3,4],runewords=['Enigma','Chains of Honor','Fortitude'])

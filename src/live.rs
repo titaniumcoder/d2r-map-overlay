@@ -15,11 +15,12 @@ use crate::game::{self, Snapshot};
 use crate::guidance::Guidance;
 use crate::journal::Journal;
 use crate::overlay::Msg;
+use crate::playstyle::Playstyle;
 use crate::reader::{Attach, GameReader};
 use crate::session::Session;
 use ab_glyph::FontVec;
 
-use crate::{config, cows, game_file, info, journal, played, render, stash_plan, web};
+use crate::{config, cows, game_file, info, journal, played, render, web};
 
 /// Snapshot interval (~5 Hz).
 const TICK: Duration = Duration::from_millis(200);
@@ -41,12 +42,17 @@ fn send(tx: &Sender<Msg>, msg: Msg) -> Result<(), UiGone> {
     tx.send(msg).map_err(|_| UiGone)
 }
 
-/// Runs until the UI is gone, reading the game through `reader`. `player` picks among several
-/// player units; `size` is the frame size;
-/// `journal` records what is seen (see [`crate::journal`]); `config` picks the highlighted drop tiers
-/// and the shrines drawn.
+/// Runs until the UI is gone, reading the game through `reader` and evaluating it with
+/// `playstyle`. `player` picks among several player units; `size` is the frame size;
+/// `journal` records what is seen (see [`crate::journal`]); `config` picks the shrines drawn and
+/// is handed to `playstyle` on every hot reload.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "plain pass-through of main's settings; a struct for one caller adds nothing"
+)]
 pub fn run(
     reader: &mut impl GameReader,
+    playstyle: &mut impl Playstyle,
     tx: &Sender<Msg>,
     player: Option<&str>,
     size: (u32, u32),
@@ -62,7 +68,9 @@ pub fn run(
     loop {
         // Hot-reload while no game is attached (webapp edits, hand edits); during a session
         // `follow_game` reloads on its own tick loop.
-        check_reload(&mut config, config_path.as_deref(), &mut watched);
+        if check_reload(&mut config, config_path.as_deref(), &mut watched) {
+            playstyle.reload(&config);
+        }
         let (pid, follow) = match reader.attach() {
             Attach::Waiting => {
                 thread::sleep(RETRY);
@@ -72,6 +80,7 @@ pub fn run(
                 pid,
                 follow_game(
                     reader,
+                    playstyle,
                     tx,
                     player,
                     size,
@@ -147,12 +156,19 @@ fn builds_state(dir: &Path) -> Option<Vec<(String, SystemTime)>> {
 /// reload (unreadable, invalid TOML) logs and keeps the current config (and the current farm
 /// list: a farm.toml error keeps the old list, only a removed file empties it), so a
 /// half-written or broken file can never blank the overlay's settings; the watched state is
-/// still recorded, so the error is logged once per change, not once per tick.
-fn check_reload(config: &mut config::Config, config_path: Option<&std::path::Path>, watched: &mut Watched) {
-    let Some(path) = config_path else { return };
+/// still recorded, so the error is logged once per change, not once per tick. True when a
+/// watched file changed (the playstyle then takes the config again).
+fn check_reload(
+    config: &mut config::Config,
+    config_path: Option<&std::path::Path>,
+    watched: &mut Watched,
+) -> bool {
+    let Some(path) = config_path else {
+        return false;
+    };
     let now = Watched::now(config_path);
     if *watched == now {
-        return;
+        return false;
     }
     let farm_changed = watched.farm != now.farm;
     *watched = now;
@@ -170,7 +186,7 @@ fn check_reload(config: &mut config::Config, config_path: Option<&std::path::Pat
         Ok(text) => text,
         Err(e) => {
             eprintln!("config {}: {e}; keeping the current one", path.display());
-            return;
+            return true;
         }
     };
     match config::parse(&text) {
@@ -191,6 +207,7 @@ fn check_reload(config: &mut config::Config, config_path: Option<&std::path::Pat
             );
         }
     }
+    true
 }
 
 /// Publishes one tick's dashboard JSON ([`web::live_json`]) from the snapshot, the playstyle's
@@ -242,6 +259,7 @@ fn publish_dashboard(
 )]
 fn follow_game(
     reader: &mut impl GameReader,
+    playstyle: &mut impl Playstyle,
     tx: &Sender<Msg>,
     player: Option<&str>,
     (w, h): (u32, u32),
@@ -266,18 +284,20 @@ fn follow_game(
     let mut dedup = Dedup::default();
     loop {
         let start = Instant::now();
-        // Hot-reload here, not only in `run`: this loop is where every consumer (valuables,
-        // shrines, builds, bis) reads `config`, and it only returns when D2R exits.
-        check_reload(config, config_path, &mut watched);
+        // Hot-reload here, not only in `run`: this loop is where every consumer (the shrines,
+        // the playstyle) reads `config`, and it only returns when D2R exits.
+        if check_reload(config, config_path, &mut watched) {
+            playstyle.reload(config);
+        }
         // The previous player id (or game.json's on a restart) keeps the choice sticky.
         match reader.snapshot(player, session.player_id()) {
             Ok(mut snap) => {
                 // The playstyle's view of the snapshot: the drop marks first (the journal records
-                // them with the drop); the item plan once the session's stash and the build are in.
-                let mut guidance = Guidance::marked(&mut snap.drops, &config.valuables);
+                // them with the drop); the rest once the session's stash is in.
+                let marks = playstyle.mark_drops(&mut snap.drops);
                 // Before `apply` and the shrine filter: they drop monster presets and shrines
                 // the journal wants to see.
-                journal.observe(&snap, &guidance.marks);
+                journal.observe(&snap, &marks);
                 last_played.record(
                     &snap.player.name,
                     Some(snap.player.class),
@@ -286,34 +306,13 @@ fn follow_game(
                 );
                 let update = session.apply(&mut snap);
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
-                // Damages: the character's own `[builds]` entry, else the selected build's,
-                // else its class's. `BiS`: inline slots when present, else the selected
-                // build's (user decision, 2026-11-17). A `switch_requires` group is met by the
-                // copies held in the shared stash (session-cached), by this character or worn by
-                // its mercenary, or when the character reached the stage before (played.json):
-                // the shared stash is unread each new game until opened, and a switch is one-way.
-                let (class, level) = (Some(snap.player.class), snap.player.char_level);
-                let holdings = snap.holdings();
-                let owns = |item: &str| holdings.count(item);
-                let name = snap.player.name.as_str();
-                let reached = last_played.reached(name);
-                let build = config
-                    .damages_for_player(name, class, level, &owns, reached)
-                    .to_vec();
-                let stage = config.stage(name, class, level, &owns, reached);
-                let bis = config.resolved_bis(name, class, level, &owns, reached);
-                // Remember a stage further along (or off the remembered one's chain, e.g. a new
-                // selection); never one behind it (a level not yet read, an earlier stage).
-                if let Some(stage) = stage
-                    && !reached.is_some_and(|reached| config.leads_to(stage.slug, reached))
-                {
-                    last_played.reach(name, stage.slug);
+                // After `session.apply`: the item plan counts the cached stash pages.
+                let evaluation = playstyle.evaluate(&snap, last_played.reached(&snap.player.name));
+                if let Some(slug) = evaluation.reached {
+                    last_played.reach(&snap.player.name, slug);
                 }
-                (guidance.damages, guidance.bis) = (build, bis);
-                // The current stage and its later ones: the farm list drops what this character
-                // wears of them; the item plan (after `session.apply`: cached pages) keeps them.
-                let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
-                guidance.items = stash_plan::for_snapshot(&snap, config, &chain, guidance.bis.as_ref());
+                let mut guidance = evaluation.guidance;
+                guidance.marks = marks;
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }
@@ -343,7 +342,15 @@ fn follow_game(
                     merc_equipped: snap.merc_equipped.clone(),
                 });
                 let quests = reader.quest_flags(update.new_game);
-                publish_dashboard(&snap, &guidance, &blocks, stage, quests, &config.farm, &chain);
+                publish_dashboard(
+                    &snap,
+                    &guidance,
+                    &blocks,
+                    evaluation.stage,
+                    quests,
+                    playstyle.farm(),
+                    &evaluation.chain,
+                );
                 if let Some((tabs, items)) = update.stash_captured {
                     eprintln!("shared stash captured: {tabs} tabs, {items} items");
                     journal.stash(true, tabs, items);

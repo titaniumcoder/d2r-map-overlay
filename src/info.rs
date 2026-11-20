@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 use ab_glyph::{Font, FontVec, GlyphId, PxScale, ScaleFont, point};
 use tiny_skia::{Mask, Paint, Pixmap, Rect, Transform};
 
-use crate::build::{self, Damage, Rating};
+use crate::build::Rating;
 use crate::cows::{COW_LEVEL, Tally};
 use crate::levels_data::{BOSSES, LEVELS};
 use crate::names::same_name;
@@ -130,14 +130,14 @@ impl InfoLine {
 /// pick, so only the area name is shown. An area with monster level 0 (towns, the Forgotten
 /// Tower's ground floor) has no monster levels. A `terrorized` level shows [`TERRORIZED`] in
 /// place of monster and boss levels (the table values don't apply in a Terror Zone). In the Moo
-/// Moo Farm, `cows` replaces them (a terrorized farm keeps [`TERRORIZED`] last). `build` (primary
-/// damage first) rates the area ([`build::rate`]).
+/// Moo Farm, `cows` replaces them (a terrorized farm keeps [`TERRORIZED`] last). `rating` is how
+/// the area suits the build (the playstyle's [`crate::build::rate`]) and colours the stats.
 pub fn info_line(
     level_id: u32,
     difficulty: Option<u8>,
     terrorized: bool,
     cows: Option<Tally>,
-    build: &[Damage],
+    rating: Rating,
 ) -> InfoLine {
     let difficulty = difficulty.filter(|&d| difficulty_name(d).is_some());
     let level = LEVELS.iter().find(|&&(id, _, _)| id == level_id);
@@ -169,7 +169,7 @@ pub fn info_line(
         area,
         stats,
         terrorized,
-        rating: build::rate(level_id, difficulty, build),
+        rating,
         low_xp: false,
     }
 }
@@ -958,6 +958,7 @@ const fn f32_px(v: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::{self, Damage};
 
     /// A two-letter label ("wp"): narrow enough for all four spots around one marker to be free.
     const SIZE: LabelSize = LabelSize {
@@ -1075,15 +1076,15 @@ mod tests {
     #[test]
     fn line_with_elite_offsets() {
         assert_eq!(
-            info_line(88, Some(0), false, None, &[]).text(),
+            info_line(88, Some(0), false, None, Rating::Neutral).text(),
             "Normal · Flayer Dungeon Level 1 · mlvl 22 · champ 24 · unique 25"
         );
         assert_eq!(
-            info_line(88, Some(1), false, None, &[]).text(),
+            info_line(88, Some(1), false, None, Rating::Neutral).text(),
             "Nightmare · Flayer Dungeon Level 1 · mlvl 51 · champ 53 · unique 54"
         );
         assert_eq!(
-            info_line(88, Some(2), false, None, &[]).text(),
+            info_line(88, Some(2), false, None, Rating::Neutral).text(),
             "Hell · Flayer Dungeon Level 1 · mlvl 81 · champ 83 · unique 84"
         );
     }
@@ -1091,11 +1092,11 @@ mod tests {
     #[test]
     fn line_with_boss() {
         assert_eq!(
-            info_line(102, Some(0), false, None, &[]).text(),
+            info_line(102, Some(0), false, None, Rating::Neutral).text(),
             "Normal · Durance of Hate Level 3 · mlvl 25 · champ 27 · unique 28 · Mephisto 26"
         );
         assert_eq!(
-            info_line(102, Some(2), false, None, &[])
+            info_line(102, Some(2), false, None, Rating::Neutral)
                 .stats
                 .last()
                 .map(String::as_str),
@@ -1105,7 +1106,7 @@ mod tests {
 
     #[test]
     fn unknown_level_has_no_monster_levels() {
-        let line = info_line(9999, Some(1), false, None, &[]);
+        let line = info_line(9999, Some(1), false, None, Rating::Neutral);
         assert_eq!(line.text(), "Nightmare · Level 9999");
     }
 
@@ -1113,13 +1114,16 @@ mod tests {
     fn unknown_difficulty_is_left_out() {
         for d in [None, Some(3), Some(200)] {
             assert_eq!(
-                info_line(88, d, false, None, &[]).text(),
+                info_line(88, d, false, None, Rating::Neutral).text(),
                 "Flayer Dungeon Level 1",
                 "{d:?}"
             );
         }
         // Mephisto's level depends on the difficulty too.
-        assert_eq!(info_line(102, None, false, None, &[]).stats, Vec::<String>::new());
+        assert_eq!(
+            info_line(102, None, false, None, Rating::Neutral).stats,
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -1128,7 +1132,7 @@ mod tests {
             eprintln!("skipped: no info-line font on this machine");
             return;
         };
-        let line = info_line(88, Some(0), false, None, &[]);
+        let line = info_line(88, Some(0), false, None, Rating::Neutral);
         let full = line.text();
         assert_eq!(fit_text(font, &line, 10_000.0), full);
         let narrow = text_width(font, &full) - 30.0;
@@ -1251,20 +1255,22 @@ mod tests {
     #[test]
     fn terrorized_line_drops_table_levels() {
         // Moo Moo Farm (39).
-        let line = info_line(39, Some(0), true, None, &[]);
+        let line = info_line(39, Some(0), true, None, Rating::Neutral);
         assert_eq!(line.text(), "Normal · Moo Moo Farm · terrorized");
         assert!(line.terrorized);
         assert!(
-            info_line(39, Some(0), false, None, &[]).text().contains("mlvl"),
+            info_line(39, Some(0), false, None, Rating::Neutral)
+                .text()
+                .contains("mlvl"),
             "not terrorized: table values"
         );
         // No boss level either (Mephisto's level is a table value too).
         assert_eq!(
-            info_line(102, Some(2), true, None, &[]).text(),
+            info_line(102, Some(2), true, None, Rating::Neutral).text(),
             "Hell · Durance of Hate Level 3 · terrorized"
         );
         assert_eq!(
-            info_line(39, None, true, None, &[]).text(),
+            info_line(39, None, true, None, Rating::Neutral).text(),
             "Moo Moo Farm · terrorized"
         );
     }
@@ -1273,7 +1279,7 @@ mod tests {
     fn zero_mlvl_area_has_no_monster_levels() {
         // Rogue Encampment: monster level 0 in the table.
         assert_eq!(
-            info_line(1, Some(0), false, None, &[]).text(),
+            info_line(1, Some(0), false, None, Rating::Neutral).text(),
             "Normal · Rogue Encampment"
         );
     }
@@ -1282,10 +1288,10 @@ mod tests {
     fn the_cow_counter_replaces_the_monster_levels_in_level_39_only() {
         let cows = Some(Tally { kills: 57, alive: 23 });
         assert_eq!(
-            info_line(39, Some(0), false, cows, &[]).text(),
+            info_line(39, Some(0), false, cows, Rating::Neutral).text(),
             "Normal · Moo Moo Farm · kill count: 57 / victims alive: 23"
         );
-        let terror = info_line(39, Some(2), true, cows, &[]);
+        let terror = info_line(39, Some(2), true, cows, Rating::Neutral);
         assert_eq!(
             terror.text(),
             "Hell · Moo Moo Farm · kill count: 57 / victims alive: 23 · terrorized"
@@ -1293,10 +1299,14 @@ mod tests {
         assert!(terror.terrorized, "still ends in the violet part");
         // Elsewhere, or without a counter, the usual line.
         assert_eq!(
-            info_line(88, Some(0), false, cows, &[]),
-            info_line(88, Some(0), false, None, &[])
+            info_line(88, Some(0), false, cows, Rating::Neutral),
+            info_line(88, Some(0), false, None, Rating::Neutral)
         );
-        assert!(info_line(39, Some(0), false, None, &[]).text().contains("mlvl"));
+        assert!(
+            info_line(39, Some(0), false, None, Rating::Neutral)
+                .text()
+                .contains("mlvl")
+        );
     }
 
     const VEX: [Damage; 3] = [Damage::Lightning, Damage::Fire, Damage::Physical];
@@ -1304,7 +1314,7 @@ mod tests {
     #[test]
     fn low_xp_greys_only_the_area_name() {
         // Travincal, Nightmare, good for Vex: the stats stay green.
-        let mut line = info_line(83, Some(1), false, None, &VEX);
+        let mut line = info_line(83, Some(1), false, None, build::rate(83, Some(1), &VEX));
         line.low_xp = true;
         let text = line.text();
         assert_eq!(
@@ -1317,7 +1327,7 @@ mod tests {
             ]
         );
         // Normal (no rating): the white stats follow the grey name.
-        let mut line = info_line(83, Some(0), false, None, &VEX);
+        let mut line = info_line(83, Some(0), false, None, build::rate(83, Some(0), &VEX));
         line.low_xp = true;
         let text = line.text();
         assert_eq!(
@@ -1329,7 +1339,7 @@ mod tests {
             ]
         );
         // A shortened name and no difficulty: still just the name.
-        let mut line = info_line(83, None, false, None, &[]);
+        let mut line = info_line(83, None, false, None, Rating::Neutral);
         line.low_xp = true;
         assert_eq!(spans(&line, "Travi…"), vec![("Travi…", LOW_XP_TEXT)]);
     }
@@ -1337,7 +1347,7 @@ mod tests {
     #[test]
     fn rating_colours_only_the_stats() {
         // Travincal, Nightmare: no immunes, good for Vex.
-        let line = info_line(83, Some(1), false, None, &VEX);
+        let line = info_line(83, Some(1), false, None, build::rate(83, Some(1), &VEX));
         assert_eq!(line.rating, Rating::Good);
         let text = line.text();
         assert_eq!(
@@ -1348,7 +1358,7 @@ mod tests {
             ]
         );
         // Hell City of the Damned: 4 of 7 types lightning immune.
-        let line = info_line(106, Some(2), false, None, &VEX);
+        let line = info_line(106, Some(2), false, None, build::rate(106, Some(2), &VEX));
         let text = line.text();
         assert_eq!(
             spans(&line, &text).last(),
@@ -1356,15 +1366,15 @@ mod tests {
         );
         // Normal, or no build: one white part.
         for line in [
-            info_line(106, Some(0), false, None, &VEX),
-            info_line(106, Some(2), false, None, &[]),
+            info_line(106, Some(0), false, None, build::rate(106, Some(0), &VEX)),
+            info_line(106, Some(2), false, None, Rating::Neutral),
         ] {
             let text = line.text();
             assert_eq!(line.rating, Rating::Neutral);
             assert_eq!(spans(&line, &text), vec![(text.as_str(), TEXT)]);
         }
         // Mephisto's level is part of the coloured stats.
-        let line = info_line(102, Some(1), false, None, &VEX);
+        let line = info_line(102, Some(1), false, None, build::rate(102, Some(1), &VEX));
         let text = line.text();
         assert!(
             spans(&line, &text)
@@ -1379,7 +1389,7 @@ mod tests {
     fn rating_keeps_terrorized_violet_and_colours_the_cow_counter() {
         let build = [Damage::Cold];
         let cows = Some(Tally { kills: 5, alive: 9 });
-        let line = info_line(39, Some(1), true, cows, &build);
+        let line = info_line(39, Some(1), true, cows, build::rate(39, Some(1), &build));
         assert_ne!(line.rating, Rating::Neutral, "Moo Moo Farm in Nightmare is rated");
         let colour = if line.rating == Rating::Bad {
             BAD_TEXT
@@ -1397,7 +1407,7 @@ mod tests {
             ]
         );
         // Terrorized without the counter: nothing to rate, only the violet part.
-        let line = info_line(83, Some(1), true, None, &VEX);
+        let line = info_line(83, Some(1), true, None, build::rate(83, Some(1), &VEX));
         let text = line.text();
         assert_eq!(
             spans(&line, &text),
@@ -1411,7 +1421,7 @@ mod tests {
             eprintln!("skipped: no info-line font on this machine");
             return;
         };
-        let line = info_line(83, Some(1), false, None, &VEX);
+        let line = info_line(83, Some(1), false, None, build::rate(83, Some(1), &VEX));
         let text = fit_text(font, &line, 200.0);
         assert!(text.contains('…'), "{text}");
         assert_eq!(
@@ -1445,15 +1455,18 @@ mod tests {
                 .count()
         };
         let [r, g, b, _] = GOOD_TEXT;
-        let good = info_line(83, Some(1), false, None, &VEX);
+        let good = info_line(83, Some(1), false, None, build::rate(83, Some(1), &VEX));
         // Only fully covered glyph pixels count: a few dozen at 16 px.
         assert!(count(&good, [r, g, b]) > 10, "green glyph pixels");
         assert!(count(&good, [255, 255, 255]) > 10, "white area name");
-        let neutral = info_line(83, Some(0), false, None, &VEX);
+        let neutral = info_line(83, Some(0), false, None, build::rate(83, Some(0), &VEX));
         assert_eq!(count(&neutral, [r, g, b]), 0, "Normal: no green");
         let [r, g, b, _] = BAD_TEXT;
         assert!(
-            count(&info_line(106, Some(2), false, None, &VEX), [r, g, b]) > 10,
+            count(
+                &info_line(106, Some(2), false, None, build::rate(106, Some(2), &VEX)),
+                [r, g, b]
+            ) > 10,
             "red"
         );
     }

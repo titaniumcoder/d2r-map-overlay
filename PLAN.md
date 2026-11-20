@@ -56,7 +56,18 @@ Rust via mise (`mise use rust@stable` pinned in the project's `mise.toml`). Impl
 ```
 Cargo.toml
 src/main.rs        — arg/config, main loop (reader thread → channel → overlay)
-src/live.rs        — live tick loop over a `reader::GameReader` (session, guidance, render, dashboard)
+src/live.rs        — live tick loop over a `reader::GameReader` and a `playstyle::Playstyle`
+                     (session, guidance, render, dashboard)
+src/config.rs      — config.toml (shrines, `[valuables]`, `[bis]`, `[builds]`); re-exports the
+                     playstyle's build/farm types under their old paths
+src/playstyle/     — the playstyle plugin (step 5 of the plugin refactor)
+  mod.rs           — `Playstyle` (reload / mark_drops / evaluate / farm), `Evaluation`
+                     (guidance, stage to latch, stage, chain); module map
+  config_driven.rs — `ConfigDriven`: today's playstyle from the config files (Summoner → Fury Druid)
+  config.rs        — builds/*.toml and farm.toml parsing, `Build`, `SwitchGroup`, `Stage`, the stage
+                     chain and latch logic (`Config::stage`, `leads_to`, `resolved_bis`, damages)
+  guidance.rs      — `Guidance` (area rating, BiS, item plan, drop marks): what render/dashboard get
+  valuables.rs, stash_plan.rs, gear_score.rs, build.rs (damage types, area `rate`)
 src/reader/        — the reader plugin (step 4 of the plugin refactor)
   mod.rs           — `GameReader` (attach / attach_now / snapshot / quest flags / alive / save dir),
                      `Platform` (find process, open memory, find image, heap regions, save dir),
@@ -645,7 +656,7 @@ progress per character and difficulty (like the build stage in `played.json`).
 - **Removed**: the "Ethereal Colossus Voulge 0os (Larzuk to 4)" rule (done in step 1).
 
 **Item places: sell / move / keep (user rule, 2026-11-20)** — playstyle logic, part of step 5's
-trait; today `src/stash_plan.rs`, shown in the dashboard's Sell / Keep panel.
+trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel.
 - Shared stash pages 1–2 are the player's own (build pieces, simple bases until something good
   drops), pages 3–4 are for trading. The gem / rune / materials tab is out of scope.
 - **Page 5 is the "ignore page"** (user, 2026-11-20: "things i keep around for stupidity"): its
@@ -690,7 +701,9 @@ trait; today `src/stash_plan.rs`, shown in the dashboard's Sell / Keep panel.
   kept by name, not for their base type. Summoner → Fury today: bow, club, hamm, mace, scep,
   staf, swor, xbow. Axes, daggers, polearms, spears, javelins, claws, orbs, wands are out. The
   merc's polearms and spears keep their rule (javelins don't count as its spears). No builds
-  known → no weapon rule. Identified boots without faster run/walk (stat 96) → sell "no run
+  known → no weapon rule; neither when a weapon or swap runeword of the chain has no weapon base
+  the class can carry (an unknown class, another class's runeword): a partial type set would
+  sell legitimate weapons. Identified boots without faster run/walk (stat 96) → sell "no run
   speed", whatever else they roll; unidentified boots stay. Then: unidentified or stats unread → keep own;
   identified → scored with `gear_score` for the build chain: keep own if ≥ 80% of the worn item in
   its slot or if its affixes alone score ≥ 20 (a planned skill, +1 class skill, 20 res/life);
@@ -727,7 +740,26 @@ trait; today `src/stash_plan.rs`, shown in the dashboard's Sell / Keep panel.
   (`cows`, `trail` and the session's in-place merges of presets, shrines, wells, links,
   terrorized, cached stash pages), and `offset_cache::cache_dir` (also game.json's dir) moving
   to a core paths module.
-- [ ] 5. Playstyle plugin trait, wrapping today's builds, farm list and valuables.
+- [x] 5. Playstyle plugin trait, wrapping today's builds, farm list and valuables:
+  `src/playstyle/` (valuables, stash_plan, gear_score, build, guidance moved there and
+  re-exported at the crate root under their old paths; the build-file / farm-file half of
+  config.rs split into `playstyle/config.rs`, re-exported from `crate::config`). `Playstyle`:
+  `reload(&Config)` on every hot reload, `mark_drops` (before the session merge, for the
+  journal), `evaluate(&Snapshot, reached)` → `Evaluation` (guidance, the stage to latch, stage
+  and chain for the dashboard), `farm()`. `ConfigDriven` is the build's playstyle (static
+  dispatch, `impl Playstyle`). The area rating is computed by the playstyle into
+  `Guidance::rating` (it replaced `Guidance::damages`; `info_line` takes the rating). The stage
+  latch stays persisted by the core in `played.json` as one opaque string per character: the
+  playstyle gets it in and returns the new one, so no separate `state()` / `restore()`. Quests
+  are not an input yet (the route, step 9, needs them).
+  Left for step 6: web.rs still reads the config files itself for the playstyle panels
+  (`/config`, farm, recipes, tips, skills, gear verdicts via `gear_score`) and `LiveInfo` still
+  takes `config::Stage` / `FarmGroup`; those panels move behind the trait with the dashboard
+  split. Left for step 7: `[valuables]`, `[bis]` and `[builds]` still live in config.toml
+  (parsed by `crate::config`; `ConfigDriven` holds a clone of the whole `Config`, shrines
+  included) and the build / farm files sit next to it; the `playstyle/<name>/` folder gives the
+  playstyle its own files and `reload(dir)`. Step 4's leftovers (the `Snapshot` / `Frame`
+  split, `offset_cache::cache_dir` to a core paths module) are still open.
 - [ ] 6. Split the dashboard into the core page and playstyle panels.
 - [ ] 7. New folder layout: `playstyle/<name>/` with route, builds, farm list and marks.
 - [ ] 8. Drop tables plus "worth farming".

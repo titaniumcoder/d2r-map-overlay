@@ -5,12 +5,9 @@
 mod affixes_data;
 mod bases_data;
 mod breakpoints;
-mod build;
 mod config;
 mod cows;
 mod game_file;
-mod gear_score;
-mod guidance;
 mod hypr;
 mod info;
 mod item_levels_data;
@@ -28,6 +25,7 @@ mod objects;
 mod objects_data;
 mod overlay;
 mod played;
+mod playstyle;
 mod reader;
 mod render;
 mod runewords_data;
@@ -36,11 +34,9 @@ mod shop;
 mod skills_data;
 mod socket_bases;
 mod stash;
-mod stash_plan;
 #[cfg(test)]
 mod testutil;
 mod tombs;
-mod valuables;
 mod weapons_data;
 mod web;
 mod xp;
@@ -51,10 +47,13 @@ use anyhow::{Context, Result, anyhow, bail};
 use smithay_client_toolkit::reexports::calloop::channel;
 
 use overlay::Msg;
+use playstyle::Playstyle;
 use reader::GameReader;
 // The reader's output types and offset tables, used across the core under their old paths
 // (`crate::game::Snapshot`, `crate::offsets::item_data`, ...).
 use reader::{game, items, offset_cache, offsets, quests};
+// The playstyle's modules, under their old paths too (`crate::valuables::Tier`, ...).
+use playstyle::{build, gear_score, guidance, stash_plan, valuables};
 
 /// Overlay / render size in px when none is given.
 const DEFAULT_SIZE: (u32, u32) = (400, 400);
@@ -131,7 +130,16 @@ fn live(player: Option<String>, size: (u32, u32), journal: bool, config: config:
         .spawn(move || {
             let _exit = ExitOnDrop;
             let mut reader = reader::ProtonReader::default();
-            live::run(&mut reader, &reader_tx, player.as_deref(), size, journal, &config);
+            let mut playstyle = playstyle::ConfigDriven::new(&config);
+            live::run(
+                &mut reader,
+                &mut playstyle,
+                &reader_tx,
+                player.as_deref(),
+                size,
+                journal,
+                &config,
+            );
         })
         .context("starting the reader thread")?;
     thread::Builder::new()
@@ -172,7 +180,7 @@ fn dump(player: Option<&str>, config: &config::Config) -> Result<()> {
     eprintln!("quest flags: {:04x?}", reader.quest_flags(true));
     let mut snap = reader.snapshot(player, None)?;
     // Only the marked bases, as live mode shows them; the marks themselves go to stderr.
-    let marks = valuables::apply(&mut snap.drops, &config.valuables);
+    let marks = playstyle::ConfigDriven::new(config).mark_drops(&mut snap.drops);
     if !marks.is_empty() {
         eprintln!("marks: {marks:?}");
     }
@@ -200,23 +208,15 @@ fn load_snapshot(path: &str) -> Result<game::Snapshot> {
 
 /// Loads a `--dump` snapshot and filters it like live mode does (superunique and quest monster
 /// presets only, drop marks and shown shrines from `config`), with the guidance the map draws
-/// (drop marks, the build's damages).
+/// (drop marks, the area rating; no stage was reached before).
 fn load_for_drawing(path: &str, config: &config::Config) -> Result<(game::Snapshot, guidance::Guidance)> {
     let mut snap = load_snapshot(path)?;
-    let mut guidance = guidance::Guidance::marked(&mut snap.drops, &config.valuables);
+    let playstyle = playstyle::ConfigDriven::new(config);
+    let marks = playstyle.mark_drops(&mut snap.drops);
     session::Session::default().apply(&mut snap);
     config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
-    let holdings = snap.holdings();
-    let owns = |item: &str| holdings.count(item);
-    guidance.damages = config
-        .damages_for_player(
-            &snap.player.name,
-            Some(snap.player.class),
-            snap.player.char_level,
-            &owns,
-            None,
-        )
-        .to_vec();
+    let mut guidance = playstyle.evaluate(&snap, None).guidance;
+    guidance.marks = marks;
     Ok((snap, guidance))
 }
 
