@@ -150,6 +150,12 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - 192 rooms in 9 large piece types (16 or 32 Room2 each): 534, 535, 538, 539, 565, 570, 574, 601, 602.
 - **601 = waypoint area** (player and waypoint object 237 inside it). **602 = Gidbinn altar candidate** (only other
   outlier id) — **confirmed**: the Gidbinn altar (object 252) is in 602; landmark rule added.
+- **Correction 2026-11-20** (user report, Nightmare): lvlprest 595–604 are "Act 3 - Clearing Pygmy
+  W/E/EW/S/SW/SE/N/NW/NE/NS", pygmy-village clearings, one per exit direction, and a jungle holds several.
+  That game had 595 (waypoint 237 inside), 600 and 602; the altar was **not** in 602. The rule is now a
+  candidate rule: every 595–604 clearing without the waypoint gets a "?", and once object 252's preset is
+  loaded only its exact quest-object star shows. Landmark markers are now one per connected piece (rooms of
+  one preset id joined by shared edges), so two copies of a preset no longer get one marker between them.
 
 ## The Warlock class (2026-11-17)
 - The user's "Demonmaster" reads **class id 7** — outside the classic 0–6. The Basin wiki documents a

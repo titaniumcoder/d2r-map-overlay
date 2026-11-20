@@ -24,9 +24,10 @@ pub const WAYPOINT_IDS: &[u32] = &[
     119, 145, 156, 157, 237, 238, 288, 323, 324, 398, 402, 429, 494, 496, 511, 539,
 ];
 /// A room that marks a landmark: the rooms of a level in `level_ids` whose level-preset id (lvlprest
-/// row) is in `preset_ids` get one marker at the centre of their combined bounding box (one piece
-/// often spans several Room2 cells): [`Marker::Landmark`] if the rule is confirmed in game,
-/// [`Marker::Suspected`] (a "?") if it is only assumed.
+/// row) is in `preset_ids` get one marker per piece, at the centre of the piece's bounding box (one
+/// piece often spans several Room2 cells; a piece is the edge-connected rooms of one preset id, so
+/// two copies of a preset get a marker each): [`Marker::Landmark`] if the rule is confirmed in
+/// game, [`Marker::Suspected`] (a "?") if it is only assumed.
 #[derive(Debug)]
 pub struct LandmarkRule {
     pub level_ids: std::ops::RangeInclusive<u32>,
@@ -37,6 +38,10 @@ pub struct LandmarkRule {
     pub confirmed: bool,
     /// How a confirmed rule is drawn.
     pub style: LandmarkStyle,
+    /// `Some(txt)`: the pieces are only candidates for where quest object `txt` lies. A piece
+    /// holding a waypoint preset is skipped, and once object `txt`'s preset is in the snapshot the
+    /// rule draws nothing (the exact [`QUEST_OBJECTS`] marker shows instead).
+    pub candidates_for: Option<u32>,
 }
 
 /// How a confirmed [`LandmarkRule`] is drawn (an unconfirmed one is always a "?").
@@ -67,9 +72,13 @@ pub enum LandmarkStyle {
 ///   wrong: 456–459 are the Halls of the Dead cube pieces.)
 /// - Halls of the Dead Level 3 (60): lvlprest "Tomb Cube W/E/S/N" (456–459) holds the Horadric Cube
 ///   chest (object 354) and Bloodwitch's spawn. Confirmed: 459 (chest inside it, 2026-11-15).
-/// - Flayer Jungle (78): the Gidbinn altar (object 252) lies in piece 602, live-verified 2026-11-15
-///   (player in a 602 room 5 tiles from the altar). 602 spans 16 Room2 cells; 601 is the waypoint
-///   area (waypoint object 237).
+/// - Flayer Jungle (78): the Gidbinn altar (object 252) lies in a pygmy-village clearing, lvlprest
+///   595–604 "Act 3 - Clearing Pygmy W/E/EW/S/SW/SE/N/NW/NE/NS" (one variant per exit direction,
+///   16 Room2 cells each). A jungle holds several of them, and the altar is in only one: 602 held
+///   it on 2026-11-15 (player 5 tiles from the altar; 601 held the waypoint), but on 2026-11-20
+///   (user report, Nightmare) the jungle had 595 (waypoint object 237 inside), 600 and 602, and
+///   602 had no altar. So every clearing without the waypoint is a "?" candidate, and once the
+///   altar's preset is loaded only its exact quest-object star shows.
 /// - Kurast Sewers Level 1 (92): the sewer lever (object 367) and the stairs down (object 366) both
 ///   sat in room preset 739 (live 2026-11-15, one game; the user then went down to level 2).
 /// - Act 1 caves, level 1 (Cave 9, Underground Passage 10, Hole 11, Pit 12): lvlprest names the
@@ -100,6 +109,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "maggot lair stairs down",
         confirmed: true,
         style: LandmarkStyle::StairsDown,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 64..=64,
@@ -107,6 +117,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "coldworm",
         confirmed: true,
         style: LandmarkStyle::Worm,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 49..=49,
@@ -114,6 +125,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "radament's lair",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 49..=49,
@@ -121,6 +133,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "radament's lair (N)",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 49..=49,
@@ -128,6 +141,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "radament's lair (S)",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 49..=49,
@@ -137,6 +151,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         // in the piece the feature sits (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 47..=48,
@@ -144,6 +159,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "sewer stairs down (east)",
         confirmed: true,
         style: LandmarkStyle::StairsDown,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 47..=48,
@@ -151,6 +167,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "sewer stairs down (west)",
         confirmed: true,
         style: LandmarkStyle::StairsDown,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 47..=48,
@@ -159,6 +176,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         // "Sewer Next W/E/S/N" family, 337/338 live-confirmed (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::StairsDown,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 28..=28,
@@ -166,6 +184,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "smith (forge)",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 28..=28,
@@ -174,6 +193,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         // "Barracks Forge W/E/S/N" family, 203/204 live-confirmed (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 28..=28,
@@ -181,6 +201,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "smith (forge N)",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 4..=4,
@@ -188,6 +209,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "cairn stones",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 9..=12,
@@ -195,6 +217,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "cave exit to the next area (north)",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 9..=12,
@@ -203,6 +226,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         // "Cave Next W/E/S/N" family, 90 live-confirmed (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 9..=12,
@@ -210,6 +234,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "cave stairs down (west)",
         confirmed: true,
         style: LandmarkStyle::StairsDown,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 9..=12,
@@ -220,6 +245,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         // level 14.
         confirmed: true,
         style: LandmarkStyle::StairsDown,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 5..=5,
@@ -227,6 +253,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "tree of inifuss",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 6..=6,
@@ -234,6 +261,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "forgotten tower",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 74..=74,
@@ -241,6 +269,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "summoner",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 66..=72,
@@ -248,6 +277,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "orifice",
         confirmed: true,
         style: LandmarkStyle::Orifice,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 66..=72,
@@ -255,6 +285,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "tomb treasure",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 60..=60,
@@ -262,6 +293,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "horadric cube",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 60..=60,
@@ -270,6 +302,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         // "Tomb Cube W/E/S/N" family, 459 live-confirmed with the chest inside it (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 66..=72,
@@ -277,6 +310,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "orifice (W)",
         confirmed: true,
         style: LandmarkStyle::Orifice,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 66..=72,
@@ -285,6 +319,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         // "Tomb Talrasha W/E/S/N" family, 460/462 live-confirmed (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::Orifice,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 66..=72,
@@ -292,13 +327,16 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "orifice (N)",
         confirmed: true,
         style: LandmarkStyle::Orifice,
+        candidates_for: None,
     },
     LandmarkRule {
         level_ids: 78..=78,
-        preset_ids: 602..=602,
+        preset_ids: 595..=604,
         label: "gidbinn",
-        confirmed: true,
+        // Which clearing holds the altar varies per game (2026-11-20): candidates only.
+        confirmed: false,
         style: LandmarkStyle::Star,
+        candidates_for: Some(252),
     },
     LandmarkRule {
         level_ids: 92..=92,
@@ -306,6 +344,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         label: "sewer stairs",
         confirmed: true,
         style: LandmarkStyle::Star,
+        candidates_for: None,
     },
 ];
 
@@ -771,32 +810,98 @@ pub fn preset_marker(p: &Preset) -> Option<Marker> {
     }
 }
 
-/// One landmark marker per rule in `rules` with matching rooms, at the centre of the bounding box of
-/// all of them.
+/// One landmark marker per piece matched by a rule in `rules`, at the centre of the piece's
+/// bounding box (see [`LandmarkRule`]).
 pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f64)> {
     let level = &snap.level;
-    rules
-        .iter()
-        .filter(|rule| rule.level_ids.contains(&level.id))
-        .filter_map(|rule| {
-            let (x0, y0, x1, y1) = level
-                .rooms
-                .iter()
-                .filter(|r| r.preset.is_some_and(|id| rule.preset_ids.contains(&id)))
-                .map(|r| (r.x, r.y, r.x.saturating_add(r.w), r.y.saturating_add(r.h)))
-                .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))?;
-            let x = f64::midpoint(f64::from(x0), f64::from(x1));
-            let y = f64::midpoint(f64::from(y0), f64::from(y1));
-            let marker = match (rule.confirmed, rule.style) {
-                (false, _) => Marker::Suspected(rule.label),
-                (true, LandmarkStyle::Star) => Marker::Landmark(rule.label),
-                (true, LandmarkStyle::StairsDown) => Marker::StairsDown,
-                (true, LandmarkStyle::Worm) => Marker::Worm,
-                (true, LandmarkStyle::Orifice) => Marker::Orifice,
-            };
-            Some((marker, x, y))
+    let has_object = |txt: u32| {
+        snap.presets
+            .iter()
+            .any(|p| p.kind == PresetKind::Object && p.txt == txt)
+    };
+    let waypoint_in = |s: Span| {
+        snap.presets.iter().any(|p| {
+            p.kind == PresetKind::Object
+                && WAYPOINT_IDS.contains(&p.txt)
+                && (s.x0..s.x1).contains(&p.x)
+                && (s.y0..s.y1).contains(&p.y)
         })
-        .collect()
+    };
+    let mut out = Vec::new();
+    for rule in rules.iter().filter(|rule| rule.level_ids.contains(&level.id)) {
+        if rule.candidates_for.is_some_and(has_object) {
+            continue;
+        }
+        let marker = match (rule.confirmed, rule.style) {
+            (false, _) => Marker::Suspected(rule.label),
+            (true, LandmarkStyle::Star) => Marker::Landmark(rule.label),
+            (true, LandmarkStyle::StairsDown) => Marker::StairsDown,
+            (true, LandmarkStyle::Worm) => Marker::Worm,
+            (true, LandmarkStyle::Orifice) => Marker::Orifice,
+        };
+        for piece in pieces(&level.rooms, &rule.preset_ids) {
+            // The quest object never shares the waypoint's piece: skip that candidate.
+            if rule.candidates_for.is_some() && piece.iter().any(|&s| waypoint_in(s)) {
+                continue;
+            }
+            let Some(b) = piece.into_iter().reduce(Span::union) else {
+                continue;
+            };
+            let x = f64::midpoint(f64::from(b.x0), f64::from(b.x1));
+            let y = f64::midpoint(f64::from(b.y0), f64::from(b.y1));
+            out.push((marker, x, y));
+        }
+    }
+    out
+}
+
+/// The rooms of `rooms` whose preset id is in `ids`, grouped into pieces: rooms of one preset id
+/// joined through shared edges (a corner touch does not join). Pieces come in room order.
+fn pieces(rooms: &[Room], ids: &std::ops::RangeInclusive<u32>) -> Vec<Vec<Span>> {
+    let rooms: Vec<(u32, Span)> = rooms
+        .iter()
+        .filter_map(|r| {
+            let id = r.preset.filter(|id| ids.contains(id))?;
+            Some((
+                id,
+                Span::of(RoomRect {
+                    x: r.x,
+                    y: r.y,
+                    w: r.w,
+                    h: r.h,
+                }),
+            ))
+        })
+        .collect();
+    // Two spans share an edge: they touch along one axis and overlap (by more than a point) along
+    // the other.
+    let joined = |a: Span, b: Span| {
+        let x_overlap = a.x0 < b.x1 && b.x0 < a.x1;
+        let y_overlap = a.y0 < b.y1 && b.y0 < a.y1;
+        let x_touch = a.x1 == b.x0 || b.x1 == a.x0;
+        let y_touch = a.y1 == b.y0 || b.y1 == a.y0;
+        (x_overlap && (y_overlap || y_touch)) || (y_overlap && x_touch)
+    };
+    // Grow each piece from its first room until no remaining room of its id shares an edge with
+    // it. A level has at most a few hundred rooms, so the repeated scans are cheap.
+    let mut rest = rooms;
+    rest.reverse();
+    let mut out = Vec::new();
+    while let Some((id, seed)) = rest.pop() {
+        let mut piece = vec![seed];
+        loop {
+            let (grown, keep): (Vec<_>, Vec<_>) = rest
+                .into_iter()
+                .partition(|&(rid, r)| rid == id && piece.iter().any(|&p| joined(p, r)));
+            rest = keep;
+            if grown.is_empty() {
+                break;
+            }
+            piece.extend(grown.into_iter().map(|(_, r)| r));
+        }
+        out.push(piece);
+    }
+    out
 }
 
 /// A world-tile box, `max` exclusive.
@@ -3415,9 +3520,21 @@ mod tests {
             let snap = sanctuary([None, Some(id), None, None]);
             assert_eq!(landmarks(&snap, LANDMARKS), vec![(summoner, 90.0, 30.0)], "{id}");
         }
-        // Several matching rooms make one star, at the centre of their bounding box.
-        let snap = sanctuary([Some(525), None, None, Some(528)]);
+        // Adjacent rooms of one preset make one star, at the centre of their bounding box.
+        let snap = sanctuary([None, Some(526), Some(526), None]);
         assert_eq!(landmarks(&snap, LANDMARKS), vec![(summoner, 120.0, 30.0)]);
+        // Separate pieces get a star each, not one between them.
+        let snap = sanctuary([Some(525), None, None, Some(528)]);
+        assert_eq!(
+            landmarks(&snap, LANDMARKS),
+            vec![(summoner, 30.0, 30.0), (summoner, 210.0, 30.0)]
+        );
+        // So do two adjacent pieces of different presets.
+        let snap = sanctuary([Some(525), Some(528), None, None]);
+        assert_eq!(
+            landmarks(&snap, LANDMARKS),
+            vec![(summoner, 30.0, 30.0), (summoner, 90.0, 30.0)]
+        );
         // Ordinary arm ends, the neighbouring ids and unknown presets: nothing.
         let snap = sanctuary([Some(510), Some(524), Some(529), None]);
         assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
@@ -3436,16 +3553,40 @@ mod tests {
     }
 
     #[test]
-    fn gidbinn_rule_marks_the_altar_piece() {
-        let gidbinn = Marker::Landmark("gidbinn");
-        let mut snap = sanctuary([Some(601), Some(602), Some(602), None]);
+    fn gidbinn_rule_marks_every_clearing_but_the_waypoint_one() {
+        let gidbinn = Marker::Suspected("gidbinn");
+        // Every pygmy clearing 595-604 is a candidate; other pieces are not.
+        let mut snap = sanctuary([Some(594), Some(595), Some(604), Some(605)]);
         snap.level.id = 78;
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![(gidbinn, 120.0, 30.0)]);
-        // The waypoint area 601 alone: nothing.
-        let mut snap = sanctuary([Some(601), None, None, None]);
+        assert_eq!(
+            landmarks(&snap, LANDMARKS),
+            vec![(gidbinn, 90.0, 30.0), (gidbinn, 150.0, 30.0)]
+        );
+        // Two separate 602 pieces: a "?" on each, none between them.
+        let mut snap = sanctuary([Some(602), Some(602), None, Some(602)]);
         snap.level.id = 78;
+        assert_eq!(
+            landmarks(&snap, LANDMARKS),
+            vec![(gidbinn, 60.0, 30.0), (gidbinn, 210.0, 30.0)]
+        );
+        // The clearing holding the waypoint (object 237) is skipped.
+        snap.presets = vec![object(237, 70, 10)];
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![(gidbinn, 210.0, 30.0)]);
+        // Once the altar (object 252) is loaded, its quest-object star alone shows.
+        snap.presets.push(object(252, 200, 20));
         assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
-        // 602 in another level: nothing.
+        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .filter(|m| {
+                matches!(
+                    m,
+                    Marker::Suspected(_) | Marker::Landmark(_) | Marker::QuestObject(_)
+                )
+            })
+            .collect();
+        assert_eq!(kinds, vec![Marker::QuestObject("gidbinn altar")]);
+        // A clearing in another level: nothing.
         let mut snap = sanctuary([None, Some(602), None, None]);
         snap.level.id = 77;
         assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
@@ -3530,11 +3671,44 @@ mod tests {
     }
 
     #[test]
-    fn all_landmark_rules_are_confirmed() {
+    fn gidbinn_candidates_in_the_nightmare_jungle_of_2026_11_20() {
+        // The pygmy clearings of a live dump (user report: a star on 602, but no altar there):
+        // 4x4 grids of 40-tile rooms, 595 holding the waypoint at (5899, 3974), 602 right north
+        // of it, and 600 further north-west.
+        let clearing = |preset, x0: u32, y0: u32| {
+            (0..16u32).map(move |i| Room {
+                x: x0 + 40 * (i % 4),
+                y: y0 + 40 * (i / 4),
+                w: 40,
+                h: 40,
+                loaded: false,
+                preset: Some(preset),
+            })
+        };
+        let mut snap = empty_snapshot(5907, 3489);
+        snap.level.id = 78;
+        snap.level.rooms = clearing(595, 5800, 3880)
+            .chain(clearing(602, 5800, 3720))
+            .chain(clearing(600, 5640, 3400))
+            .collect();
+        snap.presets = vec![object(237, 5899, 3974)];
+        let gidbinn = Marker::Suspected("gidbinn");
+        assert_eq!(
+            landmarks(&snap, LANDMARKS),
+            vec![(gidbinn, 5880.0, 3800.0), (gidbinn, 5720.0, 3480.0)]
+        );
+    }
+
+    #[test]
+    fn only_candidate_landmark_rules_are_unconfirmed() {
         // Every rule is live-confirmed: the W/E/S/N variants of a named piece inherit the
         // confirmation of their family (the direction letter only says where in the piece the
-        // feature sits), so no landmark is drawn as a mere "?" any more.
-        assert!(LANDMARKS.iter().all(|r| r.confirmed));
+        // feature sits). Only candidate rules (where a quest object might be) are a "?".
+        assert!(
+            LANDMARKS
+                .iter()
+                .all(|r| r.confirmed == r.candidates_for.is_none())
+        );
     }
 
     fn object(txt: u32, x: u32, y: u32) -> Preset {
@@ -3630,14 +3804,14 @@ mod tests {
     fn suspected_landmark_renders_as_a_question_mark() -> Result<()> {
         let snap = tomb_66();
         let (w, h) = (400, 400);
-        // No live rule is unconfirmed any more, so the ? path is exercised with a synthetic one
-        // over the fixture's 461 room.
+        // The ? path is exercised with a synthetic rule over the fixture's 461 room.
         let unconfirmed = [LandmarkRule {
             level_ids: 66..=72,
             preset_ids: 461..=461,
             label: "orifice (E)",
             confirmed: false,
             style: LandmarkStyle::Orifice,
+            candidates_for: None,
         }];
         // Without a font: a hollow gold ring, no glyph.
         let plain = render_rules(&snap, w, h, None, &unconfirmed)?;
