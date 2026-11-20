@@ -13,9 +13,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
 
-use crate::offset_cache;
-use crate::offsets::{unit, unit_table};
-use crate::process::{MapEntry, ReadMem, is_user_ptr};
+use super::offset_cache;
+use super::offsets::{unit, unit_table};
+use super::process::MapEntry;
+use super::{ReadMem, is_user_ptr};
 
 /// Accepted `SizeOfImage` range (D2R was 0x279c000 when verified).
 const SIZE_OF_IMAGE_RANGE: std::ops::RangeInclusive<u32> = 0x260_0000..=0x2A0_0000;
@@ -513,7 +514,7 @@ pub fn find_pattern(haystack: &[u8], pattern: &[Option<u8>]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::process::parse_maps;
+    use crate::reader::process::parse_maps;
     use crate::testutil::{FakeMem, temp_dir};
 
     const D2R_SIZE: u32 = 0x279_c000;

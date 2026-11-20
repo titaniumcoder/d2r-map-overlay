@@ -56,9 +56,19 @@ Rust via mise (`mise use rust@stable` pinned in the project's `mise.toml`). Impl
 ```
 Cargo.toml
 src/main.rs        — arg/config, main loop (reader thread → channel → overlay)
-src/process.rs     — find D2R pid, maps parsing, pread on /proc/<pid>/mem
-src/image.rs       — locate D2R image (live base + fully readable memfd alias), signature scan
-src/game.rs        — structs/offsets → Snapshot {level, player, rooms, markers, elites}
+src/live.rs        — live tick loop over a `reader::GameReader` (session, guidance, render, dashboard)
+src/reader/        — the reader plugin (step 4 of the plugin refactor)
+  mod.rs           — `GameReader` (attach / attach_now / snapshot / quest flags / alive / save dir),
+                     `Platform` (find process, open memory, find image, heap regions, save dir),
+                     `ReadMem`; `ProtonReader = MemoryReader<Proton>`; Windows port notes
+  memory_reader.rs — game layer driver over any `Platform`: unit-table retry/backoff + offset cache,
+                     background items-table search, quest-global search budget
+  proton.rs        — Proton/Linux `Platform`: /proc, `ProcMem`, memfd image, WINEPREFIX save dir, ptrace hint
+  process.rs       — (platform) find D2R pid, maps parsing, heap regions, pread on /proc/<pid>/mem
+  image.rs         — `find_image` (platform: memfd alias); `Image::unit_table` / `quest_flags_global`
+                     (game layer: signature, cache, structural `.data` search)
+  game.rs          — (game layer) structs/offsets → Snapshot {level, player, rooms, markers, elites}
+  offsets.rs, offset_cache.rs, items.rs (items table scan over `Platform::heap_regions`), quests.rs
 src/markers.rs     — classify presets (waypoint/exit/superunique), per-game accumulation cache
 src/overlay.rs     — layer-shell window, tiny-skia drawing, iso projection
 src/hypr.rs        — Hyprland socket2: show only while D2R is the active window
@@ -589,8 +599,8 @@ playstyle also owns the route ("where to go next") and the item marks on the map
 - **Core (map + dashboard)**: draws the map, info line and markers; runs the dashboard page and the
   stash, skills and vendor panels; holds the game data tables. Today: overlay, render, session,
   journal, web server, `*_data.rs`.
-- **Reader plugin**: finds the game and reads memory (map, monsters, items, stash, quests). Today:
-  process, image, offsets, game walk, items table, quest record. Split in two: a **platform layer**
+- **Reader plugin**: finds the game and reads memory (map, monsters, items, stash, quests). Since
+  step 4: `src/reader/` (process, image, offsets, game walk, items table, quest record). Split in two: a **platform layer**
   (find the process, read its memory; Proton-only, what Windows would replace) and a **game layer**
   (offsets and the structure walk; platform-independent, Windows would reuse it).
 - **Playstyle plugin**: builds and stages, gear choices, farm list, route, keep/sell/trade marks,
@@ -688,7 +698,16 @@ trait; today `src/stash_plan.rs`, shown in the dashboard's Sell / Keep panel.
   valuables rule; Smoke moved to merc body in both druid builds.
 - [x] 2. Small moves that untangle shared pieces: new core modules `objects`, `names`, `item_stats`; dead blood-boil branches gone from `gen_build.py`.
 - [x] 3. The reader stops computing keep/sell: it returns raw items, the playstyle sorts them. Snapshot carries `owned_items` (item + `game::Place`) and every coded ground base; new `guidance::Guidance` (damages, BiS, keep/sell/give-away, drop `marks` by unit id) is computed in live.rs / `--render` and passed to render, dashboard and journal. Left for step 4: `cows`/`trail` (session data) and the other session writes into Snapshot.
-- [ ] 4. Reader plugin trait plus the Proton reader.
+- [x] 4. Reader plugin trait plus the Proton reader: `src/reader/` (game, image, items, offsets,
+  offset_cache, process, quests moved there; the crate root re-exports `game`, `items`, `offsets`,
+  `offset_cache`, `quests` under their old paths). `GameReader` is what live.rs and `--probe` /
+  `--dump` use; `MemoryReader<P: Platform>` is the platform-independent game layer and
+  `ProtonReader = MemoryReader<Proton>` the build's reader. Static dispatch (`impl GameReader`):
+  the reader is picked at build time. `played.rs` no longer reads /proc: it seeds from
+  `GameReader::save_dir`. Left for step 5: the `Snapshot` / post-session `Frame` split
+  (`cows`, `trail` and the session's in-place merges of presets, shrines, wells, links,
+  terrorized, cached stash pages), and `offset_cache::cache_dir` (also game.json's dir) moving
+  to a core paths module.
 - [ ] 5. Playstyle plugin trait, wrapping today's builds, farm list and valuables.
 - [ ] 6. Split the dashboard into the core page and playstyle panels.
 - [ ] 7. New folder layout: `playstyle/<name>/` with route, builds, farm list and marks.

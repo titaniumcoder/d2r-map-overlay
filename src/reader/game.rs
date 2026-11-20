@@ -10,15 +10,15 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::items::{self, DropKind};
-use crate::objects::is_consumable_quest_object;
-use crate::objects_data::{SHRINE_OBJECTS, WELL_OBJECTS};
-use crate::offsets::{
+use super::ReadMem;
+use super::items::{self, DropKind};
+use super::offsets::{
     ROOM_TILE_SCALE, act, act_misc, inventory, item_data, item_mode, level, level_preset, monster_data,
     object_data, object_mode, path, player_data, preset, room_tile, room1, room2, skill, skill_txt, skills,
     stash_tab_node, stat_list, state, static_path, unit, unit_table,
 };
-use crate::process::ReadMem;
+use crate::objects::is_consumable_quest_object;
+use crate::objects_data::{SHRINE_OBJECTS, WELL_OBJECTS};
 use crate::skills_data;
 use crate::stash::{self, StashTab};
 
@@ -1022,7 +1022,7 @@ fn walk_level(r: &mut Reader<'_, impl ReadMem>, level_addr: u64, level_id: u32) 
     })
 }
 
-/// Reads one snapshot. `unit_table` is the hash table address from [`crate::image::Image::unit_table`];
+/// Reads one snapshot. `unit_table` is the hash table address from [`crate::reader::image::Image::unit_table`];
 /// `items_table` is the item-code table from [`items::find_table`] (`None`: unique and set drops only).
 /// `previous` is the unit id of the player chosen before (see [`ChosenBy::Previous`]).
 ///
@@ -1768,7 +1768,7 @@ impl<M: ReadMem> Reader<'_, M> {
         for &raw in bytes.as_chunks::<8>().0 {
             let near = u64::from_le_bytes(raw);
             // Nulls (and garbage) after the real entries are skipped, like `ReadMem::read_ptr`.
-            if !crate::process::is_user_ptr(near) {
+            if !crate::reader::is_user_ptr(near) {
                 continue;
             }
             match self.border_link(near, level_addr, from_room) {
@@ -2930,7 +2930,7 @@ mod tests {
 
     /// [`world`] with Alice's unit given a stat list holding `stats` (stat id, value).
     fn world_with_player_stats(stats: &[(u16, u32)]) -> Result<FakeMem> {
-        use crate::process::ReadMem;
+        use crate::reader::ReadMem;
         const LIST: u64 = 0x90_0000;
         const ENTRIES: u64 = 0x90_1000;
         let mut m = world()?;

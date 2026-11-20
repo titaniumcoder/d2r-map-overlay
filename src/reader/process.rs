@@ -2,19 +2,18 @@
 
 use std::fs::{self, File};
 use std::io;
+use std::ops::Range;
 use std::os::unix::fs::FileExt;
+use std::path::Path;
 
 use anyhow::{Context, Result};
+
+use super::ReadMem;
 
 /// Substring of the Wine process's cmdline that identifies the game (Windows path, backslash).
 const D2R_CMDLINE: &str = "Diablo II Resurrected\\D2R.exe";
 /// The game process's `/proc/<pid>/comm` (Wine names the main thread `Main`).
 const D2R_COMM: &str = "Main";
-
-/// Lowest address treated as a plausible user-space pointer (exclusive).
-const MIN_USER_PTR: u64 = 0x10000;
-/// Highest address treated as a plausible user-space pointer (exclusive).
-const MAX_USER_PTR: u64 = 0x7fff_ffff_ffff;
 
 /// Finds the pid of the running D2R process by scanning `/proc/*/cmdline`.
 ///
@@ -152,69 +151,29 @@ pub fn read_maps(pid: u32) -> Result<Vec<MapEntry>> {
     parse_maps(&text)
 }
 
-/// Read access to another process's address space. Little-endian helpers are provided.
-pub trait ReadMem {
-    /// Fills `buf` from `addr`; a short or failed read is an error.
-    ///
-    /// # Errors
-    /// Any I/O error, including unmapped or no-access addresses.
-    fn read(&self, addr: u64, buf: &mut [u8]) -> io::Result<()>;
-
-    /// # Errors
-    /// See [`ReadMem::read`].
-    fn read_bytes(&self, addr: u64, len: usize) -> io::Result<Vec<u8>> {
-        let mut buf = vec![0; len];
-        self.read(addr, &mut buf)?;
-        Ok(buf)
-    }
-
-    /// # Errors
-    /// See [`ReadMem::read`].
-    fn read_array<const N: usize>(&self, addr: u64) -> io::Result<[u8; N]> {
-        let mut buf = [0; N];
-        self.read(addr, &mut buf)?;
-        Ok(buf)
-    }
-
-    /// # Errors
-    /// See [`ReadMem::read`].
-    fn read_u8(&self, addr: u64) -> io::Result<u8> {
-        self.read_array::<1>(addr).map(u8::from_le_bytes)
-    }
-
-    /// # Errors
-    /// See [`ReadMem::read`].
-    fn read_u16(&self, addr: u64) -> io::Result<u16> {
-        self.read_array(addr).map(u16::from_le_bytes)
-    }
-
-    /// # Errors
-    /// See [`ReadMem::read`].
-    fn read_u32(&self, addr: u64) -> io::Result<u32> {
-        self.read_array(addr).map(u32::from_le_bytes)
-    }
-
-    /// # Errors
-    /// See [`ReadMem::read`].
-    fn read_u64(&self, addr: u64) -> io::Result<u64> {
-        self.read_array(addr).map(u64::from_le_bytes)
-    }
-
-    /// Reads a pointer; `Ok(None)` if the value isn't a plausible user-space address
-    /// (null, tiny, or kernel-half).
-    ///
-    /// # Errors
-    /// See [`ReadMem::read`].
-    fn read_ptr(&self, addr: u64) -> io::Result<Option<u64>> {
-        let p = self.read_u64(addr)?;
-        Ok(is_user_ptr(p).then_some(p))
-    }
+/// True for mappings a heap table can be in: readable, not backed by a file, not a kernel page.
+fn is_heap_region(e: &MapEntry) -> bool {
+    e.perms.read
+        && e.inode == 0
+        && !matches!(
+            e.pathname.as_str(),
+            "[vvar]" | "[vvar_vclock]" | "[vsyscall]" | "[vdso]"
+        )
 }
 
-/// True if `p` is a plausible user-space pointer (not null, not tiny, not kernel-half).
+/// The address ranges of `maps` that heap tables can be in ([`is_heap_region`]), in order.
 #[must_use]
-pub const fn is_user_ptr(p: u64) -> bool {
-    MIN_USER_PTR < p && p < MAX_USER_PTR
+pub fn heap_regions(maps: &[MapEntry]) -> Vec<Range<u64>> {
+    maps.iter()
+        .filter(|e| is_heap_region(e))
+        .map(|e| e.start..e.end)
+        .collect()
+}
+
+/// True while process `pid` exists.
+#[must_use]
+pub fn is_alive(pid: u32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// Reads a live process through `/proc/<pid>/mem` (positioned reads; needs `CAP_SYS_PTRACE`).
@@ -244,7 +203,6 @@ impl ReadMem for ProcMem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::FakeMem;
 
     #[test]
     fn cmdline_match() {
@@ -321,29 +279,19 @@ mod tests {
     }
 
     #[test]
-    fn readmem_helpers() -> Result<()> {
-        let mut m = FakeMem::default();
-        m.add(0x1000, vec![1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 2, 0, 0, 0, 0, 0]);
-        assert_eq!(m.read_u8(0x1000)?, 0x01);
-        assert_eq!(m.read_u16(0x1000)?, 0x0201);
-        assert_eq!(m.read_u32(0x1000)?, 0x0403_0201);
-        assert_eq!(m.read_u64(0x1000)?, 0x0807_0605_0403_0201);
-        assert_eq!(m.read_bytes(0x1002, 3)?, vec![3, 4, 5]);
-        assert_eq!(m.read_ptr(0x1008)?, Some(0x2_0000));
-        assert!(m.read_u64(0x100c).is_err(), "crosses region end");
-        assert!(m.read_u8(0x0fff).is_err(), "before region");
-        Ok(())
-    }
-
-    #[test]
-    fn read_ptr_plausibility() -> Result<()> {
-        let mut m = FakeMem::default();
-        let vals: [u64; 4] = [0, 0x10000, 0x7fff_ffff_ffff, 0x7ff0_0000_0000];
-        m.add(0x1000, vals.iter().flat_map(|v| v.to_le_bytes()).collect());
-        assert_eq!(m.read_ptr(0x1000)?, None);
-        assert_eq!(m.read_ptr(0x1008)?, None);
-        assert_eq!(m.read_ptr(0x1010)?, None);
-        assert_eq!(m.read_ptr(0x1018)?, Some(0x7ff0_0000_0000));
+    fn heap_regions_skip_files_unreadable_and_kernel_pages() -> Result<()> {
+        let maps = parse_maps(
+            "100000-101000 rw-p 00000000 00:00 0\n\
+             200000-201000 rw-p 00000000 fd:01 77 /game/data.bin\n\
+             300000-301000 ---p 00000000 00:00 0\n\
+             400000-402000 rw-p 00000000 00:00 0 [heap]\n\
+             500000-501000 r--p 00000000 00:00 0 [vvar]\n\
+             600000-601000 r-xp 00000000 00:00 0 [vdso]\n",
+        )?;
+        assert_eq!(
+            heap_regions(&maps),
+            vec![0x10_0000..0x10_1000, 0x40_0000..0x40_2000]
+        );
         Ok(())
     }
 }

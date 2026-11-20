@@ -5,13 +5,14 @@
 //! (`gcg `, `r01 `) lives in the game's items table, an array on the heap whose address differs
 //! per run. [`find_table`] locates it by scanning anonymous memory once per process.
 
+use std::ops::Range;
 use std::time::Instant;
 
 use memchr::memmem;
 use serde::{Deserialize, Serialize};
 
-use crate::offsets::{item_data, items_txt};
-use crate::process::{self, MapEntry, ReadMem};
+use super::ReadMem;
+use super::offsets::{item_data, items_txt};
 
 /// Gem colour (skulls count as a gem colour here: they drop and are drawn like gems).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -211,27 +212,18 @@ pub struct Scan {
     pub scanned: u64,
 }
 
-/// Searches readable anonymous memory for the items table.
-pub fn find_table(mem: &impl ReadMem, maps: &[MapEntry]) -> Scan {
-    scan(mem, maps, CHUNK)
-}
-
-/// True for mappings the table can be in: readable, not backed by a file, not a kernel page.
-fn is_scan_region(e: &MapEntry) -> bool {
-    e.perms.read
-        && e.inode == 0
-        && !matches!(
-            e.pathname.as_str(),
-            "[vvar]" | "[vvar_vclock]" | "[vsyscall]" | "[vdso]"
-        )
+/// Searches `regions` (the platform's readable anonymous memory,
+/// [`super::Platform::heap_regions`]) for the items table.
+pub fn find_table(mem: &impl ReadMem, regions: &[Range<u64>]) -> Scan {
+    scan(mem, regions, CHUNK)
 }
 
 /// [`find_table`] with a configurable read size (tests use a tiny one to cross chunk borders).
-fn scan(mem: &impl ReadMem, maps: &[MapEntry], chunk: u64) -> Scan {
+fn scan(mem: &impl ReadMem, regions: &[Range<u64>], chunk: u64) -> Scan {
     let finder = memmem::Finder::new(&SIGNATURE[0]);
     let mut buf = vec![0u8; usize::try_from(chunk).unwrap_or(0)];
     let mut scanned = 0u64;
-    for region in maps.iter().filter(|e| is_scan_region(e)) {
+    for region in regions {
         let mut start = region.start;
         while start < region.end {
             let len = (region.end - start).min(chunk);
@@ -271,18 +263,11 @@ fn is_table(mem: &impl ReadMem, base: u64) -> bool {
     })
 }
 
-/// Finds the items table of process `pid` and logs the result and the time it took.
+/// Finds the items table in `regions` and logs the result and the time it took.
 /// `None` (logged) if it can't be found: then only unique and set drops are shown.
-pub fn locate(pid: u32, mem: &impl ReadMem) -> Option<u64> {
+pub fn locate(mem: &impl ReadMem, regions: &[Range<u64>]) -> Option<u64> {
     let started = Instant::now();
-    let maps = match process::read_maps(pid) {
-        Ok(maps) => maps,
-        Err(e) => {
-            eprintln!("items table: {e:#}; gems and runes are not shown");
-            return None;
-        }
-    };
-    let Scan { base, scanned } = find_table(mem, &maps);
+    let Scan { base, scanned } = find_table(mem, regions);
     let (mib, ms) = (scanned >> 20, started.elapsed().as_millis());
     match base {
         Some(b) => eprintln!("items table at {b:#x} (scanned {mib} MiB in {ms} ms)"),
@@ -296,7 +281,6 @@ pub fn locate(pid: u32, mem: &impl ReadMem) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::process::Perms;
     use crate::testutil::FakeMem;
 
     #[test]
@@ -463,51 +447,33 @@ mod tests {
         ]
     }
 
-    fn map(start: u64, len: usize, read: bool, inode: u64, pathname: &str) -> MapEntry {
-        MapEntry {
-            start,
-            end: start + u64::try_from(len).unwrap_or(0),
-            perms: Perms {
-                read,
-                write: true,
-                ..Perms::default()
-            },
-            offset: 0,
-            inode,
-            pathname: pathname.into(),
-        }
+    fn region(start: u64, len: usize) -> Range<u64> {
+        start..start + u64::try_from(len).unwrap_or(0)
     }
 
     #[test]
     fn finds_table_and_reads_codes() {
         let mut mem = FakeMem::default();
-        let mut maps = Vec::new();
+        let mut regions = Vec::new();
         // 1. A decoy: `hax ` followed by `axe ` but not the rest.
         let decoy = table_bytes(6, &[(0, b"hax "), (1, b"axe "), (2, b"3ax ")]);
-        maps.push(map(0x10_0000, decoy.len(), true, 0, ""));
+        regions.push(region(0x10_0000, decoy.len()));
         mem.add(0x10_0000, decoy);
-        // 2. A real-looking table in a file-backed mapping: ignored.
-        let file = table_bytes(6, &signature_rows());
-        maps.push(map(0x20_0000, file.len(), true, 77, "/game/data.bin"));
-        mem.add(0x20_0000, file);
-        // 3. Listed but unreadable: skipped.
-        maps.push(map(0x30_0000, 0x1000, true, 0, ""));
-        // 4. Unreadable per perms (contains a table): skipped.
-        let noread = table_bytes(6, &signature_rows());
-        maps.push(map(0x40_0000, noread.len(), false, 0, ""));
-        mem.add(0x40_0000, noread);
-        // 5. The table, at an odd address inside an anonymous region, after some bytes.
+        // 2. Listed but unreadable: skipped. (Which mappings are listed at all is the
+        // platform's choice: `process::heap_regions`.)
+        regions.push(region(0x30_0000, 0x1000));
+        // 3. The table, at an odd address inside an anonymous region, after some bytes.
         let mut rows = signature_rows();
         rows.extend([(587, b"gcg "), (625, b"r01 ")]);
         let mut heap = vec![0u8; 0x1235];
         heap.extend(table_bytes(700, &rows));
-        maps.push(map(0x7f00_0000_0000, heap.len(), true, 0, "[heap]"));
+        regions.push(region(0x7f00_0000_0000, heap.len()));
         mem.add(0x7f00_0000_0000, heap);
         let want = 0x7f00_0000_1235;
 
         // A chunk size that doesn't divide anything, so needles fall across chunk borders.
         for chunk in [0x101, 0x3FE, CHUNK] {
-            let s = scan(&mem, &maps, chunk);
+            let s = scan(&mem, &regions, chunk);
             assert_eq!(s.base, Some(want), "chunk {chunk:#x}");
             assert!(s.scanned > 0);
         }
@@ -522,9 +488,9 @@ mod tests {
     fn no_table_found() {
         let mut mem = FakeMem::default();
         let decoy = table_bytes(6, &[(0, b"hax "), (1, b"axe "), (2, b"2ax "), (3, b"mpi ")]);
-        let maps = vec![map(0x10_0000, decoy.len(), true, 0, "")];
+        let regions = vec![region(0x10_0000, decoy.len())];
         mem.add(0x10_0000, decoy);
-        let s = scan(&mem, &maps, 0x200);
+        let s = scan(&mem, &regions, 0x200);
         assert_eq!(s.base, None, "four of five signature codes is not enough");
         assert_eq!(
             s.scanned,

@@ -13,8 +13,8 @@
 //! in-memory copy back, and re-reads it after the config page's [`remove`] or [`clear_stage`]
 //! (a new build selection), so both reset it while the overlay runs.
 //!
-//! Without the file (first start) it is seeded from D2R's own save directory in the Proton
-//! prefix: online characters leave `<Name><account digits>.ctlo` (key bindings, rewritten on
+//! Without the file (first start) it is seeded from D2R's own save directory (the reader finds
+//! it; under Proton it is in the game's prefix): online characters leave `<Name><account digits>.ctlo` (key bindings, rewritten on
 //! leaving a game), offline ones `<Name>.d2s`; their modification times are the recency. A
 //! missing or corrupt file only means no order: the page then keeps the config order.
 
@@ -119,8 +119,10 @@ fn plausible_name(name: &str) -> bool {
 }
 
 /// Last-played times from the save files in `dir` (newest file per character); unreadable
-/// entries are skipped.
-fn seed_from_saves(dir: &Path) -> Played {
+/// entries are skipped. `dir` is the game's save directory, from the reader
+/// ([`crate::reader::GameReader::save_dir`]).
+#[must_use]
+pub fn seed_from_saves(dir: &Path) -> Played {
     let mut played = Played::new();
     let Ok(entries) = fs::read_dir(dir) else {
         return played;
@@ -148,37 +150,6 @@ fn seed_from_saves(dir: &Path) -> Played {
         slot.t = slot.t.max(t);
     }
     played
-}
-
-/// `WINEPREFIX` from a process's `/proc/<pid>/environ` bytes (NUL-separated `KEY=value`).
-fn wineprefix(environ: &[u8]) -> Option<PathBuf> {
-    environ
-        .split(|&b| b == 0)
-        .find_map(|var| var.strip_prefix(b"WINEPREFIX="))
-        .and_then(|v| std::str::from_utf8(v).ok())
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-}
-
-/// D2R's save directory under `prefix`: `drive_c/users/<user>/Saved Games/Diablo II
-/// Resurrected` for the first user that has one (Proton's is `steamuser`).
-fn saves_dir(prefix: &Path) -> Option<PathBuf> {
-    let users = fs::read_dir(prefix.join("drive_c/users")).ok()?;
-    users
-        .filter_map(Result::ok)
-        .map(|u| u.path().join("Saved Games/Diablo II Resurrected"))
-        .find(|d| d.is_dir())
-}
-
-/// The seed for a missing file: the save files of the game process `pid` (its prefix from its
-/// environment; same user, so no ptrace capability is needed). Empty when anything is missing.
-#[must_use]
-pub fn seed_from_process(pid: u32) -> Played {
-    fs::read(format!("/proc/{pid}/environ"))
-        .ok()
-        .and_then(|env| wineprefix(&env))
-        .and_then(|prefix| saves_dir(&prefix))
-        .map_or_else(Played::new, |dir| seed_from_saves(&dir))
 }
 
 /// Removes `name` (any case) from the file at `path`; `Ok(false)` when it wasn't there (a
@@ -420,25 +391,17 @@ mod tests {
     }
 
     #[test]
-    fn wineprefix_is_read_from_environ() {
-        let env = b"HOME=/home/u\0WINEPREFIX=/p/pfx/\0X=1\0";
-        assert_eq!(wineprefix(env), Some(PathBuf::from("/p/pfx/")));
-        assert_eq!(wineprefix(b"HOME=/home/u\0"), None);
-    }
-
-    #[test]
-    fn seed_reads_the_save_files_of_a_prefix() -> Result<()> {
-        let prefix = temp_dir("played-prefix")?;
-        let saves = prefix.join("drive_c/users/steamuser/Saved Games/Diablo II Resurrected");
+    fn seed_reads_the_save_files() -> Result<()> {
+        let saves = temp_dir("played-saves")?;
         fs::create_dir_all(&saves)?;
         fs::write(saves.join("Vex223650631.ctlo"), "")?;
         fs::write(saves.join("Vex223650631.keyo"), "")?;
         fs::write(saves.join("Settings.json"), "")?;
-        let dir = saves_dir(&prefix).context("saves dir")?;
-        let played = seed_from_saves(&dir);
+        let played = seed_from_saves(&saves);
         assert_eq!(played.keys().collect::<Vec<_>>(), ["vex"]);
         assert_eq!(played.get("vex").map(|e| e.name.as_str()), Some("Vex"));
         assert!(played.get("vex").is_some_and(|e| e.t > 0));
+        fs::remove_dir_all(&saves)?;
         Ok(())
     }
 

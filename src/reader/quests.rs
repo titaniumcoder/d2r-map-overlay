@@ -3,8 +3,8 @@
 
 use anyhow::{Context, Result, ensure};
 
-use crate::offsets::quest_flags;
-use crate::process::ReadMem;
+use super::ReadMem;
+use super::offsets::quest_flags;
 
 /// Quest names and their word in the record (classic d2s order; words 0, 7, 8, 15, 16, 23, 24
 /// and 28 are act intros/completions, 29–34 unused, 41 Akara's respec).
@@ -114,7 +114,7 @@ pub fn is_header(header: &[u8]) -> bool {
     };
     u32_at(quest_flags::BITS) == Some(quest_flags::BITS_VALUE)
         && u64_at(quest_flags::BYTES) == Some(quest_flags::BYTES_VALUE)
-        && u64_at(quest_flags::BUFFER).is_some_and(crate::process::is_user_ptr)
+        && u64_at(quest_flags::BUFFER).is_some_and(super::is_user_ptr)
 }
 
 #[cfg(test)]

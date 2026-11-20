@@ -8,17 +8,14 @@ mod breakpoints;
 mod build;
 mod config;
 mod cows;
-mod game;
 mod game_file;
 mod gear_score;
 mod guidance;
 mod hypr;
-mod image;
 mod info;
 mod item_levels_data;
 mod item_names_data;
 mod item_stats;
-mod items;
 mod journal;
 #[allow(
     clippy::doc_markdown,
@@ -29,12 +26,9 @@ mod live;
 mod names;
 mod objects;
 mod objects_data;
-mod offset_cache;
-mod offsets;
 mod overlay;
 mod played;
-mod process;
-mod quests;
+mod reader;
 mod render;
 mod runewords_data;
 mod session;
@@ -57,6 +51,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use smithay_client_toolkit::reexports::calloop::channel;
 
 use overlay::Msg;
+use reader::GameReader;
+// The reader's output types and offset tables, used across the core under their old paths
+// (`crate::game::Snapshot`, `crate::offsets::item_data`, ...).
+use reader::{game, items, offset_cache, offsets, quests};
 
 /// Overlay / render size in px when none is given.
 const DEFAULT_SIZE: (u32, u32) = (400, 400);
@@ -132,7 +130,8 @@ fn live(player: Option<String>, size: (u32, u32), journal: bool, config: config:
         .name("reader".into())
         .spawn(move || {
             let _exit = ExitOnDrop;
-            live::run(&reader_tx, player.as_deref(), size, journal, &config);
+            let mut reader = reader::ProtonReader::default();
+            live::run(&mut reader, &reader_tx, player.as_deref(), size, journal, &config);
         })
         .context("starting the reader thread")?;
     thread::Builder::new()
@@ -160,43 +159,18 @@ impl Drop for ExitOnDrop {
 
 /// Locates the game, its image and the unit table, and prints what it found.
 fn probe() -> Result<()> {
-    let pid = process::find_d2r_pid()?;
-    println!("pid         {pid}");
-    let maps = process::read_maps(pid)?;
-    let mem = process::ProcMem::open(pid)?;
-    let img = image::find_image(&maps, &mem).context("locating D2R.exe image")?;
-    println!("live_base   {:#x}", img.live_base);
-    println!("alias_base  {:#x}", img.alias_base);
-    println!("size        {:#x}", img.size);
-    let cache = offset_cache::default_path();
-    let table = img.unit_table(&mem, cache.as_deref(), true)?;
-    println!("build       {}", table.build);
-    println!(
-        "unit_table  {:#x} (rva {:#x}, via {:?})",
-        table.addr, table.rva, table.source
-    );
-    match &cache {
-        Some(path) => println!("cache       {}", path.display()),
-        None => println!("cache       (none: neither $XDG_CACHE_HOME nor $HOME set)"),
-    }
-    Ok(())
+    reader::ProtonReader::default().attach_now(&mut |label, value| println!("{label:<12}{value}"))
 }
 
 /// Prints one JSON snapshot of the game state; `player` picks among several live player units.
 /// Only the bases `config` marks are kept, as in live mode; the marks go to stderr.
 fn dump(player: Option<&str>, config: &config::Config) -> Result<()> {
-    let pid = process::find_d2r_pid()?;
-    let maps = process::read_maps(pid)?;
-    let mem = process::ProcMem::open(pid)?;
-    let img = image::find_image(&maps, &mem).context("locating D2R.exe image")?;
-    let table = img.unit_table(&mem, offset_cache::default_path().as_deref(), true)?;
-    let items_table = items::locate(pid, &mem);
+    let mut reader = reader::ProtonReader::default();
+    reader.attach_now(&mut |_, _| {})?;
+    reader.locate_items_now();
     // The quest record goes to stderr: the snapshot JSON on stdout stays as it was.
-    match img.quest_flags_global(&mem).and_then(|g| quests::read(&mem, g)) {
-        Ok(words) => eprintln!("quest flags: {words:04x?}"),
-        Err(e) => eprintln!("quest flags: {e:#}"),
-    }
-    let mut snap = game::snapshot(&mem, table.addr, items_table, player, None)?;
+    eprintln!("quest flags: {:04x?}", reader.quest_flags(true));
+    let mut snap = reader.snapshot(player, None)?;
     // Only the marked bases, as live mode shows them; the marks themselves go to stderr.
     let marks = valuables::apply(&mut snap.drops, &config.valuables);
     if !marks.is_empty() {

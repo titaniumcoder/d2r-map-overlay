@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::{fs, io};
 
-use crate::process::ReadMem;
+use crate::reader::ReadMem;
 
 /// Sparse fake address space: regions keyed by base address. A read must fit inside one region.
 #[derive(Debug, Default)]
