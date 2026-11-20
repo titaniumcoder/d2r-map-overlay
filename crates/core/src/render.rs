@@ -674,7 +674,7 @@ impl Marker {
             Self::Merc => ([150, 255, 190, 255], 2.5, Shape::Circle),
             // Bigger than the merc and the drops (user, 2026-11-20: "make my own point a little
             // bit bigger"); redrawn after the labels so it is always in front.
-            Self::Player => ([40, 255, 60, 255], 4.5, Shape::Circle),
+            Self::Player => ([40, 255, 60, 255], 3.5, Shape::Circle),
         }
     }
 }
