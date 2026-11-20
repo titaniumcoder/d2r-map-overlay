@@ -18,6 +18,7 @@ use serde::Serialize;
 
 use crate::config::SHRINE_NAMES;
 use crate::game::{Bounds, PresetKind, Room, Snapshot};
+use crate::guidance::Marks;
 use crate::items::DropKind;
 use crate::session;
 use crate::valuables::{Category, Tier};
@@ -232,9 +233,10 @@ impl Recorder {
         &self.game
     }
 
-    /// The new events in `snap`. Feed it the snapshot as read, before `Session::apply` filters
-    /// the monster presets. A new game clears what was seen.
-    pub fn observe(&mut self, snap: &Snapshot) -> Vec<Event> {
+    /// The new events in `snap`, each drop with its mark from `marks`. Feed it the snapshot as
+    /// read, before `Session::apply` filters the monster presets. A new game clears what was
+    /// seen.
+    pub fn observe(&mut self, snap: &Snapshot, marks: &Marks) -> Vec<Event> {
         let key = game_key(snap);
         if key != self.game {
             *self = Self {
@@ -312,7 +314,7 @@ impl Recorder {
         self.mercs_seen(snap, level, &mut out);
         for d in &snap.drops {
             if self.drops.insert(d.id) {
-                let h = d.highlight.as_ref();
+                let h = marks.get(&d.id);
                 out.push(Event::Drop {
                     level,
                     id: d.id,
@@ -490,10 +492,11 @@ impl Journal {
         self.dir.is_some()
     }
 
-    /// Records the new events of `snap` (as read, before `Session::apply`).
-    pub fn observe(&mut self, snap: &Snapshot) {
+    /// Records the new events of `snap` (as read, before `Session::apply`), its drops with their
+    /// `marks`.
+    pub fn observe(&mut self, snap: &Snapshot, marks: &Marks) {
         if self.is_enabled() {
-            let events = self.rec.observe(snap);
+            let events = self.rec.observe(snap, marks);
             self.write(&events, unix_now());
         }
     }
@@ -629,8 +632,6 @@ mod tests {
                 act: Some(Addr(0xa000)),
                 char_level: None,
                 speed: None,
-                build: vec![],
-                bis: None,
                 wsm: None,
                 strength: None,
                 dexterity: None,
@@ -660,9 +661,7 @@ mod tests {
             wells: vec![],
             operated_objects: vec![],
             inventory_items: 0,
-            inventory_keep: vec![],
-            sell: vec![],
-            give_away: vec![],
+            owned_items: vec![],
             held_materials: vec![],
             white_bases: vec![],
             difficulty: None,
@@ -727,12 +726,18 @@ mod tests {
         let mut r = Recorder::default();
         let mut a = snap(1, 74);
         a.presets = vec![marker(10), marker(10), marker(50)];
-        assert_eq!(kinds(&r.observe(&a)), vec!["level", "marker", "marker"]);
-        assert!(r.observe(&a).is_empty(), "nothing new on the next tick");
+        assert_eq!(
+            kinds(&r.observe(&a, &Marks::default())),
+            vec!["level", "marker", "marker"]
+        );
+        assert!(
+            r.observe(&a, &Marks::default()).is_empty(),
+            "nothing new on the next tick"
+        );
         let mut b = snap(2, 74);
         b.presets = vec![marker(10)];
         assert_eq!(
-            kinds(&r.observe(&b)),
+            kinds(&r.observe(&b, &Marks::default())),
             vec!["level", "marker"],
             "a new game emits again"
         );
@@ -757,37 +762,57 @@ mod tests {
     fn level_re_emitted_on_new_room_count() {
         let mut r = Recorder::default();
         let mut s = snap(1, 74);
-        assert_eq!(kinds(&r.observe(&s)), vec!["level"]);
+        assert_eq!(kinds(&r.observe(&s, &Marks::default())), vec!["level"]);
         s.level.rooms.push(room(120, 0, Some(510)));
-        assert_eq!(kinds(&r.observe(&s)), vec!["level"], "more rooms loaded");
+        assert_eq!(
+            kinds(&r.observe(&s, &Marks::default())),
+            vec!["level"],
+            "more rooms loaded"
+        );
         s.level.rooms.pop();
         assert!(
-            r.observe(&s).is_empty(),
+            r.observe(&s, &Marks::default()).is_empty(),
             "a count seen before is not written again"
         );
         s.level.rooms.clear();
-        assert_eq!(r.observe(&s), vec![], "no rooms (loading): nothing");
+        assert_eq!(
+            r.observe(&s, &Marks::default()),
+            vec![],
+            "no rooms (loading): nothing"
+        );
     }
 
     #[test]
     fn terror_once_per_level_and_game() -> Result<()> {
         let mut r = Recorder::default();
         let mut s = snap(1, 39);
-        assert_eq!(kinds(&r.observe(&s)), vec!["level"], "not terrorized: no event");
+        assert_eq!(
+            kinds(&r.observe(&s, &Marks::default())),
+            vec!["level"],
+            "not terrorized: no event"
+        );
         s.terrorized = true;
-        let events = r.observe(&s);
+        let events = r.observe(&s, &Marks::default());
         let terror = events.first().context("terror event")?;
         assert_eq!(
             serde_json::to_value(terror)?,
             json!({"ev": "terror", "level": 39, "terrorized": true})
         );
-        assert!(r.observe(&s).is_empty(), "once per level");
+        assert!(r.observe(&s, &Marks::default()).is_empty(), "once per level");
         s.level.id = 40;
         s.level.rooms.clear();
-        assert_eq!(kinds(&r.observe(&s)), vec!["terror"], "another level");
+        assert_eq!(
+            kinds(&r.observe(&s, &Marks::default())),
+            vec!["terror"],
+            "another level"
+        );
         let mut next = snap(2, 39);
         next.terrorized = true;
-        assert_eq!(kinds(&r.observe(&next)), vec!["level", "terror"], "a new game");
+        assert_eq!(
+            kinds(&r.observe(&next, &Marks::default())),
+            vec!["level", "terror"],
+            "a new game"
+        );
         Ok(())
     }
 
@@ -795,20 +820,20 @@ mod tests {
     fn killed_once() {
         let mut r = Recorder::default();
         let mut s = snap(1, 74);
-        r.observe(&s);
+        r.observe(&s, &Marks::default());
         s.monsters = vec![elite(1)];
-        assert_eq!(kinds(&r.observe(&s)), vec!["monster"]);
-        assert_eq!(r.observe(&s), vec![]);
+        assert_eq!(kinds(&r.observe(&s, &Marks::default())), vec!["monster"]);
+        assert_eq!(r.observe(&s, &Marks::default()), vec![]);
         s.monsters = vec![elite(0)];
-        assert_eq!(kinds(&r.observe(&s)), vec!["killed"]);
+        assert_eq!(kinds(&r.observe(&s, &Marks::default())), vec!["killed"]);
         s.monsters = vec![elite(12)];
-        assert_eq!(r.observe(&s), vec![], "corpse seen again");
+        assert_eq!(r.observe(&s, &Marks::default()), vec![], "corpse seen again");
         let mut normal = elite(1);
         normal.id = 78;
         normal.flags = 0x10;
         s.monsters = vec![normal];
         assert!(
-            r.observe(&s).is_empty(),
+            r.observe(&s, &Marks::default()).is_empty(),
             "minions and normal monsters are not elites"
         );
     }
@@ -830,16 +855,19 @@ mod tests {
             sockets: 0,
             unique_index: Some(370),
             item_data_head: "07000000".into(),
-            highlight: Some(Highlight {
+            x: 12,
+            y: 13,
+        }];
+        let marks = Marks::from([(
+            9,
+            Highlight {
                 tier: Tier::S,
                 category: Category::Trade,
                 rule: "Unique grand charms".into(),
                 uncertain: true,
-            }),
-            x: 12,
-            y: 13,
-        }];
-        let events = r.observe(&s);
+            },
+        )]);
+        let events = r.observe(&s, &marks);
         let drop = events
             .iter()
             .find(|e| matches!(e, Event::Drop { .. }))
@@ -876,11 +904,10 @@ mod tests {
             sockets: 0,
             unique_index: None,
             item_data_head: String::new(),
-            highlight: None,
             x: 12,
             y: 13,
         }];
-        let mut events = r.observe(&s);
+        let mut events = r.observe(&s, &Marks::default());
         events.push(arrival_event(&s, (74, 85, 3)));
         let line = |ev: &Event| {
             serde_json::to_value(Line {
@@ -916,7 +943,7 @@ mod tests {
 
         let mut s = snap(0xbeef, 74);
         s.monsters = vec![elite(0)];
-        let killed = r.observe(&s);
+        let killed = r.observe(&s, &Marks::default());
         let v = serde_json::to_value(killed.first().context("killed event")?)?;
         assert_eq!(
             v,
@@ -943,7 +970,7 @@ mod tests {
             y: 10,
         }];
         let values = r
-            .observe(&s)
+            .observe(&s, &Marks::default())
             .iter()
             .filter(|e| matches!(e, Event::Shrine { .. } | Event::Well { .. }))
             .map(serde_json::to_value)
@@ -958,10 +985,13 @@ mod tests {
         );
         // Used later, or seen again: no new events; a new game sees them again.
         s.shrines = vec![shrine(true)];
-        assert_eq!(r.observe(&s), vec![]);
+        assert_eq!(r.observe(&s, &Marks::default()), vec![]);
         let mut next = snap(2, 108);
         next.shrines = vec![shrine(true)];
-        assert_eq!(kinds(&r.observe(&next)), vec!["level", "shrine"]);
+        assert_eq!(
+            kinds(&r.observe(&next, &Marks::default())),
+            vec!["level", "shrine"]
+        );
         Ok(())
     }
 
@@ -976,7 +1006,7 @@ mod tests {
         };
         s.presets = vec![monster_preset(757), monster_preset(840)];
         let values = r
-            .observe(&s)
+            .observe(&s, &Marks::default())
             .iter()
             .filter(|e| matches!(e, Event::Marker { .. }))
             .map(serde_json::to_value)
@@ -1012,7 +1042,7 @@ mod tests {
         let mut j = Journal::new(dir.clone());
         let mut s = snap(1, 74);
         s.presets = vec![marker(10)];
-        let events = j.rec.observe(&s);
+        let events = j.rec.observe(&s, &Marks::default());
         let rest = events.get(1..).context("level and marker events")?;
         j.write(&events, 1_794_787_199);
         j.write(rest, 1_794_787_199);
@@ -1036,9 +1066,9 @@ mod tests {
         let mut j = Journal::new(PathBuf::from("/dev/null/journal"));
         let mut s = snap(1, 74);
         s.presets = vec![marker(10)];
-        j.observe(&s);
+        j.observe(&s, &Marks::default());
         assert!(!j.is_enabled(), "disabled after the error");
-        j.observe(&snap(2, 74));
+        j.observe(&snap(2, 74), &Marks::default());
         j.arrival(&s, (74, 1, 1));
         assert!(!j.is_enabled());
         assert!(!Journal::disabled().is_enabled());

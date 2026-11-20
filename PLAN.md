@@ -650,7 +650,7 @@ progress per character and difficulty (like the build stage in `played.json`).
 - [x] 1. Delete the sorceress builds (only Summoner Druid → Fury Druid stay); drop the Larzuk
   valuables rule; Smoke moved to merc body in both druid builds.
 - [x] 2. Small moves that untangle shared pieces: new core modules `objects`, `names`, `item_stats`; dead blood-boil branches gone from `gen_build.py`.
-- [ ] 3. The reader stops computing keep/sell: it returns raw items, the playstyle sorts them.
+- [x] 3. The reader stops computing keep/sell: it returns raw items, the playstyle sorts them. Snapshot carries `owned_items` (item + `game::Place`) and every coded ground base; new `guidance::Guidance` (damages, BiS, keep/sell/give-away, drop `marks` by unit id) is computed in live.rs / `--render` and passed to render, dashboard and journal. Left for step 4: `cows`/`trail` (session data) and the other session writes into Snapshot.
 - [ ] 4. Reader plugin trait plus the Proton reader.
 - [ ] 5. Playstyle plugin trait, wrapping today's builds, farm list and valuables.
 - [ ] 6. Split the dashboard into the core page and playstyle panels.

@@ -11,6 +11,7 @@ mod cows;
 mod game;
 mod game_file;
 mod gear_score;
+mod guidance;
 mod hypr;
 mod image;
 mod info;
@@ -181,7 +182,7 @@ fn probe() -> Result<()> {
 }
 
 /// Prints one JSON snapshot of the game state; `player` picks among several live player units.
-/// Drops carry the highlights of `config`.
+/// Only the bases `config` marks are kept, as in live mode; the marks go to stderr.
 fn dump(player: Option<&str>, config: &config::Config) -> Result<()> {
     let pid = process::find_d2r_pid()?;
     let maps = process::read_maps(pid)?;
@@ -195,7 +196,11 @@ fn dump(player: Option<&str>, config: &config::Config) -> Result<()> {
         Err(e) => eprintln!("quest flags: {e:#}"),
     }
     let mut snap = game::snapshot(&mem, table.addr, items_table, player, None)?;
-    valuables::apply(&mut snap.drops, &config.valuables);
+    // Only the marked bases, as live mode shows them; the marks themselves go to stderr.
+    let marks = valuables::apply(&mut snap.drops, &config.valuables);
+    if !marks.is_empty() {
+        eprintln!("marks: {marks:?}");
+    }
     println!("{}", serde_json::to_string_pretty(&snap)?);
     Ok(())
 }
@@ -219,15 +224,17 @@ fn load_snapshot(path: &str) -> Result<game::Snapshot> {
 }
 
 /// Loads a `--dump` snapshot and filters it like live mode does (superunique and quest monster
-/// presets only, drop highlights and shown shrines from `config`).
-fn load_for_drawing(path: &str, config: &config::Config) -> Result<game::Snapshot> {
+/// presets only, drop marks and shown shrines from `config`), with the guidance the map draws
+/// (drop marks, the build's damages).
+fn load_for_drawing(path: &str, config: &config::Config) -> Result<(game::Snapshot, guidance::Guidance)> {
     let mut snap = load_snapshot(path)?;
-    valuables::apply(&mut snap.drops, &config.valuables);
+    let mut guidance = guidance::Guidance::with_item_lists(&snap);
+    guidance.marks = valuables::apply(&mut snap.drops, &config.valuables);
     session::Session::default().apply(&mut snap);
     config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
     let holdings = snap.holdings();
     let owns = |item: &str| holdings.count(item);
-    snap.player.build = config
+    guidance.damages = config
         .damages_for_player(
             &snap.player.name,
             Some(snap.player.class),
@@ -236,12 +243,13 @@ fn load_for_drawing(path: &str, config: &config::Config) -> Result<game::Snapsho
             None,
         )
         .to_vec();
-    Ok(snap)
+    Ok((snap, guidance))
 }
 
 /// Renders a `--dump` JSON snapshot to a PNG file.
 fn render_png(snap: &str, out: &str, (w, h): (u32, u32), config: &config::Config) -> Result<()> {
-    let pixmap = render::render(&load_for_drawing(snap, config)?, w, h)?;
+    let (snap, guidance) = load_for_drawing(snap, config)?;
+    let pixmap = render::render(&snap, &guidance, w, h)?;
     pixmap.save_png(out).with_context(|| format!("writing {out}"))?;
     println!("wrote {out} ({w}x{h})");
     Ok(())
@@ -249,7 +257,8 @@ fn render_png(snap: &str, out: &str, (w, h): (u32, u32), config: &config::Config
 
 /// Shows a `--dump` JSON snapshot in the overlay window until killed (always, focus is ignored).
 fn show(snap: &str, (w, h): (u32, u32), config: &config::Config) -> Result<()> {
-    let frame = render::render(&load_for_drawing(snap, config)?, w, h)?;
+    let (snap, guidance) = load_for_drawing(snap, config)?;
+    let frame = render::render(&snap, &guidance, w, h)?;
     let (tx, rx) = channel::channel();
     for msg in [Msg::Frame(frame), Msg::Focus(true)] {
         tx.send(msg).map_err(|_| anyhow!("overlay channel closed"))?;

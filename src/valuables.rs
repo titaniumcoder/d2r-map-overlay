@@ -10,7 +10,8 @@ use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 
 use crate::config;
-use crate::game::ItemDrop;
+use crate::game::{ItemDrop, Place};
+use crate::guidance::Marks;
 use crate::names::{self, identity, shown};
 use crate::offsets::item_data;
 
@@ -175,14 +176,9 @@ fn check(rule: &Rule, drop: &ItemDrop, name: Option<&str>) -> Option<bool> {
     Some(name_unknown || rule.needs_stats)
 }
 
-/// Every tier of both categories: what the reader keeps as ground candidates. Built once, not
-/// per item and tick.
+/// Every tier of both categories (the spare lists' verdicts). Built once, not per item and
+/// tick.
 static EVERYTHING: LazyLock<config::Valuables> = LazyLock::new(config::Valuables::everything);
-
-/// True if a rule of any tier matches `drop` (the reader keeps it; [`apply`] decides later).
-pub fn is_candidate(drop: &ItemDrop) -> bool {
-    best(drop, &EVERYTHING).is_some()
-}
 
 /// The best rule matching `drop` among the tiers `enabled` turns on: highest tier first, then a
 /// certain match over an uncertain one, then the first rule in the file.
@@ -314,28 +310,6 @@ pub fn display_name(item: &ItemDrop) -> String {
     name
 }
 
-/// Where a stored item of the player is (see `game::snapshot` for how page and owner map to it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Place {
-    Inventory,
-    Cube,
-    Stash,
-    Shared,
-}
-
-impl Place {
-    /// The short label shown after the item name: `inv`, `cube`, `stash`, `shared`.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Inventory => "inv",
-            Self::Cube => "cube",
-            Self::Stash => "stash",
-            Self::Shared => "shared",
-        }
-    }
-}
-
 /// A stored item that can go: sold to a vendor or given away (see [`spare_lists`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Spare {
@@ -367,20 +341,14 @@ const QUEST_CODES: [&str; 36] = [
 /// Staff, Hell Forge Hammer, Khalim's Flail and Will.
 const QUEST_UNIQUE_ROWS: std::ops::RangeInclusive<u32> = 123..=128;
 
-/// Cheap pre-check on the raw `ItemData` fields: an identified unique or set item, not a
-/// runeword. Only these can be spare, so the reader skips the rest of the stash.
-pub const fn may_spare(quality: u32, flags: u32) -> bool {
-    (quality == item_data::QUALITY_UNIQUE || quality == item_data::QUALITY_SET)
-        && flags & item_data::FLAG_IDENTIFIED != 0
-        && flags & item_data::FLAG_RUNEWORD == 0
-}
-
 /// Whether a stored item can go, conservatively: only an identified unique or set item with a
 /// known name and code, not a charm, jewel, gem, rune or quest item. `None`: keep it (an S or A
 /// rule matches, or it is none of these).
 pub fn verdict(item: &ItemDrop) -> Option<Verdict> {
     use crate::items::DropKind;
-    if !may_spare(item.quality, item.flags) || !matches!(item.kind, DropKind::Unique | DropKind::Set) {
+    if !crate::game::identified_unique_or_set(item.quality, item.flags)
+        || !matches!(item.kind, DropKind::Unique | DropKind::Set)
+    {
         return None;
     }
     // Without the code a quest item or jewel can't be ruled out.
@@ -472,13 +440,19 @@ pub fn spare_lists(items: &[(ItemDrop, Place)]) -> (Vec<Spare>, Vec<Spare>) {
     (sell, give)
 }
 
-/// Sets each drop's highlight from the tiers `enabled` turns on, and removes the drops that are
-/// only shown for a rule ([`crate::items::DropKind::Base`]) when no enabled rule matches.
-pub fn apply(drops: &mut Vec<ItemDrop>, enabled: &config::Valuables) {
-    for d in drops.iter_mut() {
-        d.highlight = best(d, enabled);
-    }
-    drops.retain(|d| d.kind != crate::items::DropKind::Base || d.highlight.is_some());
+/// The marks of the drops from the tiers `enabled` turns on, by drop id; removes the drops that
+/// are only shown for a rule ([`crate::items::DropKind::Base`]) when no enabled rule matches.
+/// The reader keeps every base with a code, so this is the only filter on them.
+pub fn apply(drops: &mut Vec<ItemDrop>, enabled: &config::Valuables) -> Marks {
+    let mut marks = Marks::new();
+    drops.retain(|d| {
+        let Some(h) = best(d, enabled) else {
+            return d.kind != crate::items::DropKind::Base;
+        };
+        marks.insert(d.id, h);
+        true
+    });
+    marks
 }
 
 #[cfg(test)]
@@ -497,7 +471,6 @@ mod tests {
             sockets,
             unique_index: None,
             item_data_head: String::new(),
-            highlight: None,
             x: 0,
             y: 0,
         }
@@ -663,10 +636,9 @@ mod tests {
     #[test]
     fn finished_runewords_are_not_bases() {
         let mut spirit = drop("crs", 2, 4, false);
-        assert!(is_candidate(&spirit), "white 4os Crystal Sword");
+        assert!(best(&spirit, &all()).is_some(), "white 4os Crystal Sword");
         spirit.flags = item_data::FLAG_RUNEWORD;
         assert_eq!(best(&spirit, &all()), None, "a Spirit sword, not a base");
-        assert!(!is_candidate(&spirit));
         let mut eth_voulge = drop("7vo", 2, 4, true);
         eth_voulge.flags = item_data::FLAG_RUNEWORD | item_data::FLAG_IDENTIFIED;
         assert_eq!(best(&eth_voulge, &all()), None, "an Infinity, not a base");
@@ -946,16 +918,77 @@ mod tests {
     fn apply_drops_unmatched_bases_only() {
         let mut gem = drop("gcg", 2, 0, false);
         gem.kind = DropKind::Gem(crate::items::GemColour::Emerald);
-        let mut drops = vec![drop("crs", 2, 4, false), drop("crs", 2, 3, false), gem];
-        apply(&mut drops, &config::Valuables::default());
+        gem.id = 3;
+        let mut three = drop("crs", 2, 3, false);
+        three.id = 2;
+        let mut drops = vec![drop("crs", 2, 4, false), three, gem];
+        let marks = apply(&mut drops, &config::Valuables::default());
         let left: Vec<_> = drops
             .iter()
-            .map(|d| (d.code.as_deref(), d.sockets, d.highlight.as_ref().map(|h| h.tier)))
+            .map(|d| (d.code.as_deref(), d.sockets, marks.get(&d.id).map(|h| h.tier)))
             .collect();
         assert_eq!(
             left,
             vec![(Some("crs"), 4, Some(Tier::A)), (Some("gcg"), 0, None)],
             "the 3os base is gone (B is off), the gem stays without a ring"
         );
+    }
+
+    #[test]
+    fn keeping_every_coded_base_in_the_reader_changes_no_shown_drop() {
+        // Step 3 of the plugin refactor (PLAN.md): the reader used to drop the ground bases no
+        // rule of any tier matches (the old `is_candidate`); it now keeps every base with a
+        // code and `apply` is the only filter. Over every rule code (plus an unlisted code and
+        // none) with the qualities, sockets, eth and runeword flag around the rules, both
+        // pipelines leave the same drops with the same marks, for every tier selection tried.
+        let mut codes: Vec<Option<&str>> = RULES
+            .iter()
+            .flat_map(|r| r.item_codes.iter().map(|c| Some(c.as_str())))
+            .chain([Some("hax"), None])
+            .collect();
+        codes.sort_unstable();
+        codes.dedup();
+        let mut drops = Vec::new();
+        for &code in &codes {
+            for quality in 1..=8 {
+                for sockets in [0, 2, 3, 4, 5, 6] {
+                    for ethereal in [false, true] {
+                        for flags in [item_data::FLAG_IDENTIFIED, item_data::FLAG_RUNEWORD] {
+                            let mut d = drop("", quality, sockets, ethereal);
+                            d.code = code.map(str::to_owned);
+                            d.flags = flags;
+                            d.id = u32::try_from(drops.len()).unwrap_or(u32::MAX);
+                            drops.push(d);
+                        }
+                    }
+                }
+            }
+        }
+        let was_candidate = |d: &&ItemDrop| d.kind != DropKind::Base || best(d, &EVERYTHING).is_some();
+        let has_code = |d: &&ItemDrop| d.kind != DropKind::Base || d.code.is_some();
+        let tiers = [
+            vec![],
+            vec![Tier::S],
+            vec![Tier::S, Tier::A],
+            vec![Tier::B],
+            vec![Tier::S, Tier::A, Tier::B],
+        ];
+        let mut shown = 0;
+        for trade in &tiers {
+            for twink in &tiers {
+                let enabled = config::Valuables {
+                    trade: trade.clone(),
+                    twink: twink.clone(),
+                };
+                let mut old: Vec<ItemDrop> = drops.iter().filter(was_candidate).cloned().collect();
+                let old_marks = apply(&mut old, &enabled);
+                let mut new: Vec<ItemDrop> = drops.iter().filter(has_code).cloned().collect();
+                let new_marks = apply(&mut new, &enabled);
+                assert_eq!(new, old, "trade {trade:?}, twink {twink:?}");
+                assert_eq!(new_marks, old_marks, "trade {trade:?}, twink {twink:?}");
+                shown += new.len();
+            }
+        }
+        assert!(shown > 1000, "the sample reaches the rules: {shown} drops shown");
     }
 }

@@ -185,8 +185,6 @@ mod tests {
                 res_lightning: 25,
                 res_poison: 5,
             }),
-            build: Vec::new(),
-            bis: None,
             wsm: None,
             strength: None,
             dexterity: None,

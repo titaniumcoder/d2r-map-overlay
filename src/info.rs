@@ -1165,7 +1165,7 @@ mod tests {
 
     #[test]
     fn spare_entries() {
-        use crate::valuables::Place;
+        use crate::game::Place;
         let spare = |name: &str, place, count| Spare {
             name: name.into(),
             place,

@@ -10,6 +10,7 @@ use tiny_skia::{
 };
 
 use crate::game::{Bounds, Monster, Preset, PresetKind, Room, RoomRect, Snapshot};
+use crate::guidance::{Guidance, Marks};
 use crate::items::{CharmSize, DropKind, GemColour};
 use crate::offsets::monster_data;
 use crate::valuables::Tier;
@@ -1047,8 +1048,8 @@ pub fn exit_labels(snap: &Snapshot) -> Vec<(u32, f64, f64)> {
     out
 }
 
-/// [`markers`] with custom landmark rules (for tests).
-fn markers_with(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f64)> {
+/// The markers of `snap` with its drops' `marks` as rings, by the landmark `rules`.
+fn markers_with(snap: &Snapshot, marks: &Marks, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f64)> {
     let live_bosses: Vec<(f64, f64)> = snap
         .monsters
         .iter()
@@ -1090,7 +1091,7 @@ fn markers_with(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f6
                 .map(|d| (Marker::Drop(d.kind), f64::from(d.x), f64::from(d.y))),
         )
         .chain(snap.drops.iter().filter_map(|d| {
-            let h = d.highlight.as_ref()?;
+            let h = marks.get(&d.id)?;
             let ring = Marker::Ring {
                 kind: d.kind,
                 tier: h.tier,
@@ -1114,13 +1115,14 @@ fn markers_with(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f6
 }
 
 /// Renders the snapshot's level into a new `width`×`height` pixmap, with the info line (see
-/// [`info`]) at the bottom if a font is available. There is no background panel: everything
+/// [`info`]) at the bottom if a font is available. From the playstyle's `guidance` it draws the
+/// drop rings and the build's monster-level colours. There is no background panel: everything
 /// outside the level shape, the markers and the text is fully transparent.
 ///
 /// # Errors
 /// Fails if the canvas size is zero or too large for tiny-skia.
-pub fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
-    render_with(snap, width, height, info::font())
+pub fn render(snap: &Snapshot, guidance: &Guidance, width: u32, height: u32) -> Result<Pixmap> {
+    render_with(snap, guidance, width, height, info::font())
 }
 
 /// The canvas height the map is fitted into: all of it, less the info line's band if there is
@@ -1149,7 +1151,7 @@ pub struct TextBlocks {
 
 /// The dashboard's groups ([`TextBlocks`]) for a `width` px canvas from one snapshot. None of
 /// it without a font.
-pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextBlocks {
+pub fn text_blocks(snap: &Snapshot, guidance: &Guidance, width: u32, font: Option<&FontVec>) -> TextBlocks {
     let Some(f) = font else {
         return TextBlocks::default();
     };
@@ -1162,12 +1164,12 @@ pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextB
                 .map(|band| info::fit_band(band, f, max_width))
                 .collect(),
         // Every entry, one string each: the dashboard lays them out as one wrapping run.
-        keep: snap.inventory_keep.iter().map(info::keep_entry).collect(),
-        sell: snap.sell.iter().map(info::spare_entry).collect(),
-        give: snap.give_away.iter().map(info::spare_entry).collect(),
+        keep: guidance.keep.iter().map(info::keep_entry).collect(),
+        sell: guidance.sell.iter().map(info::spare_entry).collect(),
+        give: guidance.give_away.iter().map(info::spare_entry).collect(),
         // The BiS chase list (user request, 2026-11-17): the tick is computed from the owned
         // and shared-stash names separately, so the dashboard can mark ✓(stash) distinctly.
-        bis: snap.player.bis.as_ref().map_or_else(Vec::new, |bis| {
+        bis: guidance.bis.as_ref().map_or_else(Vec::new, |bis| {
             info::bis_lines(
                 bis,
                 snap.player.char_level,
@@ -1187,13 +1189,20 @@ pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextB
 ///
 /// # Errors
 /// Fails if the canvas size is zero or too large for tiny-skia.
-pub fn render_with(snap: &Snapshot, width: u32, height: u32, font: Option<&FontVec>) -> Result<Pixmap> {
-    render_rules(snap, width, height, font, LANDMARKS)
+pub fn render_with(
+    snap: &Snapshot,
+    guidance: &Guidance,
+    width: u32,
+    height: u32,
+    font: Option<&FontVec>,
+) -> Result<Pixmap> {
+    render_rules(snap, guidance, width, height, font, LANDMARKS)
 }
 
 /// [`render_with`] with custom landmark rules (for tests).
 fn render_rules(
     snap: &Snapshot,
+    guidance: &Guidance,
     width: u32,
     height: u32,
     font: Option<&FontVec>,
@@ -1232,7 +1241,7 @@ fn render_rules(
         ..Stroke::default()
     };
     let mut tagged: Vec<(Marker, f32, f32)> = Vec::new();
-    for (marker, x, y) in markers_with(snap, rules) {
+    for (marker, x, y) in markers_with(snap, &guidance.marks, rules) {
         let (colour, size, shape) = marker.style();
         let (cx, cy) = view.to_screen(x, y);
         if marker_tag(marker).is_some() {
@@ -1295,7 +1304,7 @@ fn render_rules(
     }
     if let Some(font) = font {
         draw_labels(&mut pm, view, font, snap, &tagged);
-        draw_info_line(&mut pm, font, snap);
+        draw_info_line(&mut pm, font, snap, &guidance.damages);
     }
     Ok(pm)
 }
@@ -1474,13 +1483,13 @@ fn marker_label_colour([r, g, b, _]: Rgba) -> Rgba {
 
 /// The info line at the bottom of the frame. A terrorized level's monster levels follow the
 /// character, so its name is never greyed.
-fn draw_info_line(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot) {
+fn draw_info_line(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, damages: &[crate::build::Damage]) {
     let mut line = info::info_line(
         snap.level.id,
         snap.difficulty,
         snap.terrorized,
         snap.cows,
-        &snap.player.build,
+        damages,
     );
     line.low_xp = !snap.terrorized && xp::is_low(snap.level.id, snap.difficulty, snap.player.char_level);
     info::draw(pm, font, &line);
@@ -1955,7 +1964,7 @@ mod tests {
     /// Shadows `super::render` (a local item wins over the glob import): the map tests render
     /// without the info line, so they don't depend on the fonts installed on this machine.
     fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
-        render_with(snap, width, height, None)
+        render_with(snap, &Guidance::default(), width, height, None)
     }
 
     fn fixture() -> Result<Snapshot> {
@@ -2001,8 +2010,6 @@ mod tests {
                 act: None,
                 char_level: None,
                 speed: None,
-                build: vec![],
-                bis: None,
                 wsm: None,
                 strength: None,
                 dexterity: None,
@@ -2032,9 +2039,7 @@ mod tests {
             wells: vec![],
             operated_objects: vec![],
             inventory_items: 0,
-            inventory_keep: vec![],
-            sell: vec![],
-            give_away: vec![],
+            owned_items: vec![],
             held_materials: vec![],
             white_bases: vec![],
             difficulty: None,
@@ -2235,7 +2240,7 @@ mod tests {
             at(PresetKind::Tile, 1, 100, 100),      // exit: kept
         ];
         let kinds = |s: &Snapshot| -> Vec<Marker> {
-            markers_with(s, LANDMARKS)
+            markers_with(s, &Marks::default(), LANDMARKS)
                 .into_iter()
                 .map(|(m, _, _)| m)
                 .collect()
@@ -2303,7 +2308,9 @@ mod tests {
                 ..monster_txt(txt, flags, 1)
             }];
             assert!(
-                markers_with(&snap, LANDMARKS).iter().any(|&(m, _, _)| m == want),
+                markers_with(&snap, &Marks::default(), LANDMARKS)
+                    .iter()
+                    .any(|&(m, _, _)| m == want),
                 "{want:?}"
             );
             let pm = render(&snap, 200, 200)?;
@@ -2378,7 +2385,7 @@ mod tests {
         let snap = fixture()?;
         // Jail 1: one waypoint, one exit tile, no elites (only normals and dead minions), the player.
         assert_eq!(
-            markers_with(&snap, LANDMARKS),
+            markers_with(&snap, &Marks::default(), LANDMARKS),
             vec![
                 (Marker::Exit, 17700.0, 5211.0),
                 (Marker::Waypoint, 17519.0, 5144.0),
@@ -2401,7 +2408,7 @@ mod tests {
             wolf,
         ];
         let kinds = |s: &Snapshot| -> Vec<Marker> {
-            markers_with(s, LANDMARKS)
+            markers_with(s, &Marks::default(), LANDMARKS)
                 .into_iter()
                 .map(|(m, _, _)| m)
                 .collect()
@@ -2424,7 +2431,7 @@ mod tests {
         let mut snap = empty_snapshot(5, 5);
         snap.monsters = vec![monster(0x08, 1), monster(0x10, 1)];
         snap.presets = vec![preset(PresetKind::Monster, 1), preset(PresetKind::Tile, 1)];
-        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+        let kinds: Vec<Marker> = markers_with(&snap, &Marks::default(), LANDMARKS)
             .into_iter()
             .map(|(m, _, _)| m)
             .collect();
@@ -2615,7 +2622,6 @@ mod tests {
             sockets: 0,
             unique_index: None,
             item_data_head: String::new(),
-            highlight: None,
             x,
             y,
         }
@@ -2630,7 +2636,7 @@ mod tests {
             drop_at(DropKind::Rune(8), 2, 2),
             drop_at(DropKind::Gem(GemColour::Ruby), 3, 3),
         ];
-        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+        let kinds: Vec<Marker> = markers_with(&snap, &Marks::default(), LANDMARKS)
             .into_iter()
             .map(|(m, _, _)| m)
             .collect();
@@ -2675,15 +2681,23 @@ mod tests {
         Ok((hits, dx, dy))
     }
 
-    fn highlighted(kind: DropKind, x: u32, tier: Tier, uncertain: bool) -> ItemDrop {
+    /// A drop of `kind` at (`x`, 30) with unit id 1000 + `x`, and its mark.
+    fn highlighted(
+        kind: DropKind,
+        x: u32,
+        tier: Tier,
+        uncertain: bool,
+    ) -> (ItemDrop, (u32, crate::valuables::Highlight)) {
         let mut d = drop_at(kind, x, 30);
-        d.highlight = Some(crate::valuables::Highlight {
+        d.id = 1000 + x;
+        let mark = crate::valuables::Highlight {
             tier,
             category: crate::valuables::Category::Trade,
             rule: "test".into(),
             uncertain,
-        });
-        d
+        };
+        let id = d.id;
+        (d, (id, mark))
     }
 
     /// Of `n` points evenly around the circle of `radius` px around `at`, how many are in the
@@ -2711,11 +2725,9 @@ mod tests {
     #[test]
     fn rings_come_after_drops_and_the_player() {
         let mut snap = empty_snapshot(5, 5);
-        snap.drops = vec![
-            highlighted(DropKind::Base, 1, Tier::A, false),
-            drop_at(DropKind::Rune(1), 2, 2),
-        ];
-        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+        let (ringed, mark) = highlighted(DropKind::Base, 1, Tier::A, false);
+        snap.drops = vec![ringed, drop_at(DropKind::Rune(1), 2, 2)];
+        let kinds: Vec<Marker> = markers_with(&snap, &Marks::from([mark]), LANDMARKS)
             .into_iter()
             .map(|(m, _, _)| m)
             .collect();
@@ -2748,14 +2760,21 @@ mod tests {
     fn rings_are_coloured_by_tier_and_dashed_when_uncertain() -> Result<()> {
         let mut snap = empty_snapshot(5, 115);
         snap.level.rooms = vec![room(0, 0, false), room(60, 0, true)];
-        snap.drops = vec![
+        let marks: Marks;
+        (snap.drops, marks) = [
             highlighted(DropKind::Unique, 20, Tier::S, false),
             highlighted(DropKind::Base, 60, Tier::A, false),
             highlighted(DropKind::Base, 100, Tier::B, false),
             highlighted(DropKind::Set, 140, Tier::S, true),
-        ];
+        ]
+        .into_iter()
+        .unzip();
         let (w, h) = (400, 400);
-        let pm = render(&snap, w, h)?;
+        let guidance = Guidance {
+            marks,
+            ..Guidance::default()
+        };
+        let pm = render_with(&snap, &guidance, w, h, None)?;
         let v = View::fit(level_bounds(&snap), w, h);
         let expect = [
             (20.0, DropKind::Unique, [230, 40, 40, 255]),
@@ -2910,7 +2929,7 @@ mod tests {
         snap.room_links.clear();
         snap.border_links.clear();
         let (w, h) = (400, 400);
-        let pm = render_with(&snap, w, h, Some(font))?;
+        let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
         let top = map_height(h, Some(font));
         assert!(top < h && h - top < 40, "band {top}..{h}");
         let (mut band, mut above) = (0, 0);
@@ -2935,7 +2954,7 @@ mod tests {
         }
         assert!(dark >= 50, "only {dark} outline pixels");
         // Without a font: no text, and the map gets the whole canvas.
-        let plain = render_with(&snap, w, h, None)?;
+        let plain = render_with(&snap, &Guidance::default(), w, h, None)?;
         assert_eq!(map_height(h, None), h);
         for y in top..h {
             for x in 0..w {
@@ -2969,19 +2988,20 @@ mod tests {
         let mut snap = fixture()?;
         snap.difficulty = Some(0);
         assert_eq!(
-            count(&render_with(&snap, w, h, Some(font))?)?,
+            count(&render_with(&snap, &Guidance::default(), w, h, Some(font))?)?,
             0,
             "not terrorized"
         );
         snap.terrorized = true;
-        let pm = render_with(&snap, w, h, Some(font))?;
+        let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
         assert!(count(&pm)? >= 20, "only {} violet pixels", count(&pm)?);
         Ok(())
     }
 
     #[test]
     fn text_blocks_holds_the_dashboard_blocks() -> Result<()> {
-        use crate::valuables::{Category, Keep, Place, Spare, Tier};
+        use crate::game::Place;
+        use crate::valuables::{Category, Keep, Spare, Tier};
         let Some(font) = info::font() else {
             eprintln!("skipped: no info-line font on this machine");
             return Ok(());
@@ -2989,25 +3009,28 @@ mod tests {
         let mut snap = fixture()?;
         snap.difficulty = Some(0);
         snap.player.char_level = Some(34);
-        snap.player.bis = Some(crate::config::Bis {
-            build: String::new(),
-            slots: BTreeMap::from([("helm".to_owned(), vec!["Peasant Crown@28".to_owned()])]),
-            merc_slots: BTreeMap::new(),
-        });
-        snap.inventory_keep = vec![Keep {
-            name: "Harlequin Crest".into(),
-            tier: Tier::S,
-            category: Category::Trade,
-            count: 1,
-        }];
         let spare = |name: &str, place| Spare {
             name: name.into(),
             place,
             count: 1,
         };
-        snap.sell = vec![spare("Gravenspine", Place::Inventory)];
-        snap.give_away = vec![spare("Magefist", Place::Shared)];
-        let blocks = text_blocks(&snap, 400, Some(font));
+        let guidance = Guidance {
+            bis: Some(crate::config::Bis {
+                build: String::new(),
+                slots: BTreeMap::from([("helm".to_owned(), vec!["Peasant Crown@28".to_owned()])]),
+                merc_slots: BTreeMap::new(),
+            }),
+            keep: vec![Keep {
+                name: "Harlequin Crest".into(),
+                tier: Tier::S,
+                category: Category::Trade,
+                count: 1,
+            }],
+            sell: vec![spare("Gravenspine", Place::Inventory)],
+            give_away: vec![spare("Magefist", Place::Shared)],
+            ..Guidance::default()
+        };
+        let blocks = text_blocks(&snap, &guidance, 400, Some(font));
         // The dashboard's JSON is built from these blocks (crate::web::live_json); the overlay
         // draws only the map and info line, so the lists are asserted here, not in a rendered frame.
         assert_eq!(blocks.keep, vec!["Harlequin Crest (S)"]);
@@ -3023,7 +3046,8 @@ mod tests {
 
     #[test]
     fn the_overlay_frame_draws_no_guide_or_lists() -> Result<()> {
-        use crate::valuables::{Category, Keep, Place, Spare, Tier};
+        use crate::game::Place;
+        use crate::valuables::{Category, Keep, Spare, Tier};
         let Some(font) = info::font() else {
             eprintln!("skipped: no info-line font on this machine");
             return Ok(());
@@ -3040,26 +3064,29 @@ mod tests {
             res_lightning: 10,
             res_poison: 75,
         });
-        snap.player.bis = Some(crate::config::Bis {
-            build: String::new(),
-            slots: BTreeMap::from([("helm".to_owned(), vec!["Peasant Crown@28".to_owned()])]),
-            merc_slots: BTreeMap::new(),
-        });
-        snap.inventory_keep = vec![Keep {
-            name: "Harlequin Crest".into(),
-            tier: Tier::S,
-            category: Category::Trade,
-            count: 1,
-        }];
         let spare = |name: &str, place| Spare {
             name: name.into(),
             place,
             count: 1,
         };
-        snap.sell = vec![spare("Gravenspine", Place::Inventory)];
-        snap.give_away = vec![spare("Magefist", Place::Shared)];
+        let guidance = Guidance {
+            bis: Some(crate::config::Bis {
+                build: String::new(),
+                slots: BTreeMap::from([("helm".to_owned(), vec!["Peasant Crown@28".to_owned()])]),
+                merc_slots: BTreeMap::new(),
+            }),
+            keep: vec![Keep {
+                name: "Harlequin Crest".into(),
+                tier: Tier::S,
+                category: Category::Trade,
+                count: 1,
+            }],
+            sell: vec![spare("Gravenspine", Place::Inventory)],
+            give_away: vec![spare("Magefist", Place::Shared)],
+            ..Guidance::default()
+        };
         let (w, h) = (400, 400);
-        let pm = render_with(&snap, w, h, Some(font))?;
+        let pm = render_with(&snap, &guidance, w, h, Some(font))?;
         // The bottom band holds only the white info line: no guide (violet) and none of the
         // dashboard's lists in their colours.
         let solid = |p: Rgba| p[3] == 255;
@@ -3109,7 +3136,7 @@ mod tests {
         }
         // In the drawn pixmap the band holds no room fill: every non-transparent pixel there is
         // text (white, grey edges) or its outline (black), never the rooms' blue-grey.
-        let pm = render_with(&snap, w, h, Some(font))?;
+        let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
         for y in top..h {
             for x in 0..w {
                 let p = rgba(&pm, x, y)?;
@@ -3307,7 +3334,7 @@ mod tests {
             return Ok(());
         };
         let (w, h) = (400, 400);
-        let pm = render_with(&canyon_exit(69), w, h, Some(font))?;
+        let pm = render_with(&canyon_exit(69), &Guidance::default(), w, h, Some(font))?;
         let (b, n) = ink_box(&pm, map_height(h, Some(font)), is_text_white)?.context("no white symbol")?;
         // "Tal Rasha's Tomb" would be some 100 px wide; the ring is TOMB_HALF * 2 plus its stroke.
         assert!(
@@ -3331,14 +3358,14 @@ mod tests {
         let rows = map_height(h, Some(font));
         let mut snap = canyon_exit(69);
         snap.staff_tomb = Some(69);
-        let pm = render_with(&snap, w, h, Some(font))?;
+        let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
         let (b, n) = ink_box(&pm, rows, is_gold)?.context("no gold symbol")?;
         // The bigger ring and the star beside it.
         assert!(n >= 60 && b[2] - b[0] >= 30, "{n} px in {b:?}");
         assert!(ink_box(&pm, rows, is_text_white)?.is_none(), "drawn white too");
         // Another tomb's exit stays white.
         snap.staff_tomb = Some(70);
-        let pm = render_with(&snap, w, h, Some(font))?;
+        let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
         assert!(ink_box(&pm, rows, is_gold)?.is_none());
         Ok(())
     }
@@ -3386,7 +3413,7 @@ mod tests {
         snap.difficulty = Some(0);
         let count = |snap: &Snapshot| -> Result<(u32, u32)> {
             let (w, h) = (400, 400);
-            let pm = render_with(snap, w, h, Some(font))?;
+            let pm = render_with(snap, &Guidance::default(), w, h, Some(font))?;
             let (mut grey, mut white) = (0, 0);
             for y in 0..map_height(h, Some(font)) {
                 for x in 0..w {
@@ -3558,7 +3585,7 @@ mod tests {
         // It is part of the drawn markers, below elites and the player.
         snap.level.id = 74;
         snap.monsters = vec![monster(0x02, 1)];
-        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+        let kinds: Vec<Marker> = markers_with(&snap, &Marks::default(), LANDMARKS)
             .into_iter()
             .map(|(m, _, _)| m)
             .collect();
@@ -3588,7 +3615,7 @@ mod tests {
         // Once the altar (object 252) is loaded, its quest-object star alone shows.
         snap.presets.push(object(252, 200, 20));
         assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
-        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+        let kinds: Vec<Marker> = markers_with(&snap, &Marks::default(), LANDMARKS)
             .into_iter()
             .map(|(m, _, _)| m)
             .filter(|m| {
@@ -3851,7 +3878,7 @@ mod tests {
             candidates_for: None,
         }];
         // Without a font: a hollow gold ring, no glyph.
-        let plain = render_rules(&snap, w, h, None, &unconfirmed)?;
+        let plain = render_rules(&snap, &Guidance::default(), w, h, None, &unconfirmed)?;
         let v = View::fit(level_bounds(&snap), w, h);
         let at = v.to_screen(90.0, 30.0);
         assert_eq!(count_near(&plain, at, SUSPECT_DISC_RADIUS, is_suspect_text)?, 0);
@@ -3864,7 +3891,7 @@ mod tests {
             eprintln!("skipped the glyph check: no font on this machine");
             return Ok(());
         };
-        let pm = render_rules(&snap, w, h, Some(font), &unconfirmed)?;
+        let pm = render_rules(&snap, &Guidance::default(), w, h, Some(font), &unconfirmed)?;
         let v = View::fit(level_bounds(&snap), w, map_height(h, Some(font)));
         let at = v.to_screen(90.0, 30.0);
         let near = count_near(&pm, at, SUSPECT_DISC_RADIUS, is_suspect_text)?;
@@ -3886,7 +3913,7 @@ mod tests {
             r.preset = None;
         }
         let (w, h) = (400, 400);
-        let pm = render_with(&snap, w, h, None)?;
+        let pm = render_with(&snap, &Guidance::default(), w, h, None)?;
         let v = View::fit(level_bounds(&snap), w, h);
         let at = v.to_screen(150.0, 30.0);
         let (gold, size, shape) = Marker::QuestObject("orifice").style();
@@ -3902,7 +3929,7 @@ mod tests {
         let mut snap = sanctuary([None, Some(462), None, None]);
         snap.level.id = 72;
         snap.presets = vec![object(152, 90, 30)];
-        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+        let kinds: Vec<Marker> = markers_with(&snap, &Marks::default(), LANDMARKS)
             .into_iter()
             .map(|(m, _, _)| m)
             .collect();
@@ -3935,7 +3962,7 @@ mod tests {
         snap.drops = vec![drop_at(DropKind::Unique, 1, 1)];
         snap.shrines = vec![shrine_at(12, 40, 30)];
         snap.wells = vec![well_at(50, 30)];
-        let kinds: Vec<Marker> = markers_with(&snap, LANDMARKS)
+        let kinds: Vec<Marker> = markers_with(&snap, &Marks::default(), LANDMARKS)
             .into_iter()
             .map(|(m, _, _)| m)
             .collect();
@@ -4012,13 +4039,13 @@ mod tests {
             view.to_screen(110.0, 110.0)
         };
         let (cx, cy) = at(&snap);
-        let pm = render_with(&snap, w, h, Some(font))?;
+        let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
         let ink = count_near(&pm, (cx, cy - 12.0), 14.0, |p| tinted(p, colour))?;
         assert!(ink >= 10, "SKL tag: {ink} px");
         // A well on the same spot: the shrine outranks it, so the well's tag moves or drops and
         // never covers the shrine's.
         snap.wells = vec![well_at(110, 110)];
-        let pm = render_with(&snap, w, h, Some(font))?;
+        let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
         let again = count_near(&pm, (cx, cy - 12.0), 14.0, |p| tinted(p, colour))?;
         assert_eq!(again, ink, "shrine tag unchanged");
         let well = marker_label_colour(WELL_CYAN);
@@ -4115,10 +4142,10 @@ mod tests {
             let px = |v: f32| v.round() as u32;
             Ok(pm.pixel(px(sx), px(sy)).context("pixel")?.demultiply())
         };
-        let plain = render_with(&snap, w, h, None)?;
+        let plain = render_with(&snap, &Guidance::default(), w, h, None)?;
         // A walked line, then a 50-tile jump (a teleport) and on.
         snap.trail = vec![(20, 40), (30, 40), (40, 40), (90, 40), (100, 40)];
-        let trailed = render_with(&snap, w, h, None)?;
+        let trailed = render_with(&snap, &Guidance::default(), w, h, None)?;
         let (before, after) = (at(&plain, (25.0, 40.0))?, at(&trailed, (25.0, 40.0))?);
         assert_ne!(before, after, "the trail is drawn over the room fill");
         assert!(

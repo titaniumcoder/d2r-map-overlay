@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime};
 use smithay_client_toolkit::reexports::calloop::channel::Sender;
 
 use crate::game::{self, Snapshot};
+use crate::guidance::Guidance;
 use crate::journal::Journal;
 use crate::overlay::Msg;
 use crate::process::ProcMem;
@@ -262,10 +263,11 @@ fn find_table(pid: u32, mem: &ProcMem, cache: Option<&Path>) -> Option<u64> {
     None
 }
 
-/// Publishes one tick's dashboard JSON ([`web::live_json`]) from the snapshot, the dashboard's
-/// text blocks, the guide stage, the quest flags and the farm list.
+/// Publishes one tick's dashboard JSON ([`web::live_json`]) from the snapshot, the playstyle's
+/// guidance, the dashboard's text blocks, the guide stage, the quest flags and the farm list.
 fn publish_dashboard(
     snap: &game::Snapshot,
+    guidance: &Guidance,
     blocks: &render::TextBlocks,
     stage: Option<config::Stage<'_>>,
     quests: &[u16],
@@ -280,7 +282,7 @@ fn publish_dashboard(
         area: &info::level_name(snap.level.id)
             .map_or_else(|| format!("Level {}", snap.level.id), str::to_owned),
         blocks,
-        bis: snap.player.bis.as_ref(),
+        bis: guidance.bis.as_ref(),
         build: stage.map(|s| s.build),
         stage,
         held_materials: &snap.held_materials,
@@ -344,11 +346,13 @@ fn follow_game(
                 if snap.ground_items > 0 || snap.inventory_items > 0 {
                     items_table.search(pid);
                 }
-                // Highlights first: the journal records them with the drop.
-                valuables::apply(&mut snap.drops, &config.valuables);
+                // The playstyle's view of the snapshot: keep / sell / give-away from the owned
+                // items, then the drop marks (first: the journal records them with the drop).
+                let mut guidance = Guidance::with_item_lists(&snap);
+                guidance.marks = valuables::apply(&mut snap.drops, &config.valuables);
                 // Before `apply` and the shrine filter: they drop monster presets and shrines
                 // the journal wants to see.
-                journal.observe(&snap);
+                journal.observe(&snap, &guidance.marks);
                 last_played.record(
                     &snap.player.name,
                     Some(snap.player.class),
@@ -380,7 +384,7 @@ fn follow_game(
                 {
                     last_played.reach(name, stage.slug);
                 }
-                (snap.player.build, snap.player.bis) = (build, bis);
+                (guidance.damages, guidance.bis) = (build, bis);
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }
@@ -399,7 +403,7 @@ fn follow_game(
                 // blocks the overlay no longer draws (2026-11-17 text-stack migration);
                 // serialization of a few short lines at 5 Hz is cheap. Cleared again on
                 // snapshot errors (menu, loading) and game exit.
-                let blocks = render::text_blocks(&snap, w, info::font());
+                let blocks = render::text_blocks(&snap, &guidance, w, info::font());
                 // The config page annotates its resolved `BiS` view with the live ✓ and the
                 // equipped-quality pairs; published alongside the dashboard JSON.
                 web::publish_gear(web::GearInfo {
@@ -413,7 +417,7 @@ fn follow_game(
                 // The current stage and its later ones: a farm entry for any of them that this
                 // character wears leaves the list (it keeps the gear through a respec).
                 let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
-                publish_dashboard(&snap, &blocks, stage, quests, &config.farm, &chain);
+                publish_dashboard(&snap, &guidance, &blocks, stage, quests, &config.farm, &chain);
                 if let Some((tabs, items)) = update.stash_captured {
                     eprintln!("shared stash captured: {tabs} tabs, {items} items");
                     journal.stash(true, tabs, items);
@@ -422,7 +426,7 @@ fn follow_game(
                     eprintln!("shared stash cache dropped (new game)");
                     journal.stash(false, 0, 0);
                 }
-                if let Some(msg) = tick_msg(&mut dedup, snap, (w, h), info::font()) {
+                if let Some(msg) = tick_msg(&mut dedup, snap, guidance, (w, h), info::font()) {
                     send(tx, msg)?;
                 }
             }
@@ -574,12 +578,18 @@ impl ItemsTable {
 /// guide line it used to show there overlapped the game's terror-zone list and lives on the
 /// dashboard; user request, 2026-11-17); elsewhere the map. `None`: the screen is up to date
 /// (or rendering failed, logged).
-fn tick_msg(dedup: &mut Dedup, snap: Snapshot, (w, h): (u32, u32), font: Option<&FontVec>) -> Option<Msg> {
+fn tick_msg(
+    dedup: &mut Dedup,
+    snap: Snapshot,
+    guidance: Guidance,
+    (w, h): (u32, u32),
+    font: Option<&FontVec>,
+) -> Option<Msg> {
     if game::is_town(snap.level.id) {
         return dedup.hide(Hidden::Town).then_some(Msg::Hide);
     }
-    let snap = dedup.changed(snap)?;
-    match render::render_with(snap, w, h, font) {
+    let (snap, guidance) = dedup.changed(snap, guidance)?;
+    match render::render_with(snap, guidance, w, h, font) {
         Ok(frame) => Some(Msg::Frame(frame)),
         Err(e) => {
             eprintln!("rendering failed: {e:#}");
@@ -597,24 +607,26 @@ enum Hidden {
     NoGame,
 }
 
-/// Suppresses repeated work: the same snapshot twice in a row is not re-rendered, and a run of
-/// hidden ticks (for the same reason) sends one [`Msg::Hide`].
+/// Suppresses repeated work: the same snapshot and guidance twice in a row are not re-rendered,
+/// and a run of hidden ticks (for the same reason) sends one [`Msg::Hide`].
 #[derive(Debug, Default)]
 struct Dedup {
-    /// The last snapshot sent as a frame; `None` while hidden.
-    last: Option<Snapshot>,
+    /// The last snapshot and guidance sent as a frame; `None` while hidden.
+    last: Option<(Snapshot, Guidance)>,
     /// Why the previous tick hid the overlay, if it did (a hide was already sent).
     hidden: Option<Hidden>,
 }
 
 impl Dedup {
-    /// The snapshot to render, or `None` if it equals the one on screen.
-    fn changed(&mut self, snap: Snapshot) -> Option<&Snapshot> {
+    /// The snapshot and guidance to render, or `None` if they equal the ones on screen.
+    fn changed(&mut self, snap: Snapshot, guidance: Guidance) -> Option<(&Snapshot, &Guidance)> {
         self.hidden = None;
-        if self.last.as_ref() == Some(&snap) {
+        let frame = (snap, guidance);
+        if self.last.as_ref() == Some(&frame) {
             return None;
         }
-        Some(self.last.insert(snap))
+        let (snap, guidance) = self.last.insert(frame);
+        Some((snap, guidance))
     }
 
     /// Records a hidden tick; true if this starts a run for `why` (send a hide, log the reason).
@@ -675,16 +687,19 @@ mod tests {
         town.level.id = 1;
         let font = info::font();
         assert!(matches!(
-            tick_msg(&mut d, fixture()?, (200, 200), font),
+            tick_msg(&mut d, fixture()?, Guidance::default(), (200, 200), font),
             Some(Msg::Frame(_))
         ));
         assert!(matches!(
-            tick_msg(&mut d, town, (200, 200), font),
+            tick_msg(&mut d, town, Guidance::default(), (200, 200), font),
             Some(Msg::Hide)
         ));
         let mut town = fixture()?;
         town.level.id = 1;
-        assert!(tick_msg(&mut d, town, (200, 200), font).is_none(), "hidden once");
+        assert!(
+            tick_msg(&mut d, town, Guidance::default(), (200, 200), font).is_none(),
+            "hidden once"
+        );
         Ok(())
     }
 
@@ -698,7 +713,7 @@ mod tests {
         town.player.speed = Some(speed());
         let mut d = Dedup::default();
         assert!(matches!(
-            tick_msg(&mut d, town, (200, 200), font),
+            tick_msg(&mut d, town, Guidance::default(), (200, 200), font),
             Some(Msg::Hide)
         ));
         let h = 300;
@@ -707,7 +722,7 @@ mod tests {
         snap.player.speed = Some(speed());
         let mut d = Dedup::default();
         assert!(matches!(
-            tick_msg(&mut d, snap, (200, h), font),
+            tick_msg(&mut d, snap, Guidance::default(), (200, h), font),
             Some(Msg::Frame(_))
         ));
         Ok(())
@@ -716,25 +731,34 @@ mod tests {
     #[test]
     fn identical_snapshots_are_suppressed() -> Result<()> {
         let mut d = Dedup::default();
-        assert!(d.changed(fixture()?).is_some(), "first snapshot renders");
-        assert!(d.changed(fixture()?).is_none(), "identical one does not");
+        assert!(
+            d.changed(fixture()?, Guidance::default()).is_some(),
+            "first snapshot renders"
+        );
+        assert!(
+            d.changed(fixture()?, Guidance::default()).is_none(),
+            "identical one does not"
+        );
         let mut moved = fixture()?;
         moved.player.x += 1;
-        assert!(d.changed(moved).is_some(), "a moved player renders");
+        assert!(
+            d.changed(moved, Guidance::default()).is_some(),
+            "a moved player renders"
+        );
         Ok(())
     }
 
     #[test]
     fn failures_hide_once_and_resend_after() -> Result<()> {
         let mut d = Dedup::default();
-        assert!(d.changed(fixture()?).is_some());
+        assert!(d.changed(fixture()?, Guidance::default()).is_some());
         assert!(d.hide(Hidden::NoGame), "first failure hides");
         assert!(!d.hide(Hidden::NoGame), "later failures don't repeat the hide");
         assert!(
-            d.changed(fixture()?).is_some(),
+            d.changed(fixture()?, Guidance::default()).is_some(),
             "same snapshot after a hide is sent again"
         );
-        assert!(d.changed(fixture()?).is_none());
+        assert!(d.changed(fixture()?, Guidance::default()).is_none());
         assert!(d.hide(Hidden::NoGame), "a new failure run hides again");
         Ok(())
     }
@@ -746,14 +770,14 @@ mod tests {
         assert!(game::is_town(town.level.id));
         assert!(!game::is_town(fixture()?.level.id), "Jail 1 is not a town");
         let mut d = Dedup::default();
-        assert!(d.changed(fixture()?).is_some());
+        assert!(d.changed(fixture()?, Guidance::default()).is_some());
         assert!(d.hide(Hidden::Town), "entering town hides once");
         assert!(!d.hide(Hidden::Town), "staying in town sends nothing");
         // Town → menu: a different reason, so the menu is logged and hidden (again, harmless).
         assert!(d.hide(Hidden::NoGame));
         assert!(d.hide(Hidden::Town));
         assert!(
-            d.changed(fixture()?).is_some(),
+            d.changed(fixture()?, Guidance::default()).is_some(),
             "leaving town shows the map again"
         );
         Ok(())

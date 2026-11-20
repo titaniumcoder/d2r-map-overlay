@@ -511,7 +511,6 @@ mod tests {
             sockets,
             unique_index: None,
             item_data_head: String::new(),
-            highlight: None,
             x: 0,
             y: 0,
         }

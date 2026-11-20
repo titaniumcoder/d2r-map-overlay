@@ -21,7 +21,6 @@ use crate::offsets::{
 use crate::process::ReadMem;
 use crate::skills_data;
 use crate::stash::{self, StashTab};
-use crate::valuables;
 
 /// Most units walked per unit type (over all hash slots).
 const MAX_UNITS_PER_TYPE: usize = 1000;
@@ -151,7 +150,9 @@ pub struct Snapshot {
     /// Item units lying on the ground (shown or not). Defaults keep older dumps loadable.
     #[serde(default)]
     pub ground_items: u32,
-    /// The ground items worth showing.
+    /// The ground items worth showing: uniques, sets, gems, runes and charms, plus every base
+    /// with a known code. The playstyle keeps only the bases it marks
+    /// ([`crate::valuables::apply`]) before anything draws or records them.
     #[serde(default)]
     pub drops: Vec<ItemDrop>,
     /// Shrines near the player (objects are loaded only in range). Live mode keeps only the
@@ -169,20 +170,13 @@ pub struct Snapshot {
     /// Items in the player's inventory (shown or not); live-mode only, not in the JSON.
     #[serde(skip)]
     pub inventory_items: u32,
-    /// Inventory items worth keeping (S and A tiers, whatever the config; see
-    /// [`valuables::keep_list`]). Shown on the dashboard (keep panel).
-    /// Left out of the JSON when empty, so older dumps and fixtures stay unchanged.
+    /// The player's own items with their [`Place`]: every inventory item, and the cube and
+    /// stash items that are identified uniques or sets ([`identified_unique_or_set`]; only
+    /// these are read in full). The playstyle's keep / sell / give-away lists are computed from
+    /// them ([`crate::guidance::Guidance::with_item_lists`]). Left out of the JSON when empty;
+    /// older dumps carry the computed lists instead, which are ignored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub inventory_keep: Vec<valuables::Keep>,
-    /// The player's stored items to sell (inventory, cube, personal and shared stash; see
-    /// [`valuables::spare_lists`]). Grey lines (dashboard). Left out of the JSON when
-    /// empty, like `give_away`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sell: Vec<valuables::Spare>,
-    /// The player's stored items to give away (best rule is tier B, or a further copy of a
-    /// keep-one item). Yellow lines below `sell`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub give_away: Vec<valuables::Spare>,
+    pub owned_items: Vec<(ItemDrop, Place)>,
     /// The runes and gems the player holds in inventory, cube and stash pages (the shared
     /// materials tab is in [`Snapshot::stash`]), `(name, count)` ([`stash::held_materials`]):
     /// the dashboard's recipe ✓. Live-mode only, not in the JSON.
@@ -293,15 +287,6 @@ pub struct Player {
     /// breakpoint/gear guide (user request, 2026-11-17). `None` if the stat list is unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<SpeedStats>,
-    /// The character's build from the config ([`crate::config::Config::damages_for_player`]), primary
-    /// damage first; colours the info line's monster levels ([`crate::build::rate`]). Not read
-    /// from the game nor kept in the JSON: set from the config after reading or loading.
-    #[serde(skip)]
-    pub build: Vec<crate::build::Damage>,
-    /// The character's `BiS` build and gear list from the config ([`crate::config::Bis`]); shown
-    /// as a chase list under the guide. Config-set like `build`, not kept in the JSON.
-    #[serde(skip)]
-    pub bis: Option<crate::config::Bis>,
     /// The equipped weapon's WSM (weapon speed modifier, weapons.txt `speed` column); shown
     /// next to IAS in the guide (its frames need the weapon speed). `None` without a readable
     /// weapon or items table. Set in `snapshot`, not kept in the JSON.
@@ -471,8 +456,9 @@ struct ItemScan {
     drops: Vec<ItemDrop>,
     /// All items on the inventory page, with their owner id (`None` if unreadable).
     inventory: Vec<(ItemDrop, Option<u32>)>,
-    /// Stored items on the cube and stash pages that may be spare ([`valuables::may_spare`]),
-    /// any owner: the owner filter needs the chosen player. Inventory items are in `inventory`.
+    /// Stored items on the cube and stash pages that are identified uniques or sets
+    /// ([`identified_unique_or_set`]), any owner: the owner filter needs the chosen player.
+    /// Inventory items are in `inventory`.
     stored: Vec<Stored>,
     stash_owners: OwnerVotes,
     inventory_owners: OwnerVotes,
@@ -533,11 +519,42 @@ struct Stored {
     owner: u32,
 }
 
+/// Where one of the player's own items is ([`Snapshot::owned_items`]; see [`place`] for how
+/// page and owner map to it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Place {
+    Inventory,
+    Cube,
+    Stash,
+    Shared,
+}
+
+impl Place {
+    /// The short label shown after the item name: `inv`, `cube`, `stash`, `shared`.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Inventory => "inv",
+            Self::Cube => "cube",
+            Self::Stash => "stash",
+            Self::Shared => "shared",
+        }
+    }
+}
+
+/// Cheap pre-check on the raw `ItemData` fields: an identified unique or set item, not a
+/// runeword. Of the cube and stash items only these are read in full (only they can be spare,
+/// [`crate::valuables::verdict`]).
+pub const fn identified_unique_or_set(quality: u32, flags: u32) -> bool {
+    (quality == item_data::QUALITY_UNIQUE || quality == item_data::QUALITY_SET)
+        && flags & item_data::FLAG_IDENTIFIED != 0
+        && flags & item_data::FLAG_RUNEWORD == 0
+}
+
 /// Where a stored item on `page` with `owner` is, for the player with unit id `player`; `None`
 /// if it isn't the player's. Pages 0 (inventory), 3 (cube) and 4 (stash) count when the player
 /// owns the item; page 4 also when one of the player's `shared_tabs` owns it.
-fn place(page: u8, owner: u32, player: u32, shared_tabs: &[u32]) -> Option<valuables::Place> {
-    use valuables::Place;
+fn place(page: u8, owner: u32, player: u32, shared_tabs: &[u32]) -> Option<Place> {
     match page {
         item_data::PAGE_INVENTORY if owner == player => Some(Place::Inventory),
         item_data::PAGE_CUBE if owner == player => Some(Place::Cube),
@@ -560,10 +577,10 @@ fn player_items(
     stored: Vec<Stored>,
     player: u32,
     shared_tabs: &[u32],
-) -> Vec<(ItemDrop, valuables::Place)> {
+) -> Vec<(ItemDrop, Place)> {
     let inv = inventory
         .into_iter()
-        .filter_map(|(d, owner)| (owner == Some(player)).then_some((d, valuables::Place::Inventory)));
+        .filter_map(|(d, owner)| (owner == Some(player)).then_some((d, Place::Inventory)));
     let stashed = stored
         .into_iter()
         .filter_map(|s| place(s.page, s.owner, player, shared_tabs).map(|p| (s.item, p)));
@@ -777,8 +794,10 @@ pub fn is_well_object(txt: u32) -> bool {
     WELL_OBJECTS.binary_search(&txt).is_ok()
 }
 
-/// A ground item worth showing (see [`items::classify`]), or a base a valuables rule matches.
-/// The fields after `quality` default so older dumps stay loadable.
+/// A ground item worth showing (see [`items::classify`]), or a base with a known code (the
+/// playstyle decides which bases to show). The fields after `quality` default so older dumps
+/// stay loadable; older dumps' `highlight` is ignored (marks live in
+/// [`crate::guidance::Marks`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ItemDrop {
     pub id: u32,
@@ -803,9 +822,6 @@ pub struct ItemDrop {
     /// journal. Not part of the snapshot JSON.
     #[serde(skip)]
     pub item_data_head: String,
-    /// Set by [`valuables::apply`] from the config, not by the reader.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub highlight: Option<valuables::Highlight>,
     pub x: u32,
     pub y: u32,
 }
@@ -1050,11 +1066,9 @@ pub fn snapshot(
     // The materials tab's stacks are owned by nobody (`NO_OWNER`), so only the normal pages'
     // items reach the spare lists through these ids; gems and runes are never spare anyway.
     let shared_tabs: Vec<u32> = tabs.iter().map(|t| t.id).collect();
-    let mine = player_items(scan.inventory, scan.stored, chosen.id, &shared_tabs);
-    let inventory_keep = valuables::keep_list(&mine);
-    let (sell, give_away) = valuables::spare_lists(&mine);
-    let held_materials = stash::held_materials(mine.iter().map(|(item, _)| item));
-    let white_bases = stash::white_bases(mine.iter().map(|(item, _)| item));
+    let owned_items = player_items(scan.inventory, scan.stored, chosen.id, &shared_tabs);
+    let held_materials = stash::held_materials(owned_items.iter().map(|(item, _)| item));
+    let white_bases = stash::white_bases(owned_items.iter().map(|(item, _)| item));
     let difficulty = player.act.and_then(|a| r.difficulty(a.0));
     let staff_tomb = player.act.and_then(|a| r.staff_tomb(a.0));
     let terrorized = is_terrorized(&monsters);
@@ -1089,9 +1103,7 @@ pub fn snapshot(
         wells,
         operated_objects,
         inventory_items,
-        inventory_keep,
-        sell,
-        give_away,
+        owned_items,
         held_materials,
         white_bases,
         difficulty,
@@ -1543,8 +1555,6 @@ impl<M: ReadMem> Reader<'_, M> {
             // Gear speed/resist stats are summed from the equipped items in `snapshot` (the
             // player's stat list is base-only, no item stats).
             speed: None,
-            build: Vec::new(),
-            bis: None,
             wsm: None,
             strength: self.stat(addr, stat_list::STRENGTH).ok().flatten(),
             dexterity: self.stat(addr, stat_list::DEXTERITY).ok().flatten(),
@@ -1905,9 +1915,9 @@ impl<M: ReadMem> Reader<'_, M> {
             {
                 votes.add(owner);
             }
-            // Cube and stash: only the may-be-spare items are read in full.
+            // Cube and stash: only the identified uniques and sets are read in full.
             if let (Some(p @ (item_data::PAGE_CUBE | item_data::PAGE_STASH)), Some(owner)) = (page, owner)
-                && self.may_spare(&head)
+                && self.is_identified_unique_or_set(&head)
             {
                 match self.item_fields(addr, &head, items_table) {
                     Ok(item) => scan.stored.push(Stored { item, page: p, owner }),
@@ -2403,13 +2413,13 @@ impl<M: ReadMem> Reader<'_, M> {
             .collect())
     }
 
-    /// True if the stored item `head` may be spare ([`valuables::may_spare`]); false if its
-    /// quality or flags are unreadable.
-    fn may_spare(&self, head: &UnitHead) -> bool {
+    /// True if the stored item `head` is an identified unique or set
+    /// ([`identified_unique_or_set`]); false if its quality or flags are unreadable.
+    fn is_identified_unique_or_set(&self, head: &UnitHead) -> bool {
         head.unit_data.is_some_and(|d| {
             matches!(
                 (self.u32(d, item_data::QUALITY), self.u32(d, item_data::FLAGS)),
-                (Ok(q), Ok(f)) if valuables::may_spare(q, f)
+                (Ok(q), Ok(f)) if identified_unique_or_set(q, f)
             )
         })
     }
@@ -2441,18 +2451,18 @@ impl<M: ReadMem> Reader<'_, M> {
             sockets: self.sockets(addr).unwrap_or(0),
             unique_index,
             item_data_head: String::new(),
-            highlight: None,
             x: 0,
             y: 0,
         })
     }
 
-    /// The ground item `head` (unit at `addr`) as a drop, or `None` if it isn't one worth
-    /// showing: not a unique, set, gem, rune or charm, and no valuables rule of any tier matches
-    /// it. Which tiers are highlighted is decided later ([`valuables::apply`]).
+    /// The ground item `head` (unit at `addr`) as a drop, or `None` for a base without a known
+    /// code (not a unique, set, gem, rune or charm, and the items table not found yet): no
+    /// playstyle rule can judge it. Which bases are shown is decided later
+    /// ([`crate::valuables::apply`]).
     fn item_drop(&self, addr: u64, head: &UnitHead, items_table: Option<u64>) -> Result<Option<ItemDrop>> {
         let mut drop = self.item_fields(addr, head, items_table)?;
-        if drop.kind == DropKind::Base && !valuables::is_candidate(&drop) {
+        if drop.kind == DropKind::Base && drop.code.is_none() {
             return Ok(None);
         }
         // Items have a static path: u32 position at other offsets than a moving unit's path.
@@ -2537,6 +2547,7 @@ mod tests {
     use super::*;
     use crate::config;
     use crate::testutil::FakeMem;
+    use crate::valuables;
 
     // Synthetic world addresses (all distinct FakeMem regions).
     const TABLE: u64 = 0x10_0000;
@@ -4213,7 +4224,6 @@ mod tests {
             sockets: 0,
             unique_index: None,
             item_data_head: String::new(),
-            highlight: None,
             x,
             y,
         }
@@ -4317,7 +4327,8 @@ mod tests {
         unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
         // White eth 4os Crystal Sword: durability and damage stats around the socket stat.
         rich_item(&mut m, I1, (30, 2, eth, 0), &[(72, 50), (194, 4), (21, 5)], I2)?;
-        // White 2os Crystal Sword: no rule at any tier, not shown.
+        // White 2os Crystal Sword: no rule at any tier; kept by the reader (it has a code), removed
+        // by any config.
         rich_item(&mut m, I2, (30, 2, 0, 0), &[(194, 2)], I3)?;
         // Unique Shako, identified, row 248; no stats at all.
         rich_item(&mut m, I3, (40, 7, item_data::FLAG_IDENTIFIED, 248), &[], I4)?;
@@ -4351,6 +4362,7 @@ mod tests {
             got,
             vec![
                 (id(I1), DropKind::Base, Some("crs"), 4, true, eth, None),
+                (id(I2), DropKind::Base, Some("crs"), 2, false, 0, None),
                 (
                     id(I3),
                     DropKind::Unique,
@@ -4368,18 +4380,14 @@ mod tests {
             .first()
             .map_or_else(String::new, |d| d.item_data_head.clone());
         assert_eq!(head.len(), 2 * item_data::HEAD_LEN);
-        assert_eq!(s.inventory_keep, vec![], "nothing in the inventory");
+        assert_eq!(s.owned_items, vec![], "nothing in the inventory");
         assert!(head.starts_with("02000000"), "quality first: {head}");
-        assert!(
-            s.drops.iter().all(|d| d.highlight.is_none()),
-            "the reader doesn't highlight"
-        );
 
-        valuables::apply(&mut s.drops, &config::Valuables::default());
+        let marks = valuables::apply(&mut s.drops, &config::Valuables::default());
         let tiers: Vec<_> = s
             .drops
             .iter()
-            .map(|d| d.highlight.as_ref().map(|h| (h.tier, h.uncertain)))
+            .map(|d| marks.get(&d.id).map(|h| (h.tier, h.uncertain)))
             .collect();
         assert_eq!(
             tiers,
@@ -4387,7 +4395,7 @@ mod tests {
                 Some((valuables::Tier::A, false)),
                 Some((valuables::Tier::S, false))
             ],
-            "4os sword A, identified Shako S (certain); the 3os sword is gone"
+            "4os sword A, identified Shako S (certain); the 2os and 3os swords are gone"
         );
         Ok(())
     }
@@ -4418,8 +4426,9 @@ mod tests {
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
         assert_eq!((s.ground_items, s.drops.len()), (0, 0));
         assert_eq!(s.inventory_items, 4, "page-0 stored items, any owner");
-        let keep: Vec<_> = s
-            .inventory_keep
+        let lists = crate::guidance::Guidance::with_item_lists(&s);
+        let keep: Vec<_> = lists
+            .keep
             .iter()
             .map(|k| (k.name.as_str(), k.tier, k.count))
             .collect();
@@ -4789,7 +4798,7 @@ mod tests {
 
     #[test]
     fn place_counts_only_the_players_own_shared_tabs() {
-        use valuables::Place;
+        use super::Place;
         let (me, tab, stale) = (7, 70, 71);
         let tabs = [tab];
         assert_eq!(place(item_data::PAGE_STASH, me, me, &tabs), Some(Place::Stash));
@@ -4834,21 +4843,31 @@ mod tests {
         m.add(ITEMS, b);
 
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let lists = crate::guidance::Guidance::with_item_lists(&s);
         let names =
             |l: &[valuables::Spare]| -> Vec<String> { l.iter().map(crate::info::spare_entry).collect() };
-        assert_eq!(names(&s.sell), vec!["Gravenspine (inv)", "Gravenspine (cube)"]);
+        assert_eq!(
+            names(&lists.sell),
+            vec!["Gravenspine (inv)", "Gravenspine (cube)"]
+        );
         // Other-owner page-4 items are not the shared stash (stale units); left out for now.
-        assert_eq!(names(&s.give_away), vec!["Magefist (stash)"]);
+        assert_eq!(names(&lists.give_away), vec!["Magefist (stash)"]);
         assert_eq!(
             s.inventory_items, 2,
             "the keep scan still sees every inventory item"
         );
-        // Empty lists stay out of the JSON.
+        let places: Vec<_> = s.owned_items.iter().map(|(_, p)| *p).collect();
+        assert_eq!(
+            places,
+            vec![Place::Inventory, Place::Cube, Place::Stash, Place::Stash],
+            "Bob's own items only (no tab unit, so no shared ones): inventory first, then cube and \
+             stash in unit order"
+        );
+        // An empty list stays out of the JSON.
         let mut quiet = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
-        quiet.sell.clear();
-        quiet.give_away.clear();
+        quiet.owned_items.clear();
         let json = serde_json::to_string(&quiet)?;
-        assert!(!json.contains("sell") && !json.contains("give_away"), "{json}");
+        assert!(!json.contains("owned_items"), "{json}");
         Ok(())
     }
 
@@ -4874,9 +4893,10 @@ mod tests {
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
         let names =
             |l: &[valuables::Spare]| -> Vec<String> { l.iter().map(crate::info::spare_entry).collect() };
-        assert_eq!(s.inventory_keep, vec![], "the inventory copy is not kept");
-        assert_eq!(names(&s.sell), Vec::<String>::new());
-        assert_eq!(names(&s.give_away), vec!["Sigon's Visor (inv)"]);
+        let lists = crate::guidance::Guidance::with_item_lists(&s);
+        assert_eq!(lists.keep, vec![], "the inventory copy is not kept");
+        assert_eq!(names(&lists.sell), Vec::<String>::new());
+        assert_eq!(names(&lists.give_away), vec!["Sigon's Visor (inv)"]);
         Ok(())
     }
 
@@ -4967,11 +4987,13 @@ mod tests {
                     DropKind::Gem(items::GemColour::Emerald),
                     (5323, 5622)
                 ),
+                drop_of(I2, Some("axe"), DropKind::Base, (10, 11)),
                 drop_of(I3, Some("axe"), DropKind::Unique, (12, 13)),
                 drop_of(I4, Some("r01"), DropKind::Rune(1), (14, 15)),
                 drop_of(I6, Some("axe"), DropKind::Set, (18, 19)),
             ],
-            "static-path positions; the normal axe and the inventory rune are left out"
+            "static-path positions; the normal axe is kept for the playstyle to judge, the \
+             inventory rune is left out"
         );
         assert!(
             s.warnings.iter().all(|w| !w.starts_with("item")),
@@ -5344,30 +5366,24 @@ mod tests {
                     "x": 5323, "y": 5622})
             )
         );
-        assert_eq!(v.pointer("/drops/1/kind"), Some(&serde_json::json!("unique")));
-        // The ItemData hex is journal-only; a highlight shows once set, and parses back.
-        let mut s = s;
+        assert_eq!(v.pointer("/drops/1/kind"), Some(&serde_json::json!("base")));
+        assert_eq!(v.pointer("/drops/2/kind"), Some(&serde_json::json!("unique")));
+        // The ItemData hex is journal-only.
         assert!(v.pointer("/drops/0/item_data_head").is_none());
-        let Some(d) = s.drops.first_mut() else {
-            bail!("no drop")
-        };
-        d.highlight = Some(valuables::Highlight {
-            tier: valuables::Tier::A,
-            category: valuables::Category::Twink,
-            rule: "r".into(),
-            uncertain: true,
-        });
-        let v = serde_json::to_value(&s)?;
-        assert_eq!(
-            v.pointer("/drops/0/highlight"),
-            Some(&serde_json::json!({"tier": "A", "category": "twink", "rule": "r", "uncertain": true}))
-        );
-        let back: Snapshot = serde_json::from_value(v.clone())?;
-        assert_eq!(
-            back.drops.first().and_then(|d| d.highlight.clone()),
-            s.drops.first().and_then(|d| d.highlight.clone())
-        );
-        assert_eq!(v.pointer("/drops/2/kind"), Some(&serde_json::json!({"rune": 1})));
+        // An older dump's highlight (marks moved to `guidance::Marks`) is ignored on load.
+        let mut old = v.clone();
+        if let Some(d) = old
+            .pointer_mut("/drops/0")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            d.insert(
+                "highlight".into(),
+                serde_json::json!({"tier": "A", "category": "twink", "rule": "r", "uncertain": true}),
+            );
+        }
+        let back: Snapshot = serde_json::from_value(old)?;
+        assert_eq!(back.drops, s.drops);
+        assert_eq!(v.pointer("/drops/3/kind"), Some(&serde_json::json!({"rune": 1})));
         Ok(())
     }
 }
