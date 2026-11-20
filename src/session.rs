@@ -5,7 +5,10 @@
 //! seen is remembered per level for the game and merged back into later snapshots of that level, so the map keeps what
 //! was explored even after D2R unloads it. The filters below then run over live and remembered
 //! presets alike. A shrine keeps its latest `used`; a border link's `entry` is recomputed per
-//! snapshot. Monsters, items and the player are live only;
+//! snapshot. Rooms of landmark candidate pieces ([`crate::render::candidate_room`]) seen loaded
+//! are remembered too and marked [`Room::seen_loaded`](crate::game::Room::seen_loaded), so a
+//! clearing explored without the Gidbinn altar stays ruled out once it unloads. Monsters, items
+//! and the player are live only;
 //! a level seen terrorized (Terror Zone) stays so for the current visit (zones rotate hourly).
 //! [`GameState`] is that per-game part; `game_file` keeps it on disk across overlay restarts.
 //!
@@ -48,7 +51,7 @@ use crate::cows;
 use crate::game::{BorderLink, Monster, Preset, PresetKind, RoomLink, RoomRect, Shrine, Snapshot, Well};
 use crate::levels_data::SUPERUNIQUES;
 use crate::offsets::monster_data;
-use crate::render::{is_consumable_quest_object, quest_monster};
+use crate::render::{candidate_room, is_consumable_quest_object, quest_monster};
 use crate::stash::{self, StashTab};
 
 /// Most distance in tiles between a dead superunique and the superunique preset it is credited
@@ -136,6 +139,10 @@ pub struct GameState {
     /// Every walk-through border link seen per level id (`entry` false; it is set per snapshot).
     #[serde(default)]
     border_links: HashMap<u32, Vec<BorderLink>>,
+    /// Origins (x, y) of landmark candidate rooms ([`crate::render::candidate_room`]) seen
+    /// loaded in this game, per level id: their preset lists were complete then.
+    #[serde(default)]
+    loaded_rooms: HashMap<u32, HashSet<(u32, u32)>>,
     /// Levels seen terrorized in this game ([`Snapshot::terrorized`]). Kept so the info line
     /// doesn't drop back to the table monster levels once the desecrated monsters near the
     /// player are dead or unloaded.
@@ -232,6 +239,23 @@ impl GameState {
             self.border_links.entry(level).or_default(),
             &mut snap.border_links,
         );
+
+        // Only levels with candidate rooms get an entry, so the game file stays small.
+        for room in snap
+            .level
+            .rooms
+            .iter_mut()
+            .filter(|r| candidate_room(level, r.preset))
+        {
+            let at = (room.x, room.y);
+            if room.loaded {
+                changed |= self.loaded_rooms.entry(level).or_default().insert(at);
+            }
+            room.seen_loaded = self
+                .loaded_rooms
+                .get(&level)
+                .is_some_and(|seen| seen.contains(&at));
+        }
         changed
     }
 }
@@ -888,6 +912,55 @@ mod tests {
             txt,
             ..monster(0, mode, x, y)
         }
+    }
+
+    #[test]
+    fn candidate_rooms_seen_loaded_are_remembered_for_the_game() {
+        use crate::game::Room;
+        use crate::render::{LANDMARKS, Marker, landmarks};
+        // Flayer Jungle: clearing 602 (two rooms), clearing 600 (one room), a plain room.
+        let jungle = |player_id, loaded: [bool; 4]| {
+            let mut s = snap(player_id, 0xa000, 78);
+            s.level.rooms = [(0, 602), (40, 602), (200, 600), (300, 534)]
+                .into_iter()
+                .zip(loaded)
+                .map(|((x, preset), loaded)| Room {
+                    x,
+                    y: 0,
+                    w: 40,
+                    h: 40,
+                    loaded,
+                    seen_loaded: false,
+                    preset: Some(preset),
+                })
+                .collect();
+            s
+        };
+        let stars = |s: &Snapshot| {
+            landmarks(s, LANDMARKS)
+                .into_iter()
+                .map(|(m, x, _)| (m, x))
+                .collect::<Vec<_>>()
+        };
+        let gidbinn = Marker::Landmark("gidbinn");
+        let mut s = Session::default();
+
+        // The player stands in 602: both its rooms loaded, no altar.
+        let mut here = jungle(1, [true, true, false, true]);
+        s.apply(&mut here);
+        assert_eq!(stars(&here), vec![(gidbinn, 220.0)]);
+        assert!(s.take_changed().is_some());
+        // Walked away: 602 unloaded but stays ruled out; only candidate rooms are remembered.
+        let mut away = jungle(1, [false, false, false, false]);
+        s.apply(&mut away);
+        assert!(s.take_changed().is_none(), "nothing new to remember");
+        let seen: Vec<bool> = away.level.rooms.iter().map(|r| r.seen_loaded).collect();
+        assert_eq!(seen, vec![true, true, false, false]);
+        assert_eq!(stars(&away), vec![(gidbinn, 220.0)]);
+        // A new game (other player unit id) forgets it: both clearings are candidates again.
+        let mut next_game = jungle(2, [false, false, false, false]);
+        s.apply(&mut next_game);
+        assert_eq!(stars(&next_game), vec![(gidbinn, 40.0), (gidbinn, 220.0)]);
     }
 
     #[test]

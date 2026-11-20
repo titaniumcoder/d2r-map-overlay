@@ -39,8 +39,10 @@ pub struct LandmarkRule {
     /// How a confirmed rule is drawn.
     pub style: LandmarkStyle,
     /// `Some(txt)`: the pieces are only candidates for where quest object `txt` lies. A piece
-    /// holding a waypoint preset is skipped, and once object `txt`'s preset is in the snapshot the
-    /// rule draws nothing (the exact [`QUEST_OBJECTS`] marker shows instead).
+    /// holding a waypoint preset is skipped, and so is a piece whose rooms were all seen loaded
+    /// ([`Room::loaded`] or [`Room::seen_loaded`]) without object `txt` in the snapshot: a loaded
+    /// room's preset list is complete, so the object is not there. Once object `txt`'s preset is
+    /// in the snapshot the rule draws nothing (the exact [`QUEST_OBJECTS`] marker shows instead).
     pub candidates_for: Option<u32>,
 }
 
@@ -77,7 +79,9 @@ pub enum LandmarkStyle {
 ///   16 Room2 cells each). A jungle holds several of them, and the altar is in only one: 602 held
 ///   it on 2026-11-15 (player 5 tiles from the altar; 601 held the waypoint), but on 2026-11-20
 ///   (user report, Nightmare) the jungle had 595 (waypoint object 237 inside), 600 and 602, and
-///   602 had no altar. So every clearing without the waypoint is a "?" candidate, and once the
+///   602 had no altar. So every clearing without the waypoint is a candidate, drawn as a gold
+///   star (user's choice, 2026-11-20); a clearing whose rooms were all seen loaded without the
+///   altar is ruled out for the rest of the game (the session remembers the rooms), and once the
 ///   altar's preset is loaded only its exact quest-object star shows.
 /// - Kurast Sewers Level 1 (92): the sewer lever (object 367) and the stairs down (object 366) both
 ///   sat in room preset 739 (live 2026-11-15, one game; the user then went down to level 2).
@@ -333,8 +337,9 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 78..=78,
         preset_ids: 595..=604,
         label: "gidbinn",
-        // Which clearing holds the altar varies per game (2026-11-20): candidates only.
-        confirmed: false,
+        // Which clearing holds the altar varies per game (2026-11-20): candidates, ruled out as
+        // they are explored. Confirmed: the altar lies in a clearing (two games).
+        confirmed: true,
         style: LandmarkStyle::Star,
         candidates_for: Some(252),
     },
@@ -829,6 +834,7 @@ pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f
     };
     let mut out = Vec::new();
     for rule in rules.iter().filter(|rule| rule.level_ids.contains(&level.id)) {
+        // Past this check object `txt` is nowhere in the snapshot: a piece seen whole lacks it.
         if rule.candidates_for.is_some_and(has_object) {
             continue;
         }
@@ -840,11 +846,14 @@ pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f
             (true, LandmarkStyle::Orifice) => Marker::Orifice,
         };
         for piece in pieces(&level.rooms, &rule.preset_ids) {
-            // The quest object never shares the waypoint's piece: skip that candidate.
-            if rule.candidates_for.is_some() && piece.iter().any(|&s| waypoint_in(s)) {
+            // The quest object never shares the waypoint's piece, and a piece seen whole without
+            // it doesn't hold it: skip those candidates.
+            if rule.candidates_for.is_some()
+                && (piece.iter().any(|&(s, _)| waypoint_in(s)) || piece.iter().all(|&(_, seen)| seen))
+            {
                 continue;
             }
-            let Some(b) = piece.into_iter().reduce(Span::union) else {
+            let Some(b) = piece.into_iter().map(|(s, _)| s).reduce(Span::union) else {
                 continue;
             };
             let x = f64::midpoint(f64::from(b.x0), f64::from(b.x1));
@@ -855,22 +864,32 @@ pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f
     out
 }
 
+/// Whether a room of level `level` with level-preset id `preset` belongs to a
+/// [`LandmarkRule::candidates_for`] rule: the session remembers such rooms seen loaded
+/// ([`Room::seen_loaded`]).
+pub fn candidate_room(level: u32, preset: Option<u32>) -> bool {
+    preset.is_some_and(|id| {
+        LANDMARKS.iter().any(|rule| {
+            rule.candidates_for.is_some() && rule.level_ids.contains(&level) && rule.preset_ids.contains(&id)
+        })
+    })
+}
+
 /// The rooms of `rooms` whose preset id is in `ids`, grouped into pieces: rooms of one preset id
-/// joined through shared edges (a corner touch does not join). Pieces come in room order.
-fn pieces(rooms: &[Room], ids: &std::ops::RangeInclusive<u32>) -> Vec<Vec<Span>> {
-    let rooms: Vec<(u32, Span)> = rooms
+/// joined through shared edges (a corner touch does not join). Pieces come in room order; each
+/// room comes with whether it is or was seen loaded.
+fn pieces(rooms: &[Room], ids: &std::ops::RangeInclusive<u32>) -> Vec<Vec<(Span, bool)>> {
+    let rooms: Vec<(u32, Span, bool)> = rooms
         .iter()
         .filter_map(|r| {
             let id = r.preset.filter(|id| ids.contains(id))?;
-            Some((
-                id,
-                Span::of(RoomRect {
-                    x: r.x,
-                    y: r.y,
-                    w: r.w,
-                    h: r.h,
-                }),
-            ))
+            let span = Span::of(RoomRect {
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            });
+            Some((id, span, r.loaded || r.seen_loaded))
         })
         .collect();
     // Two spans share an edge: they touch along one axis and overlap (by more than a point) along
@@ -887,17 +906,17 @@ fn pieces(rooms: &[Room], ids: &std::ops::RangeInclusive<u32>) -> Vec<Vec<Span>>
     let mut rest = rooms;
     rest.reverse();
     let mut out = Vec::new();
-    while let Some((id, seed)) = rest.pop() {
-        let mut piece = vec![seed];
+    while let Some((id, seed, seen)) = rest.pop() {
+        let mut piece = vec![(seed, seen)];
         loop {
             let (grown, keep): (Vec<_>, Vec<_>) = rest
                 .into_iter()
-                .partition(|&(rid, r)| rid == id && piece.iter().any(|&p| joined(p, r)));
+                .partition(|&(rid, r, _)| rid == id && piece.iter().any(|&(p, _)| joined(p, r)));
             rest = keep;
             if grown.is_empty() {
                 break;
             }
-            piece.extend(grown.into_iter().map(|(_, r)| r));
+            piece.extend(grown.into_iter().map(|(_, r, seen)| (r, seen)));
         }
         out.push(piece);
     }
@@ -2125,6 +2144,7 @@ mod tests {
                 w: 5,
                 h: 5,
                 loaded: false,
+                seen_loaded: false,
                 preset: None,
             },
             Room {
@@ -2133,6 +2153,7 @@ mod tests {
                 w: 5,
                 h: 10,
                 loaded: true,
+                seen_loaded: false,
                 preset: None,
             },
         ];
@@ -2478,6 +2499,7 @@ mod tests {
             w: 60,
             h: 60,
             loaded,
+            seen_loaded: false,
             preset: None,
         }
     }
@@ -3181,6 +3203,7 @@ mod tests {
                 w: r.w,
                 h: r.h,
                 loaded: true,
+                seen_loaded: false,
                 preset: None,
             })
             .collect();
@@ -3554,7 +3577,7 @@ mod tests {
 
     #[test]
     fn gidbinn_rule_marks_every_clearing_but_the_waypoint_one() {
-        let gidbinn = Marker::Suspected("gidbinn");
+        let gidbinn = Marker::Landmark("gidbinn");
         // Every pygmy clearing 595-604 is a candidate; other pieces are not.
         let mut snap = sanctuary([Some(594), Some(595), Some(604), Some(605)]);
         snap.level.id = 78;
@@ -3562,7 +3585,7 @@ mod tests {
             landmarks(&snap, LANDMARKS),
             vec![(gidbinn, 90.0, 30.0), (gidbinn, 150.0, 30.0)]
         );
-        // Two separate 602 pieces: a "?" on each, none between them.
+        // Two separate 602 pieces: a star on each, none between them.
         let mut snap = sanctuary([Some(602), Some(602), None, Some(602)]);
         snap.level.id = 78;
         assert_eq!(
@@ -3682,6 +3705,7 @@ mod tests {
                 w: 40,
                 h: 40,
                 loaded: false,
+                seen_loaded: false,
                 preset: Some(preset),
             })
         };
@@ -3692,7 +3716,7 @@ mod tests {
             .chain(clearing(600, 5640, 3400))
             .collect();
         snap.presets = vec![object(237, 5899, 3974)];
-        let gidbinn = Marker::Suspected("gidbinn");
+        let gidbinn = Marker::Landmark("gidbinn");
         assert_eq!(
             landmarks(&snap, LANDMARKS),
             vec![(gidbinn, 5880.0, 3800.0), (gidbinn, 5720.0, 3480.0)]
@@ -3700,15 +3724,38 @@ mod tests {
     }
 
     #[test]
-    fn only_candidate_landmark_rules_are_unconfirmed() {
+    fn gidbinn_candidate_seen_whole_without_the_altar_is_ruled_out() {
+        /// The rooms of `snap` at `x`.
+        fn at(snap: &mut Snapshot, x: u32) -> impl Iterator<Item = &mut Room> {
+            snap.level.rooms.iter_mut().filter(move |r| r.x == x)
+        }
+        let gidbinn = Marker::Landmark("gidbinn");
+        // Two clearings of two rooms each, apart (602 at x 0-120, 600 at x 180-300).
+        let mut snap = sanctuary([Some(602), Some(602), None, Some(600)]);
+        snap.level.id = 78;
+        snap.level.rooms.push(Room {
+            preset: Some(600),
+            ..room(240, 0, false)
+        });
+        let both = vec![(gidbinn, 60.0, 30.0), (gidbinn, 240.0, 30.0)];
+        assert_eq!(landmarks(&snap, LANDMARKS), both);
+        // Half of 602 loaded: not yet ruled out.
+        at(&mut snap, 0).for_each(|r| r.loaded = true);
+        assert_eq!(landmarks(&snap, LANDMARKS), both);
+        // All of 602 loaded (now or earlier) and no altar: only 600 is left, and stays a star.
+        at(&mut snap, 60).for_each(|r| r.seen_loaded = true);
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![(gidbinn, 240.0, 30.0)]);
+        // The altar shows up in 600: no candidate at all, its quest-object star instead.
+        snap.presets = vec![object(252, 250, 20)];
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+    }
+
+    #[test]
+    fn every_landmark_rule_is_confirmed() {
         // Every rule is live-confirmed: the W/E/S/N variants of a named piece inherit the
         // confirmation of their family (the direction letter only says where in the piece the
-        // feature sits). Only candidate rules (where a quest object might be) are a "?".
-        assert!(
-            LANDMARKS
-                .iter()
-                .all(|r| r.confirmed == r.candidates_for.is_none())
-        );
+        // feature sits). Candidate rules too: the Gidbinn clearings are stars (2026-11-20).
+        assert!(LANDMARKS.iter().all(|r| r.confirmed));
     }
 
     fn object(txt: u32, x: u32, y: u32) -> Preset {

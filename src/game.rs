@@ -622,6 +622,12 @@ pub struct Room {
     pub w: u32,
     pub h: u32,
     pub loaded: bool,
+    /// The room was loaded at some point in this game, so its preset list was complete then (a
+    /// landmark candidate piece of rooms all seen loaded without the quest object is ruled out:
+    /// [`crate::render::landmarks`]). Set by `Session::apply` for candidate rooms only, never
+    /// read from memory. Omitted from JSON when false, so dumps and fixtures stay unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub seen_loaded: bool,
     /// Level-preset id (lvlprest row) of the room; `None` if unreadable (and in old fixtures).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<u32>,
@@ -1624,6 +1630,7 @@ impl<M: ReadMem> Reader<'_, M> {
             w: world(self.u32(room, room2::W)?)?,
             h: world(self.u32(room, room2::H)?)?,
             loaded: self.ptr(room, room2::ROOM1)?.is_some(),
+            seen_loaded: false,
             preset: self.room_preset(room),
         })
     }
@@ -3752,6 +3759,7 @@ mod tests {
                     w: 40,
                     h: 30,
                     loaded: true,
+                    seen_loaded: false,
                     preset: None
                 },
                 Room {
@@ -3760,6 +3768,7 @@ mod tests {
                     w: 40,
                     h: 40,
                     loaded: false,
+                    seen_loaded: false,
                     preset: None
                 },
                 Room {
@@ -3768,6 +3777,7 @@ mod tests {
                     w: 20,
                     h: 20,
                     loaded: false,
+                    seen_loaded: false,
                     preset: None
                 },
             ]

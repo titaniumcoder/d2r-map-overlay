@@ -611,6 +611,7 @@ mod tests {
             w: 40,
             h: 40,
             loaded: false,
+            seen_loaded: false,
             preset,
         }
     }

@@ -156,6 +156,16 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   candidate rule: every 595–604 clearing without the waypoint gets a "?", and once object 252's preset is
   loaded only its exact quest-object star shows. Landmark markers are now one per connected piece (rooms of
   one preset id joined by shared edges), so two copies of a preset no longer get one marker between them.
+- **Elimination 2026-11-20** (user's choice): the candidates are gold stars, not "?". A clearing is ruled
+  out once **every** room of it has been seen loaded (Room2 `+0x58` Room1 non-null) with no object 252 in the
+  snapshot; the session remembers candidate rooms seen loaded per level for the game (`GameState::loaded_rooms`,
+  `Room::seen_loaded`), so the clearing stays ruled out after it unloads, and a new game forgets it. The last
+  candidate left stays a star. Signal: a Room2 is initialized (preset list built from the DS1) before its Room1
+  exists, so a loaded room's presets are complete. A non-empty preset list alone is not used: the dump shows
+  preset lists on unloaded rooms (they survive the Room1), and a list could hold level-generation presets
+  before the DS1 units. Not live-verified yet: that the altar's preset is in the list whenever its room's Room1 is.
+  The 2026-11-20 dump was taken after the user left 602, so its 602 rooms read unloaded (7 of 16 still with
+  presets): from that dump alone 602 stays a candidate; the live session would have seen them loaded.
 
 ## The Warlock class (2026-11-17)
 - The user's "Demonmaster" reads **class id 7** — outside the classic 0–6. The Basin wiki documents a
