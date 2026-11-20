@@ -1031,10 +1031,6 @@ pub struct TextBlocks {
     /// The `BiS` chase lines with their structural tick ([`info::BisLine::tick`]): the
     /// dashboard marks ✓(stash) from the tick.
     pub bis: Vec<info::BisLine>,
-    /// The whole level-suggestion band ([`info::level_lines_full`]) for the dashboard's
-    /// "Where to go" panel. Each entry carries its monster level and below/equal/above bucket
-    /// so the dashboard can lay the band out in three columns.
-    pub level_full: Vec<info::LevelEntry>,
 }
 
 /// The dashboard's groups ([`TextBlocks`]) for a `width` px canvas from one snapshot. None of
@@ -1051,7 +1047,6 @@ pub fn text_blocks(snap: &Snapshot, width: u32, font: Option<&FontVec>) -> TextB
                 .into_iter()
                 .map(|band| info::fit_band(band, f, max_width))
                 .collect(),
-        level_full: info::level_lines_full(snap.player.char_level, snap.difficulty, &snap.player.build),
         // Every entry, one string each: the dashboard lays them out as one wrapping run.
         keep: snap.inventory_keep.iter().map(info::keep_entry).collect(),
         sell: snap.sell.iter().map(info::spare_entry).collect(),
@@ -2901,15 +2896,6 @@ mod tests {
         assert_eq!(blocks.keep, vec!["Harlequin Crest (S)"]);
         assert_eq!(blocks.sell, vec!["Gravenspine (inv)"]);
         assert_eq!(blocks.give, vec!["Magefist (shared)"]);
-        assert!(
-            blocks
-                .level_full
-                .first()
-                .is_some_and(|e| e.bucket == "equal" && e.mlvl == 34),
-            "level suggestions for clvl 34: {:?}",
-            blocks.level_full
-        );
-        assert!(!blocks.level_full.is_empty(), "the whole band for the panel");
         let Some(bis) = blocks.bis.first() else {
             anyhow::bail!("no helm chase line: {:?}", blocks.bis);
         };

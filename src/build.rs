@@ -1,7 +1,6 @@
 //! How well the current character's build fits the area: the info line's monster-level part
 //! turns red where too many monster types are immune to the build's damage and, from
 //! Nightmare on, green where none is immune to its primary damage (user request, 2026-11-15).
-//! The dashboard's "Where to go" panel greys the bad areas out (2026-11-20).
 //!
 //! The build is the character's damage types, primary first
 //! ([`crate::config::Config::damages_for_player`]: its `[builds]` entry, else the current guide
@@ -96,29 +95,6 @@ pub fn rate(level_id: u32, difficulty: Option<u8>, build: &[Damage]) -> Rating {
         Rating::Good if difficulty == Some(0) => Rating::Neutral,
         rating => rating,
     }
-}
-
-/// Why level `level_id` is bad for `build` in `difficulty`: the build's damage types with
-/// immune monster types, as `"physical immunes: 3 of 7 types"` (joined by `"; "`), and the
-/// count of types immune to all of them. `None` unless [`rate`] says [`Rating::Bad`].
-pub fn bad_reason(level_id: u32, difficulty: Option<u8>, build: &[Damage]) -> Option<String> {
-    if rate(level_id, difficulty, build) != Rating::Bad {
-        return None;
-    }
-    let (types, immune, masks) = area_immunities(level_id, difficulty)?;
-    let mut parts: Vec<String> = build
-        .iter()
-        .filter_map(|&d| {
-            let n = immune.get(d.index()).copied().filter(|&n| n > 0)?;
-            Some(format!("{} immunes: {n} of {types} types", d.name()))
-        })
-        .collect();
-    let build_mask = build.iter().fold(0u8, |m, d| m | d.bit());
-    let uncovered = masks.iter().filter(|&&m| m & build_mask == build_mask).count();
-    if build.len() > 1 && uncovered > 0 {
-        parts.push(format!("{uncovered} immune to all your damage"));
-    }
-    Some(parts.join("; "))
 }
 
 /// The `IMMUNITIES` entry of `level_id` in `difficulty`; `None` for an unknown level or
@@ -261,21 +237,8 @@ mod tests {
         // Bloody Foothills (110), Normal: one of 7 types is poison immune — uncovered for a
         // poison-only build, so bad even in Normal.
         assert_eq!(rate(110, Some(0), &[Poison]), Rating::Bad);
-        assert_eq!(
-            bad_reason(110, Some(0), &[Poison]).as_deref(),
-            Some("poison immunes: 1 of 7 types")
-        );
         // A summoner (physical, cold) is never bad in Normal, and "good" stays neutral there.
         assert_eq!(rate(110, Some(0), &[Physical, Cold]), Rating::Neutral);
-        assert_eq!(bad_reason(110, Some(0), &[Physical, Cold]), None);
-    }
-
-    #[test]
-    fn bad_reason_names_the_immune_damage() {
-        // Hell City of the Damned: 4 of 7 lightning immune.
-        let reason = bad_reason(106, Some(2), &VEX).unwrap_or_default();
-        assert!(reason.starts_with("lightning immunes: 4 of 7 types"), "{reason}");
-        assert_eq!(bad_reason(83, Some(1), &VEX), None, "good: no reason");
     }
 
     #[test]

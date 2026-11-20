@@ -729,7 +729,7 @@ impl LiveInfo<'_> {
 /// Serializes one tick's dashboard data. Pure: the same input gives the same JSON, so the
 /// tests need no game. Shape:
 /// `{ "live": true, "updated_at": <unix secs>, "player": {"name", "class", "level",
-/// "difficulty"}, "area": …, "guide": […], "levels": […], "keep": […], "sell": […],
+/// "difficulty"}, "area": …, "guide": […], "keep": […], "sell": […],
 /// "give": […], "bis": […], "equipped": […], "stash_pages": […], "stash_materials": {…},
 /// "stash_owned": […], "skills": {…} | null }`, where
 /// each line is `{ "text": …, "colour": "#rrggbb" }` (the overlay line's colour as hex; the
@@ -737,11 +737,7 @@ impl LiveInfo<'_> {
 /// carry a structured `"tick": "worn" | "owned" | "stash" | null` (computed in Rust from the
 /// worn, owned and stash name lists, [`info::Tick`]): the page marks ✓(stash) from it instead of scraping the
 /// line text, and, for a runeword piece, `"runes"` and `"bases"` for the hint line under the
-/// piece. The `levels` lines are the whole level-suggestion band, one area (or merged dungeon
-/// levels) per line, each as `{ "text", "colour", "mlvl", "bucket" }`
-/// ([`crate::info::LevelEntry`]: the area name in `text`, and the `below`/`equal`/`above` bucket the dashboard lays its "Where to
-/// go" panel out in three columns from, plus `bad`: why the area is bad for the build). The
-/// `keep` / `sell` / `give` lines are one entry each, every entry (the page joins each list
+/// piece. The `keep` / `sell` / `give` lines are one entry each, every entry (the page joins each list
 /// into one wrapping comma-separated run); the give-away lines have no panel of their own, so
 /// they ride with `sell` in the dashboard's Sell / Keep panel. `gear_attention` (bool) and
 /// `gear_attention_why` (text or `null`, [`gear_attention`]) open the Gear panel. The `gear` section is the 2×5 `BiS` grid: one column per
@@ -770,7 +766,6 @@ pub fn live_json(info: &LiveInfo) -> String {
         },
         "area": info.area,
         "guide": info.blocks.guide.iter().map(band_line).collect::<Vec<_>>(),
-        "levels": level_lines_full(&info.blocks.level_full, crate::info::LEVEL_TEXT),
         "keep": text_lines(&info.blocks.keep, crate::info::KEEP_TEXT),
         "sell": text_lines(&info.blocks.sell, crate::info::SELL_TEXT),
         "give": text_lines(&info.blocks.give, crate::info::GIVE_TEXT),
@@ -1535,17 +1530,18 @@ fn farm_item_json(
 }
 
 /// The natural-socket base hint for runeword `word` ([`crate::socket_bases::hint`]): bases
-/// that can drop with its socket count up to the highest monster level the "Where to go" panel
-/// offers (the cap [`gear_attention`] uses), for `wearer` (the character's class, or the
-/// mercenary taken as Act 2: [`Wearer::Act2Merc`]) and, with `slot` set, worn in that `ItemData::BODY` slot. `None` without a "Where to go"
-/// list or when nothing qualifies: the dashboard then shows the runeword's `bases` categories.
+/// that can drop with its socket count up to the highest monster level the character farms
+/// ([`crate::info::reachable_level`], the cap [`gear_attention`] uses), for `wearer` (the
+/// character's class, or the mercenary taken as Act 2: [`Wearer::Act2Merc`]) and, with `slot`
+/// set, worn in that `ItemData::BODY` slot. `None` for an unknown character level or difficulty
+/// or when nothing qualifies: the dashboard then shows the runeword's `bases` categories.
 fn base_hint(
     word: &crate::runewords_data::Runeword,
     info: &LiveInfo,
     slot: Option<u8>,
     wearer: Wearer,
 ) -> Option<String> {
-    let max_mlvl = u32::from(info.blocks.level_full.iter().map(|e| e.mlvl).max()?);
+    let max_mlvl = u32::from(crate::info::reachable_level(info.char_level, info.difficulty)?);
     crate::socket_bases::hint(word, max_mlvl, wearer, slot)
 }
 
@@ -1754,8 +1750,8 @@ fn gear_attention(info: &LiveInfo, upgrades: &[serde_json::Value]) -> Option<Str
     let (Some(bis), Some(lvl)) = (info.bis, info.char_level) else {
         return None;
     };
-    // The highest monster level the "Where to go" panel offers right now.
-    let max_mlvl = u32::from(info.blocks.level_full.iter().map(|e| e.mlvl).max()?);
+    // The highest monster level the character farms right now.
+    let max_mlvl = u32::from(crate::info::reachable_level(info.char_level, info.difficulty)?);
     let materials = owned_materials(info);
     let mut found: Vec<&str> = Vec::new();
     for slot in crate::config::SLOT_NAMES.iter().filter(|&&s| s != "swap") {
@@ -1775,8 +1771,8 @@ fn gear_attention(info: &LiveInfo, upgrades: &[serde_json::Value]) -> Option<Str
 
 /// Whether build piece `piece` is an unowned upgrade findable now: not worn, owned or in the
 /// shared stash; its required level known and ≤ `lvl`; better than the equipped piece
-/// ([`piece_state`] against `eq_level`); and droppable where the "Where to go" panel sends
-/// the character (`max_mlvl` = its highest monster level):
+/// ([`piece_state`] against `eq_level`); and droppable where the character farms (`max_mlvl`
+/// = the highest monster level it farms, [`crate::info::reachable_level`]):
 /// - a unique or set item: its quality level ≤ `max_mlvl` ([`unique_set_qlvl`]);
 /// - a runeword: every rune not already owned (`materials`, [`owned_materials`]: the shared
 ///   materials tab plus inventory, cube and stash) has a quality level ≤ `max_mlvl`
@@ -2385,29 +2381,12 @@ fn equipped_name(equipped: &crate::game::Equipped) -> String {
     "(unknown)".to_owned()
 }
 
-/// `levels`/`keep`/… lines as `{ "text", "colour" }` objects in the block's colour.
+/// `keep`/`sell`/… lines as `{ "text", "colour" }` objects in the block's colour.
 fn text_lines(lines: &[String], colour: [u8; 4]) -> Vec<serde_json::Value> {
     let hex = hex(colour);
     lines
         .iter()
         .map(|text| serde_json::json!({ "text": text, "colour": hex }))
-        .collect()
-}
-
-/// The whole level-suggestion band as `{ "text", "colour", "mlvl", "bucket", "bad" }` objects
-/// ([`crate::info::LevelEntry`]): the area name in `text` (not-bad areas first), the
-/// structured `mlvl` + `below`/`equal`/`above` bucket the dashboard re-groups its "Where to
-/// go" panel's three columns from, and `bad`: why the area is bad for the build (the page
-/// greys it out), else `null`.
-fn level_lines_full(entries: &[crate::info::LevelEntry], colour: [u8; 4]) -> Vec<serde_json::Value> {
-    let hex = hex(colour);
-    entries
-        .iter()
-        .map(|e| {
-            serde_json::json!({
-                "text": e.text, "colour": hex, "mlvl": e.mlvl, "bucket": e.bucket, "bad": e.bad,
-            })
-        })
         .collect()
 }
 
@@ -2719,8 +2698,7 @@ load();
 "#;
 
 /// The live dashboard page (a single string: no assets, no framework), dark-themed. Layout:
-/// a sticky character bar with the breakpoint chips, then Sell / Keep beside "Where to go"
-/// (one column when narrow), the vendor, the collapsible gear grid (equipped piece on top of
+/// a sticky character bar with the breakpoint chips, then Sell / Keep, the vendor, the collapsible gear grid (equipped piece on top of
 /// each slot card, the build's pieces below with their stats; open while `gear_attention`
 /// says so, until the viewer clicks), skills, recipes, the farm list and the shared stash.
 /// The script follows in [`DASHBOARD_SCRIPT`].
@@ -2758,11 +2736,9 @@ a { color: var(--gold); text-decoration: none; } a:hover { text-decoration: unde
 .waiting { color: var(--dim); font-style: italic; }
 
 /* Panels */
-.grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); margin-top: 16px; }
 .panel { background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
 .panel.full { grid-column: 1 / -1; }
-.wrap > .panel + .panel, .wrap > .grid + .panel { margin-top: 16px; }
-.wrap > .grid:first-child { margin-top: 0; }
+.wrap > .panel + .panel { margin-top: 16px; }
 /* The Gear panel's fold: the heading's button toggles the body. */
 .panel h2 .fold { all: unset; cursor: pointer; display: inline-flex; align-items: baseline; gap: 6px; }
 .panel h2 .fold::before { content: "▸"; display: inline-block; transition: transform .15s; }
@@ -2823,17 +2799,6 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .pc.worse { opacity: .38; } .pc.worse .nm { text-decoration: line-through; }
 .badge { font-size: 10px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--dim); }
 .badge.now { color: var(--good); border-color: currentColor; }
-
-/* Where to go */
-.lv3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.lvc { background: var(--panel2); border: 1px solid var(--line2); border-radius: var(--radius); padding: 8px 10px; min-width: 0; }
-.lvc.equal { border-color: var(--accent); }
-.lvc h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
-.lvc.equal h3 { color: var(--accent); }
-.area { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 1px 0; }
-.area .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.area .m { font-variant-numeric: tabular-nums; color: var(--dim); font-size: 12px; }
-.area.bad { opacity: .4; filter: grayscale(1); } .area.bad .n { text-decoration: line-through dotted; }
 
 /* Stash */
 .pages { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
@@ -2947,9 +2912,8 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
 
 @media (max-width: 1200px) { .gear { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 900px) {
-  .grid { grid-template-columns: minmax(0, 1fr); }
   .gear, .pages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .lv3, .trees { grid-template-columns: minmax(0, 1fr); }
+  .trees { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 520px) { .gear, .pages { grid-template-columns: minmax(0, 1fr); } .bar { position: static; } }
 </style></head><body>
@@ -2961,10 +2925,7 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
 </div></div>
 <div class="upbar" id="upgrades" hidden></div>
 <div class="wrap">
-<div class="grid">
-<section class="panel" id="sellpanel"><h2>Sell / Keep</h2><div id="sell" class="lines"></div></section>
-<section class="panel"><h2>Where to go <span class="sub">monster level around yours · greyed = bad for your build</span></h2><div id="levels"></div></section>
-</div>
+<section class="panel full" id="sellpanel"><h2>Sell / Keep</h2><div id="sell" class="lines"></div></section>
 <section class="panel full" id="shoppanel" hidden><h2>Vendor <span class="sub" id="shopnpc"></span></h2><div class="shop" id="shop"></div></section>
 <section class="panel full" id="gearpanel"><h2><button type="button" class="fold" id="gearfold" aria-expanded="false" aria-controls="gearbody">Gear</button> <span class="sub" id="buildname"></span> <span class="sub attn" id="gearwhy"></span></h2>
 <div id="gearbody" hidden>
@@ -3006,20 +2967,6 @@ function guide(entries) {
     const body = m ? `<b>${esc(m[1])}</b>${esc(m[2])}` : esc(part);
     return `<span class="chip" style="color:${col(e.colour)}">${body}</span>`;
   })).join("");
-}
-// "Where to go": three cards (below / equal / above the character level). The server sends
-// the entries structured ("mlvl" + "bucket"); the text's trailing "(N)" moves to the right.
-function levels(entries) {
-  const cards = ["below", "equal", "above"].map(bucket => {
-    const rows = (entries || []).filter(e => e.bucket === bucket).map(e => {
-      const name = e.text.replace(/\s*\(\d+\)\s*$/, "");
-      // Bad for the build (immunes): greyed out, the reason as the tooltip.
-      const tip = e.bad ? `${name} · bad for your build: ${e.bad}` : name;
-      return `<div class="area${e.bad ? " bad" : ""}" style="color:${col(e.colour)}"><span class="n" title="${esc(tip)}">${esc(name)}</span><span class="m">${e.mlvl != null ? e.mlvl : ""}</span></div>`;
-    }).join("");
-    return `<div class="lvc ${bucket}"><h3>${bucket}</h3>${rows || '<div class="empty">none</div>'}</div>`;
-  }).join("");
-  $("levels").innerHTML = `<div class="lv3">${cards}</div>`;
 }
 // The kind of a build piece, for its colour: explicit "kind" when the build carries one, a
 // runeword when it lists runes, else unique (the build files are mostly uniques/sets).
@@ -3318,7 +3265,7 @@ function render(r) {
   gearFold(r);
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
-    for (const id of ["guide", "levels", "gear", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
+    for (const id of ["guide", "gear", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
     shop(null);
@@ -3337,7 +3284,6 @@ function render(r) {
   $("updated").textContent = (r.offline ? "last seen " : "updated ") + seen;
   document.title = `${r.offline ? "(offline) " : ""}${p.name}${p.level != null ? " L" + p.level : ""} · ${r.area || "?"} — D2R Dashboard`;
   guide(r.guide);
-  levels(r.levels);
   upgrades(r.upgrades, p.name);
   shop(r.shop);
   gear(r.gear);
@@ -4156,20 +4102,6 @@ mod tests {
     fn live_json_has_the_documented_shape() -> Result<()> {
         let blocks = crate::render::TextBlocks {
             guide: vec![crate::info::Band::plain("fcr (7 / 105)", crate::info::GUIDE_TEXT)],
-            level_full: vec![
-                crate::info::LevelEntry {
-                    text: "Level 3 → a (3)".to_owned(),
-                    mlvl: 3,
-                    bucket: "equal",
-                    bad: None,
-                },
-                crate::info::LevelEntry {
-                    text: "b (5)".to_owned(),
-                    mlvl: 5,
-                    bucket: "above",
-                    bad: Some("physical immunes: 3 of 7 types".to_owned()),
-                },
-            ],
             keep: vec!["Harlequin Crest (S)".to_owned()],
             sell: vec!["Gravenspine (inv)".to_owned()],
             give: vec!["Lem Rune (stash)".to_owned()],
@@ -4208,20 +4140,7 @@ mod tests {
             colour_of("guide"),
             vec![("fcr (7 / 105)".to_owned(), "#c882ff".to_owned())]
         );
-        // The level-suggestion band: structured entries with the monster level and the
-        // below/equal/above bucket, in the own-level-first reading order.
-        let levels = json
-            .get("levels")
-            .and_then(|v| v.as_array())
-            .map_or_else(Vec::new, Vec::clone);
-        assert_eq!(
-            levels,
-            vec![
-                serde_json::json!({"text": "Level 3 → a (3)", "colour": "#78d2ff", "mlvl": 3, "bucket": "equal", "bad": null}),
-                serde_json::json!({"text": "b (5)", "colour": "#78d2ff", "mlvl": 5, "bucket": "above", "bad": "physical immunes: 3 of 7 types"}),
-            ],
-            "{levels:?}"
-        );
+        assert_eq!(json.get("levels"), None, "the level band is gone");
         assert_eq!(
             colour_of("keep"),
             vec![("Harlequin Crest (S)".to_owned(), "#5ae65a".to_owned())]
@@ -5688,6 +5607,7 @@ mod tests {
         let copies = ["Lawbringer".to_owned()];
         let held = [("Sol Rune".to_owned(), 1)];
         let mut info = live_info(5, &blocks, &[], &stash, &[]);
+        info.char_level = None;
         info.farm = &farm;
         info.owned = &owned;
         info.runeword_copies = &copies;
@@ -5735,7 +5655,7 @@ mod tests {
         assert_eq!(
             json.pointer("/farm/groups/0/items/0/base_hint"),
             Some(&serde_json::Value::Null),
-            "no \"Where to go\" list: no item level to check bases by"
+            "unknown character level: no item level to check bases by"
         );
         // The rune list sums over the list: Sol for Fortitude and Bulwark; held runes count
         // as had, but not as in the stash.
@@ -5825,13 +5745,14 @@ mod tests {
     }
 
     /// The live JSON's `gear_attention_why` for a level-`level` character with player
-    /// `slots`, mercenary `merc` slots, a "Where to go" band topping out at `max_mlvl`,
-    /// `owned` names and `held` materials; asserts `gear_attention` agrees with it.
+    /// `slots`, mercenary `merc` slots, in `difficulty` (it farms up to
+    /// [`crate::info::reachable_level`]: in Normal the level +2), `owned` names and `held`
+    /// materials; asserts `gear_attention` agrees with it.
     fn attention(
         slots: &[(&str, &[&str])],
         merc: &[(&str, &[&str])],
         level: u8,
-        max_mlvl: u8,
+        difficulty: u8,
         owned: &[String],
         held: &[(String, u32)],
     ) -> Result<Option<String>> {
@@ -5845,25 +5766,10 @@ mod tests {
             slots: to_map(slots),
             merc_slots: to_map(merc),
         };
-        let blocks = crate::render::TextBlocks {
-            level_full: vec![
-                crate::info::LevelEntry {
-                    text: "a".to_owned(),
-                    mlvl: max_mlvl.saturating_sub(2),
-                    bucket: "below",
-                    bad: None,
-                },
-                crate::info::LevelEntry {
-                    text: "b".to_owned(),
-                    mlvl: max_mlvl,
-                    bucket: "above",
-                    bad: None,
-                },
-            ],
-            ..crate::render::TextBlocks::default()
-        };
+        let blocks = crate::render::TextBlocks::default();
         let mut info = live_info(5, &blocks, &[], &[], &[]);
         info.char_level = Some(level);
+        info.difficulty = Some(difficulty);
         info.bis = Some(&bis);
         info.owned = owned;
         info.held_materials = held;
@@ -5884,12 +5790,12 @@ mod tests {
         let slots: [(&str, &[&str]); 1] = [("helm", &["Harlequin Crest@62", "Biggin's Bonnet@3"])];
         let owned = ["Biggin's Bonnet".to_owned()];
         assert_eq!(
-            attention(&slots, &[], 20, 1, &owned, &[])?.as_deref(),
+            attention(&slots, &[], 20, 0, &owned, &[])?.as_deref(),
             Some("▲ upgrade to wear: Biggin's Bonnet"),
             "owned and wearable, whatever the areas"
         );
-        // Harlequin Crest (lvl 62) is too high to wear at 20, and nothing else is: closed.
-        assert_eq!(attention(&slots[..], &[], 20, 1, &[], &[])?, None);
+        // Harlequin Crest (lvl 62) and Biggin's Bonnet (lvl 3) are too high to wear at 2: closed.
+        assert_eq!(attention(&slots[..], &[], 2, 0, &[], &[])?, None);
         Ok(())
     }
 
@@ -5898,42 +5804,45 @@ mod tests {
         // Biggin's Bonnet (War Bonnet, qlvl 4) and Nagelring (qlvl 10).
         let slots: [(&str, &[&str]); 2] = [("ring1", &["Nagelring@7"]), ("helm", &["Biggin's Bonnet@3"])];
         assert_eq!(
-            attention(&slots, &[], 10, 12, &[], &[])?.as_deref(),
-            Some("▲ findable: Nagelring, Biggin's Bonnet")
+            attention(&slots, &[], 10, 0, &[], &[])?.as_deref(),
+            Some("▲ findable: Nagelring, Biggin's Bonnet"),
+            "level 10 in Normal farms up to monster level 12"
         );
         assert_eq!(
-            attention(&slots, &[], 10, 6, &[], &[])?.as_deref(),
+            attention(&slots, &[], 7, 0, &[], &[])?.as_deref(),
             Some("▲ findable: Biggin's Bonnet"),
-            "Nagelring's qlvl 10 is above the areas offered"
+            "Nagelring's qlvl 10 is above the 9 a level-7 character farms"
         );
         assert_eq!(
-            attention(&slots, &[], 6, 12, &[], &[])?.as_deref(),
+            attention(&slots, &[], 6, 0, &[], &[])?.as_deref(),
             Some("▲ findable: Biggin's Bonnet"),
             "Nagelring needs level 7"
         );
         // A piece described in words has no item level to check: never findable.
         let words: [(&str, &[&str]); 1] = [("helm", &["Druid pelt with +summoning skills@3"])];
-        assert_eq!(attention(&words, &[], 10, 12, &[], &[])?, None);
+        assert_eq!(attention(&words, &[], 10, 0, &[], &[])?, None);
         Ok(())
     }
 
     #[test]
     fn gear_attention_for_runewords_counts_owned_runes() -> Result<()> {
-        // Stealth = Tal (qlvl 17) + Eth (15); Leaf = Tir (13) + Ral (19).
-        let slots: [(&str, &[&str]); 2] = [("body", &["Stealth@17"]), ("weapon", &["Leaf@19"])];
+        // Stealth = Tal (qlvl 17) + Eth (15); Leaf = Tir (13) + Ral (19). The pieces' levels
+        // are set below the runes' so a level-14 character (farming up to 16 in Normal) can
+        // wear both but finds neither Tal nor Ral.
+        let slots: [(&str, &[&str]); 2] = [("body", &["Stealth@14"]), ("weapon", &["Leaf@14"])];
         assert_eq!(
-            attention(&slots, &[], 20, 16, &[], &[])?,
+            attention(&slots, &[], 14, 0, &[], &[])?,
             None,
-            "Tal and Ral drop only above the areas offered"
+            "Tal and Ral drop only above monster level 16"
         );
         let tal = [("Tal Rune".to_owned(), 1)];
         assert_eq!(
-            attention(&slots, &[], 20, 16, &[], &tal)?.as_deref(),
+            attention(&slots, &[], 14, 0, &[], &tal)?.as_deref(),
             Some("▲ findable: Stealth"),
             "Tal owned, Eth drops there"
         );
         assert_eq!(
-            attention(&slots, &[], 20, 19, &[], &[])?.as_deref(),
+            attention(&slots, &[], 17, 0, &[], &[])?.as_deref(),
             Some("▲ findable: Stealth, Leaf")
         );
         Ok(())
@@ -5941,16 +5850,8 @@ mod tests {
 
     #[test]
     fn runeword_pieces_and_farm_entries_name_natural_socket_bases() -> Result<()> {
-        // A druid (class 5) whose "Where to go" band tops out at monster level 45.
-        let blocks = crate::render::TextBlocks {
-            level_full: vec![crate::info::LevelEntry {
-                text: "a".to_owned(),
-                mlvl: 45,
-                bucket: "above",
-                bad: None,
-            }],
-            ..crate::render::TextBlocks::default()
-        };
+        // A level-43 druid (class 5) in Nightmare: it farms up to monster level 45.
+        let blocks = crate::render::TextBlocks::default();
         let slot = |s: &str, p: &str| (s.to_owned(), vec![p.to_owned()]);
         let bis = config::Bis {
             build: "test".to_owned(),
@@ -5960,6 +5861,7 @@ mod tests {
         let farm = fury_farm()?;
         let mut info = live_info(5, &blocks, &[], &[], &[]);
         info.char_level = Some(43);
+        info.difficulty = Some(1);
         info.bis = Some(&bis);
         info.farm = &farm;
         let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
@@ -6012,15 +5914,7 @@ mod tests {
 
     #[test]
     fn farm_merc_and_slot_fields_steer_the_base_hint() -> Result<()> {
-        let blocks = crate::render::TextBlocks {
-            level_full: vec![crate::info::LevelEntry {
-                text: "a".to_owned(),
-                mlvl: 45,
-                bucket: "above",
-                bad: None,
-            }],
-            ..crate::render::TextBlocks::default()
-        };
+        let blocks = crate::render::TextBlocks::default();
         let (farm, warnings) = config::parse_farm(
             "[[farm]]\nfor = \"Fury Druid\"\nitems = [\n\
              { name = \"Fortitude\", kind = \"runeword\", slot = \"body\" },\n\
@@ -6035,6 +5929,7 @@ mod tests {
         };
         let mut info = live_info(5, &blocks, &[], &[], &[]);
         info.char_level = Some(43);
+        info.difficulty = Some(1);
         info.bis = Some(&bis);
         info.farm = &farm;
         let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
@@ -6074,8 +5969,8 @@ mod tests {
     fn gear_attention_ignores_the_mercenary() -> Result<()> {
         let merc: [(&str, &[&str]); 1] = [("weapon", &["Insight@27"])];
         let owned = ["Insight".to_owned()];
-        assert_eq!(attention(&[], &merc, 60, 80, &[], &[])?, None, "findable");
-        assert_eq!(attention(&[], &merc, 60, 80, &owned, &[])?, None, "owned");
+        assert_eq!(attention(&[], &merc, 60, 2, &[], &[])?, None, "findable");
+        assert_eq!(attention(&[], &merc, 60, 2, &owned, &[])?, None, "owned");
         Ok(())
     }
 

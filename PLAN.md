@@ -494,17 +494,17 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   isn't told apart from a found one): only their quest rewards hide them.
 - **Hot reload**: the mtime watcher watches `config.toml` AND the `builds/` directory (a cheap
   `read_dir` per tick — a directory's own mtime would miss in-place edits of a build file).
-- **Dashboard "Where to go"**: the level-suggestion band is structured (`mlvl` + `bucket`:
-  `below`/`equal`/`above` clvl, `info::LevelEntry` at the `live_json` layer, `level_lines_full` the
-  source) and the panel lays it out in three labelled columns (user request, 2026-11-17).
-- **Dashboard layout pass** (user requests, 2026-11-20): Sell / Keep beside "Where to go" at
-  the top (one column under 900 px); the sell / keep / give lists carry every entry (one JSON
+- **Dashboard "Where to go"**: removed 2026-11-20 (user: "the more I look at it, the more I
+  dislike the where to go"); the level band, `info::LevelEntry`, `level_lines_full` and
+  `build::bad_reason` are gone and the `levels` JSON field with them. See the backlog item
+  "good areas at 75+".
+- **Dashboard layout pass** (user requests, 2026-11-20): Sell / Keep full width at the top;
+  the sell / keep / give lists carry every entry (one JSON
   line each, the page wraps them as comma runs; the old 3-line `wrap` was dashboard-only and
-  is gone). "Where to go" greys out areas `build::rate` calls Bad (`levels[].bad` = reason,
-  e.g. "physical immunes: 1 of 5 types"); Bad now applies in Normal too (Good stays
-  Nightmare+). The Gear panel folds; it opens on `gear_attention` (`web::gear_attention`: an
+  is gone). `build::rate`'s Bad applies in Normal too (Good stays Nightmare+). The Gear panel folds; it opens on `gear_attention` (`web::gear_attention`: an
   owned upgrade to wear, else an unowned unique/set/runeword findable now: req ≤ clvl, qlvl ≤
-  the band's max mlvl, a runeword's missing runes' misc.txt qlvl ≤ it; mercenary slots never)
+  `info::reachable_level` (clvl +2 within the difficulty's area levels; also the cap of the
+  natural-socket `base_hint`), a runeword's missing runes' misc.txt qlvl ≤ it; mercenary slots never)
   until the viewer clicks. Farm entries the character wears (≥ count, equipped only) for its
   current stage or a later one (`Config::stage_chain`) are hidden; its mercenary's worn
   uniques/sets and runewords (`Snapshot::merc_worn`, solo games only) count as worn too.
@@ -575,6 +575,7 @@ Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each re
 - [ ] **Cleanup**: remove D2RMH exe/launcher (`~/.local/bin/d2rmh`); keep classic 1.13c files for phase 2.
 - [x] **Map toggle** (2026-11-18): `SIGUSR1` hides/shows the map; key binding left to the user's Hyprland config.
 - [ ] **Backlog: buff tracker** (user, 2026-11-18: "later"): dashboard Buffs panel — active states from the state bits at stat list `+0xB30`, the buff's own stat list (tagged with its state id) for values like Cyclone Armor's remaining absorb or Feral Rage stacks, and a countdown from the list's expiry frame vs the game frame counter (counter not yet found). Needs one recorded session.
+- [ ] **Backlog: good areas at 75+** (user, 2026-11-20: "we will bring it back when we are level 75 to show us good areas, nothing else, especially when terrorized"): from character level 75 on, a dashboard panel that lists only the areas good for the build, terrorized ones especially. The old level-band "Where to go" panel was removed the same day. Useful leftovers: `levels_data::IMMUNITIES` (per area and difficulty: monster types and immune counts per damage type), `build::rate` (Good / Neutral / Bad for the build, already colours the overlay's info line), and the Terror Zone reading (`game::is_terrorized` from the monsters' `state::DESECRATED`, per visited level only; `Session` keeps the levels seen terrorized this game; no reader for the current zone list yet). `build::bad_reason` (the immune-damage tooltip text) was deleted with the panel; it is in git history (before 2026-11-20's removal commit).
 - [ ] **Phase 2 (separate plan)**: map seed RE → d2mapapi-backed full markers from entry.
 
 ## Verification

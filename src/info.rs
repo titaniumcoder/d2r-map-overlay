@@ -12,7 +12,6 @@
 //! From Nightmare on, the monster-level part (or the cow counter) is coloured by how the
 //! character's build suits the area ([`crate::build::rate`]): red when bad, green when good.
 
-use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use ab_glyph::{Font, FontVec, GlyphId, PxScale, ScaleFont, point};
@@ -49,31 +48,22 @@ pub const KEEP_TEXT: [u8; 4] = [90, 230, 90, 255];
 pub const SELL_TEXT: [u8; 4] = [175, 175, 175, 255];
 /// The give-away lines: yellow (dashboard, riding with the Sell panel).
 pub const GIVE_TEXT: [u8; 4] = [255, 225, 60, 255];
-/// The level-suggestion lines (dashboard Where-to-go panel): light blue.
-pub const LEVEL_TEXT: [u8; 4] = [120, 210, 255, 255];
 /// The breakpoint/gear/runeword guide lines (user request, 2026-11-17): light violet.
 pub const GUIDE_TEXT: [u8; 4] = [200, 130, 255, 255];
 /// The `BiS` chase list ([`bis_lines`]): light gold.
 pub const BIS_TEXT: [u8; 4] = [255, 210, 120, 255];
 /// Most `BiS` chase lines per section (per-slot lines; hard truncation beyond it).
 const MAX_BIS_LINES: usize = 12;
-/// From this character level on no areas are suggested (everywhere is fine).
-pub const SUGGEST_UNTIL: u8 = 75;
-/// The suggested areas' monster level is at most this many above the character level (the top of
-/// the band; such areas rank last). Unique monsters are area level +3 and the experience penalty
-/// starts above clvl +5, so +2 keeps an area's uniques at or under clvl +5: a level-43 character
-/// gets areas up to 45, whose uniques are 48 (user request, 2026-11-20: "if I am 43 then the
-/// unique monsters in a 47 level area would be 50, too high").
-const SUGGEST_BONUS: u8 = 2;
-/// The suggested areas' monster level is at least this many below the character level (monsters
-/// more than this many levels below give heavily penalized experience).
-const SUGGEST_FLOOR: u8 = 5;
-/// Most suggested areas in the nearest-areas fallback (the dashboard gets the whole band).
-const MAX_SUGGESTIONS: usize = 5;
-/// Town level ids: never suggested.
+/// The highest monster level a character farms is at most this many above its own level
+/// ([`reachable_level`]). Unique monsters are area level +3 and the experience penalty starts
+/// above clvl +5, so +2 keeps an area's uniques at or under clvl +5: a level-43 character farms
+/// areas up to 45, whose uniques are 48 (user request, 2026-11-20: "if I am 43 then the unique
+/// monsters in a 47 level area would be 50, too high").
+const REACHABLE_BONUS: u8 = 2;
+/// Town level ids: never farmed.
 pub const TOWNS: [u32; 5] = [1, 40, 75, 103, 109];
-/// Level ids from here on are special or uber levels (Pandemonium, Uber Tristram, …): never
-/// suggested.
+/// Level ids from here on are special or uber levels (Pandemonium, Uber Tristram, …): not part
+/// of a difficulty's normal area levels.
 const FIRST_SPECIAL_LEVEL: u32 = 133;
 /// The last part of a terrorized level's line, drawn in [`TERROR_TEXT`].
 const TERRORIZED: &str = "terrorized";
@@ -179,46 +169,22 @@ pub fn info_line(
     }
 }
 
-/// Areas to level in for a character of `char_level` in `difficulty`: every area (name, monster
-/// level) whose monster level is in the realistic range — at most [`SUGGEST_BONUS`] above and at
-/// most [`SUGGEST_FLOOR`] below the character level — ranked by efficiency: the character level
-/// itself first (its champions are +2 and its uniques +3), then downwards to [`SUGGEST_FLOOR`]
-/// below, the above-level areas last and mildest first, ties in level-id order; if none is in the
-/// range, the nearest ones (a monster level above the target wins a tie), at most
-/// [`MAX_SUGGESTIONS`]. Towns, the cow level, special levels and areas without monster levels are
-/// never suggested. Empty for an unknown level or difficulty, and from level [`SUGGEST_UNTIL`] on.
-/// The whole band: the dashboard shows all of it ([`level_lines_full`]).
-pub fn level_suggestions(char_level: Option<u8>, difficulty: Option<u8>) -> Vec<(&'static str, u8)> {
-    let (Some(lvl), Some(d)) = (char_level.filter(|&l| l < SUGGEST_UNTIL), difficulty) else {
-        return Vec::new();
+/// The highest monster level a character of `char_level` in `difficulty` (0 Normal … 2 Hell)
+/// realistically farms, the item-level cap for findable upgrades and natural-socket bases:
+/// the character level + [`REACHABLE_BONUS`], kept within the difficulty's area levels (a
+/// level-20 character in Nightmare still meets level-36 monsters; nothing in Normal is above
+/// 43). `None` for an unknown level or difficulty.
+pub fn reachable_level(char_level: Option<u8>, difficulty: Option<u8>) -> Option<u8> {
+    let (lvl, d) = (char_level?, usize::from(difficulty?));
+    let mlvls = || {
+        LEVELS
+            .iter()
+            .filter(|&&(id, _, _)| !TOWNS.contains(&id) && id != COW_LEVEL && id < FIRST_SPECIAL_LEVEL)
+            .filter_map(move |&(_, _, lvls)| lvls.get(d).copied())
+            .filter(|&mlvl| mlvl > 0)
     };
-    let target = lvl + SUGGEST_BONUS;
-    let floor = lvl.saturating_sub(SUGGEST_FLOOR);
-    let mut areas: Vec<(&'static str, u8)> = LEVELS
-        .iter()
-        .filter(|&&(id, _, _)| !TOWNS.contains(&id) && id != COW_LEVEL && id < FIRST_SPECIAL_LEVEL)
-        .filter_map(|&(_, name, lvls)| Some((name, *lvls.get(usize::from(d))?)))
-        .filter(|&(_, mlvl)| mlvl > 0)
-        .collect();
-    // The seven Tal Rasha's Tombs share a name and level; suggest that pair once. Same-named
-    // areas with different levels (Act 2 and Act 3 Sewers) stay separate.
-    let mut seen = HashSet::new();
-    areas.retain(|&(name, mlvl)| seen.insert((name, mlvl)));
-    let mut in_range: Vec<(&'static str, u8)> = areas
-        .iter()
-        .copied()
-        .filter(|&(_, mlvl)| floor <= mlvl && mlvl <= target)
-        .collect();
-    if !in_range.is_empty() {
-        // Stable sort: equal ranks keep level-id order. Below the character level, the closest
-        // first; above it, the mildest first.
-        in_range.sort_by_key(|&(_, mlvl)| (mlvl > lvl, mlvl.abs_diff(lvl)));
-        return in_range;
-    }
-    // Stable sort: equally near areas stay in level-id order.
-    areas.sort_by_key(|&(_, mlvl)| (mlvl.abs_diff(target), mlvl < target));
-    areas.truncate(MAX_SUGGESTIONS);
-    areas
+    let (lowest, highest) = (mlvls().min()?, mlvls().max()?);
+    Some(lvl.saturating_add(REACHABLE_BONUS).clamp(lowest, highest))
 }
 
 /// Why a `BiS` line carries its ✓: the character wears the piece ([`Tick::Worn`]), owns it
@@ -505,131 +471,6 @@ const RUNEWORD_LEVELS: [(&str, u32); 20] = [
     ("Enigma", 65),
     ("Mang Song's Lesson", 82),
 ];
-
-/// One dashboard level-suggestion entry ([`level_lines_full`]): the rendered line, the area's
-/// monster level, and which of the dashboard's three columns it belongs to — `below` / `equal`
-/// / `above` the character level (`equal` = `mlvl == char_level`). The suggestions are ordered
-/// areas-that-aren't-bad first, then own-level-first; the bucket lets the dashboard's "Where
-/// to go" panel re-group them into its below / equal / above columns.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct LevelEntry {
-    /// The rendered line: `Halls of Pain (34)`, or a merged dungeon `Catacombs 3–4 (43)`.
-    pub text: String,
-    pub mlvl: u8,
-    pub bucket: &'static str,
-    /// Why the area is bad for the build ([`build::bad_reason`]), `None` when it isn't: the
-    /// dashboard greys the area out with this as its tooltip.
-    pub bad: Option<String>,
-}
-
-/// The whole level-suggestion band for the dashboard, uncapped within the band (the
-/// nearest-areas fallback keeps its 5-entry cap). `build` (primary damage first) marks the
-/// areas bad for it ([`LevelEntry::bad`]), per area before merging. The levels of one dungeon
-/// with the same monster level and the same badness merge into one entry
-/// ([`merge_dungeon_levels`]: `Catacombs 3–4 (43)`), and within each bucket the areas that
-/// aren't bad come first (stable: otherwise the own-level-first usefulness order).
-pub fn level_lines_full(char_level: Option<u8>, difficulty: Option<u8>, build: &[Damage]) -> Vec<LevelEntry> {
-    let (Some(lvl), areas) = (char_level, level_suggestions(char_level, difficulty)) else {
-        return Vec::new();
-    };
-    let areas: Vec<(&str, u8, Option<String>)> = areas
-        .iter()
-        .map(|&(name, mlvl)| {
-            let bad =
-                level_id(name, mlvl, difficulty).and_then(|id| build::bad_reason(id, difficulty, build));
-            (name, mlvl, bad)
-        })
-        .collect();
-    let mut entries: Vec<LevelEntry> = merge_dungeon_levels(&areas)
-        .into_iter()
-        .map(|(text, mlvl, bad)| LevelEntry {
-            text: format!("{text} ({mlvl})"),
-            mlvl,
-            bucket: match mlvl {
-                m if m == lvl => "equal",
-                m if m < lvl => "below",
-                _ => "above",
-            },
-            bad,
-        })
-        .collect();
-    // Stable: the dashboard filters by bucket keeping this order, so within each column the
-    // areas that aren't bad come first and the greyed-out ones last.
-    entries.sort_by_key(|e| e.bad.is_some());
-    entries
-}
-
-/// `(name, mlvl, bad)` areas with the levels of one dungeon (`<dungeon> Level N`) that share
-/// the monster level and the badness merged into one `(display name, mlvl, bad)` at the first
-/// level's place: consecutive levels as a range, gaps with a comma (`Catacombs 1, 3–4`). A
-/// dungeon level left on its own and areas without a level suffix keep their name.
-fn merge_dungeon_levels(areas: &[(&str, u8, Option<String>)]) -> Vec<(String, u8, Option<String>)> {
-    // (dungeon or full name, mlvl, bad, level numbers); a full name has no level numbers.
-    let mut groups: Vec<(&str, u8, Option<String>, Vec<u8>)> = Vec::new();
-    for (name, mlvl, bad) in areas {
-        let Some((dungeon, n)) = dungeon_level(name) else {
-            groups.push((name, *mlvl, bad.clone(), Vec::new()));
-            continue;
-        };
-        match groups
-            .iter_mut()
-            .find(|(d, m, b, ns)| !ns.is_empty() && *d == dungeon && m == mlvl && b == bad)
-        {
-            Some((_, _, _, ns)) => ns.push(n),
-            None => groups.push((dungeon, *mlvl, bad.clone(), vec![n])),
-        }
-    }
-    groups
-        .into_iter()
-        .map(|(name, mlvl, bad, mut ns)| {
-            ns.sort_unstable();
-            ns.dedup();
-            let text = match ns.as_slice() {
-                [] => name.to_owned(),
-                [n] => format!("{name} Level {n}"),
-                _ => format!("{name} {}", level_ranges(&ns)),
-            };
-            (text, mlvl, bad)
-        })
-        .collect()
-}
-
-/// `Catacombs Level 3` → `("Catacombs", 3)`; `None` for a name without a `Level N` suffix.
-fn dungeon_level(name: &str) -> Option<(&str, u8)> {
-    let (dungeon, n) = name.rsplit_once(" Level ")?;
-    Some((dungeon, n.parse().ok()?))
-}
-
-/// Sorted, distinct level numbers as ranges: `[1, 3, 4, 5]` → `1, 3–5`.
-fn level_ranges(ns: &[u8]) -> String {
-    let mut runs: Vec<(u8, u8)> = Vec::new();
-    for &n in ns {
-        match runs.last_mut() {
-            Some((_, end)) if end.checked_add(1) == Some(n) => *end = n,
-            _ => runs.push((n, n)),
-        }
-    }
-    runs.iter()
-        .map(|&(a, b)| {
-            if a == b {
-                a.to_string()
-            } else {
-                format!("{a}–{b}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The id of the area called `name` with monster level `mlvl` in `difficulty`: the first such
-/// (the seven Tal Rasha's Tombs share name and level; [`level_suggestions`] lists them once).
-fn level_id(name: &str, mlvl: u8, difficulty: Option<u8>) -> Option<u32> {
-    let d = usize::from(difficulty?);
-    LEVELS
-        .iter()
-        .find(|&&(_, n, lvls)| n == name && lvls.get(d) == Some(&mlvl))
-        .map(|&(id, _, _)| id)
-}
 
 /// The info-line font, loaded on first use from [`FONT_PATHS`]; `None` (logged once) if none loads.
 pub fn font() -> Option<&'static FontVec> {
@@ -1421,312 +1262,18 @@ mod tests {
     }
 
     #[test]
-    fn level_suggestions_prefer_own_level_and_below() {
-        // Normal 1: the character level itself first (its champions are +2, its uniques +3 —
-        // the efficient XP zone for melee), then downwards to the band floor, the above-level
-        // areas last. The whole band: the overlay caps the display, the dashboard shows it all.
-        assert_eq!(
-            level_suggestions(Some(1), Some(0)),
-            vec![
-                ("Blood Moor", 1),
-                ("Den of Evil", 1),
-                ("Cold Plains", 2),
-                ("Cave Level 1", 2),
-                ("Cave Level 2", 2),
-                ("Burial Grounds", 3),
-                ("Crypt", 3),
-                ("Mausoleum", 3)
-            ]
-        );
-        // Normal 34: the below-level areas first (34, 33, 32, then the mlvl 29 areas in id
-        // order), the above-level areas last (36); Arreat Summit (37) is +3 above and out of
-        // the −5…+2 band.
-        let areas = level_suggestions(Some(34), Some(0));
-        let head: &[(&str, u8)] = &[
-            ("Halls of Pain", 34),
-            ("Halls of Anguish", 33),
-            ("Nihlathak's Temple", 32),
-            ("Crystalline Passage", 29),
-            ("Frozen River", 29),
-            ("Glacial Trail", 29),
-            ("Drifter Cavern", 29),
-            ("The Ancients' Way", 29),
-            ("Icy Cellar", 29),
-        ];
-        assert_eq!(areas.get(..9), Some(head));
-        let tail: &[(&str, u8)] = &[("Halls of Vaught", 36)];
-        assert_eq!(areas.get(9..), Some(tail));
-    }
-
-    #[test]
-    fn level_suggestions_band_edges_and_skip_the_cow_level() {
-        // Normal 23: the band is 18–25 (23 − 5 … 23 + 2): the mlvl 17 and 26+ areas are out,
-        // the own-level areas first, the above-level ones last and mildest first.
-        let areas = level_suggestions(Some(23), Some(0));
-        let head: &[(&str, u8)] = &[
-            ("Upper Kurast", 23),
-            ("Sewers Level 1", 23),
-            ("Ruined Temple", 23),
-            ("Disused Fane", 23),
-            ("Forgotten Reliquary", 23),
-        ];
-        assert_eq!(areas.get(..5), Some(head));
-        assert!(areas.iter().any(|&(_, mlvl)| mlvl == 18), "band floor");
-        assert!(areas.iter().any(|&(_, mlvl)| mlvl == 25), "band top (+2)");
-        assert!(
-            !areas.iter().any(|&(_, mlvl)| mlvl == 17 || mlvl > 25),
-            "out of band"
-        );
-        assert!(!areas.iter().any(|&(name, _)| name == "Moo Moo Farm"));
-        // Normal 18: the band is 13–20; nothing at mlvl 19/20, so 18 first, then the mlvl 17
-        // areas in id order (the seven Tal Rasha's Tombs deduplicated to one entry).
-        let areas = level_suggestions(Some(18), Some(0));
-        let head: &[(&str, u8)] = &[
-            ("Valley of Snakes", 18),
-            ("Lost City", 17),
-            ("Maggot Lair Level 1", 17),
-            ("Maggot Lair Level 2", 17),
-            ("Maggot Lair Level 3", 17),
-        ];
-        assert_eq!(areas.get(..5), Some(head));
-        // Same-named areas with different levels are not collapsed: the Sewers Level 1 at
-        // Normal clvl 23 is Act 3's (mlvl 23) — under a name-only dedupe the Act 2 entry
-        // (mlvl 13, out of band) would have survived and the area would never be suggested.
-        let areas = level_suggestions(Some(23), Some(0));
-        assert!(
-            areas.contains(&("Sewers Level 1", 23)),
-            "Act 3's Sewers is in the band"
-        );
-        assert!(!areas.contains(&("Sewers Level 1", 13)), "Act 2's is not");
-    }
-
-    #[test]
-    fn level_suggestions_use_the_difficulty_and_stop_at_75() {
-        // Nightmare 46: the mlvl 46 areas first (own level), then 45 downwards; the mlvl 47–48
-        // areas rank last and mildest first (the whole 41–48 band is returned).
-        let areas = level_suggestions(Some(46), Some(1));
-        let head: &[(&str, u8)] = &[
-            ("Lost City", 46),
-            ("Valley of Snakes", 46),
-            ("Maggot Lair Level 3", 46),
-            ("Ancient Tunnels", 46),
-            ("Far Oasis", 45),
-        ];
-        assert_eq!(areas.get(..5), Some(head));
-        assert!(
-            areas.iter().all(|&(_, mlvl)| (41..=48).contains(&mlvl)),
-            "the 46 − 5 … 46 + 2 band: {areas:?}"
-        );
-        // Hell 74: the last level with suggestions; the band is 69–76 and the mlvl 74 areas
-        // come first (the Act 2 and Act 3 Sewers share name and level, so one entry).
-        let areas = level_suggestions(Some(74), Some(2));
-        let head: &[(&str, u8)] = &[
-            ("Sewers Level 1", 74),
-            ("Sewers Level 2", 74),
-            ("Catacombs Level 2", 73),
-            ("Catacombs Level 3", 73),
-            ("Catacombs Level 4", 73),
-        ];
-        assert_eq!(areas.get(..5), Some(head));
-        assert!(
-            areas.iter().all(|&(_, mlvl)| (69..=76).contains(&mlvl)),
-            "the 74 − 5 … 74 + 2 band: {areas:?}"
-        );
-        assert!(
-            level_suggestions(Some(75), Some(2)).is_empty(),
-            "75: everywhere is fine"
-        );
-        assert_eq!(level_suggestions(Some(90), Some(0)), Vec::<(&str, u8)>::new());
-        assert_eq!(
-            level_suggestions(None, Some(0)),
-            Vec::<(&str, u8)>::new(),
-            "unknown level"
-        );
-        assert_eq!(
-            level_suggestions(Some(10), None),
-            Vec::<(&str, u8)>::new(),
-            "unknown difficulty"
-        );
-        assert_eq!(
-            level_suggestions(Some(10), Some(3)),
-            Vec::<(&str, u8)>::new(),
-            "bad difficulty"
-        );
-    }
-
-    #[test]
-    fn level_suggestions_skip_towns_and_special_levels() {
-        for d in 0..3 {
-            for lvl in 1..SUGGEST_UNTIL {
-                for (name, mlvl) in level_suggestions(Some(lvl), Some(d)) {
-                    let &(id, _, _) = LEVELS
-                        .iter()
-                        .find(|&&(_, n, lvls)| n == name && lvls.get(usize::from(d)) == Some(&mlvl))
-                        .unwrap_or(&(0, "", [0; 3]));
-                    assert!(
-                        mlvl > 0 && !TOWNS.contains(&id) && id < FIRST_SPECIAL_LEVEL,
-                        "{name}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn level_lines_full_lists_the_whole_band_one_per_line() {
-        // One entry per area (dungeon levels merged) in the usefulness order; no prefix, no
-        // `+N more` tail, no cap.
-        let full = level_lines_full(Some(1), Some(0), &[]);
-        let texts: Vec<(&str, &str)> = full.iter().map(|e| (e.text.as_str(), e.bucket)).collect();
-        assert_eq!(
-            texts,
-            [
-                ("Blood Moor (1)", "equal"),
-                ("Den of Evil (1)", "equal"),
-                ("Cold Plains (2)", "above"),
-                ("Cave 1–2 (2)", "above"),
-                ("Burial Grounds (3)", "above"),
-                ("Crypt (3)", "above"),
-                ("Mausoleum (3)", "above"),
-            ]
-        );
-        assert_eq!(level_lines_full(Some(80), Some(0), &[]), Vec::<LevelEntry>::new());
-        assert_eq!(level_lines_full(None, Some(0), &[]), Vec::<LevelEntry>::new());
-    }
-
-    #[test]
-    fn level_band_tops_out_two_above_the_character_level() {
-        // Nightmare 43 (user example, 2026-11-20): uniques are area level +3, so the band stops
-        // at 45 (uniques 48 = clvl +5, the XP-penalty edge) and nothing at 46+ is offered.
-        let full = level_lines_full(Some(43), Some(1), &[]);
-        assert_eq!(full.iter().map(|e| e.mlvl).max(), Some(45), "{full:?}");
-        assert_eq!(full.iter().map(|e| e.mlvl).min(), Some(38), "{full:?}");
-    }
-
-    #[test]
-    fn level_lines_full_merges_dungeon_levels() {
-        // Nightmare 43: Catacombs 3 and 4 are both 43 → one range; 1 and 2 (42) are a separate
-        // entry in the other column; the Tower Cellar levels all differ and stay apart.
-        let full = level_lines_full(Some(43), Some(1), &[]);
-        let texts: Vec<&str> = full.iter().map(|e| e.text.as_str()).collect();
-        for merged in [
-            "Catacombs 3–4 (43)",
-            "Catacombs 1–2 (42)",
-            "Sewers 1–2 (43)",
-            "Jail 1–3 (41)",
-        ] {
-            assert!(texts.contains(&merged), "{merged}: {texts:?}");
-        }
-        assert!(texts.contains(&"Tower Cellar Level 5 (42)"), "{texts:?}");
-        assert!(texts.contains(&"Tower Cellar Level 4 (41)"), "{texts:?}");
-        assert!(
-            !texts.iter().any(|t| t.starts_with("Catacombs Level")),
-            "{texts:?}"
-        );
-        // A gap: non-adjacent levels join with a comma, a level on its own keeps its full name,
-        // and an area without a level suffix is untouched.
-        let merged = merge_dungeon_levels(&[
-            ("Catacombs Level 1", 42, None),
-            ("Rocky Waste", 42, None),
-            ("Catacombs Level 3", 42, None),
-            ("Catacombs Level 4", 43, None),
-            ("Catacombs Level 5", 42, None),
-        ]);
-        assert_eq!(
-            merged,
-            [
-                ("Catacombs 1, 3, 5".to_owned(), 42, None),
-                ("Rocky Waste".to_owned(), 42, None),
-                ("Catacombs Level 4".to_owned(), 43, None),
-            ]
-        );
-        assert_eq!(level_ranges(&[1, 3, 4, 5, 7]), "1, 3–5, 7");
-        // Different badness doesn't merge either.
-        let bad = Some("physical immunes".to_owned());
-        let merged = merge_dungeon_levels(&[("Jail Level 1", 71, bad.clone()), ("Jail Level 2", 71, None)]);
-        assert_eq!(
-            merged,
-            [
-                ("Jail Level 1".to_owned(), 71, bad),
-                ("Jail Level 2".to_owned(), 71, None)
-            ]
-        );
-    }
-
-    #[test]
-    fn level_lines_full_flags_areas_bad_for_the_build() {
-        use crate::build::Damage::{Cold, Physical};
-        // A Hell fury druid (physical only) at 70: the Jail (one physical-immune type of 5)
-        // and the Cathedral are bad, with the reason; the rest of the band is not.
-        let full = level_lines_full(Some(70), Some(2), &[Physical]);
-        let bad: Vec<(&str, &str)> = full
-            .iter()
-            .filter_map(|e| Some((e.text.as_str(), e.bad.as_deref()?)))
-            .collect();
-        assert_eq!(
-            bad,
-            [
-                ("Jail 1–3 (71)", "physical immunes: 1 of 5 types"),
-                ("Cathedral (72)", "physical immunes: 1 of 3 types"),
-            ]
-        );
-        // Within the `above` column the bad areas come last, after the mlvl 72 good ones.
-        let above: Vec<(&str, bool)> = full
-            .iter()
-            .filter(|e| e.bucket == "above")
-            .map(|e| (e.text.as_str(), e.bad.is_some()))
-            .collect();
-        assert_eq!(
-            above,
-            [
-                ("Inner Cloister (72)", false),
-                ("Catacombs Level 1 (72)", false),
-                ("Jail 1–3 (71)", true),
-                ("Cathedral (72)", true),
-            ]
-        );
-        // Without a build nothing is flagged. The summoner (physical, cold) isn't either: no
-        // type there is immune to both, and physical immunes stay under the 35 % share.
-        assert!(
-            level_lines_full(Some(70), Some(2), &[])
-                .iter()
-                .all(|e| e.bad.is_none())
-        );
-        assert!(
-            level_lines_full(Some(70), Some(2), &[Physical, Cold])
-                .iter()
-                .all(|e| e.bad.is_none())
-        );
-        // Normal has (almost) no immunes: nothing is bad for the summoner.
-        assert!(
-            level_lines_full(Some(20), Some(0), &[Physical, Cold])
-                .iter()
-                .all(|e| e.bad.is_none())
-        );
-    }
-
-    #[test]
-    fn level_lines_full_buckets_areas_below_equal_and_above_the_level() {
-        // The dashboard's three "Where to go" columns come from the `bucket` field: below /
-        // equal / above the character level (`equal` = mlvl == char_level, user request,
-        // 2026-11-17). Normal 23: the band is 18–25.
-        let full = level_lines_full(Some(23), Some(0), &[]);
-        assert!(!full.is_empty(), "the band is not empty for clvl 23");
-        for entry in &full {
-            let expected = match entry.mlvl {
-                23 => "equal",
-                m if m < 23 => "below",
-                _ => "above",
-            };
-            let mlvl = entry.mlvl;
-            assert_eq!(entry.bucket, expected, "entry: {entry:?}");
-            assert!(entry.text.contains(&format!("({mlvl})")), "{entry:?}");
-        }
-        // Own level first.
-        assert_eq!(full.first().map(|e| e.bucket), Some("equal"));
-        // The band's edges are represented: at least one `below` and one `above` entry.
-        assert!(full.iter().any(|e| e.bucket == "below"), "{full:?}");
-        assert!(full.iter().any(|e| e.bucket == "above"), "{full:?}");
+    fn reachable_level_is_two_above_the_character_level() {
+        // clvl +2 keeps an area's uniques (+3) at or under clvl +5: Nightmare 43 → 45.
+        assert_eq!(reachable_level(Some(43), Some(1)), Some(45));
+        assert_eq!(reachable_level(Some(70), Some(2)), Some(72));
+        // Kept within the difficulty's area levels: Nightmare starts at 36, Normal tops out at 43.
+        assert_eq!(reachable_level(Some(20), Some(1)), Some(36));
+        assert_eq!(reachable_level(Some(80), Some(0)), Some(43));
+        assert_eq!(reachable_level(Some(99), Some(2)), Some(87)); // Arreat Summit
+        // Unknown level or difficulty: no level (no findable or base hints).
+        assert_eq!(reachable_level(None, Some(0)), None);
+        assert_eq!(reachable_level(Some(10), None), None);
+        assert_eq!(reachable_level(Some(10), Some(3)), None);
     }
 
     #[test]
