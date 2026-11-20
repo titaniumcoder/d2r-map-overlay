@@ -12,8 +12,9 @@
 //! - [`stash_plan`]: sell / move / keep of the player's items, with [`gear_score`] for magic and
 //!   rare items;
 //! - [`build`]: the area rating of the info line from the build's damage types;
-//! - recipes, tips, skill plans and the farm list (read by the dashboard's playstyle panels;
-//!   they move behind the trait with the dashboard split, step 6).
+//! - [`web`]: the dashboard's playstyle panels (gear grid, upgrades, recipes, tips, stage, farm
+//!   list, sell / keep entries, the vendor notes and the skill plan for the core panels) and the
+//!   `/config` page's JSON and build selection.
 
 pub mod build;
 pub mod config;
@@ -22,11 +23,14 @@ pub mod gear_score;
 pub mod guidance;
 pub mod stash_plan;
 pub mod valuables;
+pub mod web;
 
 pub use config_driven::ConfigDriven;
 
-use crate::config::{Config, FarmGroup, Stage};
+use crate::config::{Config, Stage};
 use crate::game::{ItemDrop, Snapshot};
+use crate::played::Played;
+use crate::web::{GearInfo, LiveInfo, Panels};
 use guidance::{Guidance, Marks};
 
 /// One snapshot's evaluation ([`Playstyle::evaluate`]).
@@ -60,6 +64,28 @@ pub trait Playstyle {
     /// call), `None` when there is none.
     fn evaluate(&self, snap: &Snapshot, reached: Option<&str>) -> Evaluation<'_>;
 
-    /// The cross-character farm list, for the dashboard.
-    fn farm(&self) -> &[FarmGroup];
+    /// The playstyle's part of one tick's dashboard ([`crate::web::live_json`]) for the
+    /// evaluation of the snapshot `info` was gathered from.
+    fn panels<'a>(&'a self, evaluation: &'a Evaluation<'a>, info: &LiveInfo<'a>) -> Panels<'a>;
+
+    /// The `/config` page's JSON (`GET /api/config`): every known character with its build
+    /// selection and resolved gear view, annotated from the live `gear` state; `played` gives
+    /// the order and the classes seen.
+    fn config_json(&self, gear: &GearInfo, played: &Played) -> serde_json::Value;
+
+    /// The build definitions the `/config` page offers (`GET /api/builds`).
+    fn builds_json(&self) -> serde_json::Value;
+
+    /// `config.toml`'s `text` with character `name`'s build selection set to `build` (`None`
+    /// clears it), comments preserved; `None` when the text can't be edited (the browser gets
+    /// an error).
+    fn select_build(text: &str, name: &str, build: Option<&str>) -> Option<String>
+    where
+        Self: Sized;
+
+    /// `config.toml`'s `text` without character `name`'s entries; `None` when the text can't
+    /// be edited.
+    fn remove_character(text: &str, name: &str) -> Option<String>
+    where
+        Self: Sized;
 }

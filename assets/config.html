@@ -1,0 +1,34 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>d2r-map-overlay config</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%231a1815'/%3E%3Cpath%20d='M16%204%2028%2016%2016%2028%204%2016Z'%20fill='%232b2721'%20stroke='%23c8a85a'%20stroke-width='3'%20stroke-linejoin='round'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='4'%20fill='%23ff6b3d'/%3E%3C/svg%3E">
+<style>
+body { font-family: sans-serif; background: #1a1a1a; color: #ddd; margin: 2em; }
+input, select { background: #2a2a2a; color: #eee; border: 1px solid #555; padding: 4px; }
+button { padding: 4px 10px; }
+.char { border: 1px solid #444; padding: 0 1em; margin-bottom: 0.6em; }
+.char[open] { padding-bottom: 1em; }
+.char > summary { cursor: pointer; padding: 0.6em 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4em 0.8em; }
+.char > summary .cname { font-size: 1.25em; font-weight: bold; color: #eee; }
+.char > summary .meta { color: #aaa; font-size: 0.9em; }
+.char > summary .del { margin-left: auto; }
+.del { background: #2a2a2a; color: #c99; border: 1px solid #644; }
+.del.armed { background: #7a1f1f; color: #fff; border-color: #c44; }
+.piece { margin: 2px 0; }
+.hint { color: #9c9; font-size: 0.85em; }
+.rwhint { color: #888; font-size: 0.8em; margin-left: 1.5em; }
+.owned { color: #6f6; } .owned.have { color: #e8cf3a; }
+.stash { color: #6f6; }
+.better { text-decoration: line-through; color: #777; }
+</style></head><body>
+<h1>d2r-map-overlay config &nbsp; <a style="font-size:0.6em" href="/">live dashboard →</a></h1>
+<p class="hint">Every character in the config or seen in a game is listed (click a name to
+expand it). Delete forgets a character here (its build selection and last-played time; D2R's
+save files are not touched; playing it again brings it back). Pick a build per character. The gear lists live in
+<code>~/.config/d2r-map-overlay/builds/*.toml</code> (agent-authored) and are shown read-only:
+✓ = owned (identified set/unique pieces), ✓(stash) = in the shared stash, struck through =
+the equipped piece is already better.</p>
+<div id="err" style="color:#f77"></div>
+<div id="chars"></div>
+<h2>Add character</h2>
+<input id="newname" placeholder="character name"> <select id="newbuild"></select>
+<button onclick="addChar()">Add</button>

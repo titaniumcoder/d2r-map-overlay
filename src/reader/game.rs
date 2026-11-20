@@ -118,7 +118,7 @@ pub struct Snapshot {
     /// one per item: its uniques/sets count as owned for a stage switch and the farm list
     /// ([`crate::stash::Holdings`]; its runewords count there through
     /// [`Snapshot::runeword_copies`]), and every name counts as worn for the farm list's
-    /// hiding rule (`web::farm_worn`); none are in [`Snapshot::owned_names`] (the `BiS` ✓ of
+    /// hiding rule (`playstyle::web::farm::farm_worn`); none are in [`Snapshot::owned_names`] (the `BiS` ✓ of
     /// the character's own pieces). Empty when other players are in the game: their mercs'
     /// gear can't be told from the local player's own merc's (PLAN.md, "Merc gear caveat").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

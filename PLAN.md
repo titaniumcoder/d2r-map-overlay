@@ -61,13 +61,27 @@ src/live.rs        — live tick loop over a `reader::GameReader` and a `playsty
 src/config.rs      — config.toml (shrines, `[valuables]`, `[bis]`, `[builds]`); re-exports the
                      playstyle's build/farm types under their old paths
 src/playstyle/     — the playstyle plugin (step 5 of the plugin refactor)
-  mod.rs           — `Playstyle` (reload / mark_drops / evaluate / farm), `Evaluation`
-                     (guidance, stage to latch, stage, chain); module map
+  mod.rs           — `Playstyle` (reload / mark_drops / evaluate / panels / config_json /
+                     builds_json / select_build / remove_character), `Evaluation` (guidance, stage
+                     to latch, stage, chain); module map
   config_driven.rs — `ConfigDriven`: today's playstyle from the config files (Summoner → Fury Druid)
   config.rs        — builds/*.toml and farm.toml parsing, `Build`, `SwitchGroup`, `Stage`, the stage
                      chain and latch logic (`Config::stage`, `leads_to`, `resolved_bis`, damages)
   guidance.rs      — `Guidance` (area rating, BiS, item plan, drop marks): what render/dashboard get
   valuables.rs, stash_plan.rs, gear_score.rs, build.rs (damage types, area `rate`)
+  web/             — the dashboard's playstyle panels (step 6): `PanelInfo` (core `LiveInfo` +
+                     bis / build / stage / farm / chain) and `panels()` → `web::Panels`; mod.rs
+                     (sell / keep / bis lines, stage, shared piece helpers), gear.rs (grid,
+                     upgrades, gear_attention, vendor notes via gear_score), recipes.rs, farm.rs,
+                     config_page.rs (`/config` JSON, `[bis]` selection / character removal edits)
+src/web/           — the dashboard core (step 6 of the plugin refactor)
+  mod.rs           — `LiveInfo`, `Panels` (playstyle sections + skill plan + vendor notes),
+                     `live_json` (core keys, then the playstyle's sections merged in by key)
+  server.rs        — HTTP + SSE, live / gear cells, `/config` endpoints generic over the
+                     `Playstyle` (`serve::<P>`, a fresh `P` per `/config` request)
+  page.rs          — the pages from `assets/{dashboard,config}.{html,js}` (`include_str!`;
+                     `node --check assets/*.js`); a hash test pins the served bytes
+  stash.rs, skills.rs (trees + `SkillTarget` plan marks), vendor.rs (`ShopNote`, `shop_json`)
 src/reader/        — the reader plugin (step 4 of the plugin refactor)
   mod.rs           — `GameReader` (attach / attach_now / snapshot / quest flags / alive / save dir),
                      `Platform` (find process, open memory, find image, heap regions, save dir),
@@ -526,7 +540,7 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   `[slots]` and `[merc_slots]` whose piece list names the runeword (at least 1; Spirit sword +
   Spirit shield needs 2), owned = `Snapshot::runeword_copies` (one entry per copy, worn, carried,
   cubed, private stash and the merc's worn ones) plus the runeword items in the shared-stash
-  tabs (`web::runeword_copies`; the sources don't overlap). Other kinds have no reliable
+  tabs (`playstyle::web::recipes::runeword_copies`; the sources don't overlap). Other kinds have no reliable
   "built" signal (craft results are randomly named rares, cube recipes repeat, a socketed base
   isn't told apart from a found one): only their quest rewards hide them.
 - **Hot reload**: the mtime watcher watches `config.toml` AND the `builds/` directory (a cheap
@@ -538,7 +552,7 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - **Dashboard layout pass** (user requests, 2026-11-20): Sell / Keep full width at the top;
   the sell / keep / give lists carry every entry (one JSON
   line each, the page wraps them as comma runs; the old 3-line `wrap` was dashboard-only and
-  is gone). `build::rate`'s Bad applies in Normal too (Good stays Nightmare+). The Gear panel folds; it opens on `gear_attention` (`web::gear_attention`: an
+  is gone). `build::rate`'s Bad applies in Normal too (Good stays Nightmare+). The Gear panel folds; it opens on `gear_attention` (`playstyle::web::gear::gear_attention`: an
   owned upgrade to wear, else an unowned unique/set/runeword findable now: req ≤ clvl, qlvl ≤
   `info::reachable_level` (clvl +2 within the difficulty's area levels; also the cap of the
   natural-socket `base_hint`), a runeword's missing runes' misc.txt qlvl ≤ it; mercenary slots never)
@@ -760,7 +774,26 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   included) and the build / farm files sit next to it; the `playstyle/<name>/` folder gives the
   playstyle its own files and `reload(dir)`. Step 4's leftovers (the `Snapshot` / `Frame`
   split, `offset_cache::cache_dir` to a core paths module) are still open.
-- [ ] 6. Split the dashboard into the core page and playstyle panels.
+- [x] 6. Split the dashboard into the core page and playstyle panels: `src/web/` (core: server,
+  page, stash / skills / vendor panels, `LiveInfo`, `live_json`) and `src/playstyle/web/` (the
+  playstyle's panels, `/config` JSON and `[bis]` edits). New trait methods: `panels(&Evaluation,
+  &LiveInfo) → Panels` (sections merged into the live JSON by key; serde_json's map is sorted,
+  so the bytes are unchanged), `config_json` / `builds_json` (the server builds a fresh `P` from
+  the config files per request, as before), `select_build` / `remove_character` (`config.toml`
+  text edits); `farm()` is gone (`panels` reads it). `LiveInfo` no longer carries `Bis`,
+  `Build`, `Stage`, `FarmGroup` or the chain. The skills panel stays core and marks the trees
+  against the playstyle's plan (`SkillTarget` moved to `web::skills`, re-exported from
+  `playstyle::config`); the vendor panel stays core and takes the playstyle's per-item
+  `ShopNote` (build slot, `gear_score` verdict). The HTML / CSS / JS moved to `assets/`
+  (`include_str!`). Verified byte-identical: every dashboard, gear, shop, stage, skills, config
+  and builds JSON the test suite produces, before vs after, plus both pages
+  (`served_pages_match_their_snapshot` pins the served bytes).
+  Left for step 7: the core still loads `config.toml` (with `[valuables]`, `[bis]`, `[builds]`
+  and the build / farm files) and hands it to `Playstyle::reload`; the server's `fresh_playstyle`
+  does the same per `/config` request. With `playstyle/<name>/` the playstyle should load its own
+  files (`reload(dir)` / a `load` constructor) and `select_build` / `remove_character` should edit
+  its own file instead of `config.toml`. `render::TextBlocks` (sell / keep / bis lines) is still
+  built by the core renderer from `Guidance` and read back by the playstyle's panels.
 - [ ] 7. New folder layout: `playstyle/<name>/` with route, builds, farm list and marks.
 - [ ] 8. Drop tables plus "worth farming".
 - [ ] 9. The route engine and a "Next" panel on the dashboard.

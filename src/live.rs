@@ -15,7 +15,7 @@ use crate::game::{self, Snapshot};
 use crate::guidance::Guidance;
 use crate::journal::Journal;
 use crate::overlay::Msg;
-use crate::playstyle::Playstyle;
+use crate::playstyle::{Evaluation, Playstyle};
 use crate::reader::{Attach, GameReader};
 use crate::session::Session;
 use ab_glyph::FontVec;
@@ -50,9 +50,9 @@ fn send(tx: &Sender<Msg>, msg: Msg) -> Result<(), UiGone> {
     clippy::too_many_arguments,
     reason = "plain pass-through of main's settings; a struct for one caller adds nothing"
 )]
-pub fn run(
+pub fn run<P: Playstyle + Default + 'static>(
     reader: &mut impl GameReader,
-    playstyle: &mut impl Playstyle,
+    playstyle: &mut P,
     tx: &Sender<Msg>,
     player: Option<&str>,
     size: (u32, u32),
@@ -60,8 +60,8 @@ pub fn run(
     config: &config::Config,
 ) {
     // The companion web page: selects each character's build in a browser (user decision,
-    // 2026-11-17).
-    thread::spawn(crate::web::serve);
+    // 2026-11-17). Its `/config` JSON and selection writes are the playstyle's (`P`).
+    thread::spawn(web::serve::<P>);
     let config_path = config::default_path();
     let mut watched = Watched::now(config_path.as_deref());
     let mut config = config.clone();
@@ -210,18 +210,16 @@ fn check_reload(
     true
 }
 
-/// Publishes one tick's dashboard JSON ([`web::live_json`]) from the snapshot, the playstyle's
-/// guidance, the dashboard's text blocks, the guide stage, the quest flags and the farm list.
-fn publish_dashboard(
+/// Publishes one tick's dashboard JSON ([`web::live_json`]) from the snapshot, the dashboard's
+/// text blocks and the quest flags, plus the playstyle's panels for its `evaluation`.
+fn publish_dashboard<'a>(
     snap: &game::Snapshot,
-    guidance: &Guidance,
+    playstyle: &'a impl Playstyle,
+    evaluation: &'a Evaluation<'a>,
     blocks: &render::TextBlocks,
-    stage: Option<config::Stage<'_>>,
     quests: &[u16],
-    farm: &[config::FarmGroup],
-    stage_chain: &[String],
 ) {
-    web::publish_live(web::live_json(&web::LiveInfo {
+    let info = web::LiveInfo {
         player_name: &snap.player.name,
         class: snap.player.class,
         char_level: snap.player.char_level,
@@ -229,14 +227,9 @@ fn publish_dashboard(
         area: &info::level_name(snap.level.id)
             .map_or_else(|| format!("Level {}", snap.level.id), str::to_owned),
         blocks,
-        bis: guidance.bis.as_ref(),
-        build: stage.map(|s| s.build),
-        stage,
         held_materials: &snap.held_materials,
         white_bases: &snap.white_bases,
         quests,
-        farm,
-        stage_chain,
         equipped: &snap.equipped,
         equipped_items: &snap.equipped_items,
         owned: &snap.owned_names,
@@ -249,7 +242,8 @@ fn publish_dashboard(
         strength: snap.player.strength,
         dexterity: snap.player.dexterity,
         updated_at: now_secs(),
-    }));
+    };
+    web::publish_live(web::live_json(&info, playstyle.panels(evaluation, &info)));
 }
 
 /// Snapshots at [`TICK`] until the process exits; `Ok(())` then, `Err` if the UI is gone.
@@ -307,12 +301,11 @@ fn follow_game(
                 let update = session.apply(&mut snap);
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
                 // After `session.apply`: the item plan counts the cached stash pages.
-                let evaluation = playstyle.evaluate(&snap, last_played.reached(&snap.player.name));
+                let mut evaluation = playstyle.evaluate(&snap, last_played.reached(&snap.player.name));
                 if let Some(slug) = evaluation.reached {
                     last_played.reach(&snap.player.name, slug);
                 }
-                let mut guidance = evaluation.guidance;
-                guidance.marks = marks;
+                evaluation.guidance.marks = marks;
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }
@@ -331,7 +324,7 @@ fn follow_game(
                 // blocks the overlay no longer draws (2026-11-17 text-stack migration);
                 // serialization of a few short lines at 5 Hz is cheap. Cleared again on
                 // snapshot errors (menu, loading) and game exit.
-                let blocks = render::text_blocks(&snap, &guidance, w, info::font());
+                let blocks = render::text_blocks(&snap, &evaluation.guidance, w, info::font());
                 // The config page annotates its resolved `BiS` view with the live ✓ and the
                 // equipped-quality pairs; published alongside the dashboard JSON.
                 web::publish_gear(web::GearInfo {
@@ -342,15 +335,7 @@ fn follow_game(
                     merc_equipped: snap.merc_equipped.clone(),
                 });
                 let quests = reader.quest_flags(update.new_game);
-                publish_dashboard(
-                    &snap,
-                    &guidance,
-                    &blocks,
-                    evaluation.stage,
-                    quests,
-                    playstyle.farm(),
-                    &evaluation.chain,
-                );
+                publish_dashboard(&snap, &*playstyle, &evaluation, &blocks, quests);
                 if let Some((tabs, items)) = update.stash_captured {
                     eprintln!("shared stash captured: {tabs} tabs, {items} items");
                     journal.stash(true, tabs, items);
@@ -359,7 +344,7 @@ fn follow_game(
                     eprintln!("shared stash cache dropped (new game)");
                     journal.stash(false, 0, 0);
                 }
-                if let Some(msg) = tick_msg(&mut dedup, snap, guidance, (w, h), info::font()) {
+                if let Some(msg) = tick_msg(&mut dedup, snap, evaluation.guidance, (w, h), info::font()) {
                     send(tx, msg)?;
                 }
             }

@@ -18,6 +18,8 @@ use serde::Deserialize;
 
 use crate::build::Damage;
 use crate::config::{Bis, CLASS_NAMES, Config, class_id, clean_pieces, damages, parse_slot_tables};
+// The skill plan format is the core skills panel's; the build files carry it.
+pub use crate::web::SkillTarget;
 
 /// An agent-authored build definition from `builds/<slug>.toml` (see [`load_builds`]): display
 /// name, damage types, optional free-text notes and the per-slot piece lists in the same
@@ -109,19 +111,6 @@ impl SwitchGroup {
     pub fn met(&self, copies: &dyn Fn(&str) -> u32) -> bool {
         self.have(copies) >= self.count
     }
-}
-
-/// One `[[skill_plan]]` entry: by character level `by_level` the guide has `points` hard
-/// points in `skill` (CUMULATIVE, not the points added at that level).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SkillTarget {
-    /// The skill's displayed name, as in [`crate::skills_data::SKILLS`].
-    pub skill: String,
-    pub points: u8,
-    pub by_level: u8,
-    #[serde(default)]
-    pub note: String,
 }
 
 /// One `[[recipes]]` entry: what the guide crafts and from what (all text, shown as a card).

@@ -20,8 +20,8 @@ use crate::game::Shrine;
 use crate::valuables::{Category, Tier};
 
 pub use crate::playstyle::config::{
-    Build, FarmGroup, FarmItem, FarmKind, FarmSlot, Recipe, SkillTarget, Stage, builds_dir_for,
-    farm_path_for, load_builds, load_farm, owns_nothing, try_load_farm,
+    Build, FarmGroup, FarmItem, FarmKind, FarmSlot, Recipe, Stage, builds_dir_for, farm_path_for,
+    load_builds, load_farm, owns_nothing, try_load_farm,
 };
 
 /// Shrine names by shrines.txt code (row): `SHRINE_NAMES[code]`.

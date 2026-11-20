@@ -1,10 +1,12 @@
 //! Today's playstyle: everything read from the config files (see [`crate::config`]).
 
-use crate::config::{Config, FarmGroup};
+use crate::config::Config;
 use crate::game::{ItemDrop, Snapshot};
+use crate::played::Played;
+use crate::web::{GearInfo, LiveInfo, Panels};
 
 use super::guidance::{Guidance, Marks};
-use super::{Evaluation, Playstyle, build, stash_plan, valuables};
+use super::{Evaluation, Playstyle, build, stash_plan, valuables, web};
 
 /// The playstyle of the config files: the character's selected build (else its class's
 /// default) followed along its stage chain, the farm list and the valuables tiers.
@@ -68,7 +70,30 @@ impl Playstyle for ConfigDriven {
         }
     }
 
-    fn farm(&self) -> &[FarmGroup] {
-        &self.config.farm
+    fn panels<'a>(&'a self, evaluation: &'a Evaluation<'a>, info: &LiveInfo<'a>) -> Panels<'a> {
+        web::panels(&web::PanelInfo {
+            live: *info,
+            bis: evaluation.guidance.bis.as_ref(),
+            build: evaluation.stage.map(|s| s.build),
+            stage: evaluation.stage,
+            farm: &self.config.farm,
+            stage_chain: &evaluation.chain,
+        })
+    }
+
+    fn config_json(&self, gear: &GearInfo, played: &Played) -> serde_json::Value {
+        web::config_page::config_json(&self.config, gear, played)
+    }
+
+    fn builds_json(&self) -> serde_json::Value {
+        web::config_page::builds_json(&self.config)
+    }
+
+    fn select_build(text: &str, name: &str, build: Option<&str>) -> Option<String> {
+        web::config_page::set_bis_selection(text, name, build)
+    }
+
+    fn remove_character(text: &str, name: &str) -> Option<String> {
+        web::config_page::remove_character(text, name)
     }
 }
