@@ -5,8 +5,8 @@
 # leveling stage, 'lvl a-b'), everything else folds as alternative.
 name = "Summoner Druid"
 damages = ["physical"]
-notes = "Summoner Druid 1-99 (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Oak Sage). From level 75 an optional skill reset into Fury (next stage), only once the switch gear is owned: a Cannot Be Frozen item, a powerful weapon, Harmony, two Lawbringers for the merc, Smoke and a life-leech merc helm; without it the summoner goes on to 99. Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide."
-targets = ["Levels: level 6: Summon Spirit Wolf (reqlevel 6, needs Raven); level 18: Summon Dire Wolf + Heart of Wolverine (reqlevel 18; Dire Wolf needs Oak Sage and Spirit Wolf); level 30: Summon Grizzly (reqlevel 30, needs Dire Wolf); level 45: Raven Frost (ring, reqlevel 45): Cannot Be Frozen; one Cannot Be Frozen item is required for the Fury switch; level 51: Summon Grizzly 20 (+215% damage for the Spirit Wolves, Dire Wolves and the bear); level 60: Summon Spirit Wolf 20 with the Hell Den of Evil point (+500% attack rating, +200% defense for Dire Wolves and the Grizzly); level 75: optional switch to Fury once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) is owned: 86 skill points (74 from levels + 12 from Den of Evil, Radament and Izual in all three difficulties). Oak Sage 20 (+125% life) by now. Otherwise the summoner continues; level 90: Raven 20 (31 hits each, 73-94 base damage +720% from the 60 wolf/bear base levels); level 99: Arctic Blast 1 + Cyclone Armor 8 (Cyclone Armor reqlevel 12, needs Arctic Blast): absorbs 124 fire/cold/lightning damage per cast", "Skill points: 1 per level from level 2 plus quests: Den of Evil +1, Radament +1, Izual +2 per difficulty (12 in total). Level 40 = 39 + 4 (Normal) + 1 (Nightmare Den) = 44; level 75 = 74 + 12 = 86; level 99 = 98 + 12 = 110.", "Summons: From skills.json: Raven count min(lvl,5), 12+lvl-1 hits, damage +12% per Spirit/Dire Wolf/Grizzly base level. Spirit Wolf count min(lvl,5), its points give Dire Wolves and the Grizzly +25% attack rating and +10% defense each. Dire Wolf count min(lvl,3), damage 7-12 (lvl 1) / 15-24 (5) / 37-53 (12) / 85-109 (20), HP +60% at 1 to +535% at 20, and each Dire Wolf point gives Spirit Wolves and the Grizzly +15% life. Grizzly 30-60 base, its points give Spirit Wolves, Dire Wolves and itself +25% damage +10% per level. Spirit Wolves and Dire Wolves are separate pet types, so 5 + 3 + bear + 5 ravens fight together. Pet level is the character level (calc2 ulvl), so the summons keep up without points; points add the synergies above.", "Survival: Oak Sage: +30% life (+5%/level) for you, the merc and the pets (Oak Sage Aura); 20 points by 75 = +125%. Cyclone Armor (8 points from 92, after Arctic Blast 1) absorbs 40 + 12/level fire, cold and lightning damage per cast (124 at level 8), recast as it wears off. Heart of Wolverine (+20% damage +7%/level, +25% AR +7%/level) stays at 1 point: a Grizzly point gives +10% damage, more than Wolverine's +7%, and only one spirit is out at a time.", "Respec: optional, from 75 (Akara's free reset of any difficulty whose Den of Evil reward is still unused; stat points are refunded too): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20 (460 s form), Rabies 1, Oak Sage 5 = 86 points. Only once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) is owned; without it the summoner goes on to 99. Details in the Fury Druid stage.", "Merc: Act 2 Desert Mercenary: Normal Prayer, from Nightmare (level 40) Might; alternative: Act 1 Rogue Scout (bows, amazon bows too since D2R 2.4): in Normal before Insight, or for Harmony's Vigor aura — hireling.json: Normal Act 2 mercs have Prayer, Defiance or Blessed Aim; Might, Holy Freeze and Thorns only in Nightmare and Hell. Might raises physical damage of everyone in its radius (pets and, after the respec, the werewolf), so the same merc carries into the Fury stage."]
+notes = "Summoner Druid 1-99 (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Heart of Wolverine). From level 75 an optional skill reset into Fury (next stage), only once the switch gear is owned: a Cannot Be Frozen item, a powerful weapon, Harmony, two Lawbringers for the merc, Smoke and a life-leech merc helm; without it the summoner goes on to 99. Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide."
+targets = ["Levels: level 6: Summon Spirit Wolf (reqlevel 6, needs Raven); level 18: Summon Dire Wolf + Heart of Wolverine (reqlevel 18; Dire Wolf needs Oak Sage and Spirit Wolf); level 30: Summon Grizzly (reqlevel 30, needs Dire Wolf); level 45: Raven Frost (ring, reqlevel 45): Cannot Be Frozen; one Cannot Be Frozen item is required for the Fury switch; level 51: Summon Grizzly 20 (+215% damage for the Spirit Wolves, Dire Wolves and the bear); level 60: Summon Spirit Wolf 20 with the Hell Den of Evil point (+500% attack rating, +200% defense for Dire Wolves and the Grizzly); level 75: optional switch to Fury once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) is owned: 86 skill points (74 from levels + 12 from Den of Evil, Radament and Izual in all three difficulties). Heart of Wolverine 20 (+153% damage, +158% attack rating) by now. Otherwise the summoner continues; level 90: Raven 20 (31 hits each, 73-94 base damage +720% from the 60 wolf/bear base levels); level 99: Arctic Blast 1 + Cyclone Armor 8 (Cyclone Armor reqlevel 12, needs Arctic Blast): absorbs 124 fire/cold/lightning damage per cast", "Skill points: 1 per level from level 2 plus quests: Den of Evil +1, Radament +1, Izual +2 per difficulty (12 in total). Level 40 = 39 + 4 (Normal) + 1 (Nightmare Den) = 44; level 75 = 74 + 12 = 86; level 99 = 98 + 12 = 110.", "Summons: From skills.json: Raven count min(lvl,5), 12+lvl-1 hits, damage +12% per Spirit/Dire Wolf/Grizzly base level. Spirit Wolf count min(lvl,5), its points give Dire Wolves and the Grizzly +25% attack rating and +10% defense each. Dire Wolf count min(lvl,3), damage 7-12 (lvl 1) / 15-24 (5) / 37-53 (12) / 85-109 (20), HP +60% at 1 to +535% at 20, and each Dire Wolf point gives Spirit Wolves and the Grizzly +15% life. Grizzly 30-60 base, its points give Spirit Wolves, Dire Wolves and itself +25% damage +10% per level. Spirit Wolves and Dire Wolves are separate pet types, so 5 + 3 + bear + 5 ravens fight together. Pet level is the character level (calc2 ulvl), so the summons keep up without points; points add the synergies above.", "Survival: Heart of Wolverine is the spirit that is out: +20% damage +7%/level and +25% attack rating +7%/level for you, the merc and the pets (Wolverine Aura); 20 points by 75 = +153% damage, +158% attack rating. It is maxed after Grizzly 20 and Spirit Wolf 20 (a Grizzly point gives the wolves and the bear +10% damage, more than Wolverine's +7%; a Spirit Wolf point +25% attack rating). Oak Sage stays at 1 point (prerequisite; +30% life if cast instead, only one spirit is out at a time). Cyclone Armor only with the last reserve points (8 points from 92, after Arctic Blast 1): absorbs 40 + 12/level fire, cold and lightning damage per cast (124 at level 8), recast as it wears off.", "Respec: optional, from 75 (Akara's free reset of any difficulty whose Den of Evil reward is still unused; stat points are refunded too): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20 (460 s form), Rabies 1, Oak Sage 5 = 86 points. Only once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) is owned; without it the summoner goes on to 99. Details in the Fury Druid stage.", "Merc: Act 2 Desert Mercenary: Normal Prayer, from Nightmare (level 40) Might; alternative: Act 1 Rogue Scout (bows, amazon bows too since D2R 2.4): in Normal before Insight, or for Harmony's Vigor aura — hireling.json: Normal Act 2 mercs have Prayer, Defiance or Blessed Aim; Might, Holy Freeze and Thorns only in Nightmare and Hell. Might raises physical damage of everyone in its radius (pets and, after the respec, the werewolf), so the same merc carries into the Fury stage."]
 class = "druid"
 default_for_class = true
 merc_acts = [2, 1]
@@ -79,22 +79,22 @@ skill_plan = [
   { skill = "Summon Spirit Wolf", points = 18, by_level = 58 },
   { skill = "Summon Spirit Wolf", points = 19, by_level = 59 },
   { skill = "Summon Spirit Wolf", points = 20, by_level = 60, note = "quest point: Den of Evil (Hell) (level approximate)" },
-  { skill = "Oak Sage", points = 2, by_level = 60 },
-  { skill = "Oak Sage", points = 3, by_level = 61 },
-  { skill = "Oak Sage", points = 4, by_level = 62 },
-  { skill = "Oak Sage", points = 5, by_level = 63 },
-  { skill = "Oak Sage", points = 6, by_level = 64 },
-  { skill = "Oak Sage", points = 8, by_level = 65, note = "quest point: Radament (Hell) (level approximate)" },
-  { skill = "Oak Sage", points = 9, by_level = 66 },
-  { skill = "Oak Sage", points = 10, by_level = 67 },
-  { skill = "Oak Sage", points = 11, by_level = 68 },
-  { skill = "Oak Sage", points = 14, by_level = 69, note = "quest point: Izual (Hell) (level approximate)" },
-  { skill = "Oak Sage", points = 15, by_level = 70 },
-  { skill = "Oak Sage", points = 16, by_level = 71 },
-  { skill = "Oak Sage", points = 17, by_level = 72 },
-  { skill = "Oak Sage", points = 18, by_level = 73 },
-  { skill = "Oak Sage", points = 19, by_level = 74 },
-  { skill = "Oak Sage", points = 20, by_level = 75 },
+  { skill = "Heart of Wolverine", points = 2, by_level = 60 },
+  { skill = "Heart of Wolverine", points = 3, by_level = 61 },
+  { skill = "Heart of Wolverine", points = 4, by_level = 62 },
+  { skill = "Heart of Wolverine", points = 5, by_level = 63 },
+  { skill = "Heart of Wolverine", points = 6, by_level = 64 },
+  { skill = "Heart of Wolverine", points = 8, by_level = 65, note = "quest point: Radament (Hell) (level approximate)" },
+  { skill = "Heart of Wolverine", points = 9, by_level = 66 },
+  { skill = "Heart of Wolverine", points = 10, by_level = 67 },
+  { skill = "Heart of Wolverine", points = 11, by_level = 68 },
+  { skill = "Heart of Wolverine", points = 14, by_level = 69, note = "quest point: Izual (Hell) (level approximate)" },
+  { skill = "Heart of Wolverine", points = 15, by_level = 70 },
+  { skill = "Heart of Wolverine", points = 16, by_level = 71 },
+  { skill = "Heart of Wolverine", points = 17, by_level = 72 },
+  { skill = "Heart of Wolverine", points = 18, by_level = 73 },
+  { skill = "Heart of Wolverine", points = 19, by_level = 74 },
+  { skill = "Heart of Wolverine", points = 20, by_level = 75 },
   { skill = "Raven", points = 6, by_level = 76 },
   { skill = "Raven", points = 7, by_level = 77 },
   { skill = "Raven", points = 8, by_level = 78 },
@@ -398,7 +398,7 @@ text = "Wear Stoutnail (stash) from level 5."
 
 [[tips]]
 levels = "1-12"
-text = "Spirit Wolves from 6, Oak Sage at 7; buy a 2-socket Hard Leather Armor at Charsi if the stash's Ghost Armor (level 22) is too far."
+text = "Spirit Wolves from 6, Oak Sage 1 at 7 (prerequisite only); buy a 2-socket Hard Leather Armor at Charsi if the stash's Ghost Armor (level 22) is too far."
 
 [[tips]]
 levels = "1-12"
@@ -450,7 +450,7 @@ text = "Farm for Raven Frost from 45: the Fury switch needs a Cannot Be Frozen i
 
 [[tips]]
 levels = "60-75"
-text = "Spirit Wolf to 20 (Hell Den point too), then Oak Sage to 20 by 75."
+text = "Spirit Wolf to 20 (Hell Den point too), then Heart of Wolverine to 20 by 75 (+153% damage, +158% attack rating for you, the merc and the pets); keep it cast instead of Oak Sage."
 
 [[tips]]
 levels = "60-75"
@@ -462,7 +462,7 @@ text = "From 75 with the switch gear: optionally respec at Akara into Fury (see 
 
 [[tips]]
 levels = "75-99"
-text = "Staying a summoner: Ravens to 20 by 90 (their damage grows with the 60 wolf/bear base levels), then Arctic Blast 1 and Cyclone Armor with the rest (absorbs elemental damage; recast it)."
+text = "Staying a summoner: Ravens to 20 by 90 (their damage grows with the 60 wolf/bear base levels), then Arctic Blast 1 and Cyclone Armor with the last reserve points only (absorbs elemental damage; recast it)."
 
 [[tips]]
 levels = "75-99"

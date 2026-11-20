@@ -76,7 +76,7 @@ BUILDS = {
                 "Tal Rasha's Horadric Crest", "Undead Crown", "Vampire Gaze", "Wormskull",
                 "Arreat's Face", "Demonhorn's Edge", "Bulwark"]),
         ],
-        notes="Summoner Druid 1-99 (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Oak Sage). From level 75 an optional skill reset into Fury (next stage), only once the switch gear is owned: a Cannot Be Frozen item, a powerful weapon, Harmony, two Lawbringers for the merc, Smoke and a life-leech merc helm; without it the summoner goes on to 99. Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
+        notes="Summoner Druid 1-99 (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Heart of Wolverine). From level 75 an optional skill reset into Fury (next stage), only once the switch gear is owned: a Cannot Be Frozen item, a powerful weapon, Harmony, two Lawbringers for the merc, Smoke and a life-leech merc helm; without it the summoner goes on to 99. Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
         respec_note=("optional, from level 75 once the switch gear is owned (Cannot Be Frozen item, powerful weapon such as "
                      "Ribcracker or Grief, Harmony for speed on weapon swap, 2x Lawbringer for the dual-wielding Act 5 merc (physical immunes), Smoke for the "
                      "merc, a life-leech merc helm): respec to Fury at Akara (free reset of any difficulty "

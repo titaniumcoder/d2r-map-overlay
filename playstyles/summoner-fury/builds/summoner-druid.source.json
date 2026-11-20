@@ -4,13 +4,13 @@
   "guide_updated": "2026-11-19",
   "author": "agent-computed from the game data, not from a guide",
   "setup_legend": {
-    "lvl 1-12 (Normal Act 1-2: Ravens, then Spirit Wolves)": "Ravens from level 2 (prerequisite of Spirit Wolf), Spirit Wolves from level 6, Oak Sage at 7.",
+    "lvl 1-12 (Normal Act 1-2: Ravens, then Spirit Wolves)": "Ravens from level 2 (prerequisite of Spirit Wolf), Spirit Wolves from level 6, Oak Sage 1 at 7 (prerequisite of Heart of Wolverine and Dire Wolf; it stays at 1).",
     "lvl 12-24 (Normal Act 2-4: Dire Wolves from 18)": "Spirit Wolf to 11 by 17, Dire Wolves + Heart of Wolverine at 18. Stealth at 17, Ancients' Pledge at 21.",
     "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)": "Spirit at 25, Grizzly at 30, Dire Wolf maxed by 36.",
     "setups": "'setup' is the stage the piece is first worn in. Stash pieces were read from the overlay's shared-stash view on 2026-11-19.",
     "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)": "Grizzly to 20 by 51 (+10% damage to every wolf and the bear per point). Hire the Nightmare Act 2 Might merc. Jalal's Mane, Raven Frost and String of Ears are worn now and stay on after the Fury respec. Smoke is merc gear (the merc's armor); the druid keeps Stealth for its Faster Cast Rate.",
-    "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)": "Spirit Wolf to 20 by 60 (with the Hell Den of Evil point) (+25% attack rating for Dire Wolves and the Grizzly per point), then Oak Sage to 20 by 75 (+5% life per point). From 75 with the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) the Fury switch is possible (optional).",
-    "lvl 75-99 (Hell endgame: Ravens to 20)": "Without the switch the summoner goes on to 99: Ravens 20 by 90, then Arctic Blast 1 (prerequisite) and Cyclone Armor 8 (absorbs 124 fire/cold/lightning damage per cast). Endgame summoner gear: Heart of the Oak, Jalal's Mane, Enigma, Mara's Kaleidoscope, Arachnid Mesh."
+    "lvl 60-75 (Hell: Spirit Wolf 20, Heart of Wolverine)": "Spirit Wolf to 20 by 60 (with the Hell Den of Evil point) (+25% attack rating for Dire Wolves and the Grizzly per point), then Heart of Wolverine to 20 by 75 (+7% damage and +7% attack rating per point for you, the merc and every pet: +153% damage, +158% attack rating at 20). From 75 with the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) the Fury switch is possible (optional).",
+    "lvl 75-99 (Hell endgame: Ravens to 20)": "Without the switch the summoner goes on to 99: Ravens 20 by 90, then only the last 9 reserve points go to Arctic Blast 1 (prerequisite) and Cyclone Armor 8 (absorbs 124 fire/cold/lightning damage per cast). Endgame summoner gear: Heart of the Oak, Jalal's Mane, Enigma, Mara's Kaleidoscope, Arachnid Mesh."
   },
   "stat_source": "All numbers are computed from the D2R game tables (blizzhackers/d2data JSON, current with the Warlock class): skill requirements, petmax/HP/damage/synergy formulas from skills.json and skilldesc.json, runeword runes/types/levels from runes.json + misc.json (rune levelreq), base requirements and socket limits from weapons.json/armor.json/itemtypes.json, unique/set stats from uniqueitems.json/setitems.json, merc auras from hireling.json. Not from a build guide.",
   "targets": {
@@ -41,7 +41,7 @@
       },
       {
         "when": "level 75",
-        "target": "optional switch to Fury once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) is owned: 86 skill points (74 from levels + 12 from Den of Evil, Radament and Izual in all three difficulties). Oak Sage 20 (+125% life) by now. Otherwise the summoner continues"
+        "target": "optional switch to Fury once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) is owned: 86 skill points (74 from levels + 12 from Den of Evil, Radament and Izual in all three difficulties). Heart of Wolverine 20 (+153% damage, +158% attack rating) by now. Otherwise the summoner continues"
       },
       {
         "when": "level 90",
@@ -54,7 +54,7 @@
     ],
     "skill_points": "1 per level from level 2 plus quests: Den of Evil +1, Radament +1, Izual +2 per difficulty (12 in total). Level 40 = 39 + 4 (Normal) + 1 (Nightmare Den) = 44; level 75 = 74 + 12 = 86; level 99 = 98 + 12 = 110.",
     "summons": "From skills.json: Raven count min(lvl,5), 12+lvl-1 hits, damage +12% per Spirit/Dire Wolf/Grizzly base level. Spirit Wolf count min(lvl,5), its points give Dire Wolves and the Grizzly +25% attack rating and +10% defense each. Dire Wolf count min(lvl,3), damage 7-12 (lvl 1) / 15-24 (5) / 37-53 (12) / 85-109 (20), HP +60% at 1 to +535% at 20, and each Dire Wolf point gives Spirit Wolves and the Grizzly +15% life. Grizzly 30-60 base, its points give Spirit Wolves, Dire Wolves and itself +25% damage +10% per level. Spirit Wolves and Dire Wolves are separate pet types, so 5 + 3 + bear + 5 ravens fight together. Pet level is the character level (calc2 ulvl), so the summons keep up without points; points add the synergies above.",
-    "survival": "Oak Sage: +30% life (+5%/level) for you, the merc and the pets (Oak Sage Aura); 20 points by 75 = +125%. Cyclone Armor (8 points from 92, after Arctic Blast 1) absorbs 40 + 12/level fire, cold and lightning damage per cast (124 at level 8), recast as it wears off. Heart of Wolverine (+20% damage +7%/level, +25% AR +7%/level) stays at 1 point: a Grizzly point gives +10% damage, more than Wolverine's +7%, and only one spirit is out at a time.",
+    "survival": "Heart of Wolverine is the spirit that is out: +20% damage +7%/level and +25% attack rating +7%/level for you, the merc and the pets (Wolverine Aura); 20 points by 75 = +153% damage, +158% attack rating. It is maxed after Grizzly 20 and Spirit Wolf 20 (a Grizzly point gives the wolves and the bear +10% damage, more than Wolverine's +7%; a Spirit Wolf point +25% attack rating). Oak Sage stays at 1 point (prerequisite; +30% life if cast instead, only one spirit is out at a time). Cyclone Armor only with the last reserve points (8 points from 92, after Arctic Blast 1): absorbs 40 + 12/level fire, cold and lightning damage per cast (124 at level 8), recast as it wears off.",
     "respec": "optional, from 75 (Akara's free reset of any difficulty whose Den of Evil reward is still unused; stat points are refunded too): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20 (460 s form), Rabies 1, Oak Sage 5 = 86 points. Only once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) is owned; without it the summoner goes on to 99. Details in the Fury Druid stage."
   },
   "merc": {
@@ -95,7 +95,7 @@
         "level": "7",
         "skill": "Oak Sage",
         "points": 1,
-        "note": "+30% life for you and the pets; prerequisite of Heart of Wolverine and Dire Wolf."
+        "note": "Prerequisite of Heart of Wolverine and Dire Wolf; stays at 1 point (+30% life if cast instead of Heart of Wolverine)."
       },
       {
         "stage": "lvl 1-12 (Normal Act 1-2: Ravens, then Spirit Wolves)",
@@ -212,46 +212,46 @@
         "note": "Spirit Wolf 19: +25% attack rating and +10% defense per point for Dire Wolves and the Grizzly; Hell monsters have high defense."
       },
       {
-        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Heart of Wolverine)",
         "level": "Den of Evil (Hell)",
         "skill": "Summon Spirit Wolf",
         "points": 1,
         "note": "Quest point: Spirit Wolf 20: +500% attack rating for Dire Wolves and the Grizzly, 85% resistances for the Spirit Wolves."
       },
       {
-        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Heart of Wolverine)",
         "level": "60-64",
-        "skill": "Oak Sage",
+        "skill": "Heart of Wolverine",
         "points": 5,
-        "note": "Oak Sage: +5% life per point for you, the merc and the pets."
+        "note": "Heart of Wolverine: +7% damage and +7% attack rating per point for you, the merc and the pets."
       },
       {
-        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Heart of Wolverine)",
         "level": "Radament (Hell)",
-        "skill": "Oak Sage",
+        "skill": "Heart of Wolverine",
         "points": 1,
         "note": "Quest point."
       },
       {
-        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Heart of Wolverine)",
         "level": "65-68",
-        "skill": "Oak Sage",
+        "skill": "Heart of Wolverine",
         "points": 4,
         "note": null
       },
       {
-        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Heart of Wolverine)",
         "level": "Izual (Hell)",
-        "skill": "Oak Sage",
+        "skill": "Heart of Wolverine",
         "points": 2,
         "note": "Quest points."
       },
       {
-        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Heart of Wolverine)",
         "level": "69-75",
-        "skill": "Oak Sage",
+        "skill": "Heart of Wolverine",
         "points": 7,
-        "note": "Oak Sage 20 (+125% life). At 75: Raven 5, Spirit Wolf 20, Oak Sage 20, Heart of Wolverine 1, Dire Wolf 20, Grizzly 20 = 86 (the Fury switch is possible from here)."
+        "note": "Heart of Wolverine 20 (+153% damage, +158% attack rating). At 75: Raven 5, Spirit Wolf 20, Oak Sage 1, Heart of Wolverine 20, Dire Wolf 20, Grizzly 20 = 86 (the Fury switch is possible from here)."
       },
       {
         "stage": "lvl 75-99 (Hell endgame: Ravens to 20)",
@@ -265,14 +265,14 @@
         "level": "91",
         "skill": "Arctic Blast",
         "points": 1,
-        "note": "reqlevel 6; prerequisite of Cyclone Armor (one point only)."
+        "note": "Reserve points only, once every summon and Heart of Wolverine are done. reqlevel 6; prerequisite of Cyclone Armor (one point only)."
       },
       {
         "stage": "lvl 75-99 (Hell endgame: Ravens to 20)",
         "level": "92-99",
         "skill": "Cyclone Armor",
         "points": 8,
-        "note": "Cyclone Armor 8: absorbs 124 fire/cold/lightning damage per cast (40 + 12/level). At 99: Raven 20, Spirit Wolf 20, Oak Sage 20, Heart of Wolverine 1, Dire Wolf 20, Grizzly 20, Arctic Blast 1, Cyclone Armor 8 = 110."
+        "note": "Cyclone Armor 8: absorbs 124 fire/cold/lightning damage per cast (40 + 12/level). At 99: Raven 20, Spirit Wolf 20, Oak Sage 1, Heart of Wolverine 20, Dire Wolf 20, Grizzly 20, Arctic Blast 1, Cyclone Armor 8 = 110."
       }
     ]
   },
@@ -434,7 +434,7 @@
     {
       "name": "Spirit",
       "slot": "offhand",
-      "setup": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+      "setup": "lvl 60-75 (Hell: Spirit Wolf 20, Heart of Wolverine)",
       "kind": "runeword",
       "req_level": 54,
       "base": "4-socket Monarch (156 Str, item level 41+; the only non-class shield a druid can wear with 4 sockets before Aegis/Ward)",
@@ -885,7 +885,7 @@
       "tips": [
         "Level 1 has no skill point: melee with a club/staff; Raven from level 2.",
         "Wear Stoutnail (stash) from level 5.",
-        "Spirit Wolves from 6, Oak Sage at 7; buy a 2-socket Hard Leather Armor at Charsi if the stash's Ghost Armor (level 22) is too far.",
+        "Spirit Wolves from 6, Oak Sage 1 at 7 (prerequisite only); buy a 2-socket Hard Leather Armor at Charsi if the stash's Ghost Armor (level 22) is too far.",
         "Pick up every druid pelt: +skills to Spirit Wolf / Dire Wolf / Raven are worth wearing."
       ]
     },
@@ -918,7 +918,7 @@
     {
       "range": "lvl 60-75 (Hell)",
       "tips": [
-        "Spirit Wolf to 20 (Hell Den point too), then Oak Sage to 20 by 75.",
+        "Spirit Wolf to 20 (Hell Den point too), then Heart of Wolverine to 20 by 75 (+153% damage, +158% attack rating for you, the merc and the pets); keep it cast instead of Oak Sage.",
         "Hell has -100 resistances: Jalal's Mane and Ancients' Pledge give +30/+13 all, the merc's Smoke +50 all for the merc.",
         "From 75 with the switch gear: optionally respec at Akara into Fury (see the switch note) and swap the weapon and gloves."
       ]
@@ -926,7 +926,7 @@
     {
       "range": "lvl 75-99 (Hell endgame)",
       "tips": [
-        "Staying a summoner: Ravens to 20 by 90 (their damage grows with the 60 wolf/bear base levels), then Arctic Blast 1 and Cyclone Armor with the rest (absorbs elemental damage; recast it).",
+        "Staying a summoner: Ravens to 20 by 90 (their damage grows with the 60 wolf/bear base levels), then Arctic Blast 1 and Cyclone Armor with the last reserve points only (absorbs elemental damage; recast it).",
         "Heart of the Oak (Ko Vex Pul Thul, 4-socket mace or staff) replaces the Spirit sword; Enigma (Jah Ith Ber) replaces Stealth when found."
       ]
     }
