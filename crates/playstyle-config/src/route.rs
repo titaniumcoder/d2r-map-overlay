@@ -170,7 +170,9 @@ pub struct Facts<'a> {
     pub level: u8,
     /// 0 Normal, 1 Nightmare, 2 Hell.
     pub difficulty: u8,
-    pub quests: &'a QuestsDone,
+    /// The quests done per difficulty, `None` while unknown (the quest record not read this
+    /// game): then every `quests_done` condition is unknown ([`current`]).
+    pub quests: Option<&'a QuestsDone>,
     /// The bosses worth farming in this difficulty, each with the items it is worth it for
     /// (as shown: `"Heart of the Oak (Ko, Pul)"`; the Countess's are the parts of
     /// [`worth::countess_parts`]); bosses not worth it are absent.
@@ -209,15 +211,33 @@ impl Advice {
 /// The current step: the first whose `when` holds and whose `done_when` doesn't. With none
 /// left in this difficulty, a "move on" advice pointing to the next difficulty's first step;
 /// `None` for a route without steps.
+///
+/// With the quests unknown ([`Facts::quests`] `None`) a condition is three-valued ([`eval`]):
+/// a step whose `when` fails on a known part is skipped; one whose `when` or `done_when`
+/// can't be decided, or the current one when it lists `quests`, gives `None` (no advice
+/// rather than a false one, e.g. "rescue Cain" in a Nightmare game with Cain long rescued).
+/// So only the steps that don't need the quests show then: the Countess in Hell, the level
+/// steps of Normal.
 #[must_use]
 pub fn current(route: &Route, facts: &Facts) -> Option<Advice> {
-    let at = route.step.iter().position(|step| {
-        holds(route, step, &step.when, facts)
-            && !step
-                .done_when
-                .as_ref()
-                .is_some_and(|c| holds(route, step, c, facts))
-    });
+    let mut at = None;
+    for (i, step) in route.step.iter().enumerate() {
+        // `?`: a `when` that can't be decided ends the walk with no advice.
+        if !eval(route, step, &step.when, facts)? {
+            continue;
+        }
+        let done = step
+            .done_when
+            .as_ref()
+            .map_or(Some(false), |c| eval(route, step, c, facts))?;
+        if !done {
+            if step.quests.is_some() && facts.quests.is_none() {
+                return None;
+            }
+            at = Some(i);
+            break;
+        }
+    }
     let Some(at) = at else {
         let next = route
             .step
@@ -253,22 +273,29 @@ pub fn current(route: &Route, facts: &Facts) -> Option<Advice> {
     })
 }
 
-/// Whether `cond` of `step` holds.
-fn holds(route: &Route, step: &Step, cond: &Cond, facts: &Facts) -> bool {
-    let difficulty = cond.difficulty.map_or(facts.difficulty, Difficulty::index);
-    cond.difficulty.is_none_or(|d| d.index() == facts.difficulty)
+/// Whether `cond` of `step` holds: `Some(true)` / `Some(false)`, or `None` when it can't be
+/// told (its `quests_done` with the quests unknown, and no known part failing). Difficulty,
+/// level, options and `not_worth` are always known.
+fn eval(route: &Route, step: &Step, cond: &Cond, facts: &Facts) -> Option<bool> {
+    let known = cond.difficulty.is_none_or(|d| d.index() == facts.difficulty)
         && cond.level_min.is_none_or(|min| facts.level >= min)
         && cond.level_below.is_none_or(|below| facts.level < below)
-        && cond
-            .quests_done
-            .as_ref()
-            .is_none_or(|q| missing(route, q, facts.quests, difficulty).is_empty())
         && options_hold(route, cond)
         && (!cond.not_worth
             || !step
                 .boss
                 .iter()
-                .any(|b| b.worth && worth_items(b, facts).is_some()))
+                .any(|b| b.worth && worth_items(b, facts).is_some()));
+    if !known {
+        return Some(false);
+    }
+    let Some(quests) = &cond.quests_done else {
+        return Some(true);
+    };
+    let difficulty = cond.difficulty.map_or(facts.difficulty, Difficulty::index);
+    facts
+        .quests
+        .map(|done| missing(route, quests, done, difficulty).is_empty())
 }
 
 /// Whether `cond`'s options are as it wants them (unknown ones are off).
@@ -280,18 +307,18 @@ fn options_hold(route: &Route, cond: &Cond) -> bool {
 }
 
 /// Whether a later step can still come after the current one: the same or a later
-/// difficulty, not outleveled, its options on, and, in this difficulty, not done (a later
-/// difficulty's step can't be judged from this one's quests and worth).
+/// difficulty, not outleveled, its options on, and, in this difficulty, not known to be done (a
+/// later difficulty's step can't be judged from this one's quests and worth).
 fn may_come(route: &Route, step: &Step, facts: &Facts) -> bool {
     let later = step.when.difficulty.is_some_and(|d| d.index() > facts.difficulty);
     step.when.difficulty.is_none_or(|d| d.index() >= facts.difficulty)
         && step.when.level_below.is_none_or(|below| facts.level < below)
         && options_hold(route, &step.when)
         && (later
-            || !step
+            || step
                 .done_when
                 .as_ref()
-                .is_some_and(|c| holds(route, step, c, facts)))
+                .is_none_or(|c| eval(route, step, c, facts) != Some(true)))
 }
 
 /// The quests of `quests` not done in `difficulty`, in their listed order.
@@ -318,10 +345,11 @@ fn worth_items<'f>(boss: &Boss, facts: &Facts<'f>) -> Option<&'f [String]> {
 /// The step's what-to-do lines.
 fn todo(route: &Route, step: &Step, facts: &Facts) -> Vec<String> {
     let mut out = Vec::new();
-    let left = step
-        .quests
-        .as_ref()
-        .map_or_else(Vec::new, |q| missing(route, q, facts.quests, facts.difficulty));
+    // `current` never picks a step listing quests while they are unknown.
+    let left = match (&step.quests, facts.quests) {
+        (Some(q), Some(done)) => missing(route, q, done, facts.difficulty),
+        _ => Vec::new(),
+    };
     if let Some(target) = &step.rush {
         out.push(if left.is_empty() {
             format!("Rush to {target}")
@@ -462,6 +490,17 @@ mod tests {
         quests: &QuestsDone,
         worth: &[(String, Vec<String>)],
     ) -> Result<Advice> {
+        advise_maybe(route, level, difficulty, Some(quests), worth).context("no advice")
+    }
+
+    /// [`current`] with the quests possibly unknown.
+    fn advise_maybe(
+        route: &Route,
+        level: u8,
+        difficulty: u8,
+        quests: Option<&QuestsDone>,
+        worth: &[(String, Vec<String>)],
+    ) -> Option<Advice> {
         let areas = max_areas(&[Damage::Physical]);
         current(
             route,
@@ -473,7 +512,6 @@ mod tests {
                 max_areas: &areas,
             },
         )
-        .context("no advice")
     }
 
     fn worth_of(entries: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
@@ -677,6 +715,50 @@ mod tests {
                 "The Countess (45) — rare: Ko (Heart of the Oak)"
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_quests_show_only_the_steps_not_needing_them() -> Result<()> {
+        let route = shipped()?;
+        let countess = worth_of(&[("The Countess", &["Enigma (Ber)"])]);
+        // Hell: no step there reads the quests.
+        let a = advise_maybe(&route, 70, HELL, None, &countess).context("hell countess")?;
+        assert_eq!(a.id, "hell-countess");
+        assert_eq!(a.then.as_deref(), Some("Max areas"));
+        let a = advise_maybe(&route, 70, HELL, None, &[]).context("hell basic")?;
+        assert_eq!(a.id, "hell-basic");
+        let a = advise_maybe(&route, 76, HELL, None, &[]).context("hell max")?;
+        assert_eq!(a.id, "hell-max-areas");
+        // Normal 10: the level step, with a quest step after it as `then`.
+        let a = advise_maybe(&route, 10, NORMAL, None, &[]).context("normal")?;
+        assert_eq!(a.id, "normal-tristram");
+        assert_eq!(a.then.as_deref(), Some("Quests to open the Tombs"));
+        // A `done_when` on quests can't be decided: hidden (Normal 16, Nightmare 60).
+        assert_eq!(advise_maybe(&route, 16, NORMAL, None, &[]), None);
+        assert_eq!(advise_maybe(&route, 60, NIGHTMARE, None, &countess), None);
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_quests_three_valued_conditions() -> Result<()> {
+        let (route, _) = parse_route(
+            "[[step]]\nid = \"q-fails\"\nwhen = { level_min = 50, quests_done = [\"Den of Evil\"] }\n             [[step]]\nid = \"list\"\nwhen = { level_min = 40 }\nquests = [\"Den of Evil\"]\n             [[step]]\nid = \"q-when\"\nwhen = { level_min = 30, quests_done = [\"Den of Evil\"] }\n             [[step]]\nid = \"plain\"\n",
+        )?;
+        // A known part fails: skipped despite the unknown quest part.
+        assert_eq!(
+            advise_maybe(&route, 10, NORMAL, None, &[])
+                .map(|a| a.id)
+                .as_deref(),
+            Some("plain")
+        );
+        // An undecidable `when` (no known part failing): hidden.
+        assert_eq!(advise_maybe(&route, 35, NORMAL, None, &[]), None);
+        // The current step lists quests: hidden while unknown, listed when known.
+        assert_eq!(advise_maybe(&route, 45, NORMAL, None, &[]), None);
+        let a = advise(&route, 45, NORMAL, &QuestsDone::default(), &[])?;
+        assert_eq!(a.id, "list");
+        assert_eq!(a.todo, ["Quests left: Den of Evil"]);
         Ok(())
     }
 

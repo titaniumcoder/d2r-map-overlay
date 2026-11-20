@@ -244,8 +244,9 @@ pub struct Player {
     /// unreadable (and in old fixtures, where it is left out of the JSON).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub char_level: Option<u8>,
-    /// Speed stats and elemental resistances from the player's stat list, for the
-    /// breakpoint/gear guide (user request, 2026-11-17). `None` if the stat list is unreadable.
+    /// Speed stats and elemental resistances from the player's gear and own stat list, for
+    /// the breakpoint/gear guide (user request, 2026-11-17). `None` with neither gear stats
+    /// nor own resists read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<SpeedStats>,
     /// The equipped weapon's WSM (weapon speed modifier, weapons.txt `speed` column); shown
@@ -262,10 +263,12 @@ pub struct Player {
     pub dexterity: Option<u32>,
 }
 
-/// The player's speed stats and elemental resistances as granted by gear (stat ids from
-/// itemstatcost.txt, summed over the equipped items' and carried charms' aggregated stat arrays
-/// (`stat_list::FULL_ENTRIES`: base, affixes, runeword and socketed runes/gems);
-/// difficulty penalties are NOT included — they are applied when the guide displays them).
+/// The player's speed stats and elemental resistances (stat ids from itemstatcost.txt, summed
+/// over the equipped items' and carried charms' aggregated stat arrays
+/// (`stat_list::FULL_ENTRIES`: base, affixes, runeword and socketed runes/gems); the resists
+/// also include the player's own list (permanent quest resists: Anya's scroll, +10 all per
+/// difficulty); difficulty penalties are NOT included — they are applied when the guide
+/// displays them).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SpeedStats {
     /// `item_fastercastrate` (FCR, %).

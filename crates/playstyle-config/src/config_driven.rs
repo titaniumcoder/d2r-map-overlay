@@ -28,8 +28,9 @@ pub struct Extra<'a> {
     pub stage: Option<Stage<'a>>,
     /// The names of the current stage and its later ones, for the farm panel.
     pub chain: Vec<String>,
-    /// The route's current step, for the "Next" panel (`None` without a route, or with the
-    /// character level, difficulty or quests unknown).
+    /// The route's current step, for the "Next" panel (`None` without a route, with the
+    /// character level or difficulty unknown, or with the quests unknown and the step
+    /// depending on them).
     pub route: Option<route::Advice>,
 }
 
@@ -129,8 +130,8 @@ impl Playstyle for ConfigDriven {
 }
 
 /// The route's current step for `snap`'s character ([`route::current`]); `None` without
-/// steps or with the level, difficulty or quests unknown (no false advice before the quest
-/// record is read).
+/// steps, with the level or difficulty unknown, or with the quests unknown (record not read
+/// this game) and the current step depending on them (no false advice).
 fn advise(
     config: &Settings,
     snap: &Snapshot,
@@ -138,8 +139,7 @@ fn advise(
     damages: &[Damage],
     quests: Option<&QuestsDone>,
 ) -> Option<route::Advice> {
-    let (Some(level), Some(difficulty), Some(quests)) = (snap.player.char_level, snap.difficulty, quests)
-    else {
+    let (Some(level), Some(difficulty)) = (snap.player.char_level, snap.difficulty) else {
         return None;
     };
     if config.route.step.is_empty() {
@@ -166,7 +166,7 @@ mod tests {
     use anyhow::{Context, Result};
 
     #[test]
-    fn no_route_advice_while_the_quests_are_unknown() -> Result<()> {
+    fn quest_steps_hide_while_the_quests_are_unknown() -> Result<()> {
         let mut snap: Snapshot =
             serde_json::from_str(include_str!("../../../tests/fixtures/jail1-snapshot.json"))
                 .context("parsing fixture")?;
@@ -179,6 +179,13 @@ mod tests {
             quiet: true,
             ..Files::default()
         });
+        // Normal 10: "Tristram or the Countess" needs no quests, so it shows unread too.
+        for quests in [None, Some(&QuestsDone::default())] {
+            let advice = playstyle.evaluate(&snap, None, quests).extra.route;
+            assert_eq!(advice.map(|a| a.id).as_deref(), Some("normal-tristram"));
+        }
+        // Normal 16: the canyon quests step can't be judged from an unread record.
+        snap.player.char_level = Some(16);
         assert_eq!(
             playstyle.evaluate(&snap, None, None).extra.route,
             None,
@@ -188,7 +195,7 @@ mod tests {
             .evaluate(&snap, None, Some(&QuestsDone::default()))
             .extra
             .route;
-        assert_eq!(advice.map(|a| a.id).as_deref(), Some("normal-tristram"));
+        assert_eq!(advice.map(|a| a.id).as_deref(), Some("normal-canyon"));
         Ok(())
     }
 

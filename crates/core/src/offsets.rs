@@ -410,8 +410,9 @@ pub mod stat_list {
     /// live-verified on the player's list.
     pub const STRENGTH: u16 = 0;
     pub const DEXTERITY: u16 = 2;
-    /// Stat ids of the four elemental resistances as granted by gear (itemstatcost.txt; the txt
-    /// interleaves fire/light/cold/poison with their max counterparts, so light is 41, cold 43).
+    /// Stat ids of the four elemental resistances, on items and on the player's own list (the
+    /// quest resists; itemstatcost.txt interleaves fire/light/cold/poison with their max
+    /// counterparts, so light is 41, cold 43).
     pub const RESIST_FIRE: u16 = 39;
     pub const RESIST_LIGHTNING: u16 = 41;
     pub const RESIST_COLD: u16 = 43;

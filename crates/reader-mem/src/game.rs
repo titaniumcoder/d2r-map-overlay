@@ -75,6 +75,52 @@ const fn plain_stat_from_raw(raw: u32) -> i32 {
     }
 }
 
+/// Adds the resists on the player's own list ([`Reader::own_resists`]: the quest resists) to
+/// `player`'s gear sums, and warns when the player's aggregated array disagrees with the result.
+fn add_own_resists(r: &mut Reader<'_, impl ReadMem>, player: &mut Player, addr: u64) {
+    let (own, full) = r.own_resists(addr);
+    if own != [0; 4] {
+        let speed = player.speed.get_or_insert_default();
+        let [fire, cold, lightning, poison] = own;
+        speed.res_fire = speed.res_fire.saturating_add(fire);
+        speed.res_cold = speed.res_cold.saturating_add(cold);
+        speed.res_lightning = speed.res_lightning.saturating_add(lightning);
+        speed.res_poison = speed.res_poison.saturating_add(poison);
+    }
+    // Cross-check (shows in `--dump`): the player's aggregated array, if it has one, should
+    // hold the character-screen values before the difficulty penalty, i.e. gear + own.
+    if let Some(full) = full {
+        let read = player.speed.map_or([0; 4], |s| {
+            [s.res_fire, s.res_cold, s.res_lightning, s.res_poison]
+        });
+        if full != read {
+            r.warn(format!(
+                "player resists: aggregated array {full:?} vs gear + own list {read:?} \
+                 (fire/cold/lightning/poison)"
+            ));
+        }
+    }
+}
+
+/// The four resists summed over stat `entries` (`{layer, id, raw}`), as
+/// `[fire, cold, lightning, poison]` ([`SpeedStats`] order).
+fn resists_of(entries: &[(u16, u16, u32)]) -> [i32; 4] {
+    let mut out = [0i32; 4];
+    for &(_, id, raw) in entries {
+        let slot = match id {
+            stat_list::RESIST_FIRE => 0,
+            stat_list::RESIST_COLD => 1,
+            stat_list::RESIST_LIGHTNING => 2,
+            stat_list::RESIST_POISON => 3,
+            _ => continue,
+        };
+        if let Some(v) = out.get_mut(slot) {
+            *v = v.saturating_add(plain_stat_from_raw(raw));
+        }
+    }
+    out
+}
+
 /// Owner unit ids of stored items on one storage page, counted per id.
 #[derive(Debug, Default)]
 struct OwnerVotes(Vec<(u32, u32)>);
@@ -387,8 +433,10 @@ pub fn snapshot(
         }
     };
     let (mut player, level_addr) = r.player(chosen.addr.0).context("reading the player")?;
-    // The guide's numbers: the chosen player's equipped items and carried charms.
+    // The guide's numbers: the chosen player's equipped items and carried charms, plus the
+    // resists on the player's own (base) list: Anya's scrolls, +10 all per difficulty.
     player.speed = scan.gear.get(&chosen.id).copied();
+    add_own_resists(&mut r, &mut player, chosen.addr.0);
     player.wsm = scan.weapons.get(&chosen.id).copied();
     let equipped = scan.equipped.get(&chosen.id).cloned().unwrap_or_default();
     let merc_equipped = scan.merc_equipped.clone();
@@ -907,7 +955,7 @@ impl<M: ReadMem> Reader<'_, M> {
                 .flatten()
                 .and_then(char_level_from_raw),
             // Gear speed/resist stats are summed from the equipped items in `snapshot` (the
-            // player's stat list is base-only, no item stats).
+            // player's stat list is base-only, no item stats), plus its own quest resists.
             speed: None,
             wsm: None,
             strength: self.stat(addr, stat_list::STRENGTH).ok().flatten(),
@@ -1729,6 +1777,28 @@ impl<M: ReadMem> Reader<'_, M> {
         fell_back
     }
 
+    /// The resists on the player unit's own stat list (`[fire, cold, lightning, poison]`,
+    /// [`resists_of`] its base entries at [`stat_list::ENTRIES`]) and, when the list has
+    /// [`stat_list::FLAG_FULL_STATS`], those of its aggregated array. The base list holds no
+    /// item stats (PLAN.md "Stat lists"), so adding it to the gear sums counts nothing twice;
+    /// what it holds are the permanent quest resists (Anya's scroll, +10 all per difficulty).
+    /// Optional data: unreadable is `[0; 4]` / `None`.
+    fn own_resists(&self, player: u64) -> ([i32; 4], Option<[i32; 4]>) {
+        let Some(list) = self.ptr(player, unit::STATS).unwrap_or(None) else {
+            return ([0; 4], None);
+        };
+        let own = self.stat_entries(list).map_or([0; 4], |e| resists_of(&e));
+        let flags = self.u32(list, stat_list::FLAGS).unwrap_or(0);
+        let full = (flags & stat_list::FLAG_FULL_STATS != 0)
+            .then(|| {
+                self.stat_array(list, stat_list::FULL_ENTRIES, stat_list::FULL_COUNT)
+                    .ok()
+            })
+            .flatten()
+            .map(|e| resists_of(&e));
+        (own, full)
+    }
+
     /// All `{layer, stat id, value}` entries of the stat list at `list` (a `StatList` address,
     /// not a unit: the entries sit at `stat_list::ENTRIES`, the count at `stat_list::COUNT`).
     /// An empty list (count 0) is `Ok(vec![])` without touching its entries pointer: live
@@ -2318,6 +2388,7 @@ mod tests {
         assert_eq!(s.player.char_level, None, "no level stat");
 
         // The base world has no stat list on the player: no level, left out of the JSON.
+        // (Its resists: see `player_own_resists_add_to_gear`.)
         let s = snapshot(&world()?, TABLE, None, None, None)?;
         assert_eq!(s.player.char_level, None);
         assert_eq!(serde_json::to_value(&s)?.pointer("/player/char_level"), None);
@@ -2847,6 +2918,42 @@ mod tests {
                 (stat_list::FULL_COUNT, &full.1.to_le_bytes()),
             ],
         )
+    }
+
+    #[test]
+    fn player_own_resists_add_to_gear() -> Result<()> {
+        // Two Anya scrolls (Normal + Nightmare): +20 all on the player's own list, no gear.
+        let m = world_with_player_stats(&[
+            (stat_list::LEVEL, 68),
+            (stat_list::RESIST_FIRE, 20),
+            (stat_list::RESIST_LIGHTNING, 20),
+            (stat_list::RESIST_COLD, 20),
+            (stat_list::RESIST_POISON, 20),
+        ])?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
+        let all = SpeedStats {
+            res_fire: 20,
+            res_cold: 20,
+            res_lightning: 20,
+            res_poison: 20,
+            ..SpeedStats::default()
+        };
+        assert_eq!(s.player.speed, Some(all));
+        // No resists on the list: nothing added (no gear: no speed stats at all).
+        let m = world_with_player_stats(&[(stat_list::LEVEL, 68)])?;
+        assert_eq!(snapshot(&m, TABLE, None, None, None)?.player.speed, None);
+        // The summing itself: shifted and negative values, other stats ignored.
+        let minus_five = (-5i32).cast_unsigned();
+        assert_eq!(
+            resists_of(&[
+                (0, stat_list::RESIST_FIRE, 10 << 8),
+                (0, stat_list::RESIST_FIRE, 10),
+                (0, stat_list::RESIST_POISON, minus_five),
+                (0, stat_list::FCR, 20),
+            ]),
+            [20, 0, 0, -5]
+        );
+        Ok(())
     }
 
     #[test]

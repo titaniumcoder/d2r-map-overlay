@@ -242,6 +242,15 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   duplicate armour/weapon). The overlay therefore sums gear stats over equipped items and carried charms
   (charm codes cm1/cm2/cm3) per owner. Monsters keep full lists at +0x88 (a mob's list had its
   res/experience/level inline).
+- **Quest resists (2026-11-20, user: Anya done in Normal and Nightmare, guide res 10 too low)**: Anya's
+  Scroll of Resistance (+10 all, per difficulty, permanent) is on no item. The reader now adds the
+  resists (39/41/43/45) of the player's own base list (`+0x88` entries) to the gear sums; that list is
+  item-free (above), so nothing counts twice, and the guide still subtracts the difficulty penalty once.
+  If the player's top list has `FLAG_FULL_STATS`, its aggregated array is compared with gear + own and a
+  mismatch is a snapshot warning (`--dump`). Live-verified 2026-11-20 (Hell, level 68): gear-only
+  110/156/78/129, with the own list 120/166/88/139; after the −100 penalty 20/66/−12/39, exactly the
+  character screen (user). The own list carries +10 for two Anya scrolls, so the game stores the
+  bonus as one +10, not per difficulty; no warning in `--dump`.
 
 ## ActMisc, difficulty and seed lead (2026-11-15)
 - Player unit `+0x20` → act; **act `+0x70` → ActMisc** (older builds: +0x78, which now points into code).

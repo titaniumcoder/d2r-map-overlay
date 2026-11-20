@@ -75,7 +75,7 @@ pub trait Playstyle {
     /// `reached` is the state stored for the character ([`Evaluation::reached`] of an earlier
     /// call), `None` when there is none; `quests` the quests it finished per difficulty
     /// (remembered across games, [`crate::quest_log::Memory`]), `None` while unknown (no
-    /// record read yet): then no route advice.
+    /// record read yet): then no advice that depends on them.
     fn evaluate(
         &self,
         snap: &Snapshot,
