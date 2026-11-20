@@ -16,9 +16,9 @@ pub type Marks = HashMap<u32, valuables::Highlight>;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Guidance {
     /// How the current area suits the character's build ([`build::rate`] of its damage types,
-    /// [`config::Config::damages_for_player`]); colours the info line's monster levels.
+    /// [`crate::playstyle::config::Settings::damages_for_player`]); colours the info line's monster levels.
     pub rating: build::Rating,
-    /// The character's `BiS` build and gear list ([`config::Config::resolved_bis`]); the
+    /// The character's `BiS` build and gear list ([`crate::playstyle::config::Settings::resolved_bis`]); the
     /// dashboard's chase list.
     pub bis: Option<config::Bis>,
     /// What to do with each of the player's items, merged and sorted for the dashboard

@@ -1,0 +1,47 @@
+# Farm list: gear to collect with any character for a planned build (agent-authored).
+# An entry is "found" while a copy is on the character currently played (inventory, cube,
+# personal stash, worn) and "done" once enough copies sit in the shared stash.
+# Runewords also mark their missing runes on the dashboard's rune list.
+# Hot-reloaded like the build files.
+# Optional per entry: merc = true (for the Act 2 mercenary) and slot = "weapon" / "shield" /
+# "helm" / "body" / ...: they steer a runeword's natural-socket base hint.
+
+[[farm]]
+for = "Summoner Druid"
+items = [
+  { name = "Stealth", kind = "runeword", slot = "body" },
+  { name = "Ancients' Pledge", kind = "runeword", slot = "shield" },
+  { name = "Spirit", kind = "runeword" },
+  { name = "Lore", kind = "runeword", slot = "helm" },
+  { name = "Insight", kind = "runeword", merc = true, slot = "weapon" },
+  { name = "Manald Heal", kind = "unique" },
+  { name = "Bloodfist", kind = "unique" },
+  { name = "Heart of the Oak", kind = "runeword", slot = "weapon" },
+  { name = "Mara's Kaleidoscope", kind = "unique" },
+  { name = "Arachnid Mesh", kind = "unique" },
+  { name = "Sandstorm Trek", kind = "unique" },
+]
+
+[[farm]]
+for = "Fury Druid"
+items = [
+  { name = "Fortitude", kind = "runeword", slot = "body" },
+  { name = "Raven Frost", kind = "unique" },
+  { name = "Ribcracker", kind = "unique" },
+  { name = "Lawbringer", kind = "runeword", count = 2 },
+  { name = "Smoke", kind = "runeword", merc = true, slot = "body" },
+  { name = "Bulwark", kind = "runeword", merc = true, slot = "helm" },
+  { name = "Jalal's Mane", kind = "unique" },
+  { name = "Laying of Hands", kind = "set" },
+  { name = "Harmony", kind = "runeword", slot = "weapon" },
+  { name = "Duress", kind = "runeword", slot = "body" },
+  { name = "Dracul's Grasp", kind = "unique" },
+  { name = "String of Ears", kind = "unique" },
+  { name = "Verdungo's Hearty Cord", kind = "unique" },
+  { name = "Gore Rider", kind = "unique" },
+  { name = "War Traveler", kind = "unique" },
+  { name = "Atma's Scarab", kind = "unique" },
+  { name = "The Cat's Eye", kind = "unique" },
+  { name = "Highlord's Wrath", kind = "unique" },
+  { name = "Enigma", kind = "runeword", slot = "body" },
+]

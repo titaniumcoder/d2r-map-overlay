@@ -62,25 +62,33 @@ const USAGE: &str = "usage: d2r-map-overlay [--player NAME] [--size WxH] [--no-j
                      d2r-map-overlay --probe | --dump [--player NAME] \
                      | --render SNAPSHOT.json OUT.png [WxH] | --show SNAPSHOT.json [WxH]";
 
+/// This build's playstyle (static dispatch: the core only knows the [`Playstyle`] trait).
+type ThePlaystyle = playstyle::ConfigDriven;
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The settings and the playstyle's files, for the modes that use them.
+    let setup = || {
+        let config = config::load();
+        let files = playstyle::Files::new(&config.playstyle);
+        (config, files)
+    };
     match args.as_slice() {
         _ if args
             .first()
             .is_none_or(|a| ["--player", "--size", "--no-journal"].contains(&a.as_str())) =>
         {
             let (player, size, journal) = parse_live_args(&args)?;
-            live(player, size, journal, config::load())
+            let (config, files) = setup();
+            live(player, size, journal, config, files)
         }
         [flag] if flag == "--probe" => probe(),
-        [flag] if flag == "--dump" => dump(None, &config::load()),
-        [flag, opt, name] if flag == "--dump" && opt == "--player" => dump(Some(name), &config::load()),
-        [flag, snap, out] if flag == "--render" => render_png(snap, out, DEFAULT_SIZE, &config::load()),
-        [flag, snap, out, size] if flag == "--render" => {
-            render_png(snap, out, parse_size(size)?, &config::load())
-        }
-        [flag, snap] if flag == "--show" => show(snap, DEFAULT_SIZE, &config::load()),
-        [flag, snap, size] if flag == "--show" => show(snap, parse_size(size)?, &config::load()),
+        [flag] if flag == "--dump" => dump(None, &setup().1),
+        [flag, opt, name] if flag == "--dump" && opt == "--player" => dump(Some(name), &setup().1),
+        [flag, snap, out] if flag == "--render" => render_png(snap, out, DEFAULT_SIZE, &setup()),
+        [flag, snap, out, size] if flag == "--render" => render_png(snap, out, parse_size(size)?, &setup()),
+        [flag, snap] if flag == "--show" => show(snap, DEFAULT_SIZE, &setup()),
+        [flag, snap, size] if flag == "--show" => show(snap, parse_size(size)?, &setup()),
         _ => bail!("{USAGE}"),
     }
 }
@@ -111,7 +119,13 @@ fn parse_live_args(args: &[String]) -> Result<(Option<String>, (u32, u32), bool)
 
 /// Live overlay: a reader thread (game memory → frames) and a focus thread (Hyprland) feed the
 /// UI loop on this thread. Runs until killed.
-fn live(player: Option<String>, size: (u32, u32), journal: bool, config: config::Config) -> Result<()> {
+fn live(
+    player: Option<String>,
+    size: (u32, u32),
+    journal: bool,
+    config: config::Config,
+    files: playstyle::Files,
+) -> Result<()> {
     let journal = match journal::default_dir() {
         Some(dir) if journal => {
             eprintln!("journal: {}", dir.display());
@@ -130,7 +144,7 @@ fn live(player: Option<String>, size: (u32, u32), journal: bool, config: config:
         .spawn(move || {
             let _exit = ExitOnDrop;
             let mut reader = reader::ProtonReader::default();
-            let mut playstyle = playstyle::ConfigDriven::new(&config);
+            let mut playstyle = ThePlaystyle::load(&files);
             live::run(
                 &mut reader,
                 &mut playstyle,
@@ -139,6 +153,7 @@ fn live(player: Option<String>, size: (u32, u32), journal: bool, config: config:
                 size,
                 journal,
                 &config,
+                &files,
             );
         })
         .context("starting the reader thread")?;
@@ -171,8 +186,9 @@ fn probe() -> Result<()> {
 }
 
 /// Prints one JSON snapshot of the game state; `player` picks among several live player units.
-/// Only the bases `config` marks are kept, as in live mode; the marks go to stderr.
-fn dump(player: Option<&str>, config: &config::Config) -> Result<()> {
+/// Only the bases the playstyle (from `files`) marks are kept, as in live mode; the marks go
+/// to stderr.
+fn dump(player: Option<&str>, files: &playstyle::Files) -> Result<()> {
     let mut reader = reader::ProtonReader::default();
     reader.attach_now(&mut |_, _| {})?;
     reader.locate_items_now();
@@ -180,7 +196,7 @@ fn dump(player: Option<&str>, config: &config::Config) -> Result<()> {
     eprintln!("quest flags: {:04x?}", reader.quest_flags(true));
     let mut snap = reader.snapshot(player, None)?;
     // Only the marked bases, as live mode shows them; the marks themselves go to stderr.
-    let marks = playstyle::ConfigDriven::new(config).mark_drops(&mut snap.drops);
+    let marks = ThePlaystyle::load(files).mark_drops(&mut snap.drops);
     if !marks.is_empty() {
         eprintln!("marks: {marks:?}");
     }
@@ -207,11 +223,14 @@ fn load_snapshot(path: &str) -> Result<game::Snapshot> {
 }
 
 /// Loads a `--dump` snapshot and filters it like live mode does (superunique and quest monster
-/// presets only, drop marks and shown shrines from `config`), with the guidance the map draws
-/// (drop marks, the area rating; no stage was reached before).
-fn load_for_drawing(path: &str, config: &config::Config) -> Result<(game::Snapshot, guidance::Guidance)> {
+/// presets only, drop marks from the playstyle, shown shrines from `config`), with the guidance
+/// the map draws (drop marks, the area rating; no stage was reached before).
+fn load_for_drawing(
+    path: &str,
+    (config, files): &(config::Config, playstyle::Files),
+) -> Result<(game::Snapshot, guidance::Guidance)> {
     let mut snap = load_snapshot(path)?;
-    let playstyle = playstyle::ConfigDriven::new(config);
+    let playstyle = ThePlaystyle::load(files);
     let marks = playstyle.mark_drops(&mut snap.drops);
     session::Session::default().apply(&mut snap);
     config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
@@ -221,8 +240,13 @@ fn load_for_drawing(path: &str, config: &config::Config) -> Result<(game::Snapsh
 }
 
 /// Renders a `--dump` JSON snapshot to a PNG file.
-fn render_png(snap: &str, out: &str, (w, h): (u32, u32), config: &config::Config) -> Result<()> {
-    let (snap, guidance) = load_for_drawing(snap, config)?;
+fn render_png(
+    snap: &str,
+    out: &str,
+    (w, h): (u32, u32),
+    setup: &(config::Config, playstyle::Files),
+) -> Result<()> {
+    let (snap, guidance) = load_for_drawing(snap, setup)?;
     let pixmap = render::render(&snap, &guidance, w, h)?;
     pixmap.save_png(out).with_context(|| format!("writing {out}"))?;
     println!("wrote {out} ({w}x{h})");
@@ -230,8 +254,8 @@ fn render_png(snap: &str, out: &str, (w, h): (u32, u32), config: &config::Config
 }
 
 /// Shows a `--dump` JSON snapshot in the overlay window until killed (always, focus is ignored).
-fn show(snap: &str, (w, h): (u32, u32), config: &config::Config) -> Result<()> {
-    let (snap, guidance) = load_for_drawing(snap, config)?;
+fn show(snap: &str, (w, h): (u32, u32), setup: &(config::Config, playstyle::Files)) -> Result<()> {
+    let (snap, guidance) = load_for_drawing(snap, setup)?;
     let frame = render::render(&snap, &guidance, w, h)?;
     let (tx, rx) = channel::channel();
     for msg in [Msg::Frame(frame), Msg::Focus(true)] {

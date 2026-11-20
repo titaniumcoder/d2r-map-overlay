@@ -1,5 +1,6 @@
 //! The `/config` page's JSON (each character's resolved `BiS` view, the build definitions) and
-//! its `config.toml` edits (the `[bis.<name>]` build selection, removing a character).
+//! its text edits of `bis.toml` / an old `config.toml` (the `[bis.<name>]` build selection,
+//! removing a character; the files are picked by [`crate::playstyle::files`]).
 
 use std::collections::BTreeMap;
 
@@ -12,7 +13,7 @@ use crate::web::GearInfo;
 /// `None` removes the selection again — the `build` key, and the whole entry when that leaves
 /// it empty (nothing to clear is no change). The name matches case-insensitively and every
 /// spelling present is written (`[bis.Fulmina]` and `[bis.fulmina]` both, so they can't
-/// disagree; [`crate::config::parse`] lowercases the keys). `None` (the return) when `text` is
+/// disagree; [`crate::playstyle::config::parse_tables`] lowercases the keys). `None` (the return) when `text` is
 /// not valid TOML or the `bis` entry is not a table: the save would silently do nothing, so
 /// the caller must answer the browser with an error instead.
 #[must_use]
@@ -49,7 +50,8 @@ pub fn set_bis_selection(text: &str, name: &str, build: Option<&str>) -> Option<
     Some(doc.to_string())
 }
 
-/// The keys equal to `name` ignoring case (as [`crate::config::parse`] folds them).
+/// The keys equal to `name` ignoring case (as [`crate::playstyle::config::parse_tables`] folds
+/// them).
 pub fn matching_keys<'a>(keys: impl Iterator<Item = &'a str>, name: &str) -> Vec<String> {
     let name = name.to_lowercase();
     keys.filter(|k| k.to_lowercase() == name)
@@ -93,7 +95,7 @@ pub fn remove_character(text: &str, name: &str) -> Option<String> {
 /// - `damages`: the resolved damage types (character-level `[builds]` entry, else the shown
 ///   build's, else the class's), as lowercased names,
 /// - `slots`/`merc_slots`: the resolved per-slot piece lists — inline slots when the config
-///   has any, else the shown build's ([`crate::config::Config::resolved_bis`]) — each piece
+///   has any, else the shown build's ([`crate::playstyle::config::Settings::resolved_bis`]) — each piece
 ///   annotated with its required level, its ✓ (`tick`: `"worn"`/`"owned"`/`"stash"`/`null`,
 ///   [`crate::info::piece_tick`]), whether the equipped piece is already better (`better`,
 ///   [`crate::info::slot_equipped_better`]) and, for a runeword piece, its `runes` and
@@ -104,7 +106,7 @@ pub fn remove_character(text: &str, name: &str) -> Option<String> {
 /// Characters are listed most recently played first; those never seen follow in config order.
 #[must_use]
 pub fn config_json(
-    config: &crate::config::Config,
+    config: &crate::playstyle::config::Settings,
     gear: &GearInfo,
     played: &crate::played::Played,
 ) -> serde_json::Value {
@@ -214,7 +216,7 @@ pub fn piece_json(piece: &str, slot: &str, equipped: &[(u8, u32)], gear: &GearIn
 /// definition with its slug, display name, damages, notes and per-slot piece counts, sorted by
 /// slug.
 #[must_use]
-pub fn builds_json(config: &crate::config::Config) -> serde_json::Value {
+pub fn builds_json(config: &crate::playstyle::config::Settings) -> serde_json::Value {
     let counts = |slots: &BTreeMap<String, Vec<String>>| {
         slots
             .iter()

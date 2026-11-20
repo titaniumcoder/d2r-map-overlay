@@ -5,7 +5,7 @@
 //! kills; saved by [`game_file`] across overlay restarts); unchanged results are not re-rendered
 //! or sent. The overlay is hidden in towns and outside a game.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -15,7 +15,7 @@ use crate::game::{self, Snapshot};
 use crate::guidance::Guidance;
 use crate::journal::Journal;
 use crate::overlay::Msg;
-use crate::playstyle::{Evaluation, Playstyle};
+use crate::playstyle::{Evaluation, Files, Playstyle};
 use crate::reader::{Attach, GameReader};
 use crate::session::Session;
 use ab_glyph::FontVec;
@@ -44,13 +44,13 @@ fn send(tx: &Sender<Msg>, msg: Msg) -> Result<(), UiGone> {
 
 /// Runs until the UI is gone, reading the game through `reader` and evaluating it with
 /// `playstyle`. `player` picks among several player units; `size` is the frame size;
-/// `journal` records what is seen (see [`crate::journal`]); `config` picks the shrines drawn and
-/// is handed to `playstyle` on every hot reload.
+/// `journal` records what is seen (see [`crate::journal`]); `config` picks the shrines drawn;
+/// `files` are the playstyle's, which it reloads from when they change on disk.
 #[allow(
     clippy::too_many_arguments,
     reason = "plain pass-through of main's settings; a struct for one caller adds nothing"
 )]
-pub fn run<P: Playstyle + Default + 'static>(
+pub fn run<P: Playstyle + 'static>(
     reader: &mut impl GameReader,
     playstyle: &mut P,
     tx: &Sender<Msg>,
@@ -58,18 +58,20 @@ pub fn run<P: Playstyle + Default + 'static>(
     size: (u32, u32),
     mut journal: Journal,
     config: &config::Config,
+    files: &Files,
 ) {
     // The companion web page: selects each character's build in a browser (user decision,
     // 2026-11-17). Its `/config` JSON and selection writes are the playstyle's (`P`).
-    thread::spawn(web::serve::<P>);
+    let web_files = files.clone();
+    thread::spawn(move || web::serve::<P>(&web_files));
     let config_path = config::default_path();
-    let mut watched = Watched::now(config_path.as_deref());
+    let mut watched = Watched::now(config_path.as_deref(), files);
     let mut config = config.clone();
     loop {
         // Hot-reload while no game is attached (webapp edits, hand edits); during a session
         // `follow_game` reloads on its own tick loop.
-        if check_reload(&mut config, config_path.as_deref(), &mut watched) {
-            playstyle.reload(&config);
+        if check_reload(&mut config, config_path.as_deref(), files, &mut watched) {
+            playstyle.reload(files);
         }
         let (pid, follow) = match reader.attach() {
             Attach::Waiting => {
@@ -87,13 +89,14 @@ pub fn run<P: Playstyle + Default + 'static>(
                     &mut journal,
                     &mut config,
                     config_path.as_deref(),
+                    files,
                 ),
             ),
             Attach::Exited { pid } => (pid, Ok(())),
         };
         // `follow_game` may have reloaded on its own: resync so the next outer check doesn't
         // reload the same file twice.
-        watched = Watched::now(config_path.as_deref());
+        watched = Watched::now(config_path.as_deref(), files);
         // The process is gone (or never got a table): hide until the next one is in a game.
         // The dashboard keeps the last snapshot, marked offline.
         web::clear_live();
@@ -109,79 +112,48 @@ fn modified_at(path: &std::path::Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// The watched state behind the hot reload: `config.toml`'s mtime and the `builds/`
-/// directory's per-file `(name, mtime)` list. The builds dir is re-checked with a cheap
-/// `read_dir` every tick (user decision, 2026-11-17): a directory's own mtime would miss
-/// in-place edits of a build file, while this notices both those and added/removed files.
+/// The watched state behind the hot reload: `config.toml`'s mtime and the playstyle's files
+/// ([`Files::fingerprint`]: every file it reads, its `builds/` folders listed). Re-checked
+/// every tick (user decision, 2026-11-17: a cheap `read_dir` per builds folder): a directory's
+/// own mtime would miss in-place edits of a build file, while this notices both those and
+/// added/removed files.
 #[derive(Debug, Default, PartialEq)]
 struct Watched {
     config: Option<SystemTime>,
-    builds: Option<Vec<(String, SystemTime)>>,
-    /// `farm.toml`'s mtime (next to `config.toml`; `None` while it doesn't exist).
-    farm: Option<SystemTime>,
+    playstyle: Vec<(PathBuf, Option<SystemTime>)>,
 }
 
 impl Watched {
-    /// The current on-disk state of `config_path` and its `builds/` directory.
-    fn now(config_path: Option<&Path>) -> Self {
+    /// The current on-disk state of `config_path` and the playstyle's `files`.
+    fn now(config_path: Option<&Path>, files: &Files) -> Self {
         Self {
             config: config_path.and_then(modified_at),
-            builds: config_path
-                .map(config::builds_dir_for)
-                .and_then(|dir| builds_state(&dir)),
-            farm: config_path
-                .map(config::farm_path_for)
-                .and_then(|p| modified_at(&p)),
+            playstyle: files.fingerprint(),
         }
     }
 }
 
-/// The builds dir's `(file name, mtime)` pairs sorted by name, or `None` when the directory
-/// doesn't exist (no builds — also the state a later creation is detected against).
-fn builds_state(dir: &Path) -> Option<Vec<(String, SystemTime)>> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut state = Vec::new();
-    for entry in entries.flatten() {
-        let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
-            continue;
-        };
-        state.push((entry.file_name().to_string_lossy().into_owned(), modified));
-    }
-    state.sort();
-    Some(state)
-}
-
-/// Hot-reloads `config` when `config.toml`, its `builds/` directory or the `farm.toml` next to
-/// it changed on disk (webapp edits, hand edits, agent-authored build and farm files). A failed
-/// reload (unreadable, invalid TOML) logs and keeps the current config (and the current farm
-/// list: a farm.toml error keeps the old list, only a removed file empties it), so a
-/// half-written or broken file can never blank the overlay's settings; the watched state is
-/// still recorded, so the error is logged once per change, not once per tick. True when a
-/// watched file changed (the playstyle then takes the config again).
+/// Hot-reloads `config` when `config.toml` changed on disk (webapp edits, hand edits). A failed
+/// reload (unreadable, invalid TOML) logs and keeps the current config, so a half-written or
+/// broken file can never blank the overlay's settings; the watched state is still recorded,
+/// so the error is logged once per change, not once per tick. True when `config.toml` or a
+/// playstyle file changed: the caller then reloads the playstyle (which keeps what a broken
+/// file of its own decided, [`Playstyle::reload`]).
 fn check_reload(
     config: &mut config::Config,
-    config_path: Option<&std::path::Path>,
+    config_path: Option<&Path>,
+    files: &Files,
     watched: &mut Watched,
 ) -> bool {
-    let Some(path) = config_path else {
-        return false;
-    };
-    let now = Watched::now(config_path);
+    let now = Watched::now(config_path, files);
     if *watched == now {
         return false;
     }
-    let farm_changed = watched.farm != now.farm;
+    let config_changed = watched.config != now.config;
     *watched = now;
-    // The farm list stands on its own: a broken or missing config.toml still reloads it.
-    if farm_changed {
-        match config::try_load_farm(&config::farm_path_for(path)) {
-            Some(farm) => {
-                config.farm = farm;
-                eprintln!("farm list reloaded ({} groups)", config.farm.len());
-            }
-            None => eprintln!("farm list: keeping the current one"),
-        }
-    }
+    let Some(path) = config_path.filter(|_| config_changed) else {
+        return true;
+    };
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) => {
@@ -190,13 +162,16 @@ fn check_reload(
         }
     };
     match config::parse(&text) {
-        Ok((mut loaded, warnings)) => {
+        Ok((loaded, warnings)) => {
             for w in warnings {
                 eprintln!("config {}: {w}", path.display());
             }
-            loaded.build_defs = config::load_builds(&config::builds_dir_for(path));
-            // Already up to date (reloaded above on its own change): no second parse or log.
-            loaded.farm = std::mem::take(&mut config.farm);
+            if loaded.playstyle != config.playstyle {
+                eprintln!(
+                    "config: playstyle {:?} takes effect after a restart (running {:?})",
+                    loaded.playstyle, config.playstyle
+                );
+            }
             eprintln!("config reloaded from {}", path.display());
             *config = loaded;
         }
@@ -260,8 +235,9 @@ fn follow_game(
     journal: &mut Journal,
     config: &mut config::Config,
     config_path: Option<&Path>,
+    files: &Files,
 ) -> Result<(), UiGone> {
-    let mut watched = Watched::now(config_path);
+    let mut watched = Watched::now(config_path, files);
     let mut session = Session::default();
     let state_path = game_file::default_path();
     if let Some(state) = state_path.as_deref().and_then(game_file::load) {
@@ -280,8 +256,8 @@ fn follow_game(
         let start = Instant::now();
         // Hot-reload here, not only in `run`: this loop is where every consumer (the shrines,
         // the playstyle) reads `config`, and it only returns when D2R exits.
-        if check_reload(config, config_path, &mut watched) {
-            playstyle.reload(config);
+        if check_reload(config, config_path, files, &mut watched) {
+            playstyle.reload(files);
         }
         // The previous player id (or game.json's on a restart) keeps the choice sticky.
         match reader.snapshot(player, session.player_id()) {
@@ -557,14 +533,22 @@ mod tests {
     }
 
     #[test]
-    fn farm_list_hot_reloads_even_with_a_broken_config() -> Result<()> {
-        let dir = crate::testutil::temp_dir("farm-reload")?;
-        std::fs::create_dir_all(&dir)?;
+    fn config_and_playstyle_changes_are_noticed() -> Result<()> {
+        let dir = crate::testutil::temp_dir("hot-reload")?;
+        let shipped = dir.join("shipped");
+        std::fs::create_dir_all(shipped.join("builds"))?;
         let path = dir.join("config.toml");
-        std::fs::write(&path, "[valuables]\ntrade = [\"S\"]\n")?;
-        let farm = config::farm_path_for(&path);
+        std::fs::write(&path, "[shrines]\nshow = [\"skill\"]\n")?;
+        let files = Files {
+            shipped: Some(shipped.clone()),
+            ..Files::default()
+        };
         let mut cfg = config::load_from(&path);
-        let mut watched = Watched::now(Some(&path));
+        let mut watched = Watched::now(Some(&path), &files);
+        assert!(
+            !check_reload(&mut cfg, Some(&path), &files, &mut watched),
+            "nothing changed"
+        );
         // Explicit mtimes: two writes in the same filesystem tick would look unchanged.
         let touch = |file: &Path, secs: u64| -> Result<()> {
             let at = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
@@ -574,67 +558,35 @@ mod tests {
                 .set_modified(at)?;
             Ok(())
         };
-        std::fs::write(
-            &farm,
-            "[[farm]]\nfor = \"B\"\nitems = [{ name = \"Smoke\", kind = \"runeword\" }]\n",
-        )?;
-        touch(&farm, 1_000)?;
-        check_reload(&mut cfg, Some(&path), &mut watched);
-        assert_eq!(cfg.farm.len(), 1, "a new farm.toml is picked up");
-        assert_eq!(cfg.valuables.trade, vec![crate::valuables::Tier::S]);
-        // A broken config.toml keeps the rest of the config but still reloads the farm list.
-        std::fs::write(&path, "[valuables\n")?;
-        std::fs::write(&farm, "[[farm]]\nfor = \"B\"\nitems = []\n")?;
-        touch(&farm, 2_000)?;
-        check_reload(&mut cfg, Some(&path), &mut watched);
-        assert_eq!(cfg.farm.first().map(|g| g.items.len()), Some(0));
-        assert_eq!(cfg.valuables.trade, vec![crate::valuables::Tier::S]);
-        // Removed: no list.
-        std::fs::remove_file(&farm)?;
-        check_reload(&mut cfg, Some(&path), &mut watched);
-        assert_eq!(cfg.farm, []);
-        std::fs::remove_dir_all(&dir)?;
-        Ok(())
-    }
-
-    #[test]
-    fn invalid_farm_toml_keeps_the_old_list() -> Result<()> {
-        let dir = crate::testutil::temp_dir("farm-invalid")?;
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join("config.toml");
-        std::fs::write(&path, "")?;
-        let farm = config::farm_path_for(&path);
-        let touch = |secs: u64| -> Result<()> {
-            let at = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
-            std::fs::File::options()
-                .write(true)
-                .open(&farm)?
-                .set_modified(at)?;
-            Ok(())
-        };
-        std::fs::write(
-            &farm,
-            "[[farm]]\nfor = \"B\"\nitems = [{ name = \"Smoke\", kind = \"runeword\" }]\n",
-        )?;
-        touch(1_000)?;
-        let mut cfg = config::load_from(&path);
-        assert_eq!(cfg.farm.len(), 1);
-        let mut watched = Watched::now(Some(&path));
-        // Half-written: the old list stays.
-        std::fs::write(&farm, "[[farm]]\nfor = \"B\"\nitems = [{ name = \"Sm")?;
-        touch(2_000)?;
-        check_reload(&mut cfg, Some(&path), &mut watched);
-        assert_eq!(cfg.farm.first().map(|g| g.items.len()), Some(1), "old list kept");
-        // An unknown kind is invalid too.
-        std::fs::write(
-            &farm,
-            "[[farm]]\nfor = \"B\"\nitems = [{ name = \"Smoke\", kind = \"rune\" }]\n",
-        )?;
-        touch(3_000)?;
-        check_reload(&mut cfg, Some(&path), &mut watched);
-        assert_eq!(cfg.farm.len(), 1, "old list kept");
-        // The initial load of an invalid file: no list.
-        assert_eq!(config::load_from(&path).farm, []);
+        // A new farm list, an edited and a new build file: each one a reload.
+        let farm = shipped.join("farm.toml");
+        std::fs::write(&farm, "")?;
+        assert!(
+            check_reload(&mut cfg, Some(&path), &files, &mut watched),
+            "farm.toml created"
+        );
+        assert!(!check_reload(&mut cfg, Some(&path), &files, &mut watched), "once");
+        let build = shipped.join("builds/a.toml");
+        std::fs::write(&build, "name = \"A\"\n")?;
+        assert!(
+            check_reload(&mut cfg, Some(&path), &files, &mut watched),
+            "build added"
+        );
+        touch(&build, 1_000)?;
+        assert!(
+            check_reload(&mut cfg, Some(&path), &files, &mut watched),
+            "build edited"
+        );
+        assert_eq!(cfg.shrines.show, vec![12], "the core config untouched");
+        // config.toml: reloaded; a broken one keeps the current settings (still a change).
+        std::fs::write(&path, "[shrines]\nshow = [\"gem\"]\n")?;
+        touch(&path, 2_000)?;
+        assert!(check_reload(&mut cfg, Some(&path), &files, &mut watched));
+        assert_eq!(cfg.shrines.show, vec![18]);
+        std::fs::write(&path, "[shrines\n")?;
+        touch(&path, 3_000)?;
+        assert!(check_reload(&mut cfg, Some(&path), &files, &mut watched));
+        assert_eq!(cfg.shrines.show, vec![18], "kept");
         std::fs::remove_dir_all(&dir)?;
         Ok(())
     }

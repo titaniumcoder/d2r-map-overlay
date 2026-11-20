@@ -1,32 +1,31 @@
-//! Today's playstyle: everything read from the config files (see [`crate::config`]).
+//! This build's playstyle: everything read from the playstyle folder's files (see
+//! [`super::files`]).
 
-use crate::config::Config;
 use crate::game::{ItemDrop, Snapshot};
 use crate::played::Played;
 use crate::web::{GearInfo, LiveInfo, Panels};
 
+use super::config::Settings;
+use super::files::{self, Files};
 use super::guidance::{Guidance, Marks};
 use super::{Evaluation, Playstyle, build, stash_plan, valuables, web};
 
-/// The playstyle of the config files: the character's selected build (else its class's
+/// The playstyle of the folder's files: the character's selected build (else its class's
 /// default) followed along its stage chain, the farm list and the valuables tiers.
 #[derive(Debug, Clone, Default)]
 pub struct ConfigDriven {
-    config: Config,
-}
-
-impl ConfigDriven {
-    #[must_use]
-    pub fn new(config: &Config) -> Self {
-        Self {
-            config: config.clone(),
-        }
-    }
+    config: Settings,
 }
 
 impl Playstyle for ConfigDriven {
-    fn reload(&mut self, config: &Config) {
-        self.config.clone_from(config);
+    fn load(files: &Files) -> Self {
+        Self {
+            config: files::load(files),
+        }
+    }
+
+    fn reload(&mut self, files: &Files) {
+        files::reload(&mut self.config, files);
     }
 
     fn mark_drops(&self, drops: &mut Vec<ItemDrop>) -> Marks {
@@ -89,11 +88,11 @@ impl Playstyle for ConfigDriven {
         web::config_page::builds_json(&self.config)
     }
 
-    fn select_build(text: &str, name: &str, build: Option<&str>) -> Option<String> {
-        web::config_page::set_bis_selection(text, name, build)
+    fn select_build(files: &Files, name: &str, build: Option<&str>) -> anyhow::Result<()> {
+        files::select_build(files, name, build)
     }
 
-    fn remove_character(text: &str, name: &str) -> Option<String> {
-        web::config_page::remove_character(text, name)
+    fn remove_character(files: &Files, name: &str) -> anyhow::Result<()> {
+        files::remove_character(files, name)
     }
 }

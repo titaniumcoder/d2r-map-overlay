@@ -18,7 +18,7 @@ mod stash;
 pub mod tests;
 pub mod vendor;
 
-pub use server::{GearInfo, clear_live, publish_gear, publish_live, serve};
+pub use server::{GearInfo, clear_live, publish_gear, publish_live, serve, write_atomic};
 pub use skills::SkillTarget;
 pub use vendor::ShopNote;
 

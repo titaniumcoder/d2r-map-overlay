@@ -1,9 +1,10 @@
-//! Valuable ground drops: matches an item against the rules in `research/valuables.json`
-//! (written up in `research/valuables.md`) and picks the tier to highlight it with.
+//! Valuable ground drops: matches an item against the rules in the playstyle folder's
+//! `valuables.json` (`playstyles/summoner-fury/`, written up in `research/valuables.md`) and
+//! picks the tier to highlight it with.
 //!
-//! The rules are compiled into the binary, so it needs no data files at run time. To regenerate
-//! them from blizzhackers/d2data: `python3 research/gen_valuables.py <d2data json dir>
-//! research/valuables.json`, then rebuild.
+//! The rules are compiled into the binary (no per-user override, unlike the folder's TOML
+//! files). To regenerate them from blizzhackers/d2data: `python3 research/gen_valuables.py
+//! <d2data json dir> playstyles/summoner-fury/valuables.json`, then rebuild.
 
 use std::sync::LazyLock;
 
@@ -110,7 +111,7 @@ struct RuleFile {
 const SCHEMA: u32 = 1;
 
 static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
-    match serde_json::from_str::<RuleFile>(include_str!("../../research/valuables.json")) {
+    match serde_json::from_str::<RuleFile>(include_str!("../../playstyles/summoner-fury/valuables.json")) {
         Ok(f) if f.schema == SCHEMA => f.rules,
         Ok(f) => {
             eprintln!(
@@ -372,7 +373,8 @@ mod tests {
 
     #[test]
     fn rules_parse() -> serde_json::Result<()> {
-        let parsed: RuleFile = serde_json::from_str(include_str!("../../research/valuables.json"))?;
+        let parsed: RuleFile =
+            serde_json::from_str(include_str!("../../playstyles/summoner-fury/valuables.json"))?;
         assert_eq!(parsed.schema, SCHEMA);
         assert_eq!(parsed.rules.len(), RULES.len());
         assert!(RULES.len() > 50, "{} rules", RULES.len());

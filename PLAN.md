@@ -58,15 +58,24 @@ Cargo.toml
 src/main.rs        — arg/config, main loop (reader thread → channel → overlay)
 src/live.rs        — live tick loop over a `reader::GameReader` and a `playstyle::Playstyle`
                      (session, guidance, render, dashboard)
-src/config.rs      — config.toml (shrines, `[valuables]`, `[bis]`, `[builds]`); re-exports the
-                     playstyle's build/farm types under their old paths
+src/config.rs      — config.toml, core only (`[shrines]`, `playstyle = "<name>"`); old files'
+                     `[valuables]` / `[builds]` / `[bis]` accepted unread; re-exports the
+                     playstyle's types under their old paths
+playstyles/<name>/ — a playstyle folder (step 7); shipped: `summoner-fury/` = playstyle.toml (name,
+                     description, `[valuables]`, `[damages]`), builds/*.toml + *.source.json
+                     (research/gen_build.py writes here by default), farm.toml, valuables.json
+                     (compiled in). Overrides per file: ~/.config/d2r-map-overlay/playstyle/
 src/playstyle/     — the playstyle plugin (step 5 of the plugin refactor)
-  mod.rs           — `Playstyle` (reload / mark_drops / evaluate / panels / config_json /
-                     builds_json / select_build / remove_character), `Evaluation` (guidance, stage
-                     to latch, stage, chain); module map
-  config_driven.rs — `ConfigDriven`: today's playstyle from the config files (Summoner → Fury Druid)
-  config.rs        — builds/*.toml and farm.toml parsing, `Build`, `SwitchGroup`, `Stage`, the stage
-                     chain and latch logic (`Config::stage`, `leads_to`, `resolved_bis`, damages)
+  mod.rs           — `Playstyle` (load / reload(&Files) / mark_drops / evaluate / panels /
+                     config_json / builds_json / select_build / remove_character), `Evaluation`
+                     (guidance, stage to latch, stage, chain); module map
+  config_driven.rs — `ConfigDriven`: this build's playstyle from its folder (Summoner → Fury Druid)
+  files.rs         — `Files` (shipped / user / old places / data dir) and the per-file precedence
+                     (user > old places > shipped), load / reload (a broken file keeps its part),
+                     `fingerprint` for the hot reload, bis.toml writes
+  config.rs        — `Settings`; playstyle.toml / old config.toml tables / builds/*.toml / farm.toml
+                     parsing, `Build`, `SwitchGroup`, `Stage`, the stage chain and latch logic
+                     (`Settings::stage`, `leads_to`, `resolved_bis`, damages)
   guidance.rs      — `Guidance` (area rating, BiS, item plan, drop marks): what render/dashboard get
   valuables.rs, stash_plan.rs, gear_score.rs, build.rs (damage types, area `rate`)
   web/             — the dashboard's playstyle panels (step 6): `PanelInfo` (core `LiveInfo` +
@@ -78,7 +87,8 @@ src/web/           — the dashboard core (step 6 of the plugin refactor)
   mod.rs           — `LiveInfo`, `Panels` (playstyle sections + skill plan + vendor notes),
                      `live_json` (core keys, then the playstyle's sections merged in by key)
   server.rs        — HTTP + SSE, live / gear cells, `/config` endpoints generic over the
-                     `Playstyle` (`serve::<P>`, a fresh `P` per `/config` request)
+                     `Playstyle` (`serve::<P>(&Files)`, a fresh `P::load` per `/config` request;
+                     main.rs picks `P`)
   page.rs          — the pages from `assets/{dashboard,config}.{html,js}` (`include_str!`;
                      `node --check assets/*.js`); a hash test pins the served bytes
   stash.rs, skills.rs (trees + `SkillTarget` plan marks), vendor.rs (`ShopNote`, `shop_json`)
@@ -281,8 +291,9 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   Effect (druid, caster weights): Ancients' Pledge scores 1.7 → 189.5, Stealth 3.2 → 93.7.
   Other list fields seen: `+0x00` owner unit (affix lists), `+0x78` the parent item's top list (on a rune's
   list), `+0x68/+0x70` sibling links (unused).
-- Valuables: research/valuables.json (67 rules, S/A/B, trade/twink) embedded; tiers per category in
-  `~/.config/d2r-map-overlay/config.toml` (default S+A both; example: config.example.toml). Ground: ring by tier
+- Valuables: playstyles/summoner-fury/valuables.json (67 rules, S/A/B, trade/twink; was research/
+  until step 7) embedded; tiers per category in the playstyle's `playstyle.toml` `[valuables]`
+  (default S+A both). Ground: ring by tier
   (S red, A orange, dashed = uncertain). Inventory keep list (dashboard; formerly green lines on the overlay): certain
   S/A, uncertain only S — moved to the dashboard with the 2026-11-17 text-stack migration (see Overlay), the
   reader and its tiers unchanged. Unique/set names from src/item_names_data.rs (research/gen_item_names.py).
@@ -477,12 +488,14 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - [x] Vendor panel: implemented 2026-11-18; verified live the same day on Fara (A2): ~65 store items decoded to sensible magic names ("Bronze Double Axe of Maiming", "Helm of the Jackal", "Shimmering Large Shield of Deflecting"), store affix words sit at the same offsets as owned items.
 
 ## Build definitions and BiS selection (2026-11-17)
-- **Agent-authored build files**: `~/.config/d2r-map-overlay/builds/<slug>.toml`, one build per file
+- **Agent-authored build files**: `playstyles/summoner-fury/builds/<slug>.toml` since step 7 (was
+  `~/.config/d2r-map-overlay/builds/`, still read as a fallback), one build per file
   (schema: `name`, `damages`, `notes`, `[slots]`, `[merc_slots]` — pieces as `"Name@<required level>"`,
-  ordered best→worst). Loaded by `config::load_builds(dir)` (missing dir = no builds, no error), keyed by
+  ordered best→worst). Loaded by `playstyle::files` (missing dir = no builds, no error), keyed by
   lowercased build name — the slug a selection refers to. The webapp does NOT edit them.
 - **Selection-only config**: the webapp writes ONLY `build = "<slug>"` into `[bis."<char>"]` (toml_edit,
-  comment-preserving; the tables are created if missing). Resolution order for a character's BiS:
+  comment-preserving; the tables are created if missing) — since step 7 in
+  `~/.local/share/d2r-map-overlay/bis.toml` (an entry still in config.toml's `[bis]` is edited there). Resolution order for a character's BiS:
   inline slots (legacy, hand-edited) if present, else the selected build's slots, else none. Same for
   damages: character-level `[builds]` entry if present, else the build's damages. The old
   `POST /api/build` (damages) and slot-editing `POST /api/bis` UI are gone; `POST /api/bis` now writes
@@ -543,8 +556,9 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   tabs (`playstyle::web::recipes::runeword_copies`; the sources don't overlap). Other kinds have no reliable
   "built" signal (craft results are randomly named rares, cube recipes repeat, a socketed base
   isn't told apart from a found one): only their quest rewards hide them.
-- **Hot reload**: the mtime watcher watches `config.toml` AND the `builds/` directory (a cheap
-  `read_dir` per tick — a directory's own mtime would miss in-place edits of a build file).
+- **Hot reload**: the mtime watcher watches `config.toml` AND every playstyle file
+  (`Files::fingerprint`: the three places' playstyle.toml / farm.toml / builds/ listing and bis.toml;
+  a cheap `read_dir` per tick — a directory's own mtime would miss in-place edits of a build file).
 - **Dashboard "Where to go"**: removed 2026-11-20 (user: "the more I look at it, the more I
   dislike the where to go"); the level band, `info::LevelEntry`, `level_lines_full` and
   `build::bad_reason` are gone and the `levels` JSON field with them. See the backlog item
@@ -794,7 +808,26 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   files (`reload(dir)` / a `load` constructor) and `select_build` / `remove_character` should edit
   its own file instead of `config.toml`. `render::TextBlocks` (sell / keep / bis lines) is still
   built by the core renderer from `Guidance` and read back by the playstyle's panels.
-- [ ] 7. New folder layout: `playstyle/<name>/` with route, builds, farm list and marks.
+- [x] 7. New folder layout: `playstyles/<name>/` in the repo, selected by config.toml's
+  `playstyle = "<name>"` (default and shipped example: `summoner-fury`): `playstyle.toml` (name,
+  description, `[valuables]`, `[damages]`), `builds/*.toml` with their `*.source.json`
+  (`research/gen_build.py <stem>` writes there by default; regenerated byte-identical to the
+  user's installed files, which held no character names), `farm.toml`, `valuables.json` (moved
+  from research/, kept as JSON: still `gen_valuables.py`'s output and compiled in, so it has no
+  user override; a TOML conversion would change the generator and the matcher for nothing).
+  The shipped folder is read at run time from `CARGO_MANIFEST_DIR` (build files hot-reload
+  without a rebuild). `src/playstyle/files.rs`: per file, `~/.config/d2r-map-overlay/playstyle/`
+  > the old places (config.toml's `[valuables]` / `[builds]` tables when present, `builds/` and
+  `farm.toml` next to it; a notice on stderr names them) > shipped; a broken file keeps what it
+  decided on reload. `[bis]` (per-character selection) is state: `bis.toml` in the data dir next
+  to played.json (bis.toml wins per character over an old config.toml entry; a selection that
+  sits in config.toml is edited there). `Playstyle::load(&Files)` / `reload(&Files)`;
+  `select_build` / `remove_character` do their own file writes under the server's lock; the core
+  config is `[shrines]` + `playstyle` only (old tables accepted unread). `serve::<P>(&Files)`:
+  core web names no concrete playstyle (`main.rs` `ThePlaystyle`). Verified: `--render` of the
+  flayer and Jail 1 snapshots byte-identical before / after (with the old files and shipped
+  only), the page snapshot test. Route data (step 9) and marks v2 (step 10) will add their files
+  to the folder.
 - [ ] 8. Drop tables plus "worth farming".
 - [ ] 9. The route engine and a "Next" panel on the dashboard.
 - [ ] 10. Keep and trade marks v2.

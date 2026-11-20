@@ -1,6 +1,6 @@
 //! The HTTP server: one thread per connection, the dashboard's Server-Sent-Events stream, the
-//! live and gear cells `live` publishes into, and the `config.toml` writes of the `/config`
-//! page.
+//! live and gear cells `live` publishes into, and the `/config` page's writes (through the
+//! playstyle, which owns the files they go to).
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -10,7 +10,7 @@ use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::playstyle::Playstyle;
+use crate::playstyle::{Files, Playstyle};
 
 use super::page;
 
@@ -43,8 +43,9 @@ const SSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Concurrent SSE handlers right now (see [`MAX_SSE_CLIENTS`]).
 static SSE_CLIENTS: AtomicUsize = AtomicUsize::new(0);
 
-/// Serializes the read-edit-write of `config.toml` across connection threads, so two saves
-/// cannot both start from the same old text and lose one of the updates.
+/// Serializes the `/config` page's saves (the playstyle's read-edit-write of its files) across
+/// connection threads, so two saves cannot both start from the same old text and lose one of
+/// the updates.
 static CONFIG_WRITE: Mutex<()> = Mutex::new(());
 
 /// The pre-serialized JSON of the latest live snapshot, published by `live` each tick and read
@@ -142,10 +143,11 @@ fn mark_offline(json: &str) -> Option<String> {
 }
 
 /// Serves the page on `localhost:PORT` until the process ends. Errors are logged, not fatal:
-/// the map keeps working without the page. `P` is the build's playstyle: the `/config` JSON
-/// and the build selection writes are its (each request loads it fresh from the config files,
-/// [`fresh_playstyle`]).
-pub fn serve<P: Playstyle + Default + 'static>() {
+/// the map keeps working without the page. `P` is the build's playstyle (picked by the
+/// caller): the `/config` JSON and the build selection writes are its, over its `files` (each
+/// request loads it fresh and quietly, [`Files::quiet`], so the page shows a selection just
+/// saved before `live`'s hot reload picks it up, without repeating the load messages).
+pub fn serve<P: Playstyle + 'static>(files: &Files) {
     let Ok(listener) = TcpListener::bind(("127.0.0.1", PORT)) else {
         eprintln!("web: could not bind localhost:{PORT}; the page is off");
         return;
@@ -156,9 +158,10 @@ pub fn serve<P: Playstyle + Default + 'static>() {
             Ok(stream) => {
                 // One thread per connection: a stalled or slow client cannot hang the accept
                 // loop (and so every later request) behind it.
+                let files = files.clone();
                 if let Err(e) = thread::Builder::new()
                     .name("web".into())
-                    .spawn(move || handle::<P>(stream))
+                    .spawn(move || handle::<P>(stream, &files))
                 {
                     eprintln!("web: could not start a handler thread: {e}");
                 }
@@ -206,7 +209,7 @@ fn read_request(reader: &mut impl BufRead) -> Option<Parsed> {
 }
 
 /// Reads one request and answers it; the thread ends with the connection.
-fn handle<P: Playstyle + Default>(stream: TcpStream) {
+fn handle<P: Playstyle>(stream: TcpStream, files: &Files) {
     let peer = stream
         .peer_addr()
         .map_or_else(|_| String::new(), |a| a.to_string());
@@ -226,16 +229,18 @@ fn handle<P: Playstyle + Default>(stream: TcpStream) {
         Parsed::Request(method, path, body) => match (method.as_str(), path.as_str()) {
             ("GET", "/" | "/index.html" | "/dashboard" | "/config") => html_page(&path),
             ("GET", "/favicon.ico") => respond("200 OK", "image/svg+xml", FAVICON_SVG),
-            ("GET", "/api/config") => api_config::<P>(),
-            ("GET", "/api/builds") => api_builds::<P>(),
+            ("GET", "/api/config") => api_config::<P>(files),
+            ("GET", "/api/builds") => api_builds::<P>(files),
             ("GET", "/api/live") => api_live(),
             // The stream owns the connection from here on; nothing is written after it.
             ("GET", "/api/live-stream") => {
                 api_live_stream(stream);
                 return;
             }
-            ("POST", "/api/bis") => api_bis::<P>(&String::from_utf8_lossy(&body)),
-            ("POST", "/api/character/delete") => api_character_delete::<P>(&String::from_utf8_lossy(&body)),
+            ("POST", "/api/bis") => api_bis::<P>(files, &String::from_utf8_lossy(&body)),
+            ("POST", "/api/character/delete") => {
+                api_character_delete::<P>(files, &String::from_utf8_lossy(&body))
+            }
             _ => respond("404 Not Found", "text/plain", "not found\n"),
         },
     };
@@ -384,8 +389,8 @@ fn respond_no_store(status: &str, content_type: &str, body: &str) -> String {
 /// `BiS` view (selected build, resolved damages and per-piece annotated slots) and, for
 /// characters only known from `[builds]`, their saved damage types
 /// ([`Playstyle::config_json`]).
-fn api_config<P: Playstyle + Default>() -> String {
-    let playstyle = fresh_playstyle::<P>();
+fn api_config<P: Playstyle>(files: &Files) -> String {
+    let playstyle = P::load(&files.quiet());
     let gear = current_gear();
     let played =
         crate::played::default_path().map_or_else(crate::played::Played::new, |p| crate::played::load(&p));
@@ -398,52 +403,30 @@ fn api_config<P: Playstyle + Default>() -> String {
 
 /// `200 OK` with the available build definitions as JSON for the page's selects
 /// ([`Playstyle::builds_json`]).
-fn api_builds<P: Playstyle + Default>() -> String {
-    let playstyle = fresh_playstyle::<P>();
+fn api_builds<P: Playstyle>(files: &Files) -> String {
+    let playstyle = P::load(&files.quiet());
     respond("200 OK", "application/json", &playstyle.builds_json().to_string())
 }
 
-/// The playstyle as the config files stand right now: the page must show a selection just
-/// saved, before `live`'s hot reload picks it up.
-fn fresh_playstyle<P: Playstyle + Default>() -> P {
-    let mut playstyle = P::default();
-    playstyle.reload(&crate::config::load_from(
-        &crate::config::default_path().unwrap_or_default(),
-    ));
-    playstyle
-}
-
-/// Reads `config.toml`, applies `edit`, and writes it back atomically. The whole
-/// read-edit-write runs under [`CONFIG_WRITE`]: concurrent saves must not both start from the
-/// same old text. Answers the browser with a JSON receipt or a plain-text error.
-fn save_config(edit: impl Fn(&str) -> Option<String>) -> String {
-    let Some(path) = crate::config::default_path() else {
-        return respond("500 Internal Server Error", "text/plain", "no config path\n");
-    };
+/// Runs one of the playstyle's saves under [`CONFIG_WRITE`]: concurrent saves must not both
+/// start from the same old text. Answers the browser with a JSON receipt or a plain-text
+/// error.
+fn save(write: impl FnOnce() -> anyhow::Result<()>) -> String {
     // A poisoned lock still holds a working mutex value; use it rather than lose the save.
     let _guard = CONFIG_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
-    match std::fs::read_to_string(&path) {
-        Ok(text) => edit(&text).map_or_else(
-            || {
-                respond(
-                    "500 Internal Server Error",
-                    "text/plain",
-                    "config is not valid TOML\n",
-                )
-            },
-            |text| match write_atomic(&path, &text) {
-                Ok(()) => respond("200 OK", "application/json", "{\"saved\": true}"),
-                Err(e) => respond("500 Internal Server Error", "text/plain", &format!("{e}\n")),
-            },
-        ),
-        Err(e) => respond("500 Internal Server Error", "text/plain", &format!("{e}\n")),
+    match write() {
+        Ok(()) => respond("200 OK", "application/json", "{\"saved\": true}"),
+        Err(e) => respond("500 Internal Server Error", "text/plain", &format!("{e:#}\n")),
     }
 }
 
 /// Writes `text` over `path` atomically: to `<path>.tmp` first, then a rename. A rename over
 /// an existing file is atomic on POSIX, so the hot-reload reader never sees a truncated or
-/// empty `config.toml` and stick on the defaults.
-fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+/// empty file and stick on the defaults.
+///
+/// # Errors
+/// Writing the temporary file or the rename failed.
+pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
@@ -455,11 +438,11 @@ fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
 }
 
 /// `POST /api/bis` with `{"name": …, "build": "<slug>"}` — `"build": null`, `""` or omitted
-/// clears the selection: writes ONLY the `[bis.<name>]` `build` value into `config.toml` (the
-/// gear itself lives in the agent-authored `builds/*.toml`; the webapp doesn't edit it). Then
+/// clears the selection: saves ONLY the selection ([`Playstyle::select_build`]; the gear
+/// itself lives in the agent-authored build files; the webapp doesn't edit them). Then
 /// forgets the stage the character reached ([`crate::played::clear_stage`]): an explicit
 /// selection wins over the stage latch, which restarts from it.
-fn api_bis<P: Playstyle>(body: &str) -> String {
+fn api_bis<P: Playstyle>(files: &Files, body: &str) -> String {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
         return respond("400 Bad Request", "text/plain", "bad json\n");
     };
@@ -479,7 +462,7 @@ fn api_bis<P: Playstyle>(body: &str) -> String {
             );
         }
     };
-    let response = save_config(|text| P::select_build(text, name, build));
+    let response = save(|| P::select_build(files, name, build));
     if !response.starts_with("HTTP/1.1 200") {
         return response;
     }
@@ -493,10 +476,10 @@ fn api_bis<P: Playstyle>(body: &str) -> String {
 }
 
 /// `POST /api/character/delete` with `{"name": …}`: forgets the character — its last-played
-/// entry ([`crate::played::remove`]) and, in `config.toml`, every `[bis.<name>]` table and its
-/// `[builds]` damage entry ([`Playstyle::remove_character`]), all case-insensitively. D2R's own save
-/// files are never touched; playing the character again brings it back.
-fn api_character_delete<P: Playstyle>(body: &str) -> String {
+/// entry ([`crate::played::remove`]) and the playstyle's entries for it
+/// ([`Playstyle::remove_character`]: its build selection), all case-insensitively. D2R's own
+/// save files are never touched; playing the character again brings it back.
+fn api_character_delete<P: Playstyle>(files: &Files, body: &str) -> String {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
         return respond("400 Bad Request", "text/plain", "bad json\n");
     };
@@ -508,13 +491,11 @@ fn api_character_delete<P: Playstyle>(body: &str) -> String {
     else {
         return respond("400 Bad Request", "text/plain", "name required\n");
     };
-    // Config first: a failed config edit leaves played.json untouched, so a 500 deletes nothing.
-    // A played-only character needs no config edit; without a config file there is none.
-    if crate::config::default_path().is_some_and(|p| p.exists()) {
-        let response = save_config(|text| P::remove_character(text, name));
-        if !response.starts_with("HTTP/1.1 200") {
-            return response;
-        }
+    // The playstyle first: a failed edit leaves played.json untouched, so a 500 deletes
+    // nothing.
+    let response = save(|| P::remove_character(files, name));
+    if !response.starts_with("HTTP/1.1 200") {
+        return response;
     }
     if let Some(path) = crate::played::default_path()
         && let Err(e) = crate::played::remove(&path, name)
@@ -644,6 +625,55 @@ mod tests {
         assert_eq!(mark_offline("not json"), None);
     }
 
+    /// A playstyle with nothing in it: the routes under test don't need one, and the core web
+    /// names no concrete playstyle (the binary picks it, `main.rs`).
+    struct NoPlaystyle;
+
+    impl Playstyle for NoPlaystyle {
+        fn load(_: &Files) -> Self {
+            Self
+        }
+
+        fn reload(&mut self, _: &Files) {}
+
+        fn mark_drops(&self, _: &mut Vec<crate::game::ItemDrop>) -> crate::guidance::Marks {
+            crate::guidance::Marks::new()
+        }
+
+        fn evaluate(&self, _: &crate::game::Snapshot, _: Option<&str>) -> crate::playstyle::Evaluation<'_> {
+            crate::playstyle::Evaluation {
+                guidance: crate::guidance::Guidance::default(),
+                reached: None,
+                stage: None,
+                chain: Vec::new(),
+            }
+        }
+
+        fn panels<'a>(
+            &'a self,
+            _: &'a crate::playstyle::Evaluation<'a>,
+            _: &crate::web::LiveInfo<'a>,
+        ) -> crate::web::Panels<'a> {
+            crate::web::Panels::default()
+        }
+
+        fn config_json(&self, _: &GearInfo, _: &crate::played::Played) -> serde_json::Value {
+            serde_json::Value::Null
+        }
+
+        fn builds_json(&self) -> serde_json::Value {
+            serde_json::Value::Null
+        }
+
+        fn select_build(_: &Files, _: &str, _: Option<&str>) -> Result<()> {
+            Ok(())
+        }
+
+        fn remove_character(_: &Files, _: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn favicon_is_served_and_linked_from_both_pages() -> Result<()> {
         let page_link = |page: &str| {
@@ -666,7 +696,7 @@ mod tests {
         let addr = listener.local_addr()?;
         let server = thread::spawn(move || {
             if let Ok((stream, _)) = listener.accept() {
-                handle::<crate::playstyle::ConfigDriven>(stream);
+                handle::<NoPlaystyle>(stream, &Files::default());
             }
         });
         let mut client = std::net::TcpStream::connect(addr)?;

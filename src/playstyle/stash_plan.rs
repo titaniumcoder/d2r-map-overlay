@@ -42,13 +42,14 @@
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
-use crate::config::{Bis, Build, Config};
+use crate::config::{Bis, Build};
 use crate::game::{ItemDrop, Place, Snapshot};
 use crate::gear_score::{self, Piece, Profile};
 use crate::item_stats::{ItemStat, stat};
 use crate::items::DropKind;
 use crate::names::same_name;
 use crate::offsets::item_data;
+use crate::playstyle::config::Settings;
 use crate::runewords_data::{self, Runeword};
 use crate::socket_bases::{self, Wearer};
 use crate::stash::{StashTab, TabKind};
@@ -271,11 +272,11 @@ fn build_weapon_types<'a>(builds: impl Iterator<Item = &'a Build>, class: u32) -
 
 impl Scoring {
     /// The scoring for `snap`'s character: its class, its allocated skills plus the skill plans
-    /// of every build in the stage `chain` (by name, [`Config::stage_chain`]), the worn
+    /// of every build in the stage `chain` (by name, [`Settings::stage_chain`]), the worn
     /// weapon's kind, the chain's weapon types ([`build_weapon_types`]). Level, strength and dexterity are left out: keeping an item doesn't
     /// need it wearable today.
     #[must_use]
-    pub fn new(snap: &Snapshot, config: &Config, chain: &[String]) -> Self {
+    pub fn new(snap: &Snapshot, config: &Settings, chain: &[String]) -> Self {
         let class = snap.player.class;
         let mut skills: Vec<u16> = snap.skills.points.iter().map(|&(id, _)| id).collect();
         let builds = || {
@@ -467,7 +468,7 @@ impl Needs {
 
     /// The player's own needs: the resolved `bis` (the current stage, or the character's
     /// inline slots), every build of the stage `chain` (the current stage and the later ones,
-    /// by name: [`Config::stage_chain`]) with its slots, extras and `switch_requires`, and the
+    /// by name: [`Settings::stage_chain`]) with its slots, extras and `switch_requires`, and the
     /// whole farm list. A player piece is for class `class` (a farm group's: its build's class);
     /// a mercenary one for the Act 2 mercenary. Copies `worn` by the character or its
     /// mercenary need no stash copy, and each runeword copy `owns` counts (worn, carried,
@@ -478,7 +479,7 @@ impl Needs {
     /// for every alternative runeword.
     #[must_use]
     pub fn from_config(
-        config: &Config,
+        config: &Settings,
         chain: &[String],
         bis: Option<&Bis>,
         class: u32,
@@ -649,10 +650,10 @@ fn by_preference(items: &[Held], side: Side) -> Vec<usize> {
 }
 
 /// The item plan of `snap`'s character ([`held`], [`plan`]): needs from the resolved `bis`,
-/// the stage `chain` ([`Config::stage_chain`]) and the farm list, minus the copies the
+/// the stage `chain` ([`Settings::stage_chain`]) and the farm list, minus the copies the
 /// character and its mercenary wear; magic / rare items scored for the chain's builds.
 #[must_use]
-pub fn for_snapshot(snap: &Snapshot, config: &Config, chain: &[String], bis: Option<&Bis>) -> Vec<Advice> {
+pub fn for_snapshot(snap: &Snapshot, config: &Settings, chain: &[String], bis: Option<&Bis>) -> Vec<Advice> {
     let worn: Vec<String> = crate::game::worn_names(&snap.equipped_items)
         .into_iter()
         .chain(snap.merc_worn.iter().cloned())
@@ -911,7 +912,7 @@ mod tests {
     /// Insight wanted for the merc's weapon (farm list), `held` copies already owned.
     fn insight_needs(held: u32) -> Needs {
         use crate::config::{FarmGroup, FarmItem, FarmSlot};
-        let config = Config {
+        let config = Settings {
             farm: vec![FarmGroup {
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
@@ -922,7 +923,7 @@ mod tests {
                     slot: Some(FarmSlot::Weapon),
                 }],
             }],
-            ..Config::default()
+            ..Settings::default()
         };
         Needs::from_config(&config, &[], None, 5, &[], &move |n| {
             u32::from(n == "Insight") * held
@@ -1428,7 +1429,7 @@ mod tests {
                 .map(|(k, v)| ((*k).to_owned(), v.iter().map(|&s| s.to_owned()).collect()))
                 .collect()
         };
-        let mut config = Config::default();
+        let mut config = Settings::default();
         config.build_defs.insert(
             "fury".to_owned(),
             Build {
@@ -1518,7 +1519,7 @@ mod tests {
     #[test]
     fn a_held_runeword_needs_no_base_any_more() {
         use crate::config::{FarmGroup, FarmItem, FarmSlot};
-        let config = Config {
+        let config = Settings {
             farm: vec![FarmGroup {
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
@@ -1529,7 +1530,7 @@ mod tests {
                     slot: Some(FarmSlot::Weapon),
                 }],
             }],
-            ..Config::default()
+            ..Settings::default()
         };
         let needs = |held: u32| {
             Needs::from_config(&config, &[], None, 5, &[], &move |n| {
@@ -1619,7 +1620,7 @@ mod tests {
     fn a_runeword_on_page_5_still_satisfies_its_base_need() {
         use crate::config::{FarmGroup, FarmItem, FarmSlot};
         use crate::stash::StashItem;
-        let config = Config {
+        let config = Settings {
             farm: vec![FarmGroup {
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
@@ -1630,7 +1631,7 @@ mod tests {
                     slot: Some(FarmSlot::Weapon),
                 }],
             }],
-            ..Config::default()
+            ..Settings::default()
         };
         // Harmony in a Hunter's Bow on page 5: counted by the holdings like any stash item.
         let stash = [StashTab {

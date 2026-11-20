@@ -1,9 +1,14 @@
-"""Turn a researched build guide (JSON, see ~/.config/d2r-map-overlay/builds/*.source.json)
+"""Turn a researched build guide (JSON, see playstyles/summoner-fury/builds/*.source.json)
 into an agent-authored build file (builds/<slug>.toml) for the overlay's dashboard.
 
 Usage:
-    python3 -I research/gen_build.py SOURCE.json OUT.toml [--leveling LEVELING.json]
+    python3 -I research/gen_build.py SOURCE [OUT.toml] [--leveling LEVELING.json]
                                      [--prerequisites NEXT.json]
+
+SOURCE is a .source.json path or a bare stem (`summoner-druid`), which means
+playstyles/summoner-fury/builds/<stem>.source.json in the repo. OUT defaults to <stem>.toml in
+that same folder: the shipped playstyle (a copy in ~/.config/d2r-map-overlay/playstyle/builds/
+overrides it per file).
 
 Deterministic: the same inputs give the same file byte for byte, so it can be re-run whenever
 the research JSON changes. Per-build settings (display name, class, damages, stage chain)
@@ -78,6 +83,8 @@ BUILDS = {
 }
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# The shipped playstyle's build folder: the default for a bare SOURCE stem and for OUT.
+BUILDS_DIR = os.path.normpath(os.path.join(HERE, "..", "playstyles", "summoner-fury", "builds"))
 CLASS_IDS = {"amazon": 0, "sorceress": 1, "necromancer": 2, "paladin": 3, "barbarian": 4,
              "druid": 5, "assassin": 6, "warlock": 7}
 SLOTMAP = {"ring": "ring1"}
@@ -370,8 +377,13 @@ def main(argv):
             i = args.index(flag)
             opts[flag] = args[i + 1]
             del args[i:i + 2]
-    src, out = args
+    if len(args) not in (1, 2):
+        sys.exit(__doc__)
+    src = args[0]
+    if not src.endswith(".json"):
+        src = os.path.join(BUILDS_DIR, src + ".source.json")
     stem = os.path.basename(src).removesuffix(".json").removesuffix(".source")
+    out = args[1] if len(args) == 2 else os.path.join(BUILDS_DIR, stem + ".toml")
     cfg = BUILDS[stem]
     d = json.load(open(src, encoding="utf-8"))
     known = class_skills(cfg["cls"])

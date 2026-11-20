@@ -3,7 +3,7 @@
 //! Nightmare on, green where none is immune to its primary damage (user request, 2026-11-15).
 //!
 //! The build is the character's damage types, primary first
-//! ([`crate::config::Config::damages_for_player`]: its `[builds]` entry, else the current guide
+//! ([`crate::playstyle::config::Settings::damages_for_player`]: its `[builds]` entry, else the current guide
 //! stage's `damages`, else its class's). The area's immunities are the generated `levels_data::IMMUNITIES` table:
 //! per level and difficulty, the distinct monster types that spawn and how many are immune
 //! (resist >= 100) to each damage type.

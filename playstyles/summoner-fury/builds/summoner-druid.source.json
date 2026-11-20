@@ -1,0 +1,893 @@
+{
+  "build": "Summoner Druid (Ravens / Spirit Wolves / Dire Wolves / Grizzly, 1-99; optional switch to Fury Werewolf from 75 once the switch gear is in hand), computed from the D2R game tables",
+  "source_url": "https://github.com/blizzhackers/d2data (D2R skills.json, skilldesc.json, runes.json, misc.json, weapons.json, armor.json, itemtypes.json, uniqueitems.json, setitems.json, hireling.json)",
+  "guide_updated": "2026-11-19",
+  "author": "agent-computed from the game data, not from a guide",
+  "setup_legend": {
+    "lvl 1-12 (Normal Act 1-2: Ravens, then Spirit Wolves)": "Ravens from level 2 (prerequisite of Spirit Wolf), Spirit Wolves from level 6, Oak Sage at 7.",
+    "lvl 12-24 (Normal Act 2-4: Dire Wolves from 18)": "Spirit Wolf to 11 by 17, Dire Wolves + Heart of Wolverine at 18. Stealth at 17, Ancients' Pledge at 21.",
+    "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)": "Spirit at 25, Grizzly at 30, Dire Wolf maxed by 36.",
+    "setups": "'setup' is the stage the piece is first worn in. Stash pieces were read from the overlay's shared-stash view on 2026-11-19.",
+    "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)": "Grizzly to 20 by 51 (+10% damage to every wolf and the bear per point). Hire the Nightmare Act 2 Might merc. Jalal's Mane, Raven Frost and String of Ears are worn now and stay on after the Fury respec. Smoke is merc gear (the merc's armor); the druid keeps Stealth for its Faster Cast Rate.",
+    "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)": "Spirit Wolf to 20 by 60 (with the Hell Den of Evil point) (+25% attack rating for Dire Wolves and the Grizzly per point), then Oak Sage to 20 by 75 (+5% life per point). From 75 with the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer, Smoke, life-leech merc helm) the Fury switch is possible (optional).",
+    "lvl 75-99 (Hell endgame: Ravens to 20)": "Without the switch the summoner goes on to 99: Ravens 20 by 90, then Arctic Blast 1 (prerequisite) and Cyclone Armor 8 (absorbs 124 fire/cold/lightning damage per cast). Endgame summoner gear: Heart of the Oak, Jalal's Mane, Enigma, Mara's Kaleidoscope, Arachnid Mesh."
+  },
+  "stat_source": "All numbers are computed from the D2R game tables (blizzhackers/d2data JSON, current with the Warlock class): skill requirements, petmax/HP/damage/synergy formulas from skills.json and skilldesc.json, runeword runes/types/levels from runes.json + misc.json (rune levelreq), base requirements and socket limits from weapons.json/armor.json/itemtypes.json, unique/set stats from uniqueitems.json/setitems.json, merc auras from hireling.json. Not from a build guide.",
+  "targets": {
+    "level_milestones": [
+      {
+        "when": "level 6",
+        "target": "Summon Spirit Wolf (reqlevel 6, needs Raven)"
+      },
+      {
+        "when": "level 18",
+        "target": "Summon Dire Wolf + Heart of Wolverine (reqlevel 18; Dire Wolf needs Oak Sage and Spirit Wolf)"
+      },
+      {
+        "when": "level 30",
+        "target": "Summon Grizzly (reqlevel 30, needs Dire Wolf)"
+      },
+      {
+        "when": "level 45",
+        "target": "Raven Frost (ring, reqlevel 45): Cannot Be Frozen; one Cannot Be Frozen item is required for the Fury switch"
+      },
+      {
+        "when": "level 51",
+        "target": "Summon Grizzly 20 (+215% damage for the Spirit Wolves, Dire Wolves and the bear)"
+      },
+      {
+        "when": "level 60",
+        "target": "Summon Spirit Wolf 20 with the Hell Den of Evil point (+500% attack rating, +200% defense for Dire Wolves and the Grizzly)"
+      },
+      {
+        "when": "level 75",
+        "target": "optional switch to Fury once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer, Smoke, life-leech merc helm) is owned: 86 skill points (74 from levels + 12 from Den of Evil, Radament and Izual in all three difficulties). Oak Sage 20 (+125% life) by now. Otherwise the summoner continues"
+      },
+      {
+        "when": "level 90",
+        "target": "Raven 20 (31 hits each, 73-94 base damage +720% from the 60 wolf/bear base levels)"
+      },
+      {
+        "when": "level 99",
+        "target": "Arctic Blast 1 + Cyclone Armor 8 (Cyclone Armor reqlevel 12, needs Arctic Blast): absorbs 124 fire/cold/lightning damage per cast"
+      }
+    ],
+    "skill_points": "1 per level from level 2 plus quests: Den of Evil +1, Radament +1, Izual +2 per difficulty (12 in total). Level 40 = 39 + 4 (Normal) + 1 (Nightmare Den) = 44; level 75 = 74 + 12 = 86; level 99 = 98 + 12 = 110.",
+    "summons": "From skills.json: Raven count min(lvl,5), 12+lvl-1 hits, damage +12% per Spirit/Dire Wolf/Grizzly base level. Spirit Wolf count min(lvl,5), its points give Dire Wolves and the Grizzly +25% attack rating and +10% defense each. Dire Wolf count min(lvl,3), damage 7-12 (lvl 1) / 15-24 (5) / 37-53 (12) / 85-109 (20), HP +60% at 1 to +535% at 20, and each Dire Wolf point gives Spirit Wolves and the Grizzly +15% life. Grizzly 30-60 base, its points give Spirit Wolves, Dire Wolves and itself +25% damage +10% per level. Spirit Wolves and Dire Wolves are separate pet types, so 5 + 3 + bear + 5 ravens fight together. Pet level is the character level (calc2 ulvl), so the summons keep up without points; points add the synergies above.",
+    "survival": "Oak Sage: +30% life (+5%/level) for you, the merc and the pets (Oak Sage Aura); 20 points by 75 = +125%. Cyclone Armor (8 points from 92, after Arctic Blast 1) absorbs 40 + 12/level fire, cold and lightning damage per cast (124 at level 8), recast as it wears off. Heart of Wolverine (+20% damage +7%/level, +25% AR +7%/level) stays at 1 point: a Grizzly point gives +10% damage, more than Wolverine's +7%, and only one spirit is out at a time.",
+    "respec": "optional, from 75 (Akara's free reset of any difficulty whose Den of Evil reward is still unused; stat points are refunded too): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20 (460 s form), Rabies 1, Oak Sage 5 = 86 points. Only once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer, Smoke, life-leech merc helm) is owned; without it the summoner goes on to 99. Details in the Fury Druid stage."
+  },
+  "merc": {
+    "type": "Act 2 Desert Mercenary: Normal Prayer, from Nightmare (level 40) Might",
+    "why": "hireling.json: Normal Act 2 mercs have Prayer, Defiance or Blessed Aim; Might, Holy Freeze and Thorns only in Nightmare and Hell. Might raises physical damage of everyone in its radius (pets and, after the respec, the werewolf), so the same merc carries into the Fury stage."
+  },
+  "skill_plan": {
+    "entries": [
+      {
+        "stage": "lvl 1-12 (Normal Act 1-2: Ravens, then Spirit Wolves)",
+        "level": "2-5",
+        "skill": "Raven",
+        "points": 4,
+        "main_skill": "Raven",
+        "note": "Level 1 has no skill point. Ravens: 1 per level up to 5, 12-16 hits each; prerequisite of Spirit Wolf."
+      },
+      {
+        "stage": "lvl 1-12 (Normal Act 1-2: Ravens, then Spirit Wolves)",
+        "level": "Den of Evil (Normal)",
+        "skill": "Raven",
+        "points": 1,
+        "note": "Quest point: 5 ravens (petmax min(lvl,5))."
+      },
+      {
+        "stage": "lvl 1-12 (Normal Act 1-2: Ravens, then Spirit Wolves)",
+        "level": "6",
+        "skill": "Summon Spirit Wolf",
+        "points": 1,
+        "main_skill": "Summon Spirit Wolf",
+        "note": "reqlevel 6."
+      },
+      {
+        "stage": "lvl 1-12 (Normal Act 1-2: Ravens, then Spirit Wolves)",
+        "level": "7",
+        "skill": "Oak Sage",
+        "points": 1,
+        "note": "+30% life for you and the pets; prerequisite of Heart of Wolverine and Dire Wolf."
+      },
+      {
+        "stage": "lvl 1-12 (Normal Act 1-2: Ravens, then Spirit Wolves)",
+        "level": "8-12",
+        "skill": "Summon Spirit Wolf",
+        "points": 5,
+        "note": "5 Spirit Wolves at level 5 of the skill; Spirit Wolf 6 at 12."
+      },
+      {
+        "stage": "lvl 12-24 (Normal Act 2-4: Dire Wolves from 18)",
+        "level": "13-17",
+        "skill": "Summon Spirit Wolf",
+        "points": 5,
+        "note": "Spirit Wolf 11: +275% AR and +110% defense for the later Dire Wolves and Grizzly (Dire Wolf needs level 18)."
+      },
+      {
+        "stage": "lvl 12-24 (Normal Act 2-4: Dire Wolves from 18)",
+        "level": "Radament (Normal)",
+        "skill": "Heart of Wolverine",
+        "points": 1,
+        "note": "Quest point kept until 18 (Heart of Wolverine reqlevel 18)."
+      },
+      {
+        "stage": "lvl 12-24 (Normal Act 2-4: Dire Wolves from 18)",
+        "level": "18-24",
+        "skill": "Summon Dire Wolf",
+        "points": 7,
+        "main_skill": "Summon Dire Wolf",
+        "note": "reqlevel 18; 3 Dire Wolves from skill level 3."
+      },
+      {
+        "stage": "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)",
+        "level": "25-29",
+        "skill": "Summon Dire Wolf",
+        "points": 5,
+        "note": null
+      },
+      {
+        "stage": "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)",
+        "level": "Izual (Normal)",
+        "skill": "Summon Dire Wolf",
+        "points": 1,
+        "note": "Izual gives 2 points; keep one for the Grizzly at 30."
+      },
+      {
+        "stage": "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)",
+        "level": "30",
+        "skill": "Summon Grizzly",
+        "points": 1,
+        "main_skill": "Summon Grizzly",
+        "note": "reqlevel 30 (the kept Izual point)."
+      },
+      {
+        "stage": "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)",
+        "level": "30-36",
+        "skill": "Summon Dire Wolf",
+        "points": 7,
+        "note": "Dire Wolf 20 at 36: 85-109 damage, +535% life."
+      },
+      {
+        "stage": "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)",
+        "level": "Den of Evil (Nightmare)",
+        "skill": "Summon Grizzly",
+        "points": 1,
+        "note": "Quest point."
+      },
+      {
+        "stage": "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)",
+        "level": "37-40",
+        "skill": "Summon Grizzly",
+        "points": 4,
+        "note": "Grizzly 6: +75% damage to all wolves and the bear. At 40: Raven 5, Spirit Wolf 11, Oak Sage 1, Heart of Wolverine 1, Dire Wolf 20, Grizzly 6 = 44."
+      },
+      {
+        "stage": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+        "level": "41-44",
+        "skill": "Summon Grizzly",
+        "points": 4,
+        "note": "Grizzly first: +10% damage per point to 5 Spirit Wolves, 3 Dire Wolves and the bear (ravens +12% per base level)."
+      },
+      {
+        "stage": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+        "level": "Radament (Nightmare)",
+        "skill": "Summon Grizzly",
+        "points": 1,
+        "note": "Quest point."
+      },
+      {
+        "stage": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+        "level": "45-47",
+        "skill": "Summon Grizzly",
+        "points": 3,
+        "note": null
+      },
+      {
+        "stage": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+        "level": "Izual (Nightmare)",
+        "skill": "Summon Grizzly",
+        "points": 2,
+        "note": "Quest points."
+      },
+      {
+        "stage": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+        "level": "48-51",
+        "skill": "Summon Grizzly",
+        "points": 4,
+        "note": "Grizzly 20: +215% damage for every wolf and the bear, +200% bear life (+ Dire Wolf 20's +300%)."
+      },
+      {
+        "stage": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+        "level": "52-59",
+        "skill": "Summon Spirit Wolf",
+        "points": 8,
+        "note": "Spirit Wolf 19: +25% attack rating and +10% defense per point for Dire Wolves and the Grizzly; Hell monsters have high defense."
+      },
+      {
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "level": "Den of Evil (Hell)",
+        "skill": "Summon Spirit Wolf",
+        "points": 1,
+        "note": "Quest point: Spirit Wolf 20: +500% attack rating for Dire Wolves and the Grizzly, 85% resistances for the Spirit Wolves."
+      },
+      {
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "level": "60-64",
+        "skill": "Oak Sage",
+        "points": 5,
+        "note": "Oak Sage: +5% life per point for you, the merc and the pets."
+      },
+      {
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "level": "Radament (Hell)",
+        "skill": "Oak Sage",
+        "points": 1,
+        "note": "Quest point."
+      },
+      {
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "level": "65-68",
+        "skill": "Oak Sage",
+        "points": 4,
+        "note": null
+      },
+      {
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "level": "Izual (Hell)",
+        "skill": "Oak Sage",
+        "points": 2,
+        "note": "Quest points."
+      },
+      {
+        "stage": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+        "level": "69-75",
+        "skill": "Oak Sage",
+        "points": 7,
+        "note": "Oak Sage 20 (+125% life). At 75: Raven 5, Spirit Wolf 20, Oak Sage 20, Heart of Wolverine 1, Dire Wolf 20, Grizzly 20 = 86 (the Fury switch is possible from here)."
+      },
+      {
+        "stage": "lvl 75-99 (Hell endgame: Ravens to 20)",
+        "level": "76-90",
+        "skill": "Raven",
+        "points": 15,
+        "note": "Raven 20: 31 hits per raven, 73-94 base damage, +12% per base level of Spirit Wolf, Dire Wolf and Grizzly (+720% at 20/20/20)."
+      },
+      {
+        "stage": "lvl 75-99 (Hell endgame: Ravens to 20)",
+        "level": "91",
+        "skill": "Arctic Blast",
+        "points": 1,
+        "note": "reqlevel 6; prerequisite of Cyclone Armor (one point only)."
+      },
+      {
+        "stage": "lvl 75-99 (Hell endgame: Ravens to 20)",
+        "level": "92-99",
+        "skill": "Cyclone Armor",
+        "points": 8,
+        "note": "Cyclone Armor 8: absorbs 124 fire/cold/lightning damage per cast (40 + 12/level). At 99: Raven 20, Spirit Wolf 20, Oak Sage 20, Heart of Wolverine 1, Dire Wolf 20, Grizzly 20, Arctic Blast 1, Cyclone Armor 8 = 110."
+      }
+    ]
+  },
+  "respec": {
+    "into": "Fury Werewolf (next stage)",
+    "when": "optional, level 75 or later, once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer, Smoke, life-leech merc helm) is owned (Akara's free reset)",
+    "how": "Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20, Rabies 1, Oak Sage 5 = 86 points."
+  },
+  "items": [
+    {
+      "name": "Stoutnail",
+      "slot": "weapon",
+      "setup": "lvl 1-12 (Normal Act 1-2: Ravens, then Spirit Wolves)",
+      "kind": "unique",
+      "req_level": 5,
+      "base": "Spiked Club (ethereal), in the shared stash",
+      "stats": [
+        "+100% Enhanced Damage",
+        "+7 to Vitality",
+        "Magic Damage Reduced by 2",
+        "Attacker Takes Damage of 3-10"
+      ],
+      "why": "In the stash now; the druid hits along with the ravens until the wolves carry.",
+      "notes": "Wear from level 5; before that any club/staff from Akara/Charsi.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Spirit",
+      "slot": "weapon",
+      "setup": "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)",
+      "kind": "runeword",
+      "req_level": 25,
+      "base": "sword that dropped with 4 sockets: Broad Sword (48 Str) or Crystal Sword (43 Str), from item level 26 (Normal Act 5 / Cow Level / Nightmare)",
+      "stats": [
+        "+2 to All Skills",
+        "+25-35% Faster Cast Rate",
+        "+55% Faster Hit Recovery",
+        "+89-112 to Mana",
+        "+22 to Vitality",
+        "+250 Defense vs. Missile",
+        "+3-8 Magic Absorb"
+      ],
+      "why": "+2 to every summon; runes Tal Thul Ort Amn are all in the stash. The weapon until Heart of the Oak.",
+      "notes": "No socket quest for Spirit: the base must drop with exactly 4 sockets. itemtypes.json: swords drop with at most 3 sockets up to item level 25, 4 up to 40, 6 above. Broad Sword (one-handed) and Claymore (47 Str, two-handed) have at most 4 sockets, so any socketed one with 4 fits at every item level; a Crystal Sword above item level 40 can also roll 5-6 (no good). Shields need item level 41 for 4 sockets, so a Spirit shield is not possible yet.",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Ancients' Pledge",
+      "slot": "offhand",
+      "setup": "lvl 12-24 (Normal Act 2-4: Dire Wolves from 18)",
+      "kind": "runeword",
+      "req_level": 21,
+      "base": "3-socket non-class shield (Large Shield / Kite Shield / any 3-socket shield; druids can't use paladin shields)",
+      "stats": [
+        "+50% Enhanced Defense",
+        "Cold Resist +30%",
+        "All Resistances +13",
+        "10% Damage Taken Goes To Mana"
+      ],
+      "why": "Resistances for Nightmare; runes Ral Ort Tal in the stash.",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Swordback Hold",
+      "slot": "offhand",
+      "setup": "lvl 12-24 (Normal Act 2-4: Dire Wolves from 18)",
+      "kind": "unique",
+      "req_level": 15,
+      "base": "Spiked Shield (ethereal, 30 Str), in the shared stash",
+      "stats": [
+        "+30-60% Enhanced Defense",
+        "20% Increased Chance of Blocking",
+        "50% Chance of Open Wounds",
+        "Attacker Takes Damage of 10"
+      ],
+      "why": "In the stash: a shield from 15 until Ancients' Pledge at 21.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Stealth",
+      "slot": "body",
+      "setup": "lvl 12-24 (Normal Act 2-4: Dire Wolves from 18)",
+      "kind": "runeword",
+      "req_level": 17,
+      "base": "2-socket body armor: the stash's Ghost Armor 2os (level 22, 38 Str) or a Charsi Hard Leather Armor 2os at 17",
+      "stats": [
+        "+25% Faster Run/Walk",
+        "+25% Faster Cast Rate",
+        "+25% Faster Hit Recovery",
+        "+6 to Dexterity",
+        "Magic Damage Reduced by 3"
+      ],
+      "why": "Runes Tal Eth in the stash; FHR and run speed keep a summoner alive; worn until Enigma for its 25% Faster Cast Rate (Smoke is merc gear).",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Lore",
+      "slot": "helm",
+      "setup": "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)",
+      "kind": "runeword",
+      "req_level": 27,
+      "base": "2-socket helm: the stash's Bone Helm 2os (25 Str) or a 2-socket druid pelt",
+      "stats": [
+        "+1 to All Skills",
+        "+10 to Energy",
+        "+2 to Light Radius",
+        "+2 to Mana after each Kill"
+      ],
+      "why": "+1 to every summon.",
+      "notes": "MISSING the Sol rune (Ort is in the stash).",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Druid pelt with +summoning skills",
+      "slot": "helm",
+      "setup": "lvl 1-12 (Normal Act 1-2: Ravens, then Spirit Wolves)",
+      "kind": "magic",
+      "req_level": 3,
+      "base": "Wolf Head (level 3, 16 Str) or Hawk Helm; white or magic",
+      "stats": [
+        "+1-3 to Summon Spirit Wolf / Summon Dire Wolf / Raven / Oak Sage (class pelt mods)"
+      ],
+      "why": "Druid pelts roll +skills to druid skills; pick up every pelt and check it.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Manald Heal",
+      "slot": "ring",
+      "setup": "lvl 12-24 (Normal Act 2-4: Dire Wolves from 18)",
+      "kind": "unique",
+      "req_level": 15,
+      "base": "Ring, in the shared stash",
+      "stats": [
+        "4-7% Mana Stolen per Hit",
+        "Replenish Life +5-8",
+        "+20 to Life",
+        "Regenerate Mana 20%"
+      ],
+      "why": "In the stash: life regeneration and mana for the summons from 15.",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Insight",
+      "slot": "merc_weapon",
+      "setup": "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)",
+      "kind": "runeword",
+      "req_level": 27,
+      "base": "polearm that dropped with 4 sockets (Act 2 merc; spears can't hold Insight): Voulge (50 Str, at most 4 sockets), Scythe (41 Str / 41 Dex), Poleaxe (62 Str); polearms drop with at most 3 sockets up to item level 25, 4 up to 40, so from Normal Act 5 / Cow Level / Nightmare",
+      "stats": [
+        "Level 12-17 Meditation Aura When Equipped",
+        "+35% Faster Cast Rate",
+        "+200-260% Enhanced Damage",
+        "+23% Better Chance of Getting Magic Items"
+      ],
+      "why": "Meditation pays for re-summoning.",
+      "notes": "MISSING Tir and Sol (Ral, Tal in the stash). Until then The Battlebranch or Soul Harvest (both in the stash).",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Spirit",
+      "slot": "offhand",
+      "setup": "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)",
+      "kind": "runeword",
+      "req_level": 54,
+      "base": "4-socket Monarch (156 Str, item level 41+; the only non-class shield a druid can wear with 4 sockets before Aegis/Ward)",
+      "stats": [
+        "+2 to All Skills",
+        "+25-35% Faster Cast Rate",
+        "+55% Faster Hit Recovery",
+        "+89-112 to Mana",
+        "+22 to Vitality",
+        "+250 Defense vs. Missile",
+        "+3-8 Magic Absorb"
+      ],
+      "why": "A second +2 to every summon; the stash has runes for two Spirits (Thul 3).",
+      "notes": "Option only: 156 Str costs stat points a summoner wants in Vitality (Akara's reset at 75 refunds them). Monarch is qlvl 72, so it drops in Hell. Otherwise keep Ancients' Pledge.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Jalal's Mane",
+      "slot": "helm",
+      "setup": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+      "kind": "unique",
+      "req_level": 42,
+      "base": "Totemic Mask (druid pelt, 65 Str)",
+      "stats": [
+        "+2 to Druid Skill Levels",
+        "+2 to Shape Shifting Skills",
+        "+30% Faster Hit Recovery",
+        "+20% Attack Rating bonus",
+        "+20 to Strength",
+        "+20 to Energy",
+        "All Resistances +30",
+        "+5 to Mana after each Kill",
+        "+150-200% Enhanced Defense"
+      ],
+      "why": "+2 to every summon and +30 all resistances for Nightmare/Hell; the Fury core helm, so it stays on after the respec.",
+      "rank_in_slot": 0
+    },
+    {
+      "name": "Smoke",
+      "slot": "merc_body",
+      "setup": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+      "kind": "runeword",
+      "req_level": 37,
+      "base": "2-socket body armor: the stash's Ghost Armor 2os (38 Str)",
+      "stats": [
+        "All Resistances +50",
+        "+20% Faster Hit Recovery",
+        "+75% Enhanced Defense",
+        "+250 Defense vs. Missile",
+        "Level 6 Weaken (18 Charges)"
+      ],
+      "why": "Merc armor: +50 all resistances against Nightmare's -40 and Hell's -100 penalty (difficultylevels.json) for the Might merc; Smoke is always merc gear and stays on the merc in the Fury stage.",
+      "notes": "Nef Lum: missing Lum.",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Bloodfist",
+      "slot": "gloves",
+      "setup": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+      "kind": "unique",
+      "req_level": 9,
+      "base": "Heavy Gloves",
+      "stats": [
+        "+30% Faster Hit Recovery",
+        "+40 to Life",
+        "+10% Increased Attack Speed",
+        "+5 to Minimum Damage",
+        "+10-20% Enhanced Defense"
+      ],
+      "why": "Survivability: 30% FHR and +40 life (Laying of Hands replaces it only after a Fury switch).",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "String of Ears",
+      "slot": "belt",
+      "setup": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+      "kind": "unique",
+      "req_level": 29,
+      "base": "Demonhide Sash (20 Str)",
+      "stats": [
+        "Physical Damage Taken Reduced by 10-15%",
+        "Magic Damage Reduced by 10-15",
+        "6-8% Life Stolen per Hit",
+        "+150-180% Enhanced Defense"
+      ],
+      "why": "Physical and magic damage reduction for the summoner; a Fury belt option after the respec.",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Sigon's Sabot",
+      "slot": "boots",
+      "setup": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+      "kind": "set",
+      "req_level": 6,
+      "base": "Greaves (70 Str), in the shared stash",
+      "stats": [
+        "+20% Faster Run/Walk",
+        "Cold Resist +40%"
+      ],
+      "why": "In the stash: run speed and cold resistance (Raven Frost absorbs cold too).",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Raven Frost",
+      "slot": "ring",
+      "setup": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+      "kind": "unique",
+      "req_level": 45,
+      "base": "Ring",
+      "stats": [
+        "Cannot Be Frozen",
+        "20% Cold Absorb",
+        "+150-250 to Attack Rating",
+        "+15-20 to Dexterity",
+        "Adds 15-45 Cold Damage",
+        "+40 to Mana"
+      ],
+      "why": "Cannot Be Frozen keeps the summoner moving in Hell; one Cannot Be Frozen item is required before the Fury switch (switch_requires).",
+      "rank_in_slot": 0
+    },
+    {
+      "name": "The Battlebranch",
+      "slot": "merc_weapon",
+      "setup": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+      "kind": "unique",
+      "req_level": 17,
+      "base": "Poleaxe (polearm, 62 Str), in the shared stash",
+      "stats": [
+        "+30% Increased Attack Speed",
+        "7% Life Stolen per Hit",
+        "+50-70% Enhanced Damage",
+        "+50-100 to Attack Rating",
+        "+10 to Dexterity"
+      ],
+      "why": "In the stash: life steal keeps the Might merc alive until Insight.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Soul Harvest",
+      "slot": "merc_weapon",
+      "setup": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
+      "kind": "unique",
+      "req_level": 19,
+      "base": "Scythe (polearm, 41 Str / 41 Dex), in the shared stash",
+      "stats": [
+        "All Resistances +20",
+        "10% Mana Stolen per Hit",
+        "30% Chance of Open Wounds",
+        "+50-90% Enhanced Damage",
+        "+45 to Attack Rating",
+        "+5 to Energy"
+      ],
+      "why": "In the stash: +20 all resistances for the merc; the other option until Insight.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Heart of the Oak",
+      "slot": "weapon",
+      "setup": "lvl 75-99 (Hell endgame: Ravens to 20)",
+      "kind": "runeword",
+      "req_level": 55,
+      "base": "Flail (41 Str / 35 Dex) that dropped with 4 sockets (maces: at most 3 sockets up to item level 25, 4 up to 40, the Flail up to 5 above), or a Gnarled Staff / Battle Staff that dropped with 4 (no requirements, at most 4 sockets; two-handed, no shield)",
+      "stats": [
+        "+3 to All Skills",
+        "+40% Faster Cast Rate",
+        "All Resistances +30-40",
+        "Replenish Life +20",
+        "+15% Maximum Mana",
+        "Level 4 Oak Sage (25 Charges)",
+        "Level 14 Raven (60 Charges)"
+      ],
+      "why": "+3 to every summon (one more than Spirit) and +30-40 all resistances.",
+      "notes": "Ko Vex Pul Thul: Thul in the stash; Ko, Vex and Pul missing.",
+      "rank_in_slot": 0
+    },
+    {
+      "name": "Enigma",
+      "slot": "body",
+      "setup": "lvl 75-99 (Hell endgame: Ravens to 20)",
+      "kind": "runeword",
+      "req_level": 65,
+      "base": "3-socket body armor",
+      "stats": [
+        "+2 to All Skills",
+        "+45% Faster Run/Walk",
+        "+1 to Teleport",
+        "+750-775 Defense",
+        "+0.75 to Strength per character level",
+        "+14 Life after each Kill",
+        "1% Better Chance of Getting Magic Items per character level"
+      ],
+      "why": "+2 to every summon and Teleport to reposition; Strength per level pays for Monarch / Jalal's Mane.",
+      "notes": "Jah Ith Ber: Ith in the stash; Jah and Ber missing. Stealth stays until then.",
+      "rank_in_slot": 0
+    },
+    {
+      "name": "Mara's Kaleidoscope",
+      "slot": "amulet",
+      "setup": "lvl 75-99 (Hell endgame: Ravens to 20)",
+      "kind": "unique",
+      "req_level": 67,
+      "base": "Amulet",
+      "stats": [
+        "+2 to All Skills",
+        "All Resistances +20-30",
+        "+5 to all Attributes"
+      ],
+      "why": "+2 to every summon and +20-30 all resistances.",
+      "rank_in_slot": 0
+    },
+    {
+      "name": "Arachnid Mesh",
+      "slot": "belt",
+      "setup": "lvl 75-99 (Hell endgame: Ravens to 20)",
+      "kind": "unique",
+      "req_level": 80,
+      "base": "Spiderweb Sash (50 Str)",
+      "stats": [
+        "+1 to All Skills",
+        "+20% Faster Cast Rate",
+        "Increase Maximum Mana 5%",
+        "Slows Target by 10%",
+        "Level 3 Venom (11 Charges)",
+        "+90-120% Enhanced Defense"
+      ],
+      "why": "+1 to every summon from 80; String of Ears stays for its damage reduction until then.",
+      "rank_in_slot": 0
+    },
+    {
+      "name": "Sandstorm Trek",
+      "slot": "boots",
+      "setup": "lvl 75-99 (Hell endgame: Ravens to 20)",
+      "kind": "unique",
+      "req_level": 64,
+      "base": "Scarabshell Boots (91 Str)",
+      "stats": [
+        "+20% Faster Hit Recovery",
+        "+20% Faster Run/Walk",
+        "+10-15 to Strength",
+        "+10-15 to Vitality",
+        "Poison Resist +40-70%",
+        "+140-170% Enhanced Defense"
+      ],
+      "why": "Survivability: FHR, Vitality and Strength (for the Monarch) over Sigon's Sabot.",
+      "rank_in_slot": 0
+    }
+  ],
+  "recipes": [
+    {
+      "name": "Stealth",
+      "kind": "runeword",
+      "inputs": [
+        "Tal",
+        "Eth"
+      ],
+      "result": "Stealth (Body Armor)",
+      "req": {
+        "level": 17,
+        "sockets": 2,
+        "allowed_bases": [
+          "Body Armor"
+        ]
+      },
+      "notes": "Runes in the stash (Tal 13, Eth 6)."
+    },
+    {
+      "name": "Ancients' Pledge",
+      "kind": "runeword",
+      "inputs": [
+        "Ral",
+        "Ort",
+        "Tal"
+      ],
+      "result": "Ancients' Pledge (Shields)",
+      "req": {
+        "level": 21,
+        "sockets": 3,
+        "allowed_bases": [
+          "Shields"
+        ]
+      },
+      "notes": "Runes in the stash (Ral 10, Ort 9, Tal 13)."
+    },
+    {
+      "name": "Spirit",
+      "kind": "runeword",
+      "inputs": [
+        "Tal",
+        "Thul",
+        "Ort",
+        "Amn"
+      ],
+      "result": "Spirit (Swords / Shields)",
+      "req": {
+        "level": 25,
+        "sockets": 4,
+        "allowed_bases": [
+          "Swords"
+        ]
+      },
+      "notes": "Runes in the stash (Thul 4, Amn 8). A 4-socket sword needs item level 26+."
+    },
+    {
+      "name": "Smoke",
+      "kind": "runeword",
+      "inputs": [
+        "Nef",
+        "Lum"
+      ],
+      "result": "Smoke (Body Armor)",
+      "req": {
+        "level": 37,
+        "sockets": 2,
+        "allowed_bases": [
+          "Body Armor"
+        ]
+      },
+      "notes": "Missing: Lum (Nef 5 in the stash)."
+    },
+    {
+      "name": "Lore",
+      "kind": "runeword",
+      "inputs": [
+        "Ort",
+        "Sol"
+      ],
+      "result": "Lore (Helms)",
+      "req": {
+        "level": 27,
+        "sockets": 2,
+        "allowed_bases": [
+          "Helms"
+        ]
+      },
+      "notes": "Missing: Sol."
+    },
+    {
+      "name": "Insight",
+      "kind": "runeword",
+      "inputs": [
+        "Ral",
+        "Tir",
+        "Tal",
+        "Sol"
+      ],
+      "result": "Insight (Polearms / Staves / Missile weapons)",
+      "req": {
+        "level": 27,
+        "sockets": 4,
+        "allowed_bases": [
+          "Polearms",
+          "Staves"
+        ]
+      },
+      "notes": "Merc weapon. Missing: Tir, Sol."
+    },
+    {
+      "name": "Reserved socket quest: ethereal Ribcracker / Tomb Reaver",
+      "kind": "socket",
+      "quest": "Siege on Harrogath",
+      "inputs": [
+        "unsocketed ethereal Ribcracker or Tomb Reaver",
+        "Zod Rune"
+      ],
+      "result": "1 socket (a unique always gets one) for a Zod rune: the ethereal weapon becomes indestructible",
+      "req": "Act 5 Siege on Harrogath (any difficulty whose reward is unused)",
+      "notes": "Reserved: spend the socket reward on nothing else. Runeword bases (Spirit, Insight, Heart of the Oak, Harmony, ...) must drop with exactly their socket count; the farm list names them."
+    },
+    {
+      "name": "Heart of the Oak",
+      "kind": "runeword",
+      "inputs": [
+        "Ko",
+        "Vex",
+        "Pul",
+        "Thul"
+      ],
+      "result": "Heart of the Oak (Staves / Maces)",
+      "req": {
+        "level": 55,
+        "sockets": 4,
+        "allowed_bases": [
+          "Maces",
+          "Staves"
+        ]
+      },
+      "notes": "Missing: Ko, Vex, Pul (Thul in the stash)."
+    },
+    {
+      "name": "Enigma",
+      "kind": "runeword",
+      "inputs": [
+        "Jah",
+        "Ith",
+        "Ber"
+      ],
+      "result": "Enigma (Body Armor)",
+      "req": {
+        "level": 65,
+        "sockets": 3,
+        "allowed_bases": [
+          "Body Armor"
+        ]
+      },
+      "notes": "Missing: Jah, Ber (Ith in the stash)."
+    }
+  ],
+  "act_tips": [
+    {
+      "range": "lvl 1-12 (Normal Act 1-2)",
+      "tips": [
+        "Level 1 has no skill point: melee with a club/staff; Raven from level 2.",
+        "Wear Stoutnail (stash) from level 5.",
+        "Spirit Wolves from 6, Oak Sage at 7; buy a 2-socket Hard Leather Armor at Charsi if the stash's Ghost Armor (level 22) is too far.",
+        "Pick up every druid pelt: +skills to Spirit Wolf / Dire Wolf / Raven are worth wearing."
+      ]
+    },
+    {
+      "range": "lvl 12-24 (Normal Act 2-4)",
+      "tips": [
+        "Spirit Wolf to 11 by 17 (+25% attack rating per point for the Dire Wolves and Grizzly).",
+        "Hire an Act 2 merc with Prayer (Normal: Prayer / Defiance / Blessed Aim only).",
+        "Stealth at 17 (Tal Eth), Swordback Hold and Manald Heal from 15 (both in the stash), Ancients' Pledge at 21 (Ral Ort Tal).",
+        "Keep Radament's point for Heart of Wolverine at 18; Dire Wolves at 18."
+      ]
+    },
+    {
+      "range": "lvl 24-40 (Normal Act 5 - Nightmare)",
+      "tips": [
+        "Pick up white Broad Swords / Crystal Swords that dropped with 4 sockets (Normal Act 5, the Cow Level or Nightmare: item level 26+) for Spirit (Tal Thul Ort Amn, all in the stash); the dashboard's farm list names the bases.",
+        "Keep one Izual point for the Grizzly at 30.",
+        "No reset at 40: the summoner continues."
+      ]
+    },
+    {
+      "range": "lvl 40-60 (Nightmare)",
+      "tips": [
+        "Hire a Nightmare Act 2 Might merc (Normal mercs have no Might); give it The Battlebranch or Soul Harvest from the stash until Insight.",
+        "Grizzly to 20 first (quest points from Radament and Izual too): +10% damage per point for every pet.",
+        "Wear Jalal's Mane (42) and Raven Frost (45) as soon as found: they stay on after the Fury respec. Smoke (37, needs Lum) goes on the merc.",
+        "Farm for Raven Frost from 45: the Fury switch needs a Cannot Be Frozen item."
+      ]
+    },
+    {
+      "range": "lvl 60-75 (Hell)",
+      "tips": [
+        "Spirit Wolf to 20 (Hell Den point too), then Oak Sage to 20 by 75.",
+        "Hell has -100 resistances: Jalal's Mane and Ancients' Pledge give +30/+13 all, the merc's Smoke +50 all for the merc.",
+        "From 75 with the switch gear: optionally respec at Akara into Fury (see the switch note) and swap the weapon and gloves."
+      ]
+    },
+    {
+      "range": "lvl 75-99 (Hell endgame)",
+      "tips": [
+        "Staying a summoner: Ravens to 20 by 90 (their damage grows with the 60 wolf/bear base levels), then Arctic Blast 1 and Cyclone Armor with the rest (absorbs elemental damage; recast it).",
+        "Heart of the Oak (Ko Vex Pul Thul, 4-socket mace or staff) replaces the Spirit sword; Enigma (Jah Ith Ber) replaces Stealth when found."
+      ]
+    }
+  ]
+}

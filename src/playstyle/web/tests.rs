@@ -42,12 +42,17 @@ fn shop_json(info: &PanelInfo) -> serde_json::Value {
     crate::web::vendor::shop_json(&info.live, &gear::shop_notes(info))
 }
 
+/// The settings of a `bis.toml` / old `config.toml` text, with its warnings.
+fn settings(text: &str) -> Result<(crate::playstyle::config::Settings, Vec<String>), toml::de::Error> {
+    crate::playstyle::config::parse_tables(text).map(|(tables, warnings)| (tables.into_settings(), warnings))
+}
+
 #[test]
 fn set_bis_selection_preserves_comments_and_round_trips() -> Result<()> {
     let text = "# top\n[bis.Hork]\n# build line\nbuild = \"Blood Boil\"\n";
     let out = set_bis_selection(text, "Hork", Some("blood boil")).ok_or_else(|| anyhow!("no edit"))?;
     assert!(out.contains("# top") && out.contains("# build line"), "{out}");
-    let (config, _) = config::parse(&out)?;
+    let (config, _) = settings(&out)?;
     assert_eq!(
         config.bis.get("hork").map(|b| b.build.as_str()),
         Some("blood boil")
@@ -58,7 +63,7 @@ fn set_bis_selection_preserves_comments_and_round_trips() -> Result<()> {
 #[test]
 fn set_bis_selection_creates_missing_tables_and_names_with_spaces() -> Result<()> {
     let out = set_bis_selection("", "Demon Master", Some("blood boil")).ok_or_else(|| anyhow!("no edit"))?;
-    let (config, warnings) = config::parse(&out)?;
+    let (config, warnings) = settings(&out)?;
     assert_eq!(
         config.bis.get("demon master").map(|b| b.build.as_str()),
         Some("blood boil")
@@ -75,7 +80,7 @@ fn clearing_a_selection_removes_the_build_and_empty_entries() -> Result<()> {
     assert_eq!(out, "", "the emptied entry is removed: {out}");
     let inline = "[bis.Hork]\nbuild = \"b\"\n[bis.Hork.slots]\nweapon = [\"Insight@27\"]\n";
     let out = set_bis_selection(inline, "Hork", None).ok_or_else(|| anyhow!("no edit"))?;
-    let (config, _) = config::parse(&out)?;
+    let (config, _) = settings(&out)?;
     let bis = config.bis.get("hork").ok_or_else(|| anyhow!("gone"))?;
     assert_eq!(bis.build, "");
     assert_eq!(
@@ -95,8 +100,8 @@ fn set_bis_selection_rejects_non_table_bis() {
 
 /// A config with one build definition and a selection-only character, plus a builds-only
 /// character, for the resolved-view tests.
-fn resolved_config() -> crate::config::Config {
-    let mut config = crate::config::Config::default();
+fn resolved_config() -> crate::playstyle::config::Settings {
+    let mut config = crate::playstyle::config::Settings::default();
     config.build_defs.insert(
         "blood boil".to_owned(),
         crate::config::Build {
@@ -144,7 +149,7 @@ fn names_of(json: &serde_json::Value) -> Vec<String> {
 
 #[test]
 fn config_json_lists_every_character_once_recently_played_first() {
-    let mut config = crate::config::Config::default();
+    let mut config = crate::playstyle::config::Settings::default();
     for name in ["demonmaster", "elemental", "fulmina", "vex"] {
         let bis = crate::config::Bis {
             build: String::new(),
@@ -240,7 +245,7 @@ fn remove_character_drops_every_spelling_and_keeps_the_rest() -> Result<()> {
     }
     assert!(!out.to_lowercase().contains("bis.fulmina"), "{out}");
     assert!(!out.contains("Insight"), "{out}");
-    let (config, _) = config::parse(&out)?;
+    let (config, _) = settings(&out)?;
     assert_eq!(config.bis.keys().collect::<Vec<_>>(), ["demonmaster", "vex"]);
     assert_eq!(config.builds.names.keys().collect::<Vec<_>>(), ["vex"]);
     assert_eq!(config.builds.classes.len(), 1, "the class table is untouched");

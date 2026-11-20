@@ -1,27 +1,311 @@
-//! The playstyle's half of the configuration: the agent-authored build files and farm list,
-//! and the stage logic over them. `config.toml` itself (shrines, valuables tiers, the
-//! per-character `[bis]` selection, `[builds]` damages) is parsed by [`crate::config`], which
-//! re-exports everything here under its old paths (`crate::config::Build`, ...).
+//! The playstyle's settings ([`Settings`]): the agent-authored build files and farm list, the
+//! valuables tiers, the damage defaults and each character's build selection, and the stage
+//! logic over them. Where each comes from (the playstyle folder, the user's overrides, the old
+//! places in the config dir) is [`super::files`]; the core re-exports the types here under
+//! their old paths (`crate::config::Build`, ...).
 //!
-//! Build definitions live in `builds/<slug>.toml` next to `config.toml`, one build per file,
-//! authored by the agent (not edited in the webapp); the config only *selects* one per
-//! character via `[bis.<name>] build = "<slug>"` (user decision, 2026-11-17).
+//! Build definitions live in `builds/<slug>.toml`, one build per file, authored by the agent
+//! (not edited in the webapp); a character only *selects* one via `[bis.<name>] build =
+//! "<slug>"` (user decision, 2026-11-17), written by the `/config` page into `bis.toml`.
 //!
-//! The cross-character farm list lives in `farm.toml` next to `config.toml`, agent-authored
-//! too ([`load_farm`]); it is loaded with the config and hot-reloaded with it.
+//! The cross-character farm list lives in `farm.toml`, agent-authored too ([`parse_farm`]);
+//! it is hot-reloaded with the build files.
 
 use std::collections::BTreeMap;
-use std::io;
-use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 use crate::build::Damage;
-use crate::config::{Bis, CLASS_NAMES, Config, class_id, clean_pieces, damages, parse_slot_tables};
+use crate::config::{CLASS_NAMES, SLOT_NAMES, class_id};
+use crate::valuables::{Category, Tier};
 // The skill plan format is the core skills panel's; the build files carry it.
 pub use crate::web::SkillTarget;
 
-/// An agent-authored build definition from `builds/<slug>.toml` (see [`load_builds`]): display
+/// The playstyle's settings, as loaded from its files ([`super::files::load`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Settings {
+    /// `[valuables]`: the drop mark tiers.
+    pub valuables: Valuables,
+    /// `[damages]` (`playstyle.toml`; `[builds]` in an old `config.toml`): damage types per
+    /// character and class.
+    pub builds: Builds,
+    /// Per-character `BiS` selection and optional legacy inline gear list (`[bis.<name]`).
+    pub bis: BTreeMap<String, Bis>,
+    /// The agent-authored build definitions from `builds/*.toml`, keyed by lowercased build
+    /// name — the `slug` a `[bis.<name>]` `build` selection refers to (see [`parse_build`]).
+    pub build_defs: BTreeMap<String, Build>,
+    /// The cross-character farm list from `farm.toml` (see [`parse_farm`]); empty when the
+    /// file is missing or invalid.
+    pub farm: Vec<FarmGroup>,
+}
+
+/// A character's `BiS` selection and (legacy) inline gear list: `[bis.<name>]` (user request,
+/// 2026-11-17). Since the build files exist, the webapp writes only `build` here; the inline
+/// `slots`/`merc_slots` stay for hand-written entries and win over the selected build's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bis {
+    /// The selected build's slug (lowercased build name from `builds/*.toml`, e.g.
+    /// "blood boil"); empty when the entry is inline-only or nothing is selected.
+    pub build: String,
+    /// Slot name → pieces in chase order (`"Name@<required level>"`; the guide shows the
+    /// highest-level one the character can currently use, so a slot can graduate from Spirit
+    /// to Enigma as the character levels).
+    pub slots: BTreeMap<String, Vec<String>>,
+    /// The mercenary's slot name → pieces.
+    pub merc_slots: BTreeMap<String, Vec<String>>,
+}
+
+/// `[valuables]`: the tiers highlighted per category (see [`crate::valuables`]).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Valuables {
+    pub trade: Vec<Tier>,
+    pub twink: Vec<Tier>,
+}
+
+impl Default for Valuables {
+    fn default() -> Self {
+        Self {
+            trade: vec![Tier::S, Tier::A],
+            twink: vec![Tier::S, Tier::A],
+        }
+    }
+}
+
+impl Valuables {
+    /// Every tier of both categories (what the reader keeps as candidates).
+    pub fn everything() -> Self {
+        let all = vec![Tier::S, Tier::A, Tier::B];
+        Self {
+            trade: all.clone(),
+            twink: all,
+        }
+    }
+
+    pub fn enabled(&self, category: Category, tier: Tier) -> bool {
+        match category {
+            Category::Trade => &self.trade,
+            Category::Twink => &self.twink,
+        }
+        .contains(&tier)
+    }
+}
+
+/// `[damages]`: each character's damage types, primary first (see [`crate::build`]); by name,
+/// else by class (`[damages.class]`). Empty by default: the builds' damages count.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Builds {
+    /// Lowercased character name → damage types.
+    pub names: BTreeMap<String, Vec<Damage>>,
+    /// Class id (0..=7, see [`CLASS_NAMES`]) → damage types.
+    pub classes: BTreeMap<u32, Vec<Damage>>,
+}
+
+/// The playstyle tables one TOML file sets; `None` where the file has no such table.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Tables {
+    pub valuables: Option<Valuables>,
+    /// `[damages]` (`playstyle.toml`) or `[builds]` (an old `config.toml`).
+    pub damages: Option<Builds>,
+    pub bis: Option<BTreeMap<String, Bis>>,
+}
+
+#[cfg(test)]
+impl Tables {
+    /// The settings these tables give on their own (defaults for the absent ones; no builds,
+    /// no farm list).
+    #[must_use]
+    pub fn into_settings(self) -> Settings {
+        Settings {
+            valuables: self.valuables.unwrap_or_default(),
+            builds: self.damages.unwrap_or_default(),
+            bis: self.bis.unwrap_or_default(),
+            ..Settings::default()
+        }
+    }
+}
+
+/// `config.toml` (old places) or `bis.toml` as written: only the playstyle's tables are read;
+/// the core's (`[shrines]`, `playstyle`) are [`crate::config`]'s.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawTables {
+    valuables: Option<Valuables>,
+    builds: Option<RawBuilds>,
+    bis: Option<BTreeMap<String, RawBis>>,
+}
+
+/// `playstyle.toml` as written.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPlaystyle {
+    name: String,
+    /// For people reading the folder; shown nowhere yet.
+    #[serde(default, rename = "description")]
+    _description: String,
+    valuables: Option<Valuables>,
+    damages: Option<RawBuilds>,
+}
+
+/// `[damages]` / `[builds]` as written: character name = damage names, plus the `class` table
+/// (class id or name = damage names).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawBuilds {
+    class: BTreeMap<String, Vec<String>>,
+    /// Every other key: a character name.
+    #[serde(flatten)]
+    names: BTreeMap<String, Vec<String>>,
+}
+
+/// `[bis.<name>]` as written: the selected build's `slug` and the per-slot pieces
+/// (`slots` for the character, `merc_slots` for the mercenary — legacy inline lists the webapp
+/// no longer edits; they win over the selected build's slots).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawBis {
+    build: String,
+    slots: BTreeMap<String, Vec<String>>,
+    merc_slots: BTreeMap<String, Vec<String>>,
+}
+
+/// The known damage types among `names` (in order, without repeats); warns about the others.
+pub fn damages(names: &[String], whose: &str, warnings: &mut Vec<String>) -> Vec<Damage> {
+    let mut out = Vec::new();
+    for name in names {
+        match Damage::from_name(name) {
+            Some(d) if !out.contains(&d) => out.push(d),
+            Some(_) => {}
+            None => {
+                let known: Vec<&str> = Damage::ALL.iter().map(|d| d.name()).collect();
+                warnings.push(format!(
+                    "build {whose}: unknown damage {name:?} ignored (known: {})",
+                    known.join(", ")
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Trims a piece list and drops the blanks (`" "` entries are never meaningful).
+pub fn clean_pieces(pieces: &[String]) -> Vec<String> {
+    pieces
+        .iter()
+        .map(|p| p.trim().to_owned())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Parses a `slots`/`merc_slots` piece table (`"Piece"` or `"Piece@<required level>"` per
+/// slot): blanks dropped, empty lists dropped, unknown slot names warned about and ignored.
+/// `label` names the entry in the warnings (e.g. `bis Demonmaster`).
+pub fn parse_slot_tables(
+    raw: BTreeMap<String, Vec<String>>,
+    label: &str,
+    warnings: &mut Vec<String>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut out = BTreeMap::new();
+    for (slot, pieces) in raw {
+        let cleaned = clean_pieces(&pieces);
+        if cleaned.is_empty() {
+            continue;
+        }
+        if SLOT_NAMES.contains(&slot.as_str()) {
+            out.insert(slot, cleaned);
+        } else {
+            warnings.push(format!(
+                "{label}: unknown slot {slot:?} ignored (known: {})",
+                SLOT_NAMES.join(", ")
+            ));
+        }
+    }
+    out
+}
+
+fn builds(raw: RawBuilds, warnings: &mut Vec<String>) -> Builds {
+    let mut builds = Builds::default();
+    for (name, list) in raw.names {
+        let list = damages(&list, &name, warnings);
+        builds.names.insert(name.to_lowercase(), list);
+    }
+    for (key, list) in raw.class {
+        let list = damages(&list, &format!("class {key}"), warnings);
+        match class_id(&key) {
+            Some(id) => {
+                builds.classes.insert(id, list);
+            }
+            None => warnings.push(format!(
+                "build: unknown class {key:?} ignored (known: 0..7 or {})",
+                CLASS_NAMES.join(", ")
+            )),
+        }
+    }
+    builds
+}
+
+fn bis_entries(raw: BTreeMap<String, RawBis>, warnings: &mut Vec<String>) -> BTreeMap<String, Bis> {
+    let mut bis = BTreeMap::new();
+    for (name, raw) in raw {
+        let label = format!("bis {name}");
+        let slots = parse_slot_tables(raw.slots, &label, warnings);
+        let merc_slots = parse_slot_tables(raw.merc_slots, &label, warnings);
+        // Selection-only entries (`build` without any slots) are the webapp's normal output;
+        // an entry with neither a build nor slots does nothing and is ignored with a warning.
+        let build = raw.build.trim().to_owned();
+        if build.is_empty() && slots.is_empty() && merc_slots.is_empty() {
+            warnings.push(format!(
+                "bis {name}: needs a build selection or at least one slot piece; ignored"
+            ));
+            continue;
+        }
+        bis.insert(
+            name.to_lowercase(),
+            Bis {
+                build,
+                slots,
+                merc_slots,
+            },
+        );
+    }
+    bis
+}
+
+/// Parses the playstyle tables of a `config.toml` (old places: `[valuables]`, `[builds]`,
+/// `[bis]`; other tables are the core's and skipped) or of `bis.toml`; also returns warnings
+/// about ignored entries (unknown damage types, classes and slots, empty `[bis]` entries).
+///
+/// # Errors
+/// Fails on invalid TOML, unknown keys in these tables or wrongly typed values (e.g. a tier
+/// other than S, A, B).
+pub fn parse_tables(text: &str) -> Result<(Tables, Vec<String>), toml::de::Error> {
+    let raw: RawTables = toml::from_str(text)?;
+    let mut warnings = Vec::new();
+    let tables = Tables {
+        valuables: raw.valuables,
+        damages: raw.builds.map(|raw| builds(raw, &mut warnings)),
+        bis: raw.bis.map(|raw| bis_entries(raw, &mut warnings)),
+    };
+    Ok((tables, warnings))
+}
+
+/// Parses `playstyle.toml`: its display name, `[valuables]` and `[damages]` (its
+/// `description` is for people reading the folder), with warnings as [`parse_tables`].
+///
+/// # Errors
+/// Fails on invalid TOML, a missing `name`, unknown keys or wrongly typed values.
+pub fn parse_playstyle(text: &str) -> Result<((String, Tables), Vec<String>), toml::de::Error> {
+    let raw: RawPlaystyle = toml::from_str(text)?;
+    let mut warnings = Vec::new();
+    let tables = Tables {
+        valuables: raw.valuables,
+        damages: raw.damages.map(|raw| builds(raw, &mut warnings)),
+        bis: None,
+    };
+    Ok(((raw.name, tables), warnings))
+}
+
+/// An agent-authored build definition from `builds/<slug>.toml` (see [`super::files`]): display
 /// name, damage types, optional free-text notes and the per-slot piece lists in the same
 /// `"Piece@<required level>"` format as the old inline `[bis]` slots.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -49,7 +333,7 @@ pub struct Build {
     /// A character of [`Build::class`] without a `[bis.<name>]` selection gets this build
     /// (user request, 2026-11-17: a new character works before it is named in the config).
     pub default_for_class: bool,
-    /// The slug of the guide's next stage (`next = "druid tornado"`), see [`Config::stage`].
+    /// The slug of the guide's next stage (`next = "druid tornado"`), see [`Settings::stage`].
     pub next: Option<String>,
     /// The character level at which the next stage starts.
     pub switch_level: Option<u8>,
@@ -325,46 +609,7 @@ pub const fn owns_nothing(_item: &str) -> u32 {
     0
 }
 
-/// The `farm.toml` next to the config file at `config_path`.
-#[must_use]
-pub fn farm_path_for(config_path: &Path) -> PathBuf {
-    config_path
-        .parent()
-        .map_or_else(|| PathBuf::from("farm.toml"), |p| p.join("farm.toml"))
-}
-
-/// Loads the farm list at `path` for the start: [`try_load_farm`], an error giving no list.
-pub fn load_farm(path: &Path) -> Vec<FarmGroup> {
-    try_load_farm(path).unwrap_or_default()
-}
-
-/// Reads the farm list at `path`. Missing: `Some` empty list, silently. Unreadable or invalid:
-/// one message on stderr and `None`, so a hot reload can keep the list it has (a half-written
-/// file must not blank the panel). Warnings are reported too.
-pub fn try_load_farm(path: &Path) -> Option<Vec<FarmGroup>> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Some(Vec::new()),
-        Err(e) => {
-            eprintln!("farm {}: {e}", path.display());
-            return None;
-        }
-    };
-    match parse_farm(&text) {
-        Ok((groups, warnings)) => {
-            for w in warnings {
-                eprintln!("farm {}: {w}", path.display());
-            }
-            Some(groups)
-        }
-        Err(e) => {
-            eprintln!("farm {}: invalid:\n{e}", path.display());
-            None
-        }
-    }
-}
-
-/// Where a character is in its build guide's stage chain ([`Config::stage`]).
+/// Where a character is in its build guide's stage chain ([`Settings::stage`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stage<'a> {
     /// The current stage's slug and build.
@@ -377,7 +622,7 @@ pub struct Stage<'a> {
     pub next: Option<(&'a str, &'a Build)>,
 }
 
-impl Config {
+impl Settings {
     /// The build definition (with its slug) the character's `[bis]` entry selects, if it names
     /// one that exists.
     fn selected(&self, name: &str) -> Option<(&str, &Build)> {
@@ -401,7 +646,7 @@ impl Config {
     /// followed along `next` while the stage switches automatically (`auto_switch`), the
     /// character `level` has reached `switch_level` and every `switch_requires` group is met
     /// (`owns` gives an item's copies held, see [`SwitchGroup`]). The groups count as met, too, for a switch into a stage the
-    /// character has `reached` before or into one leading there ([`Config::leads_to`]): the
+    /// character has `reached` before or into one leading there ([`Settings::leads_to`]): the
     /// shared stash is unread until opened each game, and a switch is one-way. A `next` that
     /// is already part of the chain stops it (cycle guard). `class`/`level` are `None` where
     /// unknown (the config page, which passes [`owns_nothing`] and no `reached`): no class
@@ -493,7 +738,7 @@ impl Config {
     }
 
     /// The character's `BiS` resolved over the build files: its inline slots when it has any,
-    /// else the current stage's slots ([`Config::stage`], `owns`/`reached` as there; else
+    /// else the current stage's slots ([`Settings::stage`], `owns`/`reached` as there; else
     /// none — a build file may omit slots).
     #[must_use]
     pub fn resolved_bis(
@@ -518,7 +763,7 @@ impl Config {
     }
 
     /// The character's damage types, primary first: its own `[builds]` entry, else the current
-    /// stage's damages ([`Config::stage`], `owns`/`reached` as there), else its class's
+    /// stage's damages ([`Settings::stage`], `owns`/`reached` as there), else its class's
     /// (`class` as charstats row id; `None` where the caller doesn't know a class, e.g. the
     /// config page).
     #[must_use]
@@ -670,7 +915,7 @@ fn switch_groups(raw: Vec<RawSwitchGroup>, label: &str, warnings: &mut Vec<Strin
 /// selection refers to), the [`Build`], and warnings about ignored entries.
 /// # Errors
 /// Fails on invalid TOML, unknown keys or wrongly typed values.
-fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de::Error> {
+pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de::Error> {
     let raw: RawBuild = toml::from_str(text)?;
     let mut warnings = Vec::new();
     let name = raw.name.trim().to_owned();
@@ -786,58 +1031,9 @@ fn check_skill_names(plan: &[SkillTarget], class: Option<u32>, label: &str, warn
     }
 }
 
-/// Loads every `*.toml` build definition from `dir` (one build per file, agent-authored), keyed
-/// by lowercased build name. A missing directory means no builds and no error; an unreadable,
-/// invalid or nameless file is reported on stderr and skipped.
-pub fn load_builds(dir: &Path) -> BTreeMap<String, Build> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return BTreeMap::new();
-    };
-    let mut builds = BTreeMap::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e != "toml") {
-            continue;
-        }
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) => {
-                eprintln!("build {}: {e}; skipped", path.display());
-                continue;
-            }
-        };
-        match parse_build(&text) {
-            Ok((slug, build, warnings)) => {
-                for w in warnings {
-                    eprintln!("build {}: {w}", path.display());
-                }
-                if slug.is_empty() {
-                    eprintln!("build {}: no name; skipped", path.display());
-                } else {
-                    builds.insert(slug, build);
-                }
-            }
-            Err(e) => eprintln!("build {}: invalid, skipped:\n{e}", path.display()),
-        }
-    }
-    builds
-}
-
-/// The `builds/` directory next to the config file at `config_path` (the agent-authored build
-/// definitions; see [`load_builds`]).
-#[must_use]
-pub fn builds_dir_for(config_path: &Path) -> PathBuf {
-    config_path
-        .parent()
-        .map_or_else(|| PathBuf::from("builds"), |p| p.join("builds"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::load_from;
-    use crate::testutil::temp_dir;
-    use crate::valuables::Tier;
     use anyhow::{Result, anyhow};
 
     #[test]
@@ -868,44 +1064,8 @@ mod tests {
     }
 
     #[test]
-    fn build_files() -> Result<()> {
-        let dir = temp_dir("builds")?;
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(
-            dir.join("blood-boil.toml"),
-            "# comment preserved on the way in\nname = \"Blood Boil\"\ndamages = [\"physical\", \"fire\"]\nnotes = \"guide\"\n\
-             [slots]\nweapon = [\"Heart of the Oak@55\", \" \"]\n\
-             [merc_slots]\nweapon = [\"Insight@27\"]",
-        )?;
-        std::fs::write(dir.join("broken.toml"), "name = [\n")?;
-        std::fs::write(dir.join("nameless.toml"), "damages = [\"fire\"]\n")?;
-        std::fs::write(dir.join("ignored.txt"), "name = \"Nope\"\n")?;
-        let builds = load_builds(&dir);
-        assert_eq!(builds.keys().collect::<Vec<_>>(), ["blood boil"], "{builds:?}");
-        let Some(def) = builds.get("blood boil") else {
-            return Err(anyhow!("no blood boil"));
-        };
-        assert_eq!(def.name, "Blood Boil");
-        assert_eq!(def.damages, [Damage::Physical, Damage::Fire]);
-        assert_eq!(def.notes.as_deref(), Some("guide"));
-        assert_eq!(
-            def.slots.get("weapon").map(Vec::as_slice),
-            Some(&["Heart of the Oak@55".to_owned()][..]),
-            "blank pieces dropped"
-        );
-        assert_eq!(
-            def.merc_slots.get("weapon").map(Vec::as_slice),
-            Some(&["Insight@27".to_owned()][..])
-        );
-        // A missing directory is no builds and no error.
-        assert!(load_builds(&dir.join("missing")).is_empty());
-        std::fs::remove_dir_all(&dir)?;
-        Ok(())
-    }
-
-    #[test]
     fn resolution_inline_beats_build_beats_none() -> Result<()> {
-        let mut config = Config::default();
+        let mut config = Settings::default();
         config.build_defs.insert(
             "blood boil".to_owned(),
             Build {
@@ -1068,7 +1228,7 @@ mod tests {
     }
 
     /// A druid chain: leveling →(auto at 38) tornado →(manual) fissure.
-    fn druid_chain() -> Config {
+    fn druid_chain() -> Settings {
         let build = |name: &str, next: Option<&str>, auto: bool| Build {
             name: name.to_owned(),
             class: Some(5),
@@ -1080,7 +1240,7 @@ mod tests {
             damages: vec![Damage::Fire],
             ..Build::default()
         };
-        let mut config = Config::default();
+        let mut config = Settings::default();
         config
             .build_defs
             .insert("leveling".to_owned(), build("Leveling", Some("tornado"), true));
@@ -1571,27 +1731,158 @@ mod tests {
         Ok(())
     }
 
+    /// The settings of an old `config.toml`'s tables ([`parse_tables`]), with its warnings.
+    fn settings(text: &str) -> Result<(Settings, Vec<String>), toml::de::Error> {
+        parse_tables(text).map(|(tables, warnings)| (tables.into_settings(), warnings))
+    }
+
     #[test]
-    fn farm_list_loads_next_to_the_config() -> Result<()> {
-        let dir = temp_dir("farm")?;
-        std::fs::create_dir_all(&dir)?;
-        let config = dir.join("config.toml");
-        assert_eq!(farm_path_for(&config), dir.join("farm.toml"));
-        // Missing farm.toml (and config.toml): no list, no error.
-        assert_eq!(load_from(&config).farm, []);
-        std::fs::write(
-            dir.join("farm.toml"),
-            "[[farm]]\nfor = \"B\"\nitems = [{ name = \"Smoke\", kind = \"runeword\" }]\n",
+    fn tables_default_and_parse_valuables() -> Result<()> {
+        let c = Settings::default();
+        assert_eq!(c.valuables.trade, vec![Tier::S, Tier::A]);
+        assert_eq!(c.valuables.twink, vec![Tier::S, Tier::A]);
+        assert_eq!(parse_tables("")?, (Tables::default(), vec![]), "no tables");
+        assert_eq!(settings("[valuables]\n")?.0, c, "empty section = defaults");
+        assert_eq!(
+            settings("[shrines]\nshow = []\nplaystyle = \"x\"\n")?,
+            (c, vec![]),
+            "the core's keys are skipped"
+        );
+        let (c, _) = settings("[valuables]\ntrade = [\"S\"]\ntwink = []\n")?;
+        assert_eq!(c.valuables.trade, vec![Tier::S]);
+        assert_eq!(c.valuables.twink, vec![]);
+        assert!(!c.valuables.enabled(Category::Trade, Tier::A));
+        assert!(c.valuables.enabled(Category::Trade, Tier::S));
+        let (c, _) = settings("[valuables]\ntwink = [\"B\"]\n")?;
+        assert_eq!(c.valuables.trade, vec![Tier::S, Tier::A], "missing key = default");
+        assert_eq!(c.valuables.twink, vec![Tier::B]);
+        for bad in [
+            "[valuables\n",
+            "[valuables]\ntrade = [\"X\"]\n",
+            "[valuables]\ntrade = \"S\"\n",
+            "[valuables]\ntrdae = [\"S\"]\n",
+            "[bis.X]\nbiuld = \"b\"\n",
+        ] {
+            assert!(parse_tables(bad).is_err(), "{bad:?} accepted");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn playstyle_toml_parses() -> Result<()> {
+        let ((name, tables), warnings) = parse_playstyle(
+            "name = \"N\"\n[valuables]\ntrade = [\"S\"]\n[damages]\nVex = [\"fire\"]\n\
+             [damages.class]\ndruid = [\"physical\"]\n",
         )?;
-        assert_eq!(load_from(&config).farm.len(), 1, "loaded without a config.toml");
-        std::fs::write(&config, "[valuables]\ntrade = [\"S\"]\n")?;
-        assert_eq!(load_from(&config).farm.len(), 1, "and with one");
-        // Malformed: no list (the config itself still loads).
-        std::fs::write(dir.join("farm.toml"), "[[farm]]\nfor = 3\n")?;
-        let loaded = load_from(&config);
-        assert_eq!(loaded.farm, []);
-        assert_eq!(loaded.valuables.trade, vec![Tier::S]);
-        std::fs::remove_dir_all(&dir)?;
+        assert_eq!(name, "N");
+        assert_eq!(tables.valuables.map(|v| v.trade), Some(vec![Tier::S]));
+        let damages = tables.damages.unwrap_or_default();
+        assert_eq!(
+            damages.names.get("vex").map(Vec::as_slice),
+            Some(&[Damage::Fire][..])
+        );
+        assert_eq!(
+            damages.classes.get(&5).map(Vec::as_slice),
+            Some(&[Damage::Physical][..])
+        );
+        assert_eq!(warnings, Vec::<String>::new());
+        assert!(parse_playstyle("description = \"no name\"\n").is_err());
+        assert!(
+            parse_playstyle("name = \"N\"\n[bis.X]\nbuild = \"b\"\n").is_err(),
+            "bis is state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parses_builds() -> Result<()> {
+        use Damage::{Cold, Fire, Lightning, Physical};
+        let (c, warnings) = settings(
+            "[builds]\nVex = [\"lightning\", \"Fire\", \"physical\", \"fire\"]\nOther = [\"holy\", \"cold\"]\n\n\
+             [builds.class]\ndruid = [\"physical\"]\n4 = [\"physical\"]\nbard = [\"fire\"]\n",
+        )?;
+        assert_eq!(
+            c.damages_for_player("Vex", Some(6), None, &owns_nothing, None),
+            [Lightning, Fire, Physical],
+            "deduped, in order"
+        );
+        assert_eq!(
+            c.damages_for_player("vex", Some(1), None, &owns_nothing, None),
+            [Lightning, Fire, Physical],
+            "name in any case"
+        );
+        assert_eq!(
+            c.damages_for_player("Other", Some(5), None, &owns_nothing, None),
+            [Cold],
+            "own entry beats the class"
+        );
+        assert_eq!(
+            c.damages_for_player("Bear", Some(5), None, &owns_nothing, None),
+            [Physical],
+            "class by name"
+        );
+        assert_eq!(
+            c.damages_for_player("Barb", Some(4), None, &owns_nothing, None),
+            [Physical],
+            "class by id"
+        );
+        assert_eq!(
+            c.damages_for_player("Sorc", Some(1), None, &owns_nothing, None),
+            [] as [Damage; 0],
+            "nothing configured"
+        );
+        assert_eq!(
+            c.damages_for_player("Sorc", None, None, &owns_nothing, None),
+            [] as [Damage; 0],
+            "no class known: still no damages"
+        );
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("\"holy\"")), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("\"bard\"")), "{warnings:?}");
+        assert!(
+            parse_tables("[builds]\nVex = \"lightning\"\n").is_err(),
+            "a list is required"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bis_entries() -> Result<()> {
+        let (config, warnings) = settings(
+            "[bis.Demonmaster]\nbuild = \"blood boil\"\n\
+             [bis.Demonmaster.slots]\nweapon = [\"Heart of the Oak@55\"]\nbody = [\"Stealth@17\", \"Enigma@65\"]\nring1 = [\" \"]\n\
+             unknown = [\"x\"]\n\
+             [bis.Demonmaster.merc_slots]\nweapon = [\"Insight@27\"]",
+        )?;
+        // Blank pieces are dropped silently; unknown slots (in both tables) warn.
+        assert_eq!(
+            warnings,
+            vec![
+                "bis Demonmaster: unknown slot \"unknown\" ignored (known: amulet, ring1, ring2, body, helm, gloves, boots, belt, weapon, offhand, swap)".to_owned(),
+            ],
+            "{warnings:?}"
+        );
+        let Some(bis) = config.bis.get("demonmaster") else {
+            return Err(anyhow!("no bis entry"));
+        };
+        assert_eq!(bis.build, "blood boil");
+        assert_eq!(
+            bis.slots.get("weapon").map(Vec::as_slice),
+            Some(&["Heart of the Oak@55".to_owned()][..])
+        );
+        assert!(!bis.slots.contains_key("ring1"), "blank pieces are dropped");
+        assert_eq!(
+            bis.merc_slots.get("weapon").map(Vec::as_slice),
+            Some(&["Insight@27".to_owned()][..])
+        );
+        assert!(!config.bis.contains_key("other"));
+        // A selection without any slots is the webapp's normal output: valid.
+        let (config, warnings) = settings("[bis.X]\nbuild = \"b\"\n")?;
+        assert_eq!(config.bis.get("x").map(|b| b.build.as_str()), Some("b"));
+        assert_eq!(warnings, Vec::<String>::new());
+        // Neither a build nor slots: ignored with a warning.
+        let (_, warnings) = settings("[bis.X]\nbuild = \"\"\n[bis.X.slots]\nhelm = [\" \"]")?;
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
         Ok(())
     }
 }

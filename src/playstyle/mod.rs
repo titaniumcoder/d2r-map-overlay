@@ -2,13 +2,14 @@
 //!
 //! Live mode and `--render` / `--show` / `--dump` use it only through [`Playstyle`]; this
 //! build's playstyle is [`ConfigDriven`] (the builds, stages, farm list and valuables tiers of
-//! `config.toml`, `builds/*.toml` and `farm.toml`; today the Summoner → Fury Druid chain).
-//! Static dispatch, as for the reader: the playstyle is picked at build time.
+//! a playstyle folder, `playstyles/<name>/`, with the user's overrides: [`files`]; shipped:
+//! the Summoner → Fury Druid chain). Static dispatch, as for the reader: the playstyle is
+//! picked at build time (`main.rs`), the folder at run time (`config.toml`'s `playstyle`).
 //!
 //! What sits behind the trait:
-//! - [`valuables`]: the ground-drop marks (tiers from `research/valuables.json`);
-//! - the builds, their stage chain and its latch (`config::Config::stage`; the reached stage is
-//!   persisted by the core in `played.json` as one opaque string per character);
+//! - [`valuables`]: the ground-drop marks (rules from the folder's `valuables.json`);
+//! - the builds, their stage chain and its latch (`config::Settings::stage`; the reached stage
+//!   is persisted by the core in `played.json` as one opaque string per character);
 //! - [`stash_plan`]: sell / move / keep of the player's items, with [`gear_score`] for magic and
 //!   rare items;
 //! - [`build`]: the area rating of the info line from the build's damage types;
@@ -19,6 +20,7 @@
 pub mod build;
 pub mod config;
 mod config_driven;
+pub mod files;
 pub mod gear_score;
 pub mod guidance;
 pub mod stash_plan;
@@ -26,8 +28,9 @@ pub mod valuables;
 pub mod web;
 
 pub use config_driven::ConfigDriven;
+pub use files::Files;
 
-use crate::config::{Config, Stage};
+use crate::config::Stage;
 use crate::game::{ItemDrop, Snapshot};
 use crate::played::Played;
 use crate::web::{GearInfo, LiveInfo, Panels};
@@ -50,9 +53,14 @@ pub struct Evaluation<'a> {
 
 /// What the core needs from a playstyle.
 pub trait Playstyle {
-    /// Takes the reloaded settings (`config.toml` with the `builds/` and `farm.toml` next to
-    /// it, hot-reloaded by the core).
-    fn reload(&mut self, config: &Config);
+    /// Loads the playstyle from its files.
+    fn load(files: &Files) -> Self
+    where
+        Self: Sized;
+
+    /// Reloads from the files after a change on disk (the core compares
+    /// [`Files::fingerprint`] each tick); a broken file keeps what it decided before.
+    fn reload(&mut self, files: &Files);
 
     /// The marks of the ground drops worth a ring, by unit id; removes the plain bases no mark
     /// wants (the map draws every drop left). Runs before the session merge: the journal
@@ -76,16 +84,20 @@ pub trait Playstyle {
     /// The build definitions the `/config` page offers (`GET /api/builds`).
     fn builds_json(&self) -> serde_json::Value;
 
-    /// `config.toml`'s `text` with character `name`'s build selection set to `build` (`None`
-    /// clears it), comments preserved; `None` when the text can't be edited (the browser gets
-    /// an error).
-    fn select_build(text: &str, name: &str, build: Option<&str>) -> Option<String>
+    /// Saves character `name`'s build selection (`None` clears it) in the playstyle's files.
+    /// The core serialises the calls.
+    ///
+    /// # Errors
+    /// The save failed (the browser gets the message).
+    fn select_build(files: &Files, name: &str, build: Option<&str>) -> anyhow::Result<()>
     where
         Self: Sized;
 
-    /// `config.toml`'s `text` without character `name`'s entries; `None` when the text can't
-    /// be edited.
-    fn remove_character(text: &str, name: &str) -> Option<String>
+    /// Forgets character `name` in the playstyle's files.
+    ///
+    /// # Errors
+    /// As [`Playstyle::select_build`].
+    fn remove_character(files: &Files, name: &str) -> anyhow::Result<()>
     where
         Self: Sized;
 }

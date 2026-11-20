@@ -36,14 +36,14 @@ pub struct PanelInfo<'a> {
     /// The current stage's build definition (`None` without one): the per-piece details, the
     /// targets and the extras (charms, jewels, runes) the gear panel shows.
     pub build: Option<&'a Build>,
-    /// The character's guide stage ([`crate::config::Config::stage`]; `None` without a
+    /// The character's guide stage ([`crate::playstyle::config::Settings::stage`]; `None` without a
     /// build): the `stage` section (not rendered), and `build` is its build.
     pub stage: Option<Stage<'a>>,
     /// The cross-character farm list (`farm.toml`, [`crate::config::load_farm`]): the Farm
     /// panel ([`farm::farm_json`]).
     pub farm: &'a [FarmGroup],
     /// The build names of the character's current stage and every later one
-    /// ([`crate::config::Config::stage_chain`]): a farm entry for one of them that the
+    /// ([`crate::playstyle::config::Settings::stage_chain`]): a farm entry for one of them that the
     /// character wears enough copies of is hidden ([`farm::farm_worn`]).
     pub stage_chain: &'a [String],
 }
