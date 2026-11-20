@@ -36,6 +36,7 @@ mod runewords_data;
 mod session;
 mod shop;
 mod skills_data;
+mod socket_bases;
 mod stash;
 #[cfg(test)]
 mod testutil;

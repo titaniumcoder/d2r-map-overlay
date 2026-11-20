@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 
 use toml_edit::DocumentMut;
 
+use crate::socket_bases::Wearer;
+
 /// The port the page listens on (localhost only).
 pub const PORT: u16 = 8471;
 
@@ -1382,7 +1384,8 @@ const fn farm_status(count: u32, stashed: u32, carried: u32) -> FarmStatus {
 /// with copies still to build (`count` minus stashed and carried) lists its `runes` as
 /// `{ "rune", "need", "have", "status" }` (need = per copy × copies to build, have from
 /// [`owned_materials`], status `"have"`/`"missing"`) and its allowed `bases`; otherwise both
-/// are empty. The top-level `runes` sums those needs per rune over the whole list, in rune
+/// are empty. `base_hint` names concrete natural-socket bases for it ([`base_hint`]; `null`
+/// when none qualify or the runeword is done). The top-level `runes` sums those needs per rune over the whole list, in rune
 /// order, with the runewords needing it (`for`), the owned count (`have`) and the shared
 /// materials tab's own count (`stash`): the stash panel marks its rune stacks from it.
 fn farm_json(info: &LiveInfo) -> serde_json::Value {
@@ -1524,7 +1527,23 @@ fn farm_item_json(
         "status": status.name(),
         "runes": runes,
         "bases": word.map_or(&[][..], |w| w.bases),
+        "base_hint": word.and_then(|w| base_hint(w, info, None, Wearer::Player(info.class))),
     })
+}
+
+/// The natural-socket base hint for runeword `word` ([`crate::socket_bases::hint`]): bases
+/// that can drop with its socket count up to the highest monster level the "Where to go" panel
+/// offers (the cap [`gear_attention`] uses), for `wearer` (the character's class, or the
+/// mercenary taken as Act 2: [`Wearer::Act2Merc`]) and, with `slot` set, worn in that `ItemData::BODY` slot. `None` without a "Where to go"
+/// list or when nothing qualifies: the dashboard then shows the runeword's `bases` categories.
+fn base_hint(
+    word: &crate::runewords_data::Runeword,
+    info: &LiveInfo,
+    slot: Option<u8>,
+    wearer: Wearer,
+) -> Option<String> {
+    let max_mlvl = u32::from(info.blocks.level_full.iter().map(|e| e.mlvl).max()?);
+    crate::socket_bases::hint(word, max_mlvl, wearer, slot)
 }
 
 /// The `ItemData::BODY` slots a build slot's equipped piece sits in (the merged ring column
@@ -2115,16 +2134,17 @@ fn gear_json(info: &LiveInfo) -> serde_json::Value {
     // The mercenary's slots (its equipped items are not attributed yet: no header) and the
     // build's extras (charms, jewels, runes), with the same per-piece state and details.
     let merc: Vec<_> = [
-        ("Merc weapon", "weapon"),
-        ("Merc body", "body"),
-        ("Merc helm", "helm"),
+        ("Merc weapon", "weapon", 4),
+        ("Merc body", "body", 3),
+        ("Merc helm", "helm", 1),
     ]
     .iter()
-    .filter_map(|&(title, slot)| {
+    .filter_map(|&(title, slot, body)| {
         let pieces = info.bis.and_then(|b| b.merc_slots.get(slot))?;
+        // The mercenary (taken as Act 2): no class-only bases, polearm/spear weapons only.
         Some(serde_json::json!({
             "title": title,
-            "pieces": grid_pieces(pieces, None, &[], info),
+            "pieces": grid_pieces(pieces, None, &[], (Some(body), Wearer::Act2Merc), info),
         }))
     })
     .collect();
@@ -2136,7 +2156,7 @@ fn gear_json(info: &LiveInfo) -> serde_json::Value {
         .map(|(group, pieces)| {
             serde_json::json!({
                 "title": group,
-                "pieces": grid_pieces(pieces, None, &[], info),
+                "pieces": grid_pieces(pieces, None, &[], (None, Wearer::Player(info.class)), info),
             })
         })
         .collect();
@@ -2212,6 +2232,7 @@ fn grid_column(
             pieces.map_or(&[][..], Vec::as_slice),
             equipped_level,
             &crate::game::worn_names(info.equipped_items),
+            (bodies.first().copied(), Wearer::Player(info.class)),
             info,
         ),
     })
@@ -2227,10 +2248,14 @@ fn grid_column(
 ///   unidentified unique/set), or the piece's level is unknown; never struck through.
 ///
 /// A column whose equipped piece is unnameable therefore shows no strike-throughs.
+///
+/// A runeword piece also gets a `base_hint` ([`base_hint`]) filtered by the column's body
+/// `slot` and its `wearer` ([`Wearer`]).
 fn grid_pieces(
     pieces: &[String],
     equipped_level: Option<u32>,
     worn: &[String],
+    (slot, wearer): (Option<u8>, Wearer),
     info: &LiveInfo,
 ) -> Vec<serde_json::Value> {
     let lvl = u32::from(info.char_level.unwrap_or(0));
@@ -2256,6 +2281,10 @@ fn grid_pieces(
             {
                 obj.insert("runes".to_owned(), serde_json::json!(rw.runes));
                 obj.insert("bases".to_owned(), serde_json::json!(rw.bases));
+                obj.insert(
+                    "base_hint".to_owned(),
+                    serde_json::json!(base_hint(rw, info, slot, wearer)),
+                );
             }
             add_piece_details(&mut json, crate::info::piece_name(piece), info.build);
             if let (Some((from, to)), Some(obj)) = (range, json.as_object_mut()) {
@@ -3003,7 +3032,7 @@ function piece(p) {
     : p.tick === "stash" ? ' <span class="tick have">✓ stash</span>' : "";
   const lvl = p.level != null ? `<span class="lv">lvl ${p.level}</span>` : "";
   const sub = p.runes
-    ? `<div class="sub">${esc(p.runes.join(" "))}${p.bases && p.bases.length ? " · " + esc(p.bases.join(", ")) : ""}</div>`
+    ? `<div class="sub">${esc(p.runes.join(" "))}${p.base_hint ? " · " + esc(p.base_hint) : p.bases && p.bases.length ? " · " + esc(p.bases.join(", ")) : ""}</div>`
     : p.base ? `<div class="sub">${esc(p.base)}</div>` : "";
   const stats = p.stats && p.stats.length
     ? `<ul class="st">${p.stats.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : "";
@@ -3237,7 +3266,8 @@ function farm(f) {
       const carried = i.status !== "done" && i.carried ? `<div class="cr">on this character: ${esc(i.carried)} · put in the shared stash</div>` : "";
       const runes = (i.runes || []).length
         ? `<div class="rn">${i.runes.map(x => `<span class="${esc(x.status)}">${esc(x.rune)} ${x.status === "have" ? "✓" : esc(x.have) + "/" + esc(x.need)}</span>`).join("")}</div>` : "";
-      const bases = (i.bases || []).length ? `<div class="bs">${esc(i.bases.join(", "))}</div>` : "";
+      const bases = i.base_hint ? `<div class="bs">${esc(i.base_hint)}</div>`
+        : (i.bases || []).length ? `<div class="bs">${esc(i.bases.join(", "))}</div>` : "";
       return `<div class="fm ${esc(i.kind)} ${esc(i.status)}"><div class="fm-h"><span class="nm">${esc(i.name)}</span>`
         + `<span class="kd">${esc(i.kind)}</span><span class="fst ${esc(i.status)}">${esc(i.status)}${n}</span></div>${carried}${runes}${bases}</div>`;
     }).join("");
@@ -4586,7 +4616,7 @@ mod tests {
         info.build = Some(&build);
         info.char_level = Some(21);
         let pieces = ["Old Pelt", "Stealth@17", "Lore@27", "Tal Rune@17", "Shako@62"].map(str::to_owned);
-        let json = grid_pieces(&pieces, None, &[], &info);
+        let json = grid_pieces(&pieces, None, &[], (None, Wearer::Player(info.class)), &info);
         let names: Vec<_> = json.iter().filter_map(|p| p.get("name")?.as_str()).collect();
         assert_eq!(
             names,
@@ -4602,13 +4632,13 @@ mod tests {
         assert_eq!(field("Lore", "now"), None, "not yet");
         // In Lore's window (26-38) but below its own level 27: still not "wear now".
         info.char_level = Some(26);
-        let json26 = grid_pieces(&pieces, None, &[], &info);
+        let json26 = grid_pieces(&pieces, None, &[], (None, Wearer::Player(info.class)), &info);
         let lore = json26
             .iter()
             .find(|p| p.get("name").and_then(|n| n.as_str()) == Some("Lore"));
         assert_eq!(lore.and_then(|p| p.get("now")), None, "level 27 needed");
         info.char_level = Some(27);
-        let json27 = grid_pieces(&pieces, None, &[], &info);
+        let json27 = grid_pieces(&pieces, None, &[], (None, Wearer::Player(info.class)), &info);
         let lore = json27
             .iter()
             .find(|p| p.get("name").and_then(|n| n.as_str()) == Some("Lore"));
@@ -4616,7 +4646,7 @@ mod tests {
         info.char_level = Some(21);
         assert_eq!(field("Tal Rune", "setup"), Some(serde_json::json!("lvl 17+")));
         info.char_level = Some(60);
-        let json = grid_pieces(&pieces, None, &[], &info);
+        let json = grid_pieces(&pieces, None, &[], (None, Wearer::Player(info.class)), &info);
         let names: Vec<_> = json.iter().filter_map(|p| p.get("name")?.as_str()).collect();
         assert_eq!(names, ["Tal Rune", "Shako"], "a rune never runs out");
         assert_eq!(level_range("lvl 13-26"), Some((13, 26)));
@@ -5699,6 +5729,11 @@ mod tests {
             json.pointer("/farm/groups/0/items/3/bases"),
             Some(&serde_json::json!([]))
         );
+        assert_eq!(
+            json.pointer("/farm/groups/0/items/0/base_hint"),
+            Some(&serde_json::Value::Null),
+            "no \"Where to go\" list: no item level to check bases by"
+        );
         // The rune list sums over the list: Sol for Fortitude and Bulwark; held runes count
         // as had, but not as in the stash.
         let runes = json
@@ -5898,6 +5933,77 @@ mod tests {
             attention(&slots, &[], 20, 19, &[], &[])?.as_deref(),
             Some("▲ findable: Stealth, Leaf")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn runeword_pieces_and_farm_entries_name_natural_socket_bases() -> Result<()> {
+        // A druid (class 5) whose "Where to go" band tops out at monster level 45.
+        let blocks = crate::render::TextBlocks {
+            level_full: vec![crate::info::LevelEntry {
+                text: "a".to_owned(),
+                mlvl: 45,
+                bucket: "above",
+                bad: None,
+            }],
+            ..crate::render::TextBlocks::default()
+        };
+        let slot = |s: &str, p: &str| (s.to_owned(), vec![p.to_owned()]);
+        let bis = config::Bis {
+            build: "test".to_owned(),
+            slots: [slot("weapon", "Spirit"), slot("body", "Fortitude")].into(),
+            merc_slots: [slot("weapon", "Insight")].into(),
+        };
+        let farm = fury_farm()?;
+        let mut info = live_info(5, &blocks, &[], &[], &[]);
+        info.char_level = Some(43);
+        info.bis = Some(&bis);
+        info.farm = &farm;
+        let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+        let hint = |pointer: &str| -> Result<String> {
+            Ok(json
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .with_context(|| format!("no hint at {pointer}"))?
+                .to_owned())
+        };
+        let column = |title: &str| {
+            json.pointer("/gear/columns")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|cs| {
+                    cs.iter()
+                        .position(|c| c.get("title") == Some(&serde_json::json!(title)))
+                })
+                .context("column")
+        };
+        // The weapon column keeps Spirit's swords (not its shields).
+        let spirit = hint(&format!(
+            "/gear/columns/{}/pieces/0/base_hint",
+            column("Weapons")?
+        ))?;
+        assert!(
+            spirit.starts_with("4 sockets: Crystal Sword (43 Str)"),
+            "{spirit}"
+        );
+        assert!(!spirit.contains("shields"), "{spirit}");
+        // The body column keeps Fortitude's armor (not its weapons).
+        let fort = hint(&format!("/gear/columns/{}/pieces/0/base_hint", column("Body")?))?;
+        assert!(fort.starts_with("4 sockets: "), "{fort}");
+        assert!(!fort.contains("Staff"), "{fort}");
+        // The mercenary's Insight (taken as Act 2): polearms only, no staves or bows.
+        let insight = hint("/gear/merc/0/pieces/0/base_hint")?;
+        assert!(
+            !insight.contains("Staff") && !insight.contains("Bow") && !insight.contains("staves"),
+            "{insight}"
+        );
+        assert!(insight.starts_with("4 sockets: Voulge (50 Str)"), "{insight}");
+        // The farm list has no slot: Fortitude lists weapons and armor separately.
+        let farm_fort = hint("/farm/groups/0/items/0/base_hint")?;
+        assert!(
+            farm_fort.contains("weapons: ") && farm_fort.contains(" · armor: "),
+            "{farm_fort}"
+        );
+        assert!(!format!("{spirit}{fort}{insight}{farm_fort}").contains("Larzuk"));
         Ok(())
     }
 
