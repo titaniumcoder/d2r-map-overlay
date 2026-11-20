@@ -672,3 +672,16 @@ pub fn damage(code: &str) -> Option<u32> {
         .and_then(|i| DAMAGE.get(i))
         .map(|&(_, total)| total)
 }
+
+/// Item codes of the weapons.txt rows marked `1or2handed`: two-handed swords a barbarian
+/// may wield in one hand. Sorted.
+pub static ONE_OR_TWO_HANDED: [&str; 18] = [
+    "2hs", "72h", "7b7", "7cm", "7fb", "7gd", "7gs", "92h", "9b9", "9cm", "9fb", "9gd", "9gs", "bsw", "clm",
+    "flb", "gis", "gsd",
+];
+
+/// Whether `code` is a [`ONE_OR_TWO_HANDED`] weapon.
+#[must_use]
+pub fn one_or_two_handed(code: &str) -> bool {
+    ONE_OR_TWO_HANDED.binary_search(&code).is_ok()
+}

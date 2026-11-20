@@ -2,7 +2,7 @@
 //! upgrades the character can make now (the page chimes on new ones), the attention flag that
 //! opens the panel, and the vendor panel's notes ([`shop_notes`]).
 
-use d2r_core::socket_bases::Wearer;
+use d2r_core::socket_bases::{MercAct, Wearer};
 use d2r_core::web::ShopNote;
 
 use super::recipes::{Input, need_totals, owned_materials};
@@ -458,16 +458,19 @@ pub fn gear_json(info: &PanelInfo) -> serde_json::Value {
     // build's extras (charms, jewels, runes), with the same per-piece state and details.
     let merc: Vec<_> = [
         ("Merc weapon", "weapon", 4),
+        ("Merc off-hand", "offhand", 5),
         ("Merc body", "body", 3),
         ("Merc helm", "helm", 1),
     ]
     .iter()
     .filter_map(|&(title, slot, body)| {
         let pieces = info.bis.and_then(|b| b.merc_slots.get(slot))?;
-        // The mercenary (taken as Act 2): no class-only bases, polearm/spear weapons only.
+        // The mercenary of the stage's act (Act 2 without a build file): no class-only bases,
+        // its act's weapons only.
+        let act = info.build.map_or_else(MercAct::default, |b| b.merc_act);
         Some(serde_json::json!({
             "title": title,
-            "pieces": grid_pieces(pieces, None, &[], (Some(body), Wearer::Act2Merc), info),
+            "pieces": grid_pieces(pieces, None, &[], (Some(body), Wearer::Merc(act)), info),
         }))
     })
     .collect();
@@ -528,6 +531,14 @@ pub fn grid_column(
             .collect::<Vec<&d2r_core::game::Equipped>>()
     };
     let header = equipped(bodies);
+    // The weapon beside off-hand pieces must be one-handed (as in the item plan's base needs).
+    let class = info.live.class;
+    let offhand = info.bis.is_some_and(|b| b.slots.contains_key("offhand"));
+    let wearer = if title == "Weapons" && offhand {
+        Wearer::PlayerWithOffhand(class)
+    } else {
+        Wearer::Player(class)
+    };
     // The column's comparison base: the strongest equipped piece's requirement. Two rings
     // with different levels compare against the higher one (a piece better than one ring
     // but worse than the other is still worth listing as better).
@@ -556,7 +567,7 @@ pub fn grid_column(
             pieces.map_or(&[][..], Vec::as_slice),
             equipped_level,
             &d2r_core::game::worn_names(info.live.equipped_items),
-            (bodies.first().copied(), Wearer::Player(info.live.class)),
+            (bodies.first().copied(), wearer),
             info,
         ),
     })

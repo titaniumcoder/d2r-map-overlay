@@ -2,7 +2,7 @@
 //! the runes still needed.
 
 use crate::worth::Why;
-use d2r_core::socket_bases::Wearer;
+use d2r_core::socket_bases::{MercAct, Wearer};
 use d2r_core::web::LiveInfo;
 
 use super::recipes::{Input, need_totals, owned_materials, rune_count};
@@ -79,11 +79,17 @@ pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
         .farm
         .iter()
         .filter_map(|group| {
+            // The group's mercenary: the current stage's act when the group is for it, else
+            // Act 2 (the panel has no other build file at hand; armor bases don't care).
+            let merc_act = info
+                .build
+                .filter(|b| d2r_core::names::same_name(&b.name, &group.target))
+                .map_or_else(MercAct::default, |b| b.merc_act);
             let items: Vec<serde_json::Value> = group
                 .items
                 .iter()
                 .filter(|item| !farm_worn(&group.target, item, info))
-                .map(|item| farm_item_json(item, info, &materials, &mut wanted))
+                .map(|item| farm_item_json(item, info, merc_act, &materials, &mut wanted))
                 .collect();
             // A group whose entries are all worn leaves the list.
             (!items.is_empty()).then(|| serde_json::json!({ "for": group.target, "items": items }))
@@ -169,10 +175,12 @@ pub fn farm_worn(target: &str, item: &crate::config::FarmItem, info: &PanelInfo)
 }
 
 /// One farm entry's JSON ([`farm_json`]); a runeword still to build adds its rune needs to
-/// `wanted` (rune → total need, runewords needing it).
+/// `wanted` (rune → total need, runewords needing it). A mercenary entry's base hint is for
+/// the mercenary of `merc_act`.
 pub fn farm_item_json(
     item: &crate::config::FarmItem,
     info: &PanelInfo,
+    merc_act: MercAct,
     materials: &[(String, u32)],
     wanted: &mut Vec<(&'static str, u32, Vec<String>)>,
 ) -> serde_json::Value {
@@ -231,7 +239,7 @@ pub fn farm_item_json(
         "runes": runes,
         "bases": word.map_or(&[][..], |w| w.bases),
         "base_hint": word.and_then(|w| {
-            let wearer = if item.merc { Wearer::Act2Merc } else { Wearer::Player(info.live.class) };
+            let wearer = if item.merc { Wearer::Merc(merc_act) } else { Wearer::Player(info.live.class) };
             base_hint(w, info, item.slot.map(crate::config::FarmSlot::body), wearer)
         }),
     })

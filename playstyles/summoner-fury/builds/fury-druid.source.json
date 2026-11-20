@@ -4,8 +4,8 @@
   "guide_updated": "2026-11-19",
   "author": "agent-computed from the game data, not from a guide",
   "setup_legend": {
-    "standard": "USER CHOICE (the farm list's Fury Druid core): Ribcracker, Lawbringer, Fortitude, Smoke, Bulwark, Jalal's Mane, Laying of Hands, Raven Frost. Bulwark (helm) and Smoke (body armor) are merc gear: Jalal's Mane is the druid's helm, and Smoke is always the merc's. Jalal's Mane and Raven Frost are already worn by the summoner before the reset; the druid wears Stealth until Fortitude.",
-    "alternative": "User's endgame options (Enigma, Duress, Dracul's Grasp, String of Ears, Verdungo's Hearty Cord, Gore Rider, War Traveler, Atma's Scarab, The Cat's Eye, Highlord's Wrath, Harmony), ranked below the core pick in the same slot; belt, boots and amulet have no core pick and are ranked by value for a werewolf Fury. Ancients' Pledge (from the summoner) is the shield for the one-handed Lawbringer."
+    "standard": "USER CHOICE (the farm list's Fury Druid core): Ribcracker, Fortitude, Jalal's Mane, Laying of Hands, Raven Frost; for the merc 2x Lawbringer, Smoke, Bulwark. The druid always fights two-handed for full damage, never one-handed and never with a shield (user, 2026-11-20); both Lawbringers are the Act 5 merc's dual-wield swords until something better turns up (very endgame). Bulwark (helm) and Smoke (body armor) are merc gear: Jalal's Mane is the druid's helm, and Smoke is always the merc's. Jalal's Mane and Raven Frost are already worn by the summoner before the reset; the druid wears Stealth until Fortitude.",
+    "alternative": "User's endgame options (Enigma, Duress, Dracul's Grasp, String of Ears, Verdungo's Hearty Cord, Gore Rider, War Traveler, Atma's Scarab, The Cat's Eye, Highlord's Wrath, Harmony), ranked below the core pick in the same slot; belt, boots and amulet have no core pick and are ranked by value for a werewolf Fury. Call to Arms + Phoenix on the swap is a late option the user isn't sure helps a Fury."
   },
   "stat_source": "Numbers computed from the D2R game tables (blizzhackers/d2data JSON, current with the Warlock class): skill formulas/params from skills.json + skilldesc.json, runewords from runes.json + misc.json, bases/WSM from weapons.json, uniques/sets from uniqueitems.json/setitems.json, life-steal divisors from difficultylevels.json. Attack frames: werewolf A1 = 13 frames at speed 256 (animdata.d2 entry 40A1HTH, classic d2exp.mpq) with the attack-speed formulas from maxroll's Attack Speed resource (primary and shapeshift equations, faster one wins since patch 2.4). Not from a build guide.",
   "targets": {
@@ -13,14 +13,15 @@
     "werewolf": "Werewolf attack speed (skill IAS, diminishing 10..80): 20 at 1, 45 at 5, 51 at 7, 57 at 10, 64 at 15, 68 at 20; attack rating +50% +15% per level (335% at 20).",
     "feral_rage": "Feral Rage (level 12): max charges 3 + level/2 (3 at 1, 4 at 2-3, 5 at 4, 8 at 10, 13 at 20); 4% life steal per charge (12/16/20/32/52%), run speed up to 32-55%, charges last 20 s. Life steal is divided by 2 in Nightmare and 3 in Hell (difficultylevels.json). The skill screen formula shows 4 to 4x level + 8% (equal to the charge formula only at levels 1-2): trust the screen in game.",
     "fury": "Fury (level 30, needs Rabies > Feral Rage > Werewolf): min(level + 1, 5) hits, so 5 hits from level 4; damage +100% +17% per level (423% at 20); attack rating +50% +10% per level. The current skills.json gives Fury no synergy, so 20 hard points is all of its scaling.",
-    "skill_order": "At 75 (86 points = 74 levels + 12 quest points, all of Normal/Nightmare/Hell done): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20, Rabies 1, Oak Sage 5. Fury 20 is all of Fury's scaling (no synergy); Werewolf 20 = +335% AR and 68 skill IAS (Lawbringer needs Werewolf 14 for 7 frames); Feral Rage 20 = 13 charges, 52% life steal (17% in Hell); Lycanthropy 20 = 460 s form and +140% life in form, the same +5% life per point as Oak Sage plus duration, so it fills before Oak Sage. Then Oak Sage to 20 (76-90, +125% life for you and the merc), Rabies with the last 9 (91-99, poison for physical immunes).",
-    "ias": "Werewolf attack frames (Feral Rage, normal attack, Fury's first hit), by effective Werewolf level and off-weapon IAS. Ribcracker (WSM 0, its 50% IAS counts undiminished in wolf form): 6 frames at Werewolf 1-2, 5 frames from Werewolf 3 with no other IAS (fastest of all candidates). Lawbringer (no IAS) in a WSM 0 sword: 7 frames needs Werewolf 14 (6 with 20% IAS from Laying of Hands); in a Phase Blade (WSM -30, level 54, 136 Dex) 6 frames from Werewolf 2. Fury's middle hits roll the animation back 70% and are shorter; the tables can't give that sequence exactly.",
-    "core_fit": "From the data: Ribcracker is a two-handed Quarterstaff (level 31, 25 Str), the best werewolf weapon here thanks to the 50% weapon IAS. Lawbringer is one-handed (sword/hammer/scepter, level 43) with no IAS, so it is slower in wolf form; a druid can't dual-wield, so the second copy only fits a sword merc (Act 3 or Act 5; Act 2 mercs use polearms/spears). Smoke is always merc gear (the druid wears Fortitude, Stealth until then); Bulwark and Jalal's Mane are both helms: Jalal's Mane is a druid pelt, so Bulwark goes to the merc. Laying of Hands (Bramble Mitts, level 63, 20% IAS) is part of The Disciple set.",
-    "physical_immunes": "Fury only deals physical damage: skip physical immunes or leave them to the merc and Rabies (poison); Lawbringer adds 150-210 fire and 130-180 cold."
+    "skill_order": "At 75 (86 points = 74 levels + 12 quest points, all of Normal/Nightmare/Hell done): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20, Rabies 1, Oak Sage 5. Fury 20 is all of Fury's scaling (no synergy); Werewolf 20 = +335% AR and 68 skill IAS; Feral Rage 20 = 13 charges, 52% life steal (17% in Hell); Lycanthropy 20 = 460 s form and +140% life in form, the same +5% life per point as Oak Sage plus duration, so it fills before Oak Sage. Then Oak Sage to 20 (76-90, +125% life for you and the merc), Rabies with the last 9 (91-99, poison for physical immunes).",
+    "ias": "Werewolf attack frames (Feral Rage, normal attack, Fury's first hit), by effective Werewolf level and off-weapon IAS. Ribcracker (WSM 0, its 50% IAS counts undiminished in wolf form): 6 frames at Werewolf 1-2, 5 frames from Werewolf 3 with no other IAS (fastest of all candidates). Fury's middle hits roll the animation back 70% and are shorter; the tables can't give that sequence exactly.",
+    "core_fit": "From the data: Ribcracker is a two-handed Quarterstaff (level 31, 25 Str), the best werewolf weapon here thanks to the 50% weapon IAS. The druid fights two-handed only (user, 2026-11-20: full damage, never one-handed, no shield). Lawbringer is one-handed (sword/hammer/scepter, level 43): both copies go to an Act 5 merc that dual-wields two one-handed swords (the Frenzy Barbarian merc type, since D2R patch 2.4) until something better, very endgame; Act 2 mercs use polearms/spears. Smoke is always merc gear (the druid wears Fortitude, Stealth until then); Bulwark and Jalal's Mane are both helms: Jalal's Mane is a druid pelt, so Bulwark goes to the merc. Laying of Hands (Bramble Mitts, level 63, 20% IAS) is part of The Disciple set.",
+    "physical_immunes": "Fury only deals physical damage: skip physical immunes or leave them to the merc and Rabies (poison); each of the merc's Lawbringers adds 150-210 fire and 130-180 cold."
   },
   "merc": {
-    "type": "Act 2 Desert Mercenary, Might (Offensive), hired in Nightmare by the summoner stage",
-    "why": "hireling.json: Might is a Nightmare and Hell aura only (Normal has Prayer / Defiance / Blessed Aim); it raises the druid's physical damage. A Lawbringer merc must be Act 3 or Act 5 (swords)."
+    "act": 5,
+    "type": "Act 5 Barbarian dual-wielding both Lawbringers until something better, very endgame (user plan, 2026-11-20; replaces the summoner stage's Act 2 Might merc)",
+    "why": "A Lawbringer merc must use swords: Act 3 or Act 5 (Act 2 mercs use polearms and spears). Both copies are planned as one-handed swords: the Act 5 Frenzy merc type dual-wields one-handed swords (D2R patch 2.4)."
   },
   "skill_plan": {
     "entries": [
@@ -102,42 +103,6 @@
         "+15 to Dexterity"
       ],
       "why": "Weapon IAS counts undiminished in the shapeshift formula: 5-frame attacks from Werewolf 3, the fastest of all candidates.",
-      "rank_in_slot": 1
-    },
-    {
-      "name": "Lawbringer",
-      "slot": "weapon",
-      "setup": "standard",
-      "kind": "runeword",
-      "req_level": 43,
-      "base": "3-socket sword / hammer / scepter (one-handed)",
-      "stats": [
-        "Level 16-18 Sanctuary Aura When Equipped",
-        "20% Chance to cast level 15 Decrepify on striking",
-        "-50% Target Defense",
-        "Adds 150-210 Fire Damage",
-        "Adds 130-180 Cold Damage",
-        "+200-250 Defense vs. Missile",
-        "Slain Monsters Rest in Peace"
-      ],
-      "why": "User's core: fire + cold damage for physical immunes, Decrepify, Sanctuary.",
-      "notes": "Amn Lem Ko: missing Lem and Ko. No IAS: 7 frames in a WSM 0 sword needs Werewolf 14; a Phase Blade (WSM -30) gives 6. The second copy is for a sword merc.",
-      "rank_in_slot": 2
-    },
-    {
-      "name": "Ancients' Pledge",
-      "slot": "offhand",
-      "setup": "alternative",
-      "kind": "runeword",
-      "req_level": 21,
-      "base": "3-socket shield",
-      "stats": [
-        "+50% Enhanced Defense",
-        "Cold Resist +30%",
-        "All Resistances +13",
-        "10% Damage Taken Goes To Mana"
-      ],
-      "why": "The shield for the one-handed Lawbringer (Ribcracker is two-handed); carried over from the summoner.",
       "rank_in_slot": 1
     },
     {
@@ -230,7 +195,7 @@
         "10% Chance to cast level 3 Holy Bolt on striking",
         "+25 Defense"
       ],
-      "why": "20% IAS (6 frames for Lawbringer in a WSM 0 sword) and demon damage.",
+      "why": "20% IAS and demon damage.",
       "rank_in_slot": 1
     },
     {
@@ -257,11 +222,38 @@
       "setup": "standard",
       "kind": "runeword",
       "req_level": 43,
-      "base": "3-socket sword",
+      "base": "3-socket one-handed sword",
       "stats": [
-        "Level 16-18 Sanctuary Aura When Equipped"
+        "Level 16-18 Sanctuary Aura When Equipped",
+        "20% Chance to cast level 15 Decrepify on striking",
+        "-50% Target Defense",
+        "Adds 150-210 Fire Damage",
+        "Adds 130-180 Cold Damage",
+        "+200-250 Defense vs. Missile",
+        "Slain Monsters Rest in Peace"
       ],
-      "why": "Second copy of the user's 2x Lawbringer: only a sword merc (Act 3 / Act 5) can wield it.",
+      "why": "User's core: the Act 5 merc dual-wields two Lawbringers (one-handed swords; the Frenzy merc type dual-wields, patch 2.4): fire + cold for physical immunes, Decrepify, Sanctuary.",
+      "notes": "Amn Lem Ko: missing Lem and Ko. Until something better, very endgame.",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Lawbringer",
+      "slot": "merc_offhand",
+      "setup": "standard",
+      "kind": "runeword",
+      "req_level": 43,
+      "base": "3-socket one-handed sword",
+      "stats": [
+        "Level 16-18 Sanctuary Aura When Equipped",
+        "20% Chance to cast level 15 Decrepify on striking",
+        "-50% Target Defense",
+        "Adds 150-210 Fire Damage",
+        "Adds 130-180 Cold Damage",
+        "+200-250 Defense vs. Missile",
+        "Slain Monsters Rest in Peace"
+      ],
+      "why": "The merc's second Lawbringer, in its off hand (the Frenzy merc type dual-wields, patch 2.4).",
+      "notes": "Amn Lem Ko: missing Lem and Ko. Until something better, very endgame.",
       "rank_in_slot": 1
     },
     {
@@ -439,7 +431,7 @@
         "Lightning Resist +35%",
         "Attacker Takes Lightning Damage of 15"
       ],
-      "why": "Ranked first: deadly strike that grows with level, +1 to Fury/Werewolf/Lycanthropy and 20% IAS (which helps Lawbringer; Ribcracker is already at 5 frames).",
+      "why": "Ranked first: deadly strike that grows with level, +1 to Fury/Werewolf/Lycanthropy and 20% IAS (for the merc; Ribcracker is already at 5 frames).",
       "rank_in_slot": 1
     },
     {
@@ -474,7 +466,7 @@
         "+100 Defense",
         "+100 Defense vs. Missile"
       ],
-      "why": "Third: only speed and defense; the IAS matters for Lawbringer, not for Ribcracker (5 frames already).",
+      "why": "Third: only speed and defense; the IAS doesn't matter for Ribcracker (5 frames already).",
       "rank_in_slot": 3
     },
     {
@@ -493,8 +485,25 @@
         "Regenerate Mana 20%"
       ],
       "why": "Missile-weapon runeword (runes.json itype miss): a werewolf Fury can't attack with it. Two uses: weapon swap to cast Valkyrie and keep Vigor between fights, or the weapon of an Act 1 (bow) merc.",
-      "notes": "Tir Ith Sol Ko: Ith in the stash; Tir, Sol and Ko missing. It can't go in the Lawbringer merc's hands (Act 3/5 use swords).",
+      "notes": "Tir Ith Sol Ko: Ith in the stash; Tir, Sol and Ko missing. It can't go in the merc's hands (the Act 5 merc uses swords).",
       "rank_in_slot": 1
+    },
+    {
+      "name": "Call to Arms",
+      "slot": "swap",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 57,
+      "base": "5-socket weapon (with Phoenix in a 4-socket shield on the swap)",
+      "stats": [
+        "+1 to All Skills",
+        "+2-6 to Battle Command",
+        "+1-6 to Battle Orders",
+        "+1-4 to Battle Cry"
+      ],
+      "why": "Later swap option: Battle Orders / Battle Command before fights, with Phoenix (Redemption aura) beside it.",
+      "notes": "Amn Ral Mal Ist Ohm. The user isn't sure it helps a Fury; Harmony stays the swap's main pick.",
+      "rank_in_slot": 2
     }
   ],
   "recipes": [
@@ -634,16 +643,16 @@
       "range": "lvl 75-80 (Fury start)",
       "tips": [
         "Reset at Akara at 75 once Raven Frost is on: Werewolf 20, Lycanthropy 20, Feral Rage 20, Rabies 1, Fury 20, Oak Sage 5.",
-        "Swap the summoner's Spirit sword for Ribcracker (or Lawbringer + Ancients' Pledge) and Bloodfist for Laying of Hands; Jalal's Mane, Raven Frost and String of Ears stay on, and Stealth until Fortitude; Smoke stays on the merc.",
+        "Swap the summoner's Spirit sword and shield for Ribcracker (two-handed) and Bloodfist for Laying of Hands; Jalal's Mane, Raven Frost and String of Ears stay on, and Stealth until Fortitude; Smoke stays on the merc.",
         "Open each fight with Feral Rage until the charges are up (life steal), then Fury.",
-        "Keep the Nightmare Act 2 Might merc from the summoner stage."
+        "Hire an Act 5 Barbarian merc and give it both Lawbringers (two one-handed swords, dual wield per the user); the summoner stage's Act 2 merc can't use swords."
       ]
     },
     {
       "range": "lvl 75-99 (Hell)",
       "tips": [
         "Life steal is a third in Hell: Bulwark (merc or you), Feral Rage charges and String of Ears / Verdungo's matter.",
-        "Skip physical immunes; Rabies, Lawbringer and the merc handle them."
+        "Skip physical immunes; Rabies and the merc's Lawbringers handle them."
       ]
     }
   ]

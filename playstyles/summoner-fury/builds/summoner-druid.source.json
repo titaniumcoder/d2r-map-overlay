@@ -9,7 +9,7 @@
     "lvl 24-40 (Normal Act 5 - Nightmare: Grizzly from 30)": "Spirit at 25, Grizzly at 30, Dire Wolf maxed by 36.",
     "setups": "'setup' is the stage the piece is first worn in. Stash pieces were read from the overlay's shared-stash view on 2026-11-19.",
     "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)": "Grizzly to 20 by 51 (+10% damage to every wolf and the bear per point). Hire the Nightmare Act 2 Might merc. Jalal's Mane, Raven Frost and String of Ears are worn now and stay on after the Fury respec. Smoke is merc gear (the merc's armor); the druid keeps Stealth for its Faster Cast Rate.",
-    "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)": "Spirit Wolf to 20 by 60 (with the Hell Den of Evil point) (+25% attack rating for Dire Wolves and the Grizzly per point), then Oak Sage to 20 by 75 (+5% life per point). From 75 with the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer, Smoke, life-leech merc helm) the Fury switch is possible (optional).",
+    "lvl 60-75 (Hell: Spirit Wolf 20, Oak Sage)": "Spirit Wolf to 20 by 60 (with the Hell Den of Evil point) (+25% attack rating for Dire Wolves and the Grizzly per point), then Oak Sage to 20 by 75 (+5% life per point). From 75 with the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) the Fury switch is possible (optional).",
     "lvl 75-99 (Hell endgame: Ravens to 20)": "Without the switch the summoner goes on to 99: Ravens 20 by 90, then Arctic Blast 1 (prerequisite) and Cyclone Armor 8 (absorbs 124 fire/cold/lightning damage per cast). Endgame summoner gear: Heart of the Oak, Jalal's Mane, Enigma, Mara's Kaleidoscope, Arachnid Mesh."
   },
   "stat_source": "All numbers are computed from the D2R game tables (blizzhackers/d2data JSON, current with the Warlock class): skill requirements, petmax/HP/damage/synergy formulas from skills.json and skilldesc.json, runeword runes/types/levels from runes.json + misc.json (rune levelreq), base requirements and socket limits from weapons.json/armor.json/itemtypes.json, unique/set stats from uniqueitems.json/setitems.json, merc auras from hireling.json. Not from a build guide.",
@@ -41,7 +41,7 @@
       },
       {
         "when": "level 75",
-        "target": "optional switch to Fury once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer, Smoke, life-leech merc helm) is owned: 86 skill points (74 from levels + 12 from Den of Evil, Radament and Izual in all three difficulties). Oak Sage 20 (+125% life) by now. Otherwise the summoner continues"
+        "target": "optional switch to Fury once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) is owned: 86 skill points (74 from levels + 12 from Den of Evil, Radament and Izual in all three difficulties). Oak Sage 20 (+125% life) by now. Otherwise the summoner continues"
       },
       {
         "when": "level 90",
@@ -55,7 +55,7 @@
     "skill_points": "1 per level from level 2 plus quests: Den of Evil +1, Radament +1, Izual +2 per difficulty (12 in total). Level 40 = 39 + 4 (Normal) + 1 (Nightmare Den) = 44; level 75 = 74 + 12 = 86; level 99 = 98 + 12 = 110.",
     "summons": "From skills.json: Raven count min(lvl,5), 12+lvl-1 hits, damage +12% per Spirit/Dire Wolf/Grizzly base level. Spirit Wolf count min(lvl,5), its points give Dire Wolves and the Grizzly +25% attack rating and +10% defense each. Dire Wolf count min(lvl,3), damage 7-12 (lvl 1) / 15-24 (5) / 37-53 (12) / 85-109 (20), HP +60% at 1 to +535% at 20, and each Dire Wolf point gives Spirit Wolves and the Grizzly +15% life. Grizzly 30-60 base, its points give Spirit Wolves, Dire Wolves and itself +25% damage +10% per level. Spirit Wolves and Dire Wolves are separate pet types, so 5 + 3 + bear + 5 ravens fight together. Pet level is the character level (calc2 ulvl), so the summons keep up without points; points add the synergies above.",
     "survival": "Oak Sage: +30% life (+5%/level) for you, the merc and the pets (Oak Sage Aura); 20 points by 75 = +125%. Cyclone Armor (8 points from 92, after Arctic Blast 1) absorbs 40 + 12/level fire, cold and lightning damage per cast (124 at level 8), recast as it wears off. Heart of Wolverine (+20% damage +7%/level, +25% AR +7%/level) stays at 1 point: a Grizzly point gives +10% damage, more than Wolverine's +7%, and only one spirit is out at a time.",
-    "respec": "optional, from 75 (Akara's free reset of any difficulty whose Den of Evil reward is still unused; stat points are refunded too): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20 (460 s form), Rabies 1, Oak Sage 5 = 86 points. Only once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer, Smoke, life-leech merc helm) is owned; without it the summoner goes on to 99. Details in the Fury Druid stage."
+    "respec": "optional, from 75 (Akara's free reset of any difficulty whose Den of Evil reward is still unused; stat points are refunded too): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20 (460 s form), Rabies 1, Oak Sage 5 = 86 points. Only once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) is owned; without it the summoner goes on to 99. Details in the Fury Druid stage."
   },
   "merc": {
     "type": "Act 2 Desert Mercenary: Normal Prayer, from Nightmare (level 40) Might",
@@ -274,7 +274,7 @@
   },
   "respec": {
     "into": "Fury Werewolf (next stage)",
-    "when": "optional, level 75 or later, once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer, Smoke, life-leech merc helm) is owned (Akara's free reset)",
+    "when": "optional, level 75 or later, once the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) is owned (Akara's free reset)",
     "how": "Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20, Rabies 1, Oak Sage 5 = 86 points."
   },
   "items": [

@@ -133,7 +133,7 @@ pub fn stage_json(stage: Option<&Stage>, copies: &dyn Fn(&str) -> u32) -> serde_
 /// The natural-socket base hint for runeword `word` ([`d2r_core::socket_bases::hint`]): bases
 /// that can drop with its socket count up to the highest monster level the character farms
 /// ([`d2r_core::info::reachable_level`], the cap [`gear_attention`] uses), for `wearer` (the
-/// character's class, or the mercenary taken as Act 2: [`Wearer::Act2Merc`]) and, with `slot`
+/// character's class, or the build's mercenary: [`Wearer::Merc`]) and, with `slot`
 /// set, worn in that `ItemData::BODY` slot. `None` for an unknown character level or difficulty
 /// or when nothing qualifies: the dashboard then shows the runeword's `bases` categories.
 #[must_use]

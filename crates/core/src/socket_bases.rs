@@ -37,46 +37,150 @@ const CATEGORY_TYPES: [(&str, &str); 22] = [
     ("weapons", "weap"),
 ];
 
+/// The act a mercenary was hired in: it decides the weapons the mercenary wields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MercAct {
+    /// Rogue Scout: bows (not crossbows).
+    Act1,
+    /// Desert Mercenary: polearms and spears (not javelins). The default: the live snapshot
+    /// doesn't read the hireling's act, and a build file without `merc_act` means this one.
+    #[default]
+    Act2,
+    /// Iron Wolf: a one-handed sword and a shield.
+    Act3,
+    /// Barbarian: swords, one-handed. The user says the Act 5 mercenary dual-wields two
+    /// one-handed swords (the Frenzy merc type, D2R patch 2.4), so a two-handed
+    /// sword is never planned for it, and its off-hand slot takes a second sword.
+    Act5,
+}
+
+impl MercAct {
+    /// The act of number `act` (1, 2, 3 or 5; Act 4 has no mercenary).
+    #[must_use]
+    pub const fn from_number(act: u8) -> Option<Self> {
+        match act {
+            1 => Some(Self::Act1),
+            2 => Some(Self::Act2),
+            3 => Some(Self::Act3),
+            5 => Some(Self::Act5),
+            _ => None,
+        }
+    }
+
+    /// The act's number.
+    #[must_use]
+    pub const fn number(self) -> u8 {
+        match self {
+            Self::Act1 => 1,
+            Self::Act2 => 2,
+            Self::Act3 => 3,
+            Self::Act5 => 5,
+        }
+    }
+
+    /// The item types it wields (class-only variants, such as amazon bows and spears, drop
+    /// out through the class check).
+    const fn weapons(self) -> &'static [&'static str] {
+        match self {
+            Self::Act1 => &["bow"],
+            Self::Act2 => &["pole", "spea"],
+            Self::Act3 | Self::Act5 => &["swor"],
+        }
+    }
+
+    /// Whether its weapon must be one-handed: the Act 3 mercenary holds a shield, the Act 5
+    /// one a second sword (per the user, see [`MercAct::Act5`]).
+    const fn one_handed(self) -> bool {
+        matches!(self, Self::Act3 | Self::Act5)
+    }
+
+    /// Whether it dual-wields: its off-hand slot takes a weapon (Act 5, per the user).
+    const fn dual_wields(self) -> bool {
+        matches!(self, Self::Act5)
+    }
+}
+
 /// Who will wear the base.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wearer {
     /// The player character of this class (player txt row, 0 amazon .. 7 warlock): bases
     /// restricted to another class are skipped.
     Player(u32),
-    /// The mercenary, always taken as an Act 2 Desert Mercenary: the live snapshot doesn't read
-    /// the hireling's act, and every build here uses Act 2. A mercenary can't wear class-only
-    /// bases (pelts, barbarian helms, ...; circlets have no class and stay in), and its weapons
-    /// are only polearms and spears ([`ACT2_MERC_WEAPONS`]).
-    Act2Merc,
+    /// The player character of this class with an off-hand piece (a shield) beside the weapon:
+    /// as [`Wearer::Player`], but only one-handed weapons ([`two_handed_for`]).
+    PlayerWithOffhand(u32),
+    /// The mercenary of this act. It can't wear class-only bases (pelts, barbarian helms, ...;
+    /// circlets have no class and stay in), and its weapons are its act's
+    /// ([`MercAct::weapons`]); an Act 3 one also takes shields.
+    Merc(MercAct),
 }
 
-/// The item types an Act 2 mercenary wields (polearms, spears). Amazon spears (`aspe`, an
-/// Equiv of `spea`) are class-only and drop out through the class check.
-const ACT2_MERC_WEAPONS: [&str; 2] = ["pole", "spea"];
-
-/// Whether `wearer` can use a base of raw item type `ty`, body slot `slot` and class
-/// restriction `class`.
-fn wearable(wearer: Wearer, ty: &str, slot: u8, class: Option<u8>) -> bool {
-    match wearer {
-        Wearer::Player(c) => class.is_none_or(|only| u32::from(only) == c),
-        Wearer::Act2Merc => {
-            class.is_none() && (slot != 4 || ACT2_MERC_WEAPONS.iter().any(|w| is_a(ty, w, 0)))
+impl Wearer {
+    /// Whether its weapon must be one-handed.
+    const fn one_hand_only(self) -> bool {
+        match self {
+            Self::Player(_) => false,
+            Self::PlayerWithOffhand(_) => true,
+            Self::Merc(act) => act.one_handed(),
         }
     }
 }
 
-/// Whether the Act 2 mercenary can wear the base with item code `code`: a helm or body armor
-/// of no class, or a polearm or spear.
+/// Whether `wearer` can use a base of raw item type `ty`, body slot `slot` and class
+/// restriction `class` (its hands aside: [`in_hand`]).
+fn wearable(wearer: Wearer, ty: &str, slot: u8, class: Option<u8>) -> bool {
+    match wearer {
+        Wearer::Player(c) | Wearer::PlayerWithOffhand(c) => class.is_none_or(|only| u32::from(only) == c),
+        // Javelins are spears in itemtypes.txt (Equiv2), but no merc weapon.
+        Wearer::Merc(act) => {
+            class.is_none()
+                && match slot {
+                    4 => act.weapons().iter().any(|w| is_a(ty, w, 0)) && !is_a(ty, "jave", 0),
+                    5 => act == MercAct::Act3,
+                    _ => true,
+                }
+        }
+    }
+}
+
+/// Whether weapon `code` takes both hands for `wearer`: weapons.txt `2handed`, except that a
+/// barbarian player wields a `1or2handed` sword in one hand. The Act 5 mercenary is a barbarian
+/// too, but the user plans its swords one-handed ([`MercAct::Act5`]). `false` for a non-weapon.
 #[must_use]
-pub fn merc_wears(code: &str) -> bool {
-    bases_data::base(code)
-        .is_some_and(|b| matches!(b.slot, 1 | 3 | 4) && wearable(Wearer::Act2Merc, b.kind, b.slot, b.class))
+pub fn two_handed_for(code: &str, wearer: Wearer) -> bool {
+    let barbarian = matches!(wearer, Wearer::Player(4) | Wearer::PlayerWithOffhand(4));
+    crate::weapons_data::two_handed(code) == Some(true)
+        && !(barbarian && crate::weapons_data::one_or_two_handed(code))
+}
+
+/// Whether a base worn in body slot `base_slot` goes in the wanted `slot` (`None`: any): the
+/// same slot, or a weapon in the off-hand (5) of a mercenary that dual-wields
+/// ([`MercAct::dual_wields`]).
+fn in_slot(wearer: Wearer, slot: Option<u8>, base_slot: u8) -> bool {
+    let dual = matches!(wearer, Wearer::Merc(act) if act.dual_wields());
+    slot.is_none_or(|s| s == base_slot || (dual && s == 5 && base_slot == 4))
+}
+
+/// Whether `wearer`'s hands allow base `code`: a wearer limited to one hand
+/// ([`Wearer::PlayerWithOffhand`], an Act 3 or Act 5 mercenary) takes no two-handed weapon.
+fn in_hand(code: &str, wearer: Wearer) -> bool {
+    !wearer.one_hand_only() || !two_handed_for(code, wearer)
+}
+
+/// Whether the mercenary of `act` can wear the base with item code `code`: a helm or body
+/// armor of no class, a weapon of its act (one-handed for Act 3 and 5), and for Act 3 a shield.
+#[must_use]
+pub fn merc_wears(code: &str, act: MercAct) -> bool {
+    let wearer = Wearer::Merc(act);
+    bases_data::base(code).is_some_and(|b| {
+        matches!(b.slot, 1 | 3 | 4 | 5) && wearable(wearer, b.kind, b.slot, b.class) && in_hand(code, wearer)
+    })
 }
 
 /// Whether the hint ranks by defense: the mercenary's helm or body armor (user request,
 /// 2026-11-20: the merc wants the strongest base, its strength is no concern of the player's).
-fn by_defense(wearer: Wearer, slot: Option<u8>) -> bool {
-    wearer == Wearer::Act2Merc && matches!(slot, Some(1 | 3))
+const fn by_defense(wearer: Wearer, slot: Option<u8>) -> bool {
+    matches!(wearer, Wearer::Merc(_)) && matches!(slot, Some(1 | 3))
 }
 
 /// One base that can drop with the wanted socket count.
@@ -121,8 +225,8 @@ fn type_cap(ty: &str, ilvl: u32) -> u8 {
 
 /// Every base fitting one of `categories` (readable runeword base names) that can drop with
 /// exactly `sockets` sockets at item level `max_ilvl` or below, whose quality level is ≤
-/// `max_ilvl`, that `wearer` can use ([`Wearer`]) and, with `slot` set, that is worn in that
-/// body slot.
+/// `max_ilvl`, that `wearer` can use ([`Wearer`], its hands included) and, with `slot` set,
+/// that is worn in that body slot.
 /// Sorted by strength + dexterity requirement, then quality level, then name; for the
 /// mercenary's helm or body armor by maximum defense, highest first, then the same keys.
 ///
@@ -154,7 +258,8 @@ pub fn natural_bases(
             (max >= sockets
                 && u32::from(qlvl) <= max_ilvl
                 && wearable(wearer, ty, base.slot, base.class)
-                && slot.is_none_or(|s| s == base.slot))
+                && in_hand(code, wearer)
+                && in_slot(wearer, slot, base.slot))
             .then_some((
                 u32::from(qlvl),
                 name,
@@ -200,10 +305,22 @@ pub fn max_defense(code: &str) -> Option<u16> {
 }
 
 /// Whether the base with item code `code` can carry runeword `word` for `wearer` (the same
-/// category, class and mercenary checks as [`natural_bases`]) and, with `slot` set, is worn in
-/// that body slot. The socket count is the caller's check: this is about the base only.
+/// category, class, mercenary and hand checks as [`natural_bases`]) and, with `slot` set, is
+/// worn in that body slot. The socket count is the caller's check: this is about the base only.
 #[must_use]
 pub fn fits(word: &Runeword, code: &str, wearer: Wearer, slot: Option<u8>) -> bool {
+    fits_type(word, code, wearer, slot) && in_hand(code, wearer)
+}
+
+/// Whether base `code` would [`fit`](fits) `word` for `wearer` but takes both hands where the
+/// wearer has only one free (a druid's Zweihander beside a shield).
+#[must_use]
+pub fn two_handed_misfit(word: &Runeword, code: &str, wearer: Wearer, slot: Option<u8>) -> bool {
+    fits_type(word, code, wearer, slot) && !in_hand(code, wearer)
+}
+
+/// [`fits`] without the hand check.
+fn fits_type(word: &Runeword, code: &str, wearer: Wearer, slot: Option<u8>) -> bool {
     let (Some(&(_, _, ty, _, _, _)), Some(base)) = (socketable_row(code), bases_data::base(code)) else {
         return false;
     };
@@ -213,7 +330,7 @@ pub fn fits(word: &Runeword, code: &str, wearer: Wearer, slot: Option<u8>) -> bo
             .find(|(name, _)| name == c)
             .is_some_and(|&(_, want)| is_a(ty, want, 0))
     });
-    category && wearable(wearer, ty, base.slot, base.class) && slot.is_none_or(|s| s == base.slot)
+    category && wearable(wearer, ty, base.slot, base.class) && in_slot(wearer, slot, base.slot)
 }
 
 /// Whether base `code` can carry runeword `word` at all: it [`fits`] and can have the
@@ -346,7 +463,7 @@ mod tests {
 
     #[test]
     fn the_act2_merc_wields_only_polearms_and_spears() -> anyhow::Result<()> {
-        let picks = natural_bases(&["weapons"], 4, 60, Wearer::Act2Merc, Some(4));
+        let picks = natural_bases(&["weapons"], 4, 60, Wearer::Merc(MercAct::Act2), Some(4));
         assert!(names(&picks).contains(&"Voulge"), "{:?}", names(&picks));
         for p in &picks {
             let (_, _, ty, _, _, _) = SOCKETABLE
@@ -358,11 +475,18 @@ mod tests {
         // Amazon spears are class-only: never for the merc.
         assert!(!names(&picks).contains(&"Maiden Spear"), "{:?}", names(&picks));
         let insight = crate::runewords_data::lookup("Insight").ok_or_else(|| anyhow::anyhow!("Insight"))?;
-        let text = hint(insight, 45, Wearer::Act2Merc, Some(4)).ok_or_else(|| anyhow::anyhow!("no hint"))?;
+        let text = hint(insight, 45, Wearer::Merc(MercAct::Act2), Some(4))
+            .ok_or_else(|| anyhow::anyhow!("no hint"))?;
         assert!(text.starts_with("4 sockets: Voulge (50 Str)"), "{text}");
         assert!(!text.contains("Staff") && !text.contains("Bow"), "{text}");
         // Its helm and body armor stay unfiltered by type (class-only pelts still out).
-        let helms = names(&natural_bases(&["helms"], 2, 60, Wearer::Act2Merc, Some(1)));
+        let helms = names(&natural_bases(
+            &["helms"],
+            2,
+            60,
+            Wearer::Merc(MercAct::Act2),
+            Some(1),
+        ));
         assert!(
             helms.contains(&"Cap") && !helms.contains(&"Wolf Head"),
             "{helms:?}"
@@ -372,7 +496,7 @@ mod tests {
 
     #[test]
     fn the_merc_helm_and_body_rank_by_defense() -> anyhow::Result<()> {
-        let helms = natural_bases(&["helms"], 3, 60, Wearer::Act2Merc, Some(1));
+        let helms = natural_bases(&["helms"], 3, 60, Wearer::Merc(MercAct::Act2), Some(1));
         let names = names(&helms);
         assert!(
             !names.contains(&"Wolf Head") && !names.contains(&"Jawbone Cap"),
@@ -385,7 +509,8 @@ mod tests {
             "{names:?}"
         );
         let bulwark = crate::runewords_data::lookup("Bulwark").ok_or_else(|| anyhow::anyhow!("Bulwark"))?;
-        let text = hint(bulwark, 99, Wearer::Act2Merc, Some(1)).ok_or_else(|| anyhow::anyhow!("no hint"))?;
+        let text = hint(bulwark, 99, Wearer::Merc(MercAct::Act2), Some(1))
+            .ok_or_else(|| anyhow::anyhow!("no hint"))?;
         assert!(
             text.starts_with("3 sockets: Corona (def 165, 174 Str), Spired Helm (def 159, 192 Str)"),
             "{text}"
@@ -393,7 +518,7 @@ mod tests {
         // The merc's weapon and the player's helms keep the requirement order.
         let druid = hint(bulwark, 99, DRUID, Some(1)).ok_or_else(|| anyhow::anyhow!("no hint"))?;
         assert!(!druid.contains("(def "), "{druid}");
-        let body = natural_bases(&["armor"], 4, 60, Wearer::Act2Merc, Some(3));
+        let body = natural_bases(&["armor"], 4, 60, Wearer::Merc(MercAct::Act2), Some(3));
         assert!(
             body.windows(2)
                 .all(|w| w.first().map(|p| p.def) >= w.get(1).map(|p| p.def))
@@ -410,7 +535,7 @@ mod tests {
         assert!(fits(harmony, "hbw", DRUID, Some(4)));
         assert!(!fits(harmony, "hbw", DRUID, Some(5)), "not an off-hand");
         assert!(
-            !fits(harmony, "hbw", Wearer::Act2Merc, None),
+            !fits(harmony, "hbw", Wearer::Merc(MercAct::Act2), None),
             "merc: polearms and spears only"
         );
         assert!(!fits(harmony, "crs", DRUID, None), "a sword is no missile weapon");
@@ -448,6 +573,103 @@ mod tests {
             hint(spirit, 10, DRUID, Some(4)).is_none(),
             "nothing has 4 sockets at ilvl 10"
         );
+        Ok(())
+    }
+
+    /// The raw item types of `picks` ([`SOCKETABLE`]).
+    fn types(picks: &[Pick]) -> Vec<&'static str> {
+        picks
+            .iter()
+            .filter_map(|p| SOCKETABLE.iter().find(|row| row.1 == p.name).map(|row| row.2))
+            .collect()
+    }
+
+    #[test]
+    fn merc_acts_by_number() {
+        for act in [MercAct::Act1, MercAct::Act2, MercAct::Act3, MercAct::Act5] {
+            assert_eq!(MercAct::from_number(act.number()), Some(act));
+        }
+        assert_eq!(MercAct::from_number(4), None, "Act 4 has no mercenary");
+        assert_eq!(MercAct::default(), MercAct::Act2);
+    }
+
+    #[test]
+    fn each_merc_act_wields_its_own_weapons() {
+        let weapons = |act| natural_bases(&["weapons"], 3, 99, Wearer::Merc(act), Some(4));
+        // Act 1 rogue: bows, no crossbows, no amazon bows.
+        let rogue = weapons(MercAct::Act1);
+        assert!(names(&rogue).contains(&"Long Bow"), "{:?}", names(&rogue));
+        assert!(types(&rogue).iter().all(|&t| t == "bow"), "{:?}", types(&rogue));
+        assert!(!names(&rogue).contains(&"Stag Bow"));
+        // Act 3 and Act 5: one-handed swords only (the Act 5 one per the user: dual wield).
+        for act in [MercAct::Act3, MercAct::Act5] {
+            let swords = weapons(act);
+            assert!(names(&swords).contains(&"Broad Sword"), "{:?}", names(&swords));
+            assert!(
+                types(&swords).iter().all(|&t| t == "swor"),
+                "{:?}",
+                types(&swords)
+            );
+            for two in ["Zweihander", "Two-Handed Sword", "Claymore"] {
+                assert!(!names(&swords).contains(&two), "{act:?}: {two}");
+            }
+        }
+        // The Act 5 merc's off-hand takes a second one-handed sword (dual wield, per the user);
+        // no other act's off-hand takes a weapon, and only Act 3 takes a shield.
+        let second = natural_bases(&["swords"], 3, 99, Wearer::Merc(MercAct::Act5), Some(5));
+        assert!(names(&second).contains(&"Broad Sword") && !names(&second).contains(&"Claymore"));
+        assert_eq!(
+            natural_bases(&["swords"], 3, 99, Wearer::Merc(MercAct::Act3), Some(5)),
+            vec![]
+        );
+        assert_ne!(
+            natural_bases(&["shields"], 3, 99, Wearer::Merc(MercAct::Act3), Some(5)),
+            vec![]
+        );
+        assert_eq!(
+            natural_bases(&["shields"], 3, 99, Wearer::Merc(MercAct::Act5), Some(5)),
+            vec![]
+        );
+        // Javelins are spears in itemtypes.txt, but never a merc weapon.
+        assert!(!merc_wears("jav", MercAct::Act2));
+        assert!(merc_wears("spr", MercAct::Act2) && !merc_wears("spr", MercAct::Act5));
+        // Armor fits every act; a shield only the Act 3 merc.
+        assert!(merc_wears("cap", MercAct::Act5) && merc_wears("qui", MercAct::Act1));
+        assert!(merc_wears("lrg", MercAct::Act3) && !merc_wears("lrg", MercAct::Act5));
+        assert!(merc_wears("bsd", MercAct::Act5) && !merc_wears("9fb", MercAct::Act5));
+    }
+
+    #[test]
+    fn a_weapon_beside_an_offhand_must_be_one_handed() -> anyhow::Result<()> {
+        let lawbringer =
+            crate::runewords_data::lookup("Lawbringer").ok_or_else(|| anyhow::anyhow!("Lawbringer"))?;
+        let with_shield = Wearer::PlayerWithOffhand(5);
+        // Broad Sword: one-handed. Zweihander (`9fb`): two-handed for a druid.
+        assert!(fits(lawbringer, "bsd", with_shield, Some(4)));
+        assert!(!fits(lawbringer, "9fb", with_shield, Some(4)));
+        assert!(two_handed_misfit(lawbringer, "9fb", with_shield, Some(4)));
+        assert!(!two_handed_misfit(lawbringer, "bsd", with_shield, Some(4)));
+        // Without an off-hand both hands are free.
+        assert!(fits(lawbringer, "9fb", DRUID, Some(4)));
+        assert!(!two_handed_misfit(lawbringer, "9fb", DRUID, Some(4)));
+        // A barbarian wields a `1or2handed` sword in one hand; a bow takes both hands for all.
+        assert!(fits(lawbringer, "9fb", Wearer::PlayerWithOffhand(4), Some(4)));
+        assert!(!two_handed_for("9fb", Wearer::Player(4)) && two_handed_for("9fb", DRUID));
+        assert!(two_handed_for("hbw", Wearer::Player(4)));
+        assert!(!two_handed_for("cap", DRUID), "no weapon");
+        // The Act 5 merc is a barbarian, but its swords are planned one-handed.
+        assert!(!fits(lawbringer, "9fb", Wearer::Merc(MercAct::Act5), Some(4)));
+        assert!(two_handed_misfit(
+            lawbringer,
+            "9fb",
+            Wearer::Merc(MercAct::Act5),
+            Some(4)
+        ));
+        // The hint drops the two-handers too.
+        let hint = hint(lawbringer, 99, with_shield, Some(4)).ok_or_else(|| anyhow::anyhow!("no hint"))?;
+        assert!(!hint.contains("Claymore") && !hint.contains("Maul"), "{hint}");
+        let free = super::hint(lawbringer, 99, DRUID, Some(4)).ok_or_else(|| anyhow::anyhow!("no hint"))?;
+        assert!(free.contains("Claymore") && free.contains("Maul"), "{free}");
         Ok(())
     }
 }

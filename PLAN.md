@@ -506,7 +506,8 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - **Agent-authored build files**: `playstyles/summoner-fury/builds/<slug>.toml` since step 7 (was
   `~/.config/d2r-map-overlay/builds/`, still read as a fallback), one build per file
   (schema: `name`, `damages`, `notes`, `[slots]`, `[merc_slots]` — pieces as `"Name@<required level>"`,
-  ordered best→worst). Loaded by `playstyle::files` (missing dir = no builds, no error), keyed by
+  ordered best→worst; optional `merc_act = 1 | 2 | 3 | 5`, default 2, the act of the build's
+  mercenary, from the source JSON's `merc.act` in `gen_build.py`). Loaded by `playstyle::files` (missing dir = no builds, no error), keyed by
   lowercased build name — the slug a selection refers to. The webapp does NOT edit them.
 - **Selection-only config**: the webapp writes ONLY `build = "<slug>"` into `[bis."<char>"]` (toml_edit,
   comment-preserving; the tables are created if missing) — since step 7 in
@@ -713,7 +714,7 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
 - **Keep · own**: pieces of the active build and its later stages (`BiS` slots, extras,
   `switch_requires`) and of the farm list, as many copies as needed minus the worn ones; one white
   base per (runeword, wearer, slot) need: allowed type, exactly the rune count of sockets, usable by
-  the player class or the Act 2 merc; each copy of the runeword already held (worn, carried,
+  the player class or the merc of the build's `merc_act`; each copy of the runeword already held (worn, carried,
   stashed, merc) drops one such need, and the narrowest need picks its base first. Each need
   keeps the **best** fitting base held (user, 2026-11-20: a better base for the same runeword
   replaces the old one): higher base damage for weapons (min + max, `weapons_data::DAMAGE` from
@@ -721,6 +722,23 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   plain, then the lower str + dex requirement, then the better place. The worse bases are sold,
   even one already kept on pages 1–2. Fine on pages 1–2 and in the personal stash; in the
   inventory or cube it is a move to 1–2 (user, 2026-11-20: "wrong place (inv, stash)").
+- **Hands and merc acts** (user, 2026-11-20: "why replace a Broad Sword with a Zweihander? a
+  2h sword can't be used by the Act 5 merc for dual wield"). One-/two-handed comes from
+  weapons.txt `2handed` and `1or2handed` (`weapons_data`, `gen_weapons.py`; a barbarian player
+  holds a `1or2handed` sword in one hand). A need is one-handed for the player's `weapon` slot of a
+  stage that also has `offhand` pieces (`Wearer::PlayerWithOffhand`; `swap` keeps both hands) and
+  for an Act 3 (shield) or Act 5 (dual wield) merc. Merc weapons per act: 1 bows (no crossbows),
+  2 polearms and spears (no javelins), 3 swords + shields, 5 swords; the Act 5 merc's `offhand`
+  takes a second sword. A base that fits a need except for its hands is sold with the reason
+  "two-handed". A slot-less want of a runeword a build places in a slot (a `switch_requires`
+  condition, a farm entry) adds no looser need, and a farm runeword its group's build places takes
+  that build's needs. Hints, map marks and the merc-wearable rule use the same act.
+  Act 5 dual wield: the Frenzy Barbarian merc type (added in D2R patch 2.4) dual-wields one-handed
+  swords only (Blizzard forums, 2026-11-20 check); the Bash/Taunt type uses one weapon.
+  The Fury fights two-handed only (Ribcracker; user, 2026-11-20: "never one handed"); both
+  Lawbringers are its Act 5 merc's (`merc_act = 5`, merc weapon + offhand) until something better,
+  very endgame. Live result: the two Broad Sword 3os → Keep · own, the Zweihander 3os → Sell
+  "two-handed" (no 3-socket two-handed runeword need in either build).
 - **Keep · trade**: valuables rules S/A (certain, or uncertain S), category trade; category twink
   only S for a white base (an eth elite 4os polearm). A twink-A white base (Bill / Poleaxe 4os,
   Crystal Sword 4os, Flail 4os, Paladin shields) is own gear, not a trade good: kept only as a
@@ -746,7 +764,7 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   allow almost any weapon, and their uniques (Rune Master, The Jade Tan Do, Tomb Reaver) are
   kept by name, not for their base type. Summoner → Fury today: bow, club, hamm, mace, scep,
   staf, swor, xbow. Axes, daggers, polearms, spears, javelins, claws, orbs, wands are out. The
-  merc's polearms and spears keep their rule (javelins don't count as its spears). No builds
+  merc's weapons (its act's, for any build of the chain) keep their rule (javelins never count). No builds
   known → no weapon rule; neither when a weapon or swap runeword of the chain has no weapon base
   the class can carry (an unknown class, another class's runeword): a partial type set would
   sell legitimate weapons. Identified boots without faster run/walk (stat 96) → sell "no run
@@ -755,8 +773,8 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   its slot or if its affixes alone score ≥ 20 (a planned skill, +1 class skill, 20 res/life);
   charms and jewels if they score at all (charms carried in the inventory stay out); else sell with
   a reason ("no build stats", "worse than worn", "other class"). The merc's gear has no stats in
-  the snapshot, so a merc-wearable base (helm, body, polearm, spear) failing the player's test is
-  kept unscored.
+  the snapshot, so a merc-wearable base (helm, body, its act's weapon) failing the player's test
+  is kept unscored.
 - Left alone: gems, runes, carried charms, finished runewords that aren't build pieces, quest items.
 
 **User answers (2026-11-20)**

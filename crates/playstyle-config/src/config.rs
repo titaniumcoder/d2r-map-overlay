@@ -18,6 +18,7 @@ use serde::Deserialize;
 use crate::valuables::{Category, Tier};
 use d2r_core::build::Damage;
 use d2r_core::config::{CLASS_NAMES, SLOT_NAMES, class_id};
+use d2r_core::socket_bases::MercAct;
 // The skill plan format is the core skills panel's; the build files carry it.
 pub use d2r_core::web::SkillTarget;
 // The `BiS` selection is a core type: the guidance carries it to the map and the dashboard.
@@ -312,6 +313,9 @@ pub struct Build {
     pub slots: BTreeMap<String, Vec<String>>,
     /// The mercenary's slot name → pieces.
     pub merc_slots: BTreeMap<String, Vec<String>>,
+    /// The act of the build's mercenary (`merc_act = 5`; Act 2 when left out or invalid): it
+    /// decides which weapons its `merc_slots` take ([`d2r_core::socket_bases::MercAct`]).
+    pub merc_act: MercAct,
     /// Per-piece details by piece name (`[pieces."<name>"]`): what the dashboard shows under
     /// each piece (kind, base, stats, why). A piece without an entry shows only its name.
     pub pieces: BTreeMap<String, PieceInfo>,
@@ -481,9 +485,9 @@ pub struct FarmItem {
     /// How many copies the build needs (default 1; two Lawbringers for two weapon slots).
     #[serde(default = "one")]
     pub count: u32,
-    /// `merc = true`: the item is for the mercenary (taken as Act 2, as everywhere else), so
-    /// a runeword's base hint skips class-only bases, keeps polearms/spears for weapons and
-    /// ranks helm and body bases by defense.
+    /// `merc = true`: the item is for the mercenary of the group's build (its `merc_act`, Act 2
+    /// by default), so a runeword's base hint skips class-only bases, keeps that act's weapons
+    /// and ranks helm and body bases by defense.
     #[serde(default)]
     pub merc: bool,
     /// `slot = "helm"`: the body slot it is worn in, narrowing a runeword's base hint to bases
@@ -801,6 +805,7 @@ struct RawBuild {
     notes: String,
     slots: BTreeMap<String, Vec<String>>,
     merc_slots: BTreeMap<String, Vec<String>>,
+    merc_act: Option<u8>,
     pieces: BTreeMap<String, PieceInfo>,
     targets: Vec<String>,
     extras: BTreeMap<String, Vec<String>>,
@@ -926,6 +931,14 @@ pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de:
     let label = format!("build {name}");
     let slots = parse_slot_tables(raw.slots, &label, &mut warnings);
     let merc_slots = parse_slot_tables(raw.merc_slots, &label, &mut warnings);
+    let merc_act = raw.merc_act.map_or_else(MercAct::default, |n| {
+        MercAct::from_number(n).unwrap_or_else(|| {
+            warnings.push(format!(
+                "{label}: merc_act {n} unknown (known: 1, 2, 3, 5); taken as 2"
+            ));
+            MercAct::default()
+        })
+    });
     let notes = raw.notes.trim().to_owned();
     let class = class_of_build(&raw.class, &label, &mut warnings);
     check_skill_names(&raw.skill_plan, class, &label, &mut warnings);
@@ -970,6 +983,7 @@ pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de:
             notes: (!notes.is_empty()).then_some(notes),
             slots,
             merc_slots,
+            merc_act,
             pieces: raw.pieces,
             targets: raw
                 .targets
@@ -1886,6 +1900,21 @@ mod tests {
         // Neither a build nor slots: ignored with a warning.
         let (_, warnings) = settings("[bis.X]\nbuild = \"\"\n[bis.X.slots]\nhelm = [\" \"]")?;
         assert_eq!(warnings.len(), 1, "{warnings:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn merc_act_defaults_to_act_2() -> Result<(), toml::de::Error> {
+        let (_, five, warnings) = parse_build("name = \"B\"\nmerc_act = 5\n")?;
+        assert_eq!((five.merc_act, warnings), (MercAct::Act5, Vec::new()));
+        let (_, none, _) = parse_build("name = \"B\"\n")?;
+        assert_eq!(none.merc_act, MercAct::Act2);
+        let (_, four, warnings) = parse_build("name = \"B\"\nmerc_act = 4\n")?;
+        assert_eq!(four.merc_act, MercAct::Act2);
+        assert_eq!(
+            warnings,
+            vec!["build B: merc_act 4 unknown (known: 1, 2, 3, 5); taken as 2".to_owned()]
+        );
         Ok(())
     }
 }

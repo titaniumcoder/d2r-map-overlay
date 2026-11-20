@@ -3,7 +3,8 @@
 # personal stash, worn) and "done" once enough copies sit in the shared stash.
 # Runewords also mark their missing runes on the dashboard's rune list.
 # Hot-reloaded like the build files.
-# Optional per entry: merc = true (for the Act 2 mercenary) and slot = "weapon" / "shield" /
+# Optional per entry: merc = true (for the mercenary of the group's build: its merc_act,
+# Act 2 by default) and slot = "weapon" / "shield" /
 # "helm" / "body" / ...: they steer a runeword's natural-socket base hint.
 
 [[farm]]
@@ -28,7 +29,7 @@ items = [
   { name = "Fortitude", kind = "runeword", slot = "body" },
   { name = "Raven Frost", kind = "unique" },
   { name = "Ribcracker", kind = "unique" },
-  { name = "Lawbringer", kind = "runeword", count = 2 },
+  { name = "Lawbringer", kind = "runeword", count = 2, merc = true, slot = "weapon" },
   { name = "Smoke", kind = "runeword", merc = true, slot = "body" },
   { name = "Bulwark", kind = "runeword", merc = true, slot = "helm" },
   { name = "Jalal's Mane", kind = "unique" },

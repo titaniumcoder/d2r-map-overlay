@@ -11,7 +11,8 @@
 //! - **Keep · own**: a piece of the active build or a later stage (`BiS` slots, extras,
 //!   `switch_requires`) or of the farm list, as many copies as needed beyond the worn ones;
 //!   and one white base per runeword need (the runeword's base type, exactly its socket count,
-//!   usable by the wearer: the player class or the Act 2 mercenary), the best one held
+//!   usable by the wearer: the player class or the mercenary of the build's act, one-handed
+//!   where the wearer has only one hand free), the best one held
 //!   ([`base_rank`]: damage or defense first). Fine on pages 1–2 and in the personal stash;
 //!   in the inventory or cube it is a Move to 1–2 (user rule, 2026-11-20).
 //! - **Keep · trade**: what the valuables rules rate S or A ([`valuables::keep_tiers`]): trade
@@ -30,12 +31,11 @@
 //! [`Scoring`]): kept for own use when unidentified (not judgeable yet), when they score at
 //! least [`NEAR_WORN`] of what is worn in their slot, or when their affixes alone are worth
 //! [`NOTABLE`] (skills, FCR, resistances …); a charm or jewel when it scores at all. The
-//! mercenary's gear has no stats in the snapshot, so a base it can wear (helm, body, polearm,
-//! spear) that fails the player's test is kept unscored. The rest is sold, with the reason.
+//! mercenary's gear has no stats in the snapshot, so a base it can wear (helm, body, its act's
+//! weapon) that fails the player's test is kept unscored. The rest is sold, with the reason.
 //! Two hard rules come first (user rules, 2026-11-20): a weapon whose type no build of the
 //! stage chain uses ([`build_weapon_types`]: axes, daggers, javelins, claws, orbs … for the
-//! druid) is sold as "not a build weapon", identified or not (the merc's polearms and spears
-//! excepted); identified boots without faster run/walk are sold as "no run speed".
+//! druid) is sold as "not a build weapon", identified or not (the merc's weapons excepted); identified boots without faster run/walk are sold as "no run speed".
 //! Gems, runes, charms in the inventory (they work there), finished runewords that aren't
 //! build pieces, quest items and anything else no rule speaks about get no action.
 
@@ -55,7 +55,7 @@ use d2r_core::items::DropKind;
 use d2r_core::names::same_name;
 use d2r_core::offsets::item_data;
 use d2r_core::runewords_data::{self, Runeword};
-use d2r_core::socket_bases::{self, Wearer};
+use d2r_core::socket_bases::{self, MercAct, Wearer};
 use d2r_core::stash::{StashTab, TabKind};
 
 /// The last shared-stash page for the player's own items; the pages after it are for trade.
@@ -149,6 +149,20 @@ pub struct Scoring {
     pub worn: Vec<(u8, Option<String>, Vec<ItemStat>)>,
     /// items.txt weapon types (`swor`, `staf`, …); empty = no builds known, every type judged.
     pub weapon_types: Vec<&'static str>,
+    /// The mercenary acts of the chain's builds ([`Build::merc_act`]); empty = Act 2.
+    pub merc_acts: Vec<MercAct>,
+}
+
+impl Scoring {
+    /// Whether a mercenary of the chain could wear base `code` ([`socket_bases::merc_wears`]).
+    fn merc_wears(&self, code: &str) -> bool {
+        if self.merc_acts.is_empty() {
+            return socket_bases::merc_wears(code, MercAct::default());
+        }
+        self.merc_acts
+            .iter()
+            .any(|&act| socket_bases::merc_wears(code, act))
+    }
 }
 
 /// The items.txt types of the weapons `builds` use (user rule, 2026-11-20: "druids barely use
@@ -254,6 +268,11 @@ impl Scoring {
                 .map(|e| (e.body, e.code.clone(), e.stats.clone()))
                 .collect(),
             weapon_types: build_weapon_types(builds(), class),
+            merc_acts: {
+                let mut acts: Vec<MercAct> = builds().map(|b| b.merc_act).collect();
+                acts.dedup();
+                acts
+            },
         }
     }
 }
@@ -270,13 +289,13 @@ pub const NOTABLE: f64 = 20.0;
 fn judge(item: &ItemDrop, scoring: &Scoring) -> Result<(), &'static str> {
     let code = item.code.as_deref();
     let base = code.and_then(d2r_core::bases_data::base);
-    let merc = code.is_some_and(socket_bases::merc_wears);
+    let merc = code.is_some_and(|c| scoring.merc_wears(c));
     // A weapon of a type no build uses (user rule, 2026-11-20): sold, identified or not (no
-    // point identifying it). The mercenary's polearms and spears keep their rule below;
-    // javelins are a kind of spear in itemtypes.txt, but not one to keep for the merc.
+    // point identifying it). The mercenary's weapons (its act's: polearms and spears for
+    // Act 2, never javelins) keep their rule below.
     if let Some(b) = base
         && b.slot == 4
-        && !(merc && b.kind != "jave")
+        && !merc
         && !scoring.weapon_types.is_empty()
         && !scoring.weapon_types.contains(&b.kind)
     {
@@ -382,32 +401,62 @@ impl Needs {
         }
     }
 
-    /// Wants a base for `entry` if it names a runeword.
-    fn base(&mut self, entry: &str, wearer: Wearer, slot: Option<u8>) {
+    /// Wants a base for `entry` if it names a runeword; whether it does.
+    fn base(&mut self, entry: &str, wearer: Wearer, slot: Option<u8>) -> bool {
         let Some(word) = runewords_data::lookup(piece_name(entry)) else {
-            return;
+            return false;
         };
         let need = BaseNeed { word, wearer, slot };
         if !self.bases.contains(&need) {
             self.bases.push(need);
         }
+        true
     }
 
-    /// Every piece of build `slots` (slot name → pieces) and a base for each runeword in it.
+    /// Every piece of build `slots` (slot name → pieces) and a base for each runeword in it
+    /// ([`Needs::slot_bases`]).
     fn slots(&mut self, slots: &BTreeMap<String, Vec<String>>, wearer: Wearer) {
+        for entry in slots.values().flatten() {
+            self.piece(entry, 1);
+        }
+        self.slot_bases(slots, wearer, None);
+    }
+
+    /// A base for each runeword in build `slots` (only runeword `only` when set) for `wearer`;
+    /// whether there was any. The player's weapon slot of a stage with off-hand pieces wants a
+    /// one-handed base (user rule, 2026-11-20: a druid can't hold a Zweihander and a shield):
+    /// [`Wearer::PlayerWithOffhand`]. The swap slot keeps both hands (Harmony is a bow).
+    fn slot_bases(
+        &mut self,
+        slots: &BTreeMap<String, Vec<String>>,
+        wearer: Wearer,
+        only: Option<&str>,
+    ) -> bool {
+        // `parse_slot_tables` drops empty lists, so a present "offhand" has pieces.
+        let offhand = slots.contains_key("offhand");
+        let mut any = false;
         for (slot, pieces) in slots {
+            let wearer = match wearer {
+                Wearer::Player(class) if offhand && slot == "weapon" => Wearer::PlayerWithOffhand(class),
+                other => other,
+            };
             for entry in pieces {
-                self.piece(entry, 1);
-                self.base(entry, wearer, slot_body(slot));
+                if only.is_none_or(|word| same_name(piece_name(entry), word)) {
+                    any |= self.base(entry, wearer, slot_body(slot));
+                }
             }
         }
+        any
     }
 
     /// The player's own needs: the resolved `bis` (the current stage, or the character's
     /// inline slots), every build of the stage `chain` (the current stage and the later ones,
     /// by name: [`Settings::stage_chain`]) with its slots, extras and `switch_requires`, and the
     /// whole farm list. A player piece is for class `class` (a farm group's: its build's class);
-    /// a mercenary one for the Act 2 mercenary. Copies `worn` by the character or its
+    /// a mercenary one for the mercenary of its build's act ([`Build::merc_act`]; Act 2 for
+    /// an inline `bis` without a build file). A farm runeword its group's build places in its
+    /// own slots takes that build's base needs (the second Lawbringer is the Act 5 merc's
+    /// one-handed sword), not a looser one for any slot. Copies `worn` by the character or its
     /// mercenary need no stash copy, and each runeword copy `owns` counts (worn, carried,
     /// stashed, the mercenary's) drops one base need of that runeword.
     ///
@@ -424,9 +473,17 @@ impl Needs {
         owns: &dyn Fn(&str) -> u32,
     ) -> Self {
         let mut needs = Self::default();
+        let merc_of = |build: &str| {
+            Wearer::Merc(
+                config
+                    .build_defs
+                    .get(&build.to_lowercase())
+                    .map_or_else(MercAct::default, |b| b.merc_act),
+            )
+        };
         if let Some(bis) = bis {
             needs.slots(&bis.slots, Wearer::Player(class));
-            needs.slots(&bis.merc_slots, Wearer::Act2Merc);
+            needs.slots(&bis.merc_slots, merc_of(&bis.build));
         }
         for build in chain
             .iter()
@@ -434,7 +491,7 @@ impl Needs {
         {
             let player = Wearer::Player(build.class.unwrap_or(class));
             needs.slots(&build.slots, player);
-            needs.slots(&build.merc_slots, Wearer::Act2Merc);
+            needs.slots(&build.merc_slots, Wearer::Merc(build.merc_act));
             for entry in build.extras.values().flatten() {
                 needs.piece(entry, 1);
                 needs.base(entry, player, None);
@@ -449,21 +506,39 @@ impl Needs {
             }
         }
         for group in &config.farm {
-            let farm_class = config
-                .build_defs
-                .get(&group.target.to_lowercase())
-                .and_then(|b| b.class)
-                .unwrap_or(class);
+            let target = config.build_defs.get(&group.target.to_lowercase());
+            let farm_class = target.and_then(|b| b.class).unwrap_or(class);
             for item in &group.items {
+                needs.piece(&item.name, item.count);
+                if let Some(build) = target {
+                    let player = Wearer::Player(farm_class);
+                    let placed = needs.slot_bases(&build.slots, player, Some(&item.name));
+                    let merc_placed =
+                        needs.slot_bases(&build.merc_slots, Wearer::Merc(build.merc_act), Some(&item.name));
+                    if placed || merc_placed {
+                        continue;
+                    }
+                }
                 let wearer = if item.merc {
-                    Wearer::Act2Merc
+                    merc_of(&group.target)
                 } else {
                     Wearer::Player(farm_class)
                 };
-                needs.piece(&item.name, item.count);
                 needs.base(&item.name, wearer, item.slot.map(crate::config::FarmSlot::body));
             }
         }
+        // A runeword a build places in a slot wants its base for that slot (and hands); a
+        // slot-less want of it (a `switch_requires` condition such as "2x Lawbringer", a farm
+        // entry without a slot) adds no looser need that a two-hander could fill.
+        let placed: Vec<&str> = needs
+            .bases
+            .iter()
+            .filter(|n| n.slot.is_some())
+            .map(|n| n.word.name)
+            .collect();
+        needs
+            .bases
+            .retain(|n| n.slot.is_some() || !placed.contains(&n.word.name));
         for (name, count) in &mut needs.pieces {
             let on = worn.iter().filter(|w| same_name(w, name)).count();
             *count = count.saturating_sub(u32::try_from(on).unwrap_or(u32::MAX));
@@ -696,6 +771,20 @@ impl Wants {
     }
 }
 
+/// The reason a plain base is sold: "two-handed" when it would fill a runeword need but for
+/// its hands (user request, 2026-11-20: a Zweihander for a dual-wielding merc), else none.
+fn base_sell_reason(base: &ItemDrop, needs: &Needs) -> Option<&'static str> {
+    let code = base.code.as_deref()?;
+    needs
+        .bases
+        .iter()
+        .any(|n| {
+            usize::from(base.sockets) == n.word.runes.len()
+                && socket_bases::two_handed_misfit(n.word, code, n.wearer, n.slot)
+        })
+        .then_some("two-handed")
+}
+
 /// An item's action with the reason of a scored sell.
 type Decided = (Action, Option<&'static str>);
 
@@ -816,7 +905,8 @@ pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> (Vec<Advice>, W
                 }
             }
         } else if plain_base(&h.item) {
-            Some(Action::Sell)
+            *slot = Some((Action::Sell, base_sell_reason(&h.item, needs)));
+            continue;
         } else if d2r_core::game::magic_or_better(h.item.quality) {
             *slot = Some(match judge(&h.item, scoring) {
                 Ok(()) => (keep_or_move(Side::Own, h.spot), None),
@@ -1056,7 +1146,7 @@ mod tests {
         assert_eq!(open.base(&base("crs", 4)), Some("Spirit"));
         // A trade-worthy base is never an own base: eth elite polearm 4os (twink S) for Insight.
         let mut insight = Needs::default();
-        insight.base("Insight", Wearer::Act2Merc, Some(4));
+        insight.base("Insight", Wearer::Merc(MercAct::Act2), Some(4));
         let (_, merc) = plan(&[], &insight, &druid());
         assert_eq!(merc.base(&base("9vo", 4)), Some("Insight"), "a plain Bill 4os");
         let mut eth = base("7vo", 4);
@@ -1624,9 +1714,9 @@ mod tests {
             bases,
             vec![
                 ("Harmony", DRUID, Some(4)),
-                ("Bulwark", Wearer::Act2Merc, Some(1)),
+                ("Bulwark", Wearer::Merc(MercAct::Act2), Some(1)),
                 ("Lawbringer", DRUID, None),
-                ("Insight", Wearer::Act2Merc, Some(4)),
+                ("Insight", Wearer::Merc(MercAct::Act2), Some(4)),
             ],
             "no base for Wisdom, one alternative of several; the druid class from the build"
         );
@@ -1909,6 +1999,215 @@ mod tests {
         assert_eq!(
             rows(&[at(named("hbt", 5, 38), Spot::Page(1))], &needs),
             vec![row("Sigon's Sabot", Spot::Page(1), Action::Keep(Side::Own), 1)]
+        );
+    }
+
+    /// The shipped playstyle (`playstyles/summoner-fury/`): build files and farm list.
+    fn shipped() -> Settings {
+        crate::files::load(&d2r_core::playstyle::Files {
+            shipped: Some(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury"),
+            ),
+            quiet: true,
+            ..d2r_core::playstyle::Files::default()
+        })
+    }
+
+    /// The needs of a druid on the shipped Summoner → Fury chain at stage `bis_build`, holding
+    /// no copy of anything.
+    fn shipped_needs(config: &Settings, bis_build: &str) -> anyhow::Result<Needs> {
+        let def = config
+            .build_defs
+            .get(bis_build)
+            .ok_or_else(|| anyhow::anyhow!("no build {bis_build}"))?;
+        let bis = Bis {
+            build: def.name.clone(),
+            slots: def.slots.clone(),
+            merc_slots: def.merc_slots.clone(),
+        };
+        let chain = ["summoner druid".to_owned(), "fury druid".to_owned()];
+        Ok(Needs::from_config(config, &chain, Some(&bis), 5, &[], &|_| 0))
+    }
+
+    /// A plan row with its sell reason.
+    type Reasoned = (String, Spot, Action, Option<&'static str>, u32);
+
+    /// `(name, spot, action, reason, count)` rows of the plan.
+    fn reasoned(items: &[Held], needs: &Needs) -> Vec<Reasoned> {
+        plan(items, needs, &druid())
+            .0
+            .into_iter()
+            .map(|a| (a.name, a.spot, a.action, a.reason, a.count))
+            .collect()
+    }
+
+    #[test]
+    fn fury_merc_is_act_5_and_lawbringer_needs_are_one_handed() -> anyhow::Result<()> {
+        let config = shipped();
+        let fury = config
+            .build_defs
+            .get("fury druid")
+            .ok_or_else(|| anyhow::anyhow!("fury"))?;
+        assert_eq!(fury.merc_act, MercAct::Act5);
+        let summoner = config
+            .build_defs
+            .get("summoner druid")
+            .ok_or_else(|| anyhow::anyhow!("summoner"))?;
+        assert_eq!(summoner.merc_act, MercAct::Act2, "the default");
+        for stage in ["summoner druid", "fury druid"] {
+            let needs = shipped_needs(&config, stage)?;
+            let lawbringer: Vec<(Wearer, Option<u8>)> = needs
+                .bases
+                .iter()
+                .filter(|n| n.word.name == "Lawbringer")
+                .map(|n| (n.wearer, n.slot))
+                .collect();
+            // Both are the dual-wielding Act 5 merc's (off-hand and weapon; the druid fights
+            // two-handed); the farm entry and the summoner's "2x Lawbringer" switch condition
+            // add no looser third one.
+            assert_eq!(
+                lawbringer,
+                vec![
+                    (Wearer::Merc(MercAct::Act5), Some(5)),
+                    (Wearer::Merc(MercAct::Act5), Some(4)),
+                ],
+                "{stage}"
+            );
+
+            // Harmony in the swap slot keeps both hands (a bow).
+            assert!(
+                needs
+                    .bases
+                    .iter()
+                    .any(|n| n.word.name == "Harmony" && n.wearer == DRUID),
+                "{stage}"
+            );
+            // The summoner's merc keeps Act 2 for Insight.
+            assert!(
+                needs
+                    .bases
+                    .iter()
+                    .any(|n| n.word.name == "Insight" && n.wearer == Wearer::Merc(MercAct::Act2)),
+                "{stage}"
+            );
+        }
+        // The Fury has no off-hand: its own weapon-slot runewords keep both hands (the farm
+        // list's summoner entries, Spirit and Heart of the Oak beside a shield, don't).
+        let bis = Bis {
+            build: fury.name.clone(),
+            slots: fury.slots.clone(),
+            merc_slots: fury.merc_slots.clone(),
+        };
+        let own = Needs::from_config(&config, &["fury druid".to_owned()], Some(&bis), 5, &[], &|_| 0);
+        let swap: Vec<Wearer> = own
+            .bases
+            .iter()
+            .filter(|n| matches!(n.word.name, "Harmony" | "Call to Arms"))
+            .map(|n| n.wearer)
+            .collect();
+        assert_eq!(swap, vec![DRUID, DRUID]);
+        Ok(())
+    }
+
+    #[test]
+    fn live_two_broad_swords_kept_and_the_zweihander_sold_as_two_handed() -> anyhow::Result<()> {
+        // The live stash (2026-11-20): two Broad Sword 3os on page 2, a Zweihander 3os in the
+        // inventory, no Lawbringer held.
+        let config = shipped();
+        let needs = shipped_needs(&config, "summoner druid")?;
+        let items = [
+            at(base("bsd", 3), Spot::Page(2)),
+            at(base("bsd", 3), Spot::Page(2)),
+            at(base("9fb", 3), Spot::Inventory),
+        ];
+        let own = Action::Keep(Side::Own);
+        let mine = |n: &str, spot, action, reason, count| (n.to_owned(), spot, action, reason, count);
+        // Both Broad Swords kept (the Act 5 merc's two Lawbringer bases), merged into one line;
+        // no 3-socket need of the builds takes a two-handed base.
+        assert_eq!(
+            reasoned(&items, &needs),
+            vec![
+                mine(
+                    "Zweihander 3os",
+                    Spot::Inventory,
+                    Action::Sell,
+                    Some("two-handed"),
+                    1
+                ),
+                mine("Broad Sword 3os", Spot::Page(2), own, None, 2),
+            ]
+        );
+        // A better one-handed 3os sword (War Sword, 8-20 over 7-14) replaces one Broad Sword.
+        let better = [
+            at(base("bsd", 3), Spot::Page(2)),
+            at(base("bsd", 3), Spot::Page(2)),
+            at(base("9fb", 3), Spot::Inventory),
+            at(base("wsd", 3), Spot::Inventory),
+        ];
+        assert_eq!(
+            reasoned(&better, &needs),
+            vec![
+                mine("Broad Sword 3os", Spot::Page(2), Action::Sell, None, 1),
+                mine(
+                    "Zweihander 3os",
+                    Spot::Inventory,
+                    Action::Sell,
+                    Some("two-handed"),
+                    1
+                ),
+                mine("War Sword 3os", Spot::Inventory, Action::Move(Side::Own), None, 1),
+                mine("Broad Sword 3os", Spot::Page(2), own, None, 1),
+            ]
+        );
+        // On the map: a Zweihander 3os is no Lawbringer base, a War Sword 3os is.
+        let (_, wants) = plan(&items, &needs, &druid());
+        assert_eq!(wants.base(&base("9fb", 3)), None);
+        assert_eq!(wants.base(&base("wsd", 3)), Some("Lawbringer"));
+        assert_eq!(wants.base(&base("bsd", 3)), None, "no better than the kept ones");
+        Ok(())
+    }
+
+    #[test]
+    fn a_two_handed_base_without_any_offhand_stays_a_candidate() {
+        // No off-hand in the stage: the weapon slot takes both hands, the Zweihander wins.
+        let mut needs = Needs::default();
+        let slots: BTreeMap<String, Vec<String>> =
+            [("weapon".to_owned(), vec!["Lawbringer@43".to_owned()])].into();
+        needs.slots(&slots, DRUID);
+        let items = [
+            at(base("bsd", 3), Spot::Page(2)),
+            at(base("9fb", 3), Spot::Page(1)),
+        ];
+        assert_eq!(
+            rows(&items, &needs),
+            vec![
+                row("Broad Sword 3os", Spot::Page(2), Action::Sell, 1),
+                row("Zweihander 3os", Spot::Page(1), Action::Keep(Side::Own), 1),
+            ]
+        );
+        // With an off-hand piece: the Broad Sword, and the Zweihander says why it goes.
+        let mut needs = Needs::default();
+        let mut slots = slots;
+        slots.insert("offhand".to_owned(), vec!["Ancients' Pledge@21".to_owned()]);
+        needs.slots(&slots, DRUID);
+        assert_eq!(
+            reasoned(&items, &needs),
+            vec![
+                (
+                    "Zweihander 3os".to_owned(),
+                    Spot::Page(1),
+                    Action::Sell,
+                    Some("two-handed"),
+                    1
+                ),
+                (
+                    "Broad Sword 3os".to_owned(),
+                    Spot::Page(2),
+                    Action::Keep(Side::Own),
+                    None,
+                    1
+                ),
+            ]
         );
     }
 }

@@ -25,7 +25,11 @@ live in BUILDS below, keyed by the source file's stem (`druid-leveling.source` c
 - `--prerequisites` (the stage before a manual switch): the next stage's `prerequisites`
   become this stage's `switch_note`.
 
-Skill names are checked against src/skills_data.rs (class skills); mismatches are reported
+- The source's `merc.act` (1, 2, 3 or 5; optional) becomes `merc_act = N` after `class`: the
+  act of the build's mercenary, which decides the weapons its merc slots take (the overlay
+  defaults to Act 2 when it is left out).
+
+Skill names are checked against crates/core/src/skills_data.rs (class skills); mismatches are reported
 on stderr and in the exit summary.
 """
 
@@ -61,15 +65,15 @@ BUILDS = {
                 "Ribcracker", "Buriza-Do Kyanon", "Tomb Reaver", "Grief", "Beast",
                 "Breath of the Dying", "Eternity", "Oath", "Unbending Will", "Hustle (weapon)"]),
             "Harmony",
-            dict(label="Physical immunes", any=["Lawbringer"], count=2),
+            dict(label="Merc's 2x Lawbringer", any=["Lawbringer"], count=2),
             "Smoke",
             dict(label="Merc helm with life leech", any=[
                 "Andariel's Visage", "Crown of Thieves", "Isenhart's Horns", "Stealskull",
                 "Tal Rasha's Horadric Crest", "Undead Crown", "Vampire Gaze", "Wormskull", "Bulwark"]),
         ],
-        notes="Summoner Druid 1-99 (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Oak Sage). From level 75 an optional skill reset into Fury (next stage), only once the switch gear is owned: a Cannot Be Frozen item, a powerful weapon, Harmony, two Lawbringers, Smoke and a life-leech merc helm; without it the summoner goes on to 99. Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
+        notes="Summoner Druid 1-99 (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Oak Sage). From level 75 an optional skill reset into Fury (next stage), only once the switch gear is owned: a Cannot Be Frozen item, a powerful weapon, Harmony, two Lawbringers for the merc, Smoke and a life-leech merc helm; without it the summoner goes on to 99. Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
         respec_note=("optional, from level 75 once the switch gear is owned (Cannot Be Frozen item, powerful weapon such as "
-                     "Ribcracker or Grief, Harmony for speed on weapon swap, 2x Lawbringer for physical immunes, Smoke for the "
+                     "Ribcracker or Grief, Harmony for speed on weapon swap, 2x Lawbringer for the dual-wielding Act 5 merc (physical immunes), Smoke for the "
                      "merc, a life-leech merc helm): respec to Fury at Akara (free reset of any difficulty "
                      "whose Den of Evil reward is unused): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20 (460 s form), "
                      "Rabies 1, Oak Sage 5 = 86 points (74 levels + 12 quest points, Normal/Nightmare/Hell); keep the Cannot "
@@ -78,7 +82,7 @@ BUILDS = {
     ),
     "fury-druid": dict(
         name="Fury Druid", cls="druid", damages=["physical"],
-        notes="Fury Werewolf from the optional skill reset at 75 (Summoner Druid with Raven Frost); standard = the user's core (Ribcracker, Lawbringer, Fortitude, Smoke, Bulwark, Jalal's Mane, Laying of Hands, Raven Frost). Durations, breakpoints and skill order computed from the D2R game tables, not from a guide.",
+        notes="Fury Werewolf from the optional skill reset at 75 (Summoner Druid with Raven Frost); standard = the user's core (Ribcracker, Fortitude, Jalal's Mane, Laying of Hands, Raven Frost; the merc's 2x Lawbringer, Smoke, Bulwark); the druid always fights two-handed. Durations, breakpoints and skill order computed from the D2R game tables, not from a guide.",
     ),
 }
 
@@ -117,8 +121,8 @@ def req_group(g):
 
 
 def class_skills(cls):
-    """Skill names of class `cls` from the generated src/skills_data.rs."""
-    text = open(os.path.join(HERE, "..", "src", "skills_data.rs"), encoding="utf-8").read()
+    """Skill names of class `cls` from the generated crates/core/src/skills_data.rs."""
+    text = open(os.path.join(HERE, "..", "crates", "core", "src", "skills_data.rs"), encoding="utf-8").read()
     names = set()
     for m in re.finditer(r'name: "([^"]+)",\s*class: (\d+),', text):
         if int(m.group(2)) == CLASS_IDS[cls]:
@@ -506,6 +510,11 @@ def main(argv):
     L.append(f"class = {q(cfg['cls'])}")
     if cfg.get("default"):
         L.append("default_for_class = true")
+    merc_act = (d.get("merc") or {}).get("act")
+    if merc_act is not None:
+        if merc_act not in (1, 2, 3, 5):
+            problems.append(f"{stem}: merc act {merc_act!r} is not 1, 2, 3 or 5")
+        L.append(f"merc_act = {int(merc_act)}")
     if cfg.get("next"):
         L += [f"next = {q(cfg['next'])}", f"switch_level = {cfg['switch_level']}",
               f"auto_switch = {'true' if cfg['auto_switch'] else 'false'}"]

@@ -1,6 +1,6 @@
 """Generate src/weapons_data.rs from blizzhackers/d2data weapons.json (D2R tables).
 
-Usage: python3 -I research/gen_weapons.py <dir with weapons.json> > src/weapons_data.rs
+Usage: python3 -I research/gen_weapons.py <dir with weapons.json> > crates/core/src/weapons_data.rs
 Fetch the table with:
   gh api repos/blizzhackers/d2data/contents/json/weapons.json -H "Accept: application/vnd.github.raw" > weapons.json
 The "speed" column is the WSM (weapon speed modifier): negative faster, positive slower;
@@ -113,4 +113,28 @@ print("        .binary_search_by(|(c, _)| c.cmp(&code))")
 print("        .ok()")
 print("        .and_then(|i| DAMAGE.get(i))")
 print("        .map(|&(_, total)| total)")
+print("}")
+
+# One- or two-handed (user request, 2026-11-20: a druid with a shield can't hold a Zweihander).
+# weapons.txt `1or2handed` marks the two-handed swords a barbarian may wield in one hand; for
+# every other class (and, per the user, the Act 5 mercenary) `2handed` alone decides.
+either = sorted(r["code"] for r in weapons if r.get("code") and r.get("1or2handed") == 1)
+print()
+print("/// Item codes of the weapons.txt rows marked `1or2handed`: two-handed swords a barbarian")
+print("/// may wield in one hand. Sorted.")
+print(f"pub static ONE_OR_TWO_HANDED: [&str; {len(either)}] = [")
+# rustfmt's layout for short items (max_width = 110 in rustfmt.toml): packed, 4-space indent.
+line = "   "
+for item in (f'"{code}",' for code in either):
+    if len(line) + 1 + len(item) > 110:
+        print(line)
+        line = "   "
+    line += " " + item
+print(line)
+print("];")
+print()
+print("/// Whether `code` is a [`ONE_OR_TWO_HANDED`] weapon.")
+print("#[must_use]")
+print("pub fn one_or_two_handed(code: &str) -> bool {")
+print("    ONE_OR_TWO_HANDED.binary_search(&code).is_ok()")
 print("}")
