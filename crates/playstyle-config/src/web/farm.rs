@@ -328,8 +328,10 @@ fn where_text(n: &Needed, spots: &Spots) -> Option<String> {
             .then(|| Spot::Area85.text()),
         crate::config::FarmKind::Runeword => {
             let mut parts: Vec<(Spot, Vec<(&str, f64)>)> = Vec::new();
+            let mut unknown = false;
             for &(rune, _, _) in &n.short {
                 let Some(spot) = spots.rune(&n.item.name, rune) else {
+                    unknown = true;
                     continue;
                 };
                 let odds = if let Spot::Countess(one_in) = spot {
@@ -343,6 +345,7 @@ fn where_text(n: &Needed, spots: &Spots) -> Option<String> {
                 }
             }
             if let [(spot, _)] = parts.as_slice()
+                && !unknown
                 && !matches!(spot, Spot::Countess(_))
             {
                 return Some(spot.text());
