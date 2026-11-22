@@ -96,6 +96,32 @@ async function load() {
     });
     root.appendChild(div);
   });
+  renderNotNeeded(cfg.not_needed || []);
+}
+// Every not-needed mark by build (cfg.not_needed), each with a "bring back" button.
+function renderNotNeeded(groups) {
+  const root = document.getElementById("notneeded");
+  root.innerHTML = groups.length ? "" : '<div class="hint">Nothing is marked not needed.</div>';
+  groups.forEach(g => {
+    const head = document.createElement("div");
+    head.className = "nn-build";
+    head.innerHTML = esc(g.build) + (g.known ? "" : ' <span class="hint">(no such build any more)</span>');
+    root.appendChild(head);
+    g.names.forEach(name => {
+      const row = document.createElement("div");
+      row.className = "nn-piece";
+      row.innerHTML = `${esc(name)} <button type="button">bring back</button>`;
+      const button = row.querySelector("button");
+      button.addEventListener("click", () => { button.disabled = true; bringBack(g.build, name); });
+      root.appendChild(row);
+    });
+  });
+}
+// Unmarks one piece (POST /api/not-needed with needed: true), then reloads the page's lists.
+async function bringBack(build, name) {
+  const r = await fetch("/api/not-needed", {method: "POST", body: JSON.stringify({build, name, needed: true})});
+  document.getElementById("err").textContent = r.ok ? "" : `bring back failed: ${await r.text()}`;
+  load();
 }
 // Forgets the character (config entries and last-played time), then reloads the list.
 async function deleteChar(name) {

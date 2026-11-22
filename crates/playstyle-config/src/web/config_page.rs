@@ -70,7 +70,7 @@ pub fn remove_character(text: &str, name: &str) -> Option<String> {
 }
 
 /// The config page's JSON: every character of the config and of `played` once, most recently
-/// played first, the never-seen ones after in config order.
+/// played first, the never-seen ones after in config order; and every "not needed" mark.
 #[must_use]
 pub fn config_json(
     config: &crate::config::Settings,
@@ -86,7 +86,30 @@ pub fn config_json(
         .collect();
     characters.sort_by_key(|&(t, _)| std::cmp::Reverse(t));
     let characters: Vec<_> = characters.into_iter().map(|(_, json)| json).collect();
-    serde_json::json!({ "characters": characters })
+    serde_json::json!({ "characters": characters, "not_needed": not_needed_json(config) })
+}
+
+/// Every mark of `not-needed.toml` by the build (or character) it was made for, in key order:
+/// `[{build, known, names}]`. A build or name that matches nothing any more is listed too
+/// (`known: false` for a build that is neither a build nor a character), so it can be brought
+/// back. The inherited marks of later stages are left out: they undo with their own build.
+fn not_needed_json(config: &crate::config::Settings) -> serde_json::Value {
+    let groups: Vec<_> = config
+        .not_needed
+        .iter()
+        .filter_map(|(key, marks)| {
+            let own: Vec<_> = marks
+                .iter()
+                .filter(|m| m.build.eq_ignore_ascii_case(key))
+                .collect();
+            let build = &own.first()?.build;
+            let known =
+                config.build_defs.contains_key(key) || config.bis.keys().any(|k| k.eq_ignore_ascii_case(key));
+            let names: Vec<_> = own.iter().map(|m| m.name.as_str()).collect();
+            Some(serde_json::json!({ "build": build, "known": known, "names": names }))
+        })
+        .collect();
+    serde_json::json!(groups)
 }
 
 /// The lowercased character names of the config, then of `played`, each once.

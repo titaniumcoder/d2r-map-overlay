@@ -806,7 +806,7 @@ mod tests {
         );
         assert_eq!(
             (config.len(), format!("{:#018x}", fnv1a(config.as_bytes()))),
-            (10_613, "0xd31264b357429ae1".to_owned()),
+            (12_368, "0xde69b4452dfbd62e".to_owned()),
             "config page"
         );
     }

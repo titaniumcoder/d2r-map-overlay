@@ -19,6 +19,9 @@ button { padding: 4px 10px; }
 .owned { color: #6f6; } .owned.have { color: #e8cf3a; }
 .stash { color: #6f6; }
 .better { text-decoration: line-through; color: #777; }
+.nn-build { margin: 0.6em 0 0.2em; font-weight: bold; }
+.nn-build .hint { font-weight: normal; }
+.nn-piece { margin: 2px 0 2px 1em; }
 </style></head><body>
 <h1>d2r-map-overlay config &nbsp; <a style="font-size:0.6em" href="/">live dashboard →</a></h1>
 <p class="hint">Every character in the config or seen in a game is listed (click a name to
@@ -32,6 +35,11 @@ the equipped piece is already better.</p>
 <h2>Add character</h2>
 <input id="newname" placeholder="character name"> <select id="newbuild"></select>
 <button onclick="addChar()">Add</button>
+<h2>Not needed items</h2>
+<p class="hint">Every piece marked not needed (the ✕ on the live dashboard), by the build it was
+marked for, also when the build or the name matches nothing any more
+(<code>~/.local/share/d2r-map-overlay/not-needed.toml</code>). Bring back makes it wanted again.</p>
+<div id="notneeded"></div>
 <h2>Loot filter</h2>
 <p class="hint">The playstyle's D2R loot filter profile (<code>loot-filter.json</code>; a copy in
 <code>~/.config/d2r-map-overlay/playstyle/</code> overrides it). Copy it, then import it in the game.</p>

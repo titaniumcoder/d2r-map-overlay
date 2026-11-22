@@ -781,7 +781,11 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   Druid)" for an inherited one), ↺ undoes (`d2r-show-hidden` in localStorage). A clicked
   control stays faded and disabled across re-renders until a frame no longer shows it; a failed
   save shows a red line under the top bar. With the game closed the reloaded frame waits for
-  the next game.
+  the next game. The `/config` page lists every mark of the file under "Not needed items" by the
+  build (or character) it was made for, also a build or name that matches nothing any more
+  ("no such build any more"), each with "bring back" (`needed: true`); `GET /api/config`'s
+  `not_needed` = `[{build, known, names}]`, the own marks only (an inherited one undoes with its
+  build). (User request 2026-11-22: "a separate list somewhere where we can get them back".)
 - **Upgrades + chime**: `upgrades` in the live JSON = owned/stash pieces of the current stage wearable now
   and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
   are all owned. The page chimes (WebAudio, 🔔 toggle) when a key appears that this character hasn't had.

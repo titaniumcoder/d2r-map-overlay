@@ -196,6 +196,47 @@ fn config_json_lists_every_character_once_recently_played_first() {
 }
 
 #[test]
+fn config_json_lists_every_not_needed_mark_by_build_the_stale_ones_too() {
+    let mut config = resolved_config();
+    let build = |name: &str, next: Option<&str>| crate::config::Build {
+        name: name.to_owned(),
+        slots: [("weapon".to_owned(), vec!["Grief".to_owned()])].into(),
+        next: next.map(str::to_owned),
+        ..crate::config::Build::default()
+    };
+    config.build_defs.insert(
+        "summoner druid".to_owned(),
+        build("Summoner Druid", Some("fury druid")),
+    );
+    config
+        .build_defs
+        .insert("fury druid".to_owned(), build("Fury Druid", None));
+    config.not_needed = mark(
+        &[
+            ("summoner druid", &["Grief", "No Such Piece"]),
+            ("old build", &["Gone"]),
+            ("demonmaster", &["Shako"]),
+        ],
+        &mut config.build_defs,
+        &mut [],
+    );
+    assert!(config.not_needed.contains_key("fury druid"), "inherited there");
+    let json = config_json(&config, &GearInfo::default(), &d2r_core::played::Played::new());
+    assert_eq!(
+        json.get("not_needed"),
+        Some(&serde_json::json!([
+            { "build": "demonmaster", "known": true, "names": ["Shako"] },
+            { "build": "old build", "known": false, "names": ["Gone"] },
+            { "build": "Summoner Druid", "known": true, "names": ["Grief", "No Such Piece"] },
+        ])),
+        "own marks only, a character key and an unknown build included"
+    );
+    config.not_needed.clear();
+    let json = config_json(&config, &GearInfo::default(), &d2r_core::played::Played::new());
+    assert_eq!(json.get("not_needed"), Some(&serde_json::json!([])));
+}
+
+#[test]
 fn config_json_shows_the_class_default_of_a_played_class() {
     let mut config = resolved_config();
     if let Some(def) = config.build_defs.get_mut("blood boil") {
