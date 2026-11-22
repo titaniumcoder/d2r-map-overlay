@@ -2060,10 +2060,18 @@ mod tests {
 
     const FIXTURE: &str = include_str!("../../../tests/fixtures/jail1-snapshot.json");
 
-    /// Shadows `super::render` (a local item wins over the glob import): the map tests render
-    /// without the info line, so they don't depend on the fonts installed on this machine.
+    /// Shadows `super::render`: renders without the info line, so map tests don't depend on the
+    /// fonts installed on this machine.
     fn render(snap: &Snapshot, width: u32, height: u32) -> Result<Pixmap> {
         render_with(snap, &Guidance::default(), width, height, None)
+    }
+
+    /// The marker kinds of `snap` without drop marks, in draw order.
+    fn marker_kinds(snap: &Snapshot) -> Vec<Marker> {
+        markers_with(snap, &Marks::default(), LANDMARKS)
+            .into_iter()
+            .map(|(m, _, _)| m)
+            .collect()
     }
 
     fn fixture() -> Result<Snapshot> {
@@ -2157,9 +2165,8 @@ mod tests {
     #[test]
     fn iso_matches_automap_axes() {
         assert_eq!(iso(0.0, 0.0), (0.0, 0.0));
-        // +x goes right-down, +y goes left-down.
-        assert_eq!(iso(10.0, 0.0), (10.0, 5.0));
-        assert_eq!(iso(0.0, 10.0), (-10.0, 5.0));
+        assert_eq!(iso(10.0, 0.0), (10.0, 5.0), "+x goes right-down");
+        assert_eq!(iso(0.0, 10.0), (-10.0, 5.0), "+y goes left-down");
         assert_eq!(iso(10.0, 10.0), (0.0, 10.0));
     }
 
@@ -2188,7 +2195,6 @@ mod tests {
                 assert!(x >= m && x <= px(f64::from(w)) - m, "{w}x{h}: x {x}");
                 assert!(y >= m && y <= px(f64::from(h)) - m, "{w}x{h}: y {y}");
             }
-            // Centred: the projected extremes are symmetric around the canvas centre.
             let (lo_x, hi_x) = pts
                 .iter()
                 .fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
@@ -2290,9 +2296,8 @@ mod tests {
 
     #[test]
     fn live_monster_icon_classification() {
-        // Andariel (156), Baal (544), Baal's clone (570), Nihlathak (526): the boss check wins
-        // over the superunique flag, and needs no elite flag at all.
-        for txt in [156, 544, 570, 526] {
+        let (andariel, baal, baal_clone, nihlathak) = (156, 544, 570, 526);
+        for txt in [andariel, baal, baal_clone, nihlathak] {
             assert_eq!(
                 elite_marker(&monster_txt(txt, 0x02, 1)),
                 Some(Marker::Boss),
@@ -2306,20 +2311,21 @@ mod tests {
             assert_eq!(
                 elite_marker(&monster_txt(txt, 0x00, 1)),
                 Some(Marker::Boss),
-                "{txt}"
+                "{txt}: no elite flag needed"
             );
         }
-        // Superunique beats the plain elite, also with the unique and champion bits set.
         assert_eq!(elite_marker(&monster(0x02, 1)), Some(Marker::Superunique));
-        assert_eq!(elite_marker(&monster(0x0A, 1)), Some(Marker::Superunique));
+        assert_eq!(
+            elite_marker(&monster(0x0A, 1)),
+            Some(Marker::Superunique),
+            "superunique beats unique"
+        );
         assert_eq!(elite_marker(&monster(0x08, 1)), Some(Marker::Elite));
         assert_eq!(elite_marker(&monster(0x04, 1)), Some(Marker::Elite));
-        // Not drawn as an elite: minion only, normal, dead (boss or not).
-        assert_eq!(elite_marker(&monster(0x10, 1)), None);
-        assert_eq!(elite_marker(&monster(0x00, 1)), None);
-        assert_eq!(elite_marker(&monster(0x02, 0)), None);
-        assert_eq!(elite_marker(&monster_txt(156, 0x00, 12)), None);
-        // Same draw rank as the elite dot: above shrines, below the player.
+        assert_eq!(elite_marker(&monster(0x10, 1)), None, "minion only");
+        assert_eq!(elite_marker(&monster(0x00, 1)), None, "normal");
+        assert_eq!(elite_marker(&monster(0x02, 0)), None, "dead");
+        assert_eq!(elite_marker(&monster_txt(andariel, 0x00, 12)), None, "dead boss");
         assert!(Marker::Shrine(1) < Marker::Elite);
         assert!(Marker::Elite < Marker::Superunique && Marker::Superunique < Marker::Boss);
         assert!(Marker::Boss < Marker::Player);
@@ -2334,18 +2340,12 @@ mod tests {
             ..preset(kind, txt)
         };
         snap.presets = vec![
-            at(PresetKind::Monster, 757, 100, 100), // Countess preset, 19 tiles off: hidden
-            at(PresetKind::Monster, 771, 200, 100), // another superunique preset: kept
-            at(PresetKind::Monster, 434, 110, 110), // quest monster preset near him: hidden
-            at(PresetKind::Object, 460, 101, 100),  // quest object, not a monster: kept
-            at(PresetKind::Tile, 1, 100, 100),      // exit: kept
+            at(PresetKind::Monster, 757, 100, 100), // the Countess, 19 tiles off
+            at(PresetKind::Monster, 771, 200, 100), // the Smith, far away
+            at(PresetKind::Monster, 434, 110, 110), // quest monster near her
+            at(PresetKind::Object, 460, 101, 100),  // quest object
+            at(PresetKind::Tile, 1, 100, 100),      // exit
         ];
-        let kinds = |s: &Snapshot| -> Vec<Marker> {
-            markers_with(s, &Marks::default(), LANDMARKS)
-                .into_iter()
-                .map(|(m, _, _)| m)
-                .collect()
-        };
         let countess = |mode| Monster {
             x: 115,
             y: 112,
@@ -2354,7 +2354,7 @@ mod tests {
 
         snap.monsters = vec![countess(1)];
         assert_eq!(
-            kinds(&snap),
+            marker_kinds(&snap),
             vec![
                 Marker::Exit,
                 Marker::Special(Some("The Smith")),
@@ -2363,23 +2363,22 @@ mod tests {
                 Marker::Player
             ]
         );
-        // A plain unique standing there hides nothing.
         snap.monsters = vec![Monster {
             x: 100,
             y: 100,
             ..monster(0x08, 1)
         }];
         assert_eq!(
-            kinds(&snap)
+            marker_kinds(&snap)
                 .iter()
                 .filter(|m| matches!(m, Marker::Special(_)))
                 .count(),
-            2
+            2,
+            "a plain unique hides nothing"
         );
-        // Dead: the preset is back for this frame (the session hides a killed one for the game).
         snap.monsters = vec![countess(12)];
         assert_eq!(
-            kinds(&snap),
+            marker_kinds(&snap),
             vec![
                 Marker::Exit,
                 Marker::Special(Some("The Countess")),
@@ -2387,16 +2386,16 @@ mod tests {
                 Marker::QuestObject("anya"),
                 Marker::QuestObject("prison door"),
                 Marker::Player
-            ]
+            ],
+            "dead: the presets are back"
         );
-        // A live boss hides a nearby preset the same way.
         snap.monsters = vec![Monster {
             x: 105,
             y: 100,
             ..monster_txt(526, 0x00, 1)
         }];
-        assert!(!kinds(&snap).contains(&Marker::Special(Some("The Countess"))));
-        assert!(kinds(&snap).contains(&Marker::Boss));
+        assert!(!marker_kinds(&snap).contains(&Marker::Special(Some("The Countess"))));
+        assert!(marker_kinds(&snap).contains(&Marker::Boss));
     }
 
     #[test]
@@ -2408,12 +2407,7 @@ mod tests {
                 y: 60,
                 ..monster_txt(txt, flags, 1)
             }];
-            assert!(
-                markers_with(&snap, &Marks::default(), LANDMARKS)
-                    .iter()
-                    .any(|&(m, _, _)| m == want),
-                "{want:?}"
-            );
+            assert!(marker_kinds(&snap).contains(&want), "{want:?}");
             let pm = render(&snap, 200, 200)?;
             let at = View::fit(level_bounds(&snap), 200, 200).to_screen(60.0, 60.0);
             let red = |p: Rgba| p[0] > 180 && p[1] < 80 && p[2] < 80 && p[3] > 200;
@@ -2430,9 +2424,7 @@ mod tests {
                     }
                 }
             }
-            // About 8x8 px less the outline, eyes and edge anti-aliasing: a dozen solid pixels.
             assert!(hits >= 10, "{want:?}: only {hits} red pixels");
-            // A dark outline just outside the cranium top, and dark eye holes.
             #[allow(
                 clippy::cast_sign_loss,
                 clippy::cast_possible_truncation,
@@ -2482,9 +2474,8 @@ mod tests {
     }
 
     #[test]
-    fn fixture_markers() -> Result<()> {
+    fn jail_fixture_has_a_waypoint_an_exit_and_no_elites() -> Result<()> {
         let snap = fixture()?;
-        // Jail 1: one waypoint, one exit tile, no elites (only normals and dead minions), the player.
         assert_eq!(
             markers_with(&snap, &Marks::default(), LANDMARKS),
             vec![
@@ -2499,29 +2490,22 @@ mod tests {
     #[test]
     fn den_of_evil_shows_every_living_monster() {
         let mut snap = empty_snapshot(5, 5);
-        let mut wolf = monster(0x00, 1);
-        wolf.txt = 420; // druid spirit wolf: a summon, never drawn
+        let spirit_wolf = monster_txt(420, 0x00, 1);
         snap.monsters = vec![
             monster(0x00, 1),
             monster(0x10, 1),
             monster(0x08, 1),
             monster(0x00, 12),
-            wolf,
+            spirit_wolf,
         ];
-        let kinds = |s: &Snapshot| -> Vec<Marker> {
-            markers_with(s, &Marks::default(), LANDMARKS)
-                .into_iter()
-                .map(|(m, _, _)| m)
-                .collect()
-        };
         assert_eq!(
-            kinds(&snap),
+            marker_kinds(&snap),
             vec![Marker::Elite, Marker::Player],
             "elsewhere: elites only"
         );
         snap.level.id = 8;
         assert_eq!(
-            kinds(&snap),
+            marker_kinds(&snap),
             vec![Marker::Monster, Marker::Monster, Marker::Elite, Marker::Player],
             "Den of Evil: normals and minions too, dead skipped, below the elite"
         );
@@ -2532,12 +2516,8 @@ mod tests {
         let mut snap = empty_snapshot(5, 5);
         snap.monsters = vec![monster(0x08, 1), monster(0x10, 1)];
         snap.presets = vec![preset(PresetKind::Monster, 1), preset(PresetKind::Tile, 1)];
-        let kinds: Vec<Marker> = markers_with(&snap, &Marks::default(), LANDMARKS)
-            .into_iter()
-            .map(|(m, _, _)| m)
-            .collect();
         assert_eq!(
-            kinds,
+            marker_kinds(&snap),
             vec![Marker::Exit, Marker::Special(None), Marker::Elite, Marker::Player]
         );
     }
@@ -2556,17 +2536,14 @@ mod tests {
         let (w, h) = (400, 400);
         let pm = render(&snap, w, h)?;
         assert_eq!((pm.width(), pm.height()), (w, h));
-
-        // No background panel: corners and edges are fully transparent.
         assert_eq!(
             pm.pixel(0, 0).map(tiny_skia::PremultipliedColorU8::alpha),
-            Some(0)
+            Some(0),
+            "no background panel"
         );
         for (x, y) in [(3, h / 2), (w / 2, 0), (w - 1, h - 1), (w / 2, h - 3)] {
             assert_eq!(pm.pixel(x, y).context("edge pixel")?.alpha(), 0, "{x},{y}");
         }
-
-        // Pixels in exactly the (opaque) player colour exist and all sit on the projected player.
         let v = View::fit(level_bounds(&snap), w, h);
         let (cx, cy) = v.to_screen(f64::from(snap.player.x), f64::from(snap.player.y));
         let (player, radius, _) = Marker::Player.style();
@@ -2623,7 +2600,6 @@ mod tests {
                 Marker::StairsDown,
             ]
         );
-        // The staircase draws in the exit purple.
         let (cx, cy) = (20.0, 20.0);
         let path = marker_path(Shape::Stairs, cx, cy, 6.0).context("stairs path")?;
         let mut pm = Pixmap::new(40, 40).context("pixmap")?;
@@ -2667,7 +2643,6 @@ mod tests {
 
     #[test]
     fn adjacent_rooms_render_without_seams() -> Result<()> {
-        // Two unloaded rooms side by side in x, sharing the edge x = 60. The player is far off.
         let mut snap = empty_snapshot(5, 115);
         snap.level.rooms = vec![room(0, 0, false), room(60, 0, false)];
         let (w, h) = (400, 400);
@@ -2684,13 +2659,11 @@ mod tests {
             rgba(&pm, px, py)
         };
         let fill = inside(30.0, 30.0)?;
-        // Every pixel along the shared edge looks like the inside of a room: no outline, no seam.
         for i in 1..60 {
             assert_eq!(inside(60.0, f64::from(i))?, fill, "seam at edge tile {i}");
         }
         assert_eq!(inside(90.0, 30.0)?, fill, "both rooms in the same colour");
 
-        // A loaded room next to an unloaded one: brighter, and no gap along the shared edge.
         snap.level.rooms = vec![room(0, 0, false), room(60, 0, true)];
         let pm2 = render(&snap, w, h)?;
         let at = |x: f64, y: f64| -> Result<Rgba> {
@@ -2753,7 +2726,6 @@ mod tests {
             ],
             "unique on top of the other drops; drops above the player so a fresh drop isn't hidden"
         );
-        // Drops never look like a dot: every drop style has a non-circle shape.
         for kind in [
             DropKind::Unique,
             DropKind::Set,
@@ -2764,7 +2736,11 @@ mod tests {
                 unique: false,
             },
         ] {
-            assert_ne!(Marker::Drop(kind).style().2, Shape::Circle, "{kind:?}");
+            assert_ne!(
+                Marker::Drop(kind).style().2,
+                Shape::Circle,
+                "{kind:?} looks like a dot"
+            );
         }
     }
 
@@ -2891,9 +2867,10 @@ mod tests {
             let at = v.to_screen(x, 30.0);
             let radius = Marker::Drop(kind).style().1 + RING_GAP;
             let hits = ring_hits(&pm, at, radius, colour, 72)?;
-            // S and A rings carry the gold coin over about an eighth of them.
-            assert!(hits >= 58, "solid {colour:?} ring at x {x}: {hits}/72");
-            // Inside the gap between marker and ring: not ring-coloured.
+            assert!(
+                hits >= 58,
+                "solid {colour:?} ring (less the coin) at x {x}: {hits}/72"
+            );
             let inside = ring_hits(&pm, at, radius - 2.5, colour, 72)?;
             assert!(inside <= 4, "ring colour inside the ring at x {x}: {inside}");
         }
@@ -2926,7 +2903,6 @@ mod tests {
         let radius = Marker::Drop(DropKind::Base).style().1 + RING_GAP;
         let hits = ring_hits(&pm, at, radius, KEEP_GREEN, 72)?;
         assert!(hits >= 68, "solid green keep ring: {hits}/72");
-        // The farm ring: dashed (an unidentified unique), green, a green star at its upper right.
         let at = v.to_screen(100.0, 30.0);
         let radius = Marker::Drop(DropKind::Unique).style().1 + RING_GAP;
         let hits = ring_hits(&pm, at, radius, KEEP_GREEN, 72)?;
@@ -2973,7 +2949,7 @@ mod tests {
             let at = v.to_screen(x, 30.0);
             let d = (Marker::Drop(kind).style().1 + RING_GAP) * std::f32::consts::FRAC_1_SQRT_2;
             let upper_left = (at.0 - d, at.1 - d);
-            // The rim tells the coin apart from the B ring's yellow, which passes there too.
+            // The rim, not the gold, tells the coin apart from the B ring's yellow.
             let rim = ring_hits(&pm, upper_left, COIN_RADIUS, COIN_RIM, 24)?;
             if coin {
                 let gold = ring_hits(&pm, upper_left, 1.0, COIN_GOLD, 12)?;
@@ -3024,7 +3000,6 @@ mod tests {
             let v = View::fit(level_bounds(&snap), w, map_height(h, Some(font)));
             let at = v.to_screen(60.0, 30.0);
             let ring = Marker::Drop(DropKind::Base).style().1 + RING_GAP;
-            // Beyond the ring's stroke, within a short tag's reach.
             tinted_between(&pm, at, (ring + 2.5, 40.0), orange)
         };
         let with_tag = render_tag("5os")?;
@@ -3091,7 +3066,6 @@ mod tests {
         let (edge_x, _) = centre((at.0 + half, at.1));
         let edge = rgba(&pm, edge_x, ry)?;
         assert!(edge[0] < 150 && edge[3] > 150, "outline at the edge: {edge:?}");
-
         let (gem, size, _) = Marker::Drop(DropKind::Gem(GemColour::Sapphire)).style();
         let at = v.to_screen(90.0, 30.0);
         let (hits, dx, dy) = colour_spread(&pm, gem, at)?;
@@ -3173,7 +3147,7 @@ mod tests {
         Ok(())
     }
 
-    /// Light grey to white: the info line's glyph cores (13 px strokes are thin, so few are pure white).
+    /// Light grey to white: glyph cores (thin strokes, so few are pure white).
     fn is_text_white(p: Rgba) -> bool {
         p.iter().all(|&c| c >= 200)
     }
@@ -3186,7 +3160,7 @@ mod tests {
         };
         let mut snap = fixture()?;
         snap.difficulty = Some(0);
-        // Exit labels are white text on the map too (`exit_labels_are_grey_where_xp_is_low`).
+        // Exit labels are white text on the map too.
         snap.room_links.clear();
         snap.border_links.clear();
         let (w, h) = (400, 400);
@@ -3203,7 +3177,6 @@ mod tests {
         }
         assert!(band >= 50, "only {band} white text pixels in the band");
         assert_eq!(above, 0, "white pixels above the band");
-        // The dark outline is there too: some opaque, dark pixels in the band.
         let mut dark = 0;
         for y in top..h {
             for x in 0..w {
@@ -3214,7 +3187,6 @@ mod tests {
             }
         }
         assert!(dark >= 50, "only {dark} outline pixels");
-        // Without a font: no text, and the map gets the whole canvas.
         let plain = render_with(&snap, &Guidance::default(), w, h, None)?;
         assert_eq!(map_height(h, None), h);
         for y in top..h {
@@ -3231,17 +3203,15 @@ mod tests {
             eprintln!("skipped: no info-line font on this machine");
             return Ok(());
         };
-        // Glyph cores of the violet part (190, 120, 255); anti-aliased edges blend into the
-        // dark outline, so only fairly opaque, blue-heavy pixels with red over green count.
-        let violet = |p: Rgba| p[3] >= 200 && p[2] >= 180 && p[0] >= 120 && p[0].saturating_sub(p[1]) >= 40;
+        let violet_core =
+            |p: Rgba| p[3] >= 200 && p[2] >= 180 && p[0] >= 120 && p[0].saturating_sub(p[1]) >= 40;
         let (w, h) = (400, 400);
-        // The info band only: map markers may be violet-ish too.
         let top = map_height(h, Some(font));
         let count = |pm: &Pixmap| -> Result<u32> {
             let mut n = 0;
             for y in top..pm.height() {
                 for x in 0..pm.width() {
-                    n += u32::from(violet(rgba(pm, x, y)?));
+                    n += u32::from(violet_core(rgba(pm, x, y)?));
                 }
             }
             Ok(n)
@@ -3259,16 +3229,9 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn text_blocks_holds_the_dashboard_blocks() -> Result<()> {
-        use crate::guidance::{Advice, Spot};
-        let Some(font) = info::font() else {
-            eprintln!("skipped: no info-line font on this machine");
-            return Ok(());
-        };
-        let mut snap = fixture()?;
-        snap.difficulty = Some(0);
-        snap.player.char_level = Some(34);
+    /// A helm `BiS` chase list and one item-plan entry per action.
+    fn sample_guidance() -> Guidance {
+        use crate::guidance::Spot;
         let advice = |name: &str, spot, action| Advice {
             name: name.into(),
             spot,
@@ -3276,7 +3239,7 @@ mod tests {
             reason: None,
             count: 1,
         };
-        let guidance = Guidance {
+        Guidance {
             bis: Some(crate::guidance::Bis {
                 build: String::new(),
                 slots: BTreeMap::from([("helm".to_owned(), vec!["Peasant Crown@28".to_owned()])]),
@@ -3290,10 +3253,19 @@ mod tests {
                 advice("Magefist", Spot::Stash, Action::GiveAway),
             ],
             ..Guidance::default()
+        }
+    }
+
+    #[test]
+    fn text_blocks_holds_the_dashboard_blocks() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
         };
-        let blocks = text_blocks(&snap, &guidance, 400, Some(font));
-        // The dashboard's JSON is built from these blocks (crate::web::live_json); the overlay
-        // draws only the map and info line, so the lists are asserted here, not in a rendered frame.
+        let mut snap = fixture()?;
+        snap.difficulty = Some(0);
+        snap.player.char_level = Some(34);
+        let blocks = text_blocks(&snap, &sample_guidance(), 400, Some(font));
         let text = |list: &[Advice]| list.iter().map(info::advice_entry).collect::<Vec<_>>();
         assert_eq!(text(&blocks.sell), vec!["Gravenspine (inv)"]);
         assert_eq!(text(&blocks.moves), vec!["Hunter's Bow 4os (page 4 → 1–2)"]);
@@ -3310,7 +3282,6 @@ mod tests {
 
     #[test]
     fn the_overlay_frame_draws_no_guide_or_lists() -> Result<()> {
-        use crate::guidance::{Advice, Spot};
         let Some(font) = info::font() else {
             eprintln!("skipped: no info-line font on this machine");
             return Ok(());
@@ -3327,32 +3298,8 @@ mod tests {
             res_lightning: 10,
             res_poison: 75,
         });
-        let advice = |name: &str, spot, action| Advice {
-            name: name.into(),
-            spot,
-            action,
-            reason: None,
-            count: 1,
-        };
-        let guidance = Guidance {
-            bis: Some(crate::guidance::Bis {
-                build: String::new(),
-                slots: BTreeMap::from([("helm".to_owned(), vec!["Peasant Crown@28".to_owned()])]),
-                merc_slots: BTreeMap::new(),
-            }),
-            items: vec![
-                advice("Gravenspine", Spot::Inventory, Action::Sell),
-                advice("Hunter's Bow 4os", Spot::Page(4), Action::Move(Side::Own)),
-                advice("Spirit", Spot::Page(1), Action::Keep(Side::Own)),
-                advice("Harlequin Crest", Spot::Page(3), Action::Keep(Side::Trade)),
-                advice("Magefist", Spot::Stash, Action::GiveAway),
-            ],
-            ..Guidance::default()
-        };
         let (w, h) = (400, 400);
-        let pm = render_with(&snap, &guidance, w, h, Some(font))?;
-        // The bottom band holds only the white info line: no guide (violet) and none of the
-        // dashboard's lists in their colours.
+        let pm = render_with(&snap, &sample_guidance(), w, h, Some(font))?;
         let solid = |p: Rgba| p[3] == 255;
         let violet = |p: Rgba| solid(p) && p[2] > 200 && p[0] > 150 && p[1] < 180;
         let cyan = |p: Rgba| solid(p) && p[2] > 200 && p[1] > 170 && p[0] < 160;
@@ -3398,14 +3345,12 @@ mod tests {
                 assert!(sy <= px(f64::from(top)), "room corner at y {sy}, band from {top}");
             }
         }
-        // In the drawn pixmap the band holds no room fill: every non-transparent pixel there is
-        // text (white, grey edges) or its outline (black), never the rooms' blue-grey.
         let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
         for y in top..h {
             for x in 0..w {
                 let p = rgba(&pm, x, y)?;
                 let grey = p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1;
-                assert!(p[3] == 0 || grey, "non-text pixel {p:?} at {x},{y}");
+                assert!(p[3] == 0 || grey, "room fill {p:?} in the text band at {x},{y}");
             }
         }
         Ok(())
@@ -3455,7 +3400,6 @@ mod tests {
             dx <= f64::from(half) && dy <= f64::from(half),
             "entry spread {dx},{dy}"
         );
-        // The exit keeps its colour, at its own spot only.
         let (exit, radius, _) = Marker::Exit.style();
         let at = v.to_screen(90.0, 30.0);
         let (hits, dx, dy) = colour_spread(&pm, exit, at)?;
@@ -3510,7 +3454,6 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                // Level 26 below room b: entry, pointing +y.
                 (
                     Marker::BorderExit {
                         dir: (0, 80),
@@ -3519,7 +3462,6 @@ mod tests {
                     160.0,
                     140.5
                 ),
-                // Level 28 above both rooms: one marker at the middle of the shared edge, pointing -y.
                 (
                     Marker::BorderExit {
                         dir: (0, -80),
@@ -3539,8 +3481,7 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                // Tile link from room b without a loaded tile preset: the room's centre.
-                (29, 160.0, 120.0),
+                (29, 160.0, 120.0), // the room's centre: no tile preset loaded
                 (26, 160.0, 140.5),
                 (28, 140.0, 99.5),
             ]
@@ -3600,7 +3541,6 @@ mod tests {
         let (w, h) = (400, 400);
         let pm = render_with(&canyon_exit(69), &Guidance::default(), w, h, Some(font))?;
         let (b, n) = ink_box(&pm, map_height(h, Some(font)), is_text_white)?.context("no white symbol")?;
-        // "Tal Rasha's Tomb" would be some 100 px wide; the ring is TOMB_HALF * 2 plus its stroke.
         assert!(
             n >= 20 && b[2] - b[0] <= 20 && b[3] - b[1] <= 20,
             "{n} px in {b:?}"
@@ -3624,13 +3564,17 @@ mod tests {
         snap.staff_tomb = Some(69);
         let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
         let (b, n) = ink_box(&pm, rows, is_gold)?.context("no gold symbol")?;
-        // The bigger ring and the star beside it.
-        assert!(n >= 60 && b[2] - b[0] >= 30, "{n} px in {b:?}");
+        assert!(
+            n >= 60 && b[2] - b[0] >= 30,
+            "bigger, with a star: {n} px in {b:?}"
+        );
         assert!(ink_box(&pm, rows, is_text_white)?.is_none(), "drawn white too");
-        // Another tomb's exit stays white.
         snap.staff_tomb = Some(70);
         let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
-        assert!(ink_box(&pm, rows, is_gold)?.is_none());
+        assert!(
+            ink_box(&pm, rows, is_gold)?.is_none(),
+            "another tomb's exit stays white"
+        );
         Ok(())
     }
 
@@ -3666,12 +3610,12 @@ mod tests {
             eprintln!("skipped: no info-line font on this machine");
             return Ok(());
         };
-        // One room linking to Bloody Foothills (Normal mlvl 24).
+        let bloody_foothills = 110;
         let mut snap = empty_snapshot(120, 120);
         snap.level.rooms = vec![room(100, 100, true)];
         snap.room_links = vec![RoomLink {
             from_room: RoomPos { x: 100, y: 100 },
-            to_level_id: 110,
+            to_level_id: bloody_foothills,
             to_room: RoomPos { x: 0, y: 0 },
         }];
         snap.difficulty = Some(0);
@@ -3682,7 +3626,6 @@ mod tests {
             for y in 0..map_height(h, Some(font)) {
                 for x in 0..w {
                     let p = rgba(&pm, x, y)?;
-                    // Glyph cores, opaque over the translucent room fill; edges blend.
                     if p[3] >= 250 && p.iter().take(3).all(|&c| (125..=155).contains(&c)) {
                         grey += 1;
                     } else if is_text_white(p) {
@@ -3692,14 +3635,11 @@ mod tests {
             }
             Ok((grey, white))
         };
-        // clvl 10: 14 levels below the monsters, 2%.
         snap.player.char_level = Some(10);
         let (grey, white) = count(&snap)?;
         assert!(grey >= 20 && white == 0, "low xp: {grey} grey, {white} white");
-        // clvl 20: 4 below, full experience.
         snap.player.char_level = Some(20);
         let (grey, white) = count(&snap)?;
-        // White glyph edges blend into a few grey-ish pixels.
         assert!(
             white >= 20 && grey * 4 < white,
             "full xp: {grey} grey, {white} white"
@@ -3709,7 +3649,6 @@ mod tests {
 
     #[test]
     fn border_exit_triangle_points_outward_on_screen() -> Result<()> {
-        // World -y projects to screen up-right: iso(0, -1) = (1, -0.5).
         let dir = Marker::BorderExit {
             dir: (0, -80),
             entry: false,
@@ -3723,7 +3662,7 @@ mod tests {
         assert!((tx.hypot(ty) - size).abs() < 1e-4, "tip {tx},{ty}");
         assert!(
             (ty / tx + 0.5).abs() < 1e-4 && tx > 0.0,
-            "tip {tx},{ty} not up-right"
+            "world -y is screen up-right; tip {tx},{ty}"
         );
         assert!(
             points
@@ -3745,7 +3684,6 @@ mod tests {
             let (colour, size, _) = Marker::BorderExit { dir: (0, 1), entry }.style();
             assert_eq!(colour, if entry { Marker::Entry } else { Marker::Exit }.style().0);
             let (hits, dx, dy) = colour_spread(&pm, colour, v.to_screen(x, y))?;
-            // Size 7: about 45 px of area; most of it is fully covered.
             assert!(hits >= 20, "only {hits} pixels (entry {entry})");
             assert!(
                 dx.hypot(dy) <= f64::from(size) * 1.5,
@@ -3773,11 +3711,9 @@ mod tests {
     #[test]
     fn orifice_rule_marks_the_real_tomb_chamber_only() {
         let orifice = Marker::Orifice;
-        // Real tomb 72, orifice chamber 462 (confirmed in game).
         let mut snap = sanctuary([Some(462), Some(424), None, None]);
         snap.level.id = 72;
         assert_eq!(landmarks(&snap, LANDMARKS), vec![(orifice, 30.0, 30.0)]);
-        // The chamber spans several Room2 cells: one star at their combined centre.
         let mut snap = sanctuary([Some(462), Some(462), Some(424), None]);
         snap.level.id = 72;
         snap.level.rooms.extend([
@@ -3790,98 +3726,96 @@ mod tests {
                 ..room(60, 60, false)
             },
         ]);
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![(orifice, 60.0, 60.0)]);
-        // Fake tomb 71: its chest chamber 473 is the treasure room, not the orifice.
+        assert_eq!(
+            landmarks(&snap, LANDMARKS),
+            vec![(orifice, 60.0, 60.0)],
+            "one marker at the centre of a multi-room chamber"
+        );
         let mut snap = sanctuary([Some(473), Some(424), None, None]);
         snap.level.id = 71;
         assert_eq!(
             landmarks(&snap, LANDMARKS),
-            vec![(Marker::Landmark("tomb treasure"), 30.0, 30.0)]
+            vec![(Marker::Landmark("tomb treasure"), 30.0, 30.0)],
+            "a fake tomb's chest chamber"
         );
-        // Tomb 66 with 460 (Talrasha W): confirmed in tomb 69, so a star in any tomb.
         let mut snap = sanctuary([None, Some(460), None, None]);
         snap.level.id = 66;
         assert_eq!(landmarks(&snap, LANDMARKS), vec![(Marker::Orifice, 90.0, 30.0)]);
-        // 462 is the orifice in whichever tomb is the real one.
         let mut snap = sanctuary([None, Some(462), None, None]);
         snap.level.id = 66;
         assert_eq!(landmarks(&snap, LANDMARKS), vec![(orifice, 90.0, 30.0)]);
-        // 456 (a cube piece) in a tomb is nothing.
         let mut snap = sanctuary([None, Some(456), None, None]);
         snap.level.id = 66;
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
-        // The orifice id outside the tombs is nothing either.
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![], "a cube piece in a tomb");
         let mut snap = sanctuary([Some(462), None, None, None]);
         snap.level.id = 73;
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![], "outside the tombs");
     }
 
     #[test]
     fn summoner_rule_marks_the_room_centre() {
-        // Every Summoner arm-end preset is matched, at the centre of its room.
         let summoner = Marker::Landmark("summoner");
         for id in 525..=528 {
             let snap = sanctuary([None, Some(id), None, None]);
             assert_eq!(landmarks(&snap, LANDMARKS), vec![(summoner, 90.0, 30.0)], "{id}");
         }
-        // Adjacent rooms of one preset make one star, at the centre of their bounding box.
         let snap = sanctuary([None, Some(526), Some(526), None]);
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![(summoner, 120.0, 30.0)]);
-        // Separate pieces get a star each, not one between them.
+        assert_eq!(
+            landmarks(&snap, LANDMARKS),
+            vec![(summoner, 120.0, 30.0)],
+            "one star for adjacent rooms of one preset"
+        );
         let snap = sanctuary([Some(525), None, None, Some(528)]);
         assert_eq!(
             landmarks(&snap, LANDMARKS),
-            vec![(summoner, 30.0, 30.0), (summoner, 210.0, 30.0)]
+            vec![(summoner, 30.0, 30.0), (summoner, 210.0, 30.0)],
+            "a star per separate piece"
         );
-        // So do two adjacent pieces of different presets.
         let snap = sanctuary([Some(525), Some(528), None, None]);
         assert_eq!(
             landmarks(&snap, LANDMARKS),
-            vec![(summoner, 30.0, 30.0), (summoner, 90.0, 30.0)]
+            vec![(summoner, 30.0, 30.0), (summoner, 90.0, 30.0)],
+            "a star per preset for adjacent pieces"
         );
-        // Ordinary arm ends, the neighbouring ids and unknown presets: nothing.
         let snap = sanctuary([Some(510), Some(524), Some(529), None]);
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
-        // The same preset ids in another level: nothing.
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![], "ordinary arm ends");
         let mut snap = sanctuary([Some(525), None, None, None]);
         snap.level.id = 73;
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
-        // It is part of the drawn markers, below elites and the player.
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![], "another level");
         snap.level.id = 74;
         snap.monsters = vec![monster(0x02, 1)];
-        let kinds: Vec<Marker> = markers_with(&snap, &Marks::default(), LANDMARKS)
-            .into_iter()
-            .map(|(m, _, _)| m)
-            .collect();
-        assert_eq!(kinds, vec![summoner, Marker::Superunique, Marker::Player]);
+        assert_eq!(
+            marker_kinds(&snap),
+            vec![summoner, Marker::Superunique, Marker::Player]
+        );
     }
 
     #[test]
     fn gidbinn_rule_marks_every_clearing_but_the_waypoint_one() {
         let gidbinn = Marker::Landmark("gidbinn");
-        // Every pygmy clearing 595-604 is a candidate; other pieces are not.
         let mut snap = sanctuary([Some(594), Some(595), Some(604), Some(605)]);
         snap.level.id = 78;
         assert_eq!(
             landmarks(&snap, LANDMARKS),
-            vec![(gidbinn, 90.0, 30.0), (gidbinn, 150.0, 30.0)]
+            vec![(gidbinn, 90.0, 30.0), (gidbinn, 150.0, 30.0)],
+            "clearings 595-604 only"
         );
-        // Two separate 602 pieces: a star on each, none between them.
         let mut snap = sanctuary([Some(602), Some(602), None, Some(602)]);
         snap.level.id = 78;
         assert_eq!(
             landmarks(&snap, LANDMARKS),
             vec![(gidbinn, 60.0, 30.0), (gidbinn, 210.0, 30.0)]
         );
-        // The clearing holding the waypoint (object 237) is skipped.
         snap.presets = vec![object(237, 70, 10)];
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![(gidbinn, 210.0, 30.0)]);
-        // Once the altar (object 252) is loaded, its quest-object star alone shows.
+        assert_eq!(
+            landmarks(&snap, LANDMARKS),
+            vec![(gidbinn, 210.0, 30.0)],
+            "the waypoint's clearing is skipped"
+        );
         snap.presets.push(object(252, 200, 20));
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
-        let kinds: Vec<Marker> = markers_with(&snap, &Marks::default(), LANDMARKS)
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![], "the altar is loaded");
+        let stars: Vec<Marker> = marker_kinds(&snap)
             .into_iter()
-            .map(|(m, _, _)| m)
             .filter(|m| {
                 matches!(
                     m,
@@ -3889,11 +3823,10 @@ mod tests {
                 )
             })
             .collect();
-        assert_eq!(kinds, vec![Marker::QuestObject("gidbinn altar")]);
-        // A clearing in another level: nothing.
+        assert_eq!(stars, vec![Marker::QuestObject("gidbinn altar")]);
         let mut snap = sanctuary([None, Some(602), None, None]);
         snap.level.id = 77;
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![], "another level");
     }
 
     #[test]
@@ -3902,9 +3835,8 @@ mod tests {
         let mut snap = sanctuary([None, Some(739), None, None]);
         snap.level.id = 92;
         assert_eq!(landmarks(&snap, LANDMARKS), vec![(stairs, 90.0, 30.0)]);
-        // 739 in another level: nothing.
         snap.level.id = 93;
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![], "another level");
     }
 
     #[test]
@@ -3916,7 +3848,6 @@ mod tests {
         let at = v.to_screen(90.0, 30.0);
         let (gold, size, shape) = Marker::Landmark("summoner").style();
         assert_eq!(shape, Shape::Star);
-        // Unlike every other marker: its own colour, bigger than all of them.
         for other in [
             Marker::Exit,
             Marker::Entry,
@@ -3928,43 +3859,39 @@ mod tests {
             Marker::Player,
         ] {
             let (colour, other_size, _) = other.style();
-            assert_ne!(colour, gold, "{other:?}");
-            assert!(other_size < size, "{other:?}");
+            assert_ne!(colour, gold, "{other:?} shares the star's colour");
+            assert!(other_size < size, "{other:?} is as big as the star");
         }
         #[allow(
             clippy::cast_sign_loss,
             clippy::cast_possible_truncation,
             reason = "test points are inside the canvas"
         )]
-        // The pixel whose centre is nearest to the point.
-        let pixel = |dx: f32, dy: f32| ((at.0 + dx - 0.5).round() as u32, (at.1 + dy - 0.5).round() as u32);
+        let nearest_pixel =
+            |dx: f32, dy: f32| ((at.0 + dx - 0.5).round() as u32, (at.1 + dy - 0.5).round() as u32);
 
-        let (cx, cy) = pixel(0.0, 0.0);
+        let (cx, cy) = nearest_pixel(0.0, 0.0);
         assert_eq!(rgba(&pm, cx, cy)?, gold, "star centre");
-        let (tx, ty) = pixel(0.0, 3.0 - size);
+        let (tx, ty) = nearest_pixel(0.0, 3.0 - size);
         assert_eq!(rgba(&pm, tx, ty)?, gold, "top tip");
-        // Dark outline just above the top tip.
-        let (ox, oy) = pixel(0.0, -size - 1.0);
+        let (ox, oy) = nearest_pixel(0.0, -size - 1.0);
         let outline = rgba(&pm, ox, oy)?;
         assert!(
             outline[0] < 100 && outline[3] > 150,
             "outline above the tip: {outline:?}"
         );
-        // Between star and halo: no gold (the room shows through).
-        let (gx, gy) = pixel(0.0, size + 3.0);
+        let (gx, gy) = nearest_pixel(0.0, size + 3.0);
         assert_ne!(rgba(&pm, gx, gy)?, gold, "gap below the star");
-        // The gold halo ring around it, on all four sides.
         for (dx, dy) in [
             (LANDMARK_RING, 0.0),
             (-LANDMARK_RING, 0.0),
             (0.0, LANDMARK_RING),
             (0.0, -LANDMARK_RING),
         ] {
-            let (hx, hy) = pixel(dx, dy);
+            let (hx, hy) = nearest_pixel(dx, dy);
             let p = rgba(&pm, hx, hy)?;
             assert!(p[0] > 200 && p[1] > 140 && p[2] < 120, "halo at {dx},{dy}: {p:?}");
         }
-        // All gold pixels belong to this marker.
         let (hits, dx, dy) = colour_spread(&pm, gold, at)?;
         assert!(hits >= 60, "only {hits} gold pixels");
         assert!(
@@ -3975,10 +3902,8 @@ mod tests {
     }
 
     #[test]
-    fn gidbinn_candidates_in_the_nightmare_jungle_of_2026_11_20() {
-        // The pygmy clearings of a live dump (user report: a star on 602, but no altar there):
-        // 4x4 grids of 40-tile rooms, 595 holding the waypoint at (5899, 3974), 602 right north
-        // of it, and 600 further north-west.
+    fn gidbinn_candidates_in_a_live_jungle_skip_the_waypoint_clearing() {
+        // A live layout: 595 holds the waypoint, 602 lies north of it, 600 further north-west.
         let clearing = |preset, x0: u32, y0: u32| {
             (0..16u32).map(move |i| Room {
                 x: x0 + 40 * (i % 4),
@@ -4011,7 +3936,6 @@ mod tests {
             snap.level.rooms.iter_mut().filter(move |r| r.x == x)
         }
         let gidbinn = Marker::Landmark("gidbinn");
-        // Two clearings of two rooms each, apart (602 at x 0-120, 600 at x 180-300).
         let mut snap = sanctuary([Some(602), Some(602), None, Some(600)]);
         snap.level.id = 78;
         snap.level.rooms.push(Room {
@@ -4020,22 +3944,20 @@ mod tests {
         });
         let both = vec![(gidbinn, 60.0, 30.0), (gidbinn, 240.0, 30.0)];
         assert_eq!(landmarks(&snap, LANDMARKS), both);
-        // Half of 602 loaded: not yet ruled out.
         at(&mut snap, 0).for_each(|r| r.loaded = true);
-        assert_eq!(landmarks(&snap, LANDMARKS), both);
-        // All of 602 loaded (now or earlier) and no altar: only 600 is left, and stays a star.
+        assert_eq!(landmarks(&snap, LANDMARKS), both, "half of 602 loaded");
         at(&mut snap, 60).for_each(|r| r.seen_loaded = true);
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![(gidbinn, 240.0, 30.0)]);
-        // The altar shows up in 600: no candidate at all, its quest-object star instead.
+        assert_eq!(
+            landmarks(&snap, LANDMARKS),
+            vec![(gidbinn, 240.0, 30.0)],
+            "all of 602 seen loaded"
+        );
         snap.presets = vec![object(252, 250, 20)];
-        assert_eq!(landmarks(&snap, LANDMARKS), vec![]);
+        assert_eq!(landmarks(&snap, LANDMARKS), vec![], "the altar is loaded");
     }
 
     #[test]
     fn every_landmark_rule_is_confirmed() {
-        // Every rule is live-confirmed: the W/E/S/N variants of a named piece inherit the
-        // confirmation of their family (the direction letter only says where in the piece the
-        // feature sits). Candidate rules too: the Gidbinn clearings are stars (2026-11-20).
         assert!(LANDMARKS.iter().all(|r| r.confirmed));
     }
 
@@ -4072,14 +3994,15 @@ mod tests {
             assert_eq!(preset_marker(&object(txt, 0, 0)), None, "{txt}");
         }
         assert_eq!(preset_marker(&object(237, 0, 0)), Some(Marker::Waypoint));
-        // A quest-object id that is a monster or tile preset is not a quest object.
         let monster = Preset {
             kind: PresetKind::Monster,
             ..object(152, 0, 0)
         };
-        assert_eq!(preset_marker(&monster), Some(Marker::Special(None)));
-        // A quest monster preset (prison door) is drawn as a quest object; as an object it's not.
-        // Siege barricades (432, 433, 435) stay generic monster presets.
+        assert_eq!(
+            preset_marker(&monster),
+            Some(Marker::Special(None)),
+            "a quest-object id on a monster preset"
+        );
         let door = Preset {
             kind: PresetKind::Monster,
             ..object(434, 0, 0)
@@ -4091,7 +4014,8 @@ mod tests {
             ..object(526, 0, 0)
         };
         assert_eq!(preset_marker(&nihlathak), Some(Marker::QuestObject("nihlathak")));
-        for barricade in [432, 433, 435] {
+        let siege_barricades = [432, 433, 435];
+        for barricade in siege_barricades {
             let p = Preset {
                 kind: PresetKind::Monster,
                 ..object(barricade, 0, 0)
@@ -4100,7 +4024,7 @@ mod tests {
         }
     }
 
-    /// Tomb 66 with an assumed-orifice room (456) at world 90,30 and the orifice object at 150,30.
+    /// Tomb 66 with an orifice room (461) at world 90,30 and the orifice object at 150,30.
     fn tomb_66() -> Snapshot {
         let mut snap = sanctuary([None, Some(461), None, None]);
         snap.level.id = 66;
@@ -4132,7 +4056,6 @@ mod tests {
     fn suspected_landmark_renders_as_a_question_mark() -> Result<()> {
         let snap = tomb_66();
         let (w, h) = (400, 400);
-        // The ? path is exercised with a synthetic rule over the fixture's 461 room.
         let unconfirmed = [LandmarkRule {
             level_ids: 66..=72,
             preset_ids: 461..=461,
@@ -4141,7 +4064,6 @@ mod tests {
             style: LandmarkStyle::Orifice,
             candidates_for: None,
         }];
-        // Without a font: a hollow gold ring, no glyph.
         let plain = render_rules(&snap, &Guidance::default(), w, h, None, &unconfirmed)?;
         let v = View::fit(level_bounds(&snap), w, h);
         let at = v.to_screen(90.0, 30.0);
@@ -4149,7 +4071,10 @@ mod tests {
         let (_, radius, _) = Marker::Suspected("").style();
         let ring = count_near(&plain, at, radius + 1.5, |p| p == LANDMARK_GOLD)?;
         let centre = count_near(&plain, at, radius - 2.5, |p| p == LANDMARK_GOLD)?;
-        assert!(ring >= 15 && centre == 0, "ring {ring}, centre {centre}");
+        assert!(
+            ring >= 15 && centre == 0,
+            "no font: a hollow ring {ring}, centre {centre}"
+        );
 
         let Some(font) = info::font() else {
             eprintln!("skipped the glyph check: no font on this machine");
@@ -4160,10 +4085,8 @@ mod tests {
         let at = v.to_screen(90.0, 30.0);
         let near = count_near(&pm, at, SUSPECT_DISC_RADIUS, is_suspect_text)?;
         assert!(near >= 15, "only {near} light glyph pixels near the ?");
-        // No landmark star there: no gold.
         let star_gold = count_near(&pm, at, LANDMARK_RING + 2.0, |p| p == LANDMARK_GOLD)?;
         assert_eq!(star_gold, 0, "gold star pixels at the ?");
-        // The disc darkens the room behind the glyph: some dark opaque pixels inside it.
         let dark = count_near(&pm, at, SUSPECT_DISC_RADIUS, |p| p[3] >= 150 && p[0] < 50)?;
         assert!(dark >= 30, "only {dark} dark disc/outline pixels");
         Ok(())
@@ -4171,7 +4094,6 @@ mod tests {
 
     #[test]
     fn quest_object_renders_as_a_small_gold_star() -> Result<()> {
-        // The orifice object alone (no "?" room, whose no-font ring is gold too).
         let mut snap = tomb_66();
         for r in &mut snap.level.rooms {
             r.preset = None;
@@ -4189,17 +4111,13 @@ mod tests {
         let (hits, dx, dy) = colour_spread(&pm, gold, at)?;
         assert!(hits >= 12, "only {hits} gold pixels");
         assert!(dx.hypot(dy) <= f64::from(size), "gold spread {dx},{dy}: no halo");
-        // Drawn after (above) the landmark star, so both show when they overlap.
         let mut snap = sanctuary([None, Some(462), None, None]);
         snap.level.id = 72;
         snap.presets = vec![object(152, 90, 30)];
-        let kinds: Vec<Marker> = markers_with(&snap, &Marks::default(), LANDMARKS)
-            .into_iter()
-            .map(|(m, _, _)| m)
-            .collect();
         assert_eq!(
-            kinds,
-            vec![Marker::Orifice, Marker::QuestObject("orifice"), Marker::Player]
+            marker_kinds(&snap),
+            vec![Marker::Orifice, Marker::QuestObject("orifice"), Marker::Player],
+            "drawn above the landmark"
         );
         Ok(())
     }
@@ -4226,12 +4144,8 @@ mod tests {
         snap.drops = vec![drop_at(DropKind::Unique, 1, 1)];
         snap.shrines = vec![shrine_at(12, 40, 30)];
         snap.wells = vec![well_at(50, 30)];
-        let kinds: Vec<Marker> = markers_with(&snap, &Marks::default(), LANDMARKS)
-            .into_iter()
-            .map(|(m, _, _)| m)
-            .collect();
         assert_eq!(
-            kinds,
+            marker_kinds(&snap),
             vec![
                 Marker::Landmark("summoner"),
                 Marker::QuestObject("orifice"),
@@ -4306,12 +4220,10 @@ mod tests {
         let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
         let ink = count_near(&pm, (cx, cy - 12.0), 14.0, |p| tinted(p, colour))?;
         assert!(ink >= 10, "SKL tag: {ink} px");
-        // A well on the same spot: the shrine outranks it, so the well's tag moves or drops and
-        // never covers the shrine's.
         snap.wells = vec![well_at(110, 110)];
         let pm = render_with(&snap, &Guidance::default(), w, h, Some(font))?;
         let again = count_near(&pm, (cx, cy - 12.0), 14.0, |p| tinted(p, colour))?;
-        assert_eq!(again, ink, "shrine tag unchanged");
+        assert_eq!(again, ink, "the shrine outranks a well on the same spot");
         let well = marker_label_colour(WELL_CYAN);
         let well_ink = count_near(&pm, (cx, cy), 40.0, |p| tinted(p, well))?;
         assert!(well_ink >= 5, "well tag moved, not dropped: {well_ink} px");
@@ -4407,8 +4319,8 @@ mod tests {
             Ok(pm.pixel(px(sx), px(sy)).context("pixel")?.demultiply())
         };
         let plain = render_with(&snap, &Guidance::default(), w, h, None)?;
-        // A walked line, then a 50-tile jump (a teleport) and on.
-        snap.trail = vec![(20, 40), (30, 40), (40, 40), (90, 40), (100, 40)];
+        let teleport_from_40_to_90 = vec![(20, 40), (30, 40), (40, 40), (90, 40), (100, 40)];
+        snap.trail = teleport_from_40_to_90;
         let trailed = render_with(&snap, &Guidance::default(), w, h, None)?;
         let (before, after) = (at(&plain, (25.0, 40.0))?, at(&trailed, (25.0, 40.0))?);
         assert_ne!(before, after, "the trail is drawn over the room fill");
