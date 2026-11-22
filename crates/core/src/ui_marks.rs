@@ -157,27 +157,57 @@ pub fn vendor(shop: &Shop, notes: &[ShopNote], tab: Option<u8>) -> UiMarks {
         }
     }
     picks.sort_by_key(|(pick, _)| *pick);
-    let hidden = if picks.len() > MAX_LINES {
-        picks.len() - (MAX_LINES - 1)
-    } else {
-        0
-    };
-    let mut lines: Vec<Line> = picks
+    let lines = picks
         .into_iter()
-        .take(MAX_LINES)
         .map(|(pick, text)| Line {
             text,
             colour: pick_colour(pick),
         })
         .collect();
-    if hidden > 0 {
+    UiMarks {
+        frames,
+        lines: capped(lines),
+    }
+}
+
+/// The stash's items to take out and sell, where they are: "Bone Visor (page 3)",
+/// "2× Spear (personal)"; not the inventory's, cube's or the gems / materials / runes tab's.
+#[must_use]
+pub fn stash_sells(advice: &[Advice]) -> Vec<Line> {
+    let lines = advice
+        .iter()
+        .filter(|line| line.action == Action::Sell)
+        .filter_map(|line| {
+            let place = match line.spot {
+                Spot::Stash => "personal".to_owned(),
+                Spot::Page(n) => format!("page {n}"),
+                Spot::Inventory | Spot::Cube => return None,
+            };
+            let count = if line.count > 1 {
+                format!("{}× ", line.count)
+            } else {
+                String::new()
+            };
+            Some(Line {
+                text: format!("{count}{} ({place})", line.name),
+                colour: SELL,
+            })
+        })
+        .collect();
+    capped(lines)
+}
+
+/// At most [`MAX_LINES`], the last one "+N more" when there are more.
+fn capped(mut lines: Vec<Line>) -> Vec<Line> {
+    if lines.len() > MAX_LINES {
+        let hidden = lines.len() - (MAX_LINES - 1);
         lines.truncate(MAX_LINES - 1);
         lines.push(Line {
             text: format!("+{hidden} more"),
             colour: MORE,
         });
     }
-    UiMarks { frames, lines }
+    lines
 }
 
 const fn pick_colour(pick: Pick) -> Rgba {
@@ -579,6 +609,44 @@ mod tests {
             item_frames(&plan, Window::Stash(Some(Spot::Stash))),
             [inventory.as_slice(), &[(rect(163, 213, 48, 48), SELL)]].concat(),
             "the personal tab shown: its sell item, not page 3's"
+        );
+    }
+
+    fn sell(name: &str, spot: Spot, count: u32) -> Advice {
+        Advice {
+            name: name.to_owned(),
+            count,
+            ..advice(spot, Action::Sell, &[])
+        }
+    }
+
+    #[test]
+    fn the_stash_box_lists_its_sell_items_where_they_are() {
+        use crate::guidance::Tab;
+        let plan = [
+            sell("Bone Visor", Spot::Page(3), 1),
+            sell("Wand", Spot::Inventory, 1),
+            sell("Gem", Spot::Cube, 1),
+            advice(Spot::Page(2), Action::Stow(Tab::Gems), &[]),
+            advice(Spot::Stash, Action::Keep(Side::Own), &[]),
+            sell("Spear", Spot::Stash, 2),
+        ];
+        let lines = stash_sells(&plan);
+        assert_eq!(
+            lines
+                .iter()
+                .map(|l| (l.text.as_str(), l.colour))
+                .collect::<Vec<_>>(),
+            [("Bone Visor (page 3)", SELL), ("2× Spear (personal)", SELL)],
+            "not the inventory's or the cube's, not kept or stowed items"
+        );
+        assert!(stash_sells(&plan[1..4]).is_empty(), "none in the stash: no lines");
+        let many: Vec<Advice> = (1..=10).map(|n| sell("Spear", Spot::Page(n), 1)).collect();
+        let lines = stash_sells(&many);
+        assert_eq!(lines.len(), MAX_LINES);
+        assert_eq!(
+            lines.last().map(|l| (l.text.as_str(), l.colour)),
+            Some(("+3 more", MORE))
         );
     }
 

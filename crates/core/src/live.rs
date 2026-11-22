@@ -235,7 +235,7 @@ fn publish_dashboard<'a, P: Playstyle>(
 }
 
 /// The marks for the open game window: a trade window's box and the inventory's sell frames,
-/// else the stash window's inventory frames. The shown store and stash tabs aren't read: no
+/// else the stash window's box (its items to sell) and inventory frames. The shown store and stash tabs aren't read: no
 /// store-grid or stash-grid frames.
 fn window_marks(
     shop: Option<&crate::shop::Shop>,
@@ -253,7 +253,7 @@ fn window_marks(
     if stash_open {
         return UiMarks {
             frames: ui_marks::item_frames(items, ui_marks::Window::Stash(None)),
-            lines: Vec::new(),
+            lines: ui_marks::stash_sells(items),
         };
     }
     UiMarks::default()
@@ -482,7 +482,7 @@ mod tests {
             count: 1,
             cells: vec![CellRect { x, y: 0, w: 1, h: 1 }],
         };
-        let items = [at(Action::Sell, 0), at(Action::Move(Side::Own), 1)];
+        let mut items = vec![at(Action::Sell, 0), at(Action::Move(Side::Own), 1)];
         let colours = |marks: &UiMarks| marks.frames.iter().map(|f| f.1).collect::<Vec<_>>();
         let shop = crate::shop::Shop {
             npc_txt: 0,
@@ -500,6 +500,21 @@ mod tests {
             "the stash: the item to put away only"
         );
         assert!(window_marks(None, &[], &items, false).is_empty(), "no window");
+        items.push(Advice {
+            name: "Spear".into(),
+            spot: Spot::Page(3),
+            ..at(Action::Sell, 2)
+        });
+        let stash = window_marks(None, &[], &items, true);
+        assert_eq!(
+            stash.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+            ["Spear (page 3)"],
+            "the stash's box: its sell items"
+        );
+        assert!(
+            window_marks(Some(&shop), &[], &items, true).lines.is_empty(),
+            "not at a vendor"
+        );
     }
 
     #[test]
