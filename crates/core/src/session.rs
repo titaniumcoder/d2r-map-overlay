@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::cows;
 use crate::game::{BorderLink, Monster, Preset, PresetKind, RoomLink, RoomRect, Shrine, Snapshot, Well};
 use crate::levels_data::SUPERUNIQUES;
-use crate::objects::is_consumable_quest_object;
+use crate::objects::{
+    SUPER_CHEST_LEVELS, SUPER_CHEST_PRESET, is_consumable_quest_object, is_super_chest_object,
+};
 use crate::offsets::monster_data;
 use crate::render::{candidate_room, quest_monster};
 use crate::stash::{self, StashTab};
@@ -25,6 +27,9 @@ const BIND_RADIUS: f64 = 15.0;
 /// Most distance in tiles between an operated consumable quest object (live position) and the
 /// object preset it hides: the two positions may differ by a tile or two.
 const OPERATED_RADIUS: f64 = 5.0;
+/// Most distance in tiles between an opened chest and the super chest preset it hides: the
+/// chest spawns on the preset, and an ordinary chest a few tiles away must not hide it.
+const OPENED_CHEST_RADIUS: f64 = 2.0;
 /// Most distance in tiles between the arrival point and the entry tile preset.
 const ENTRY_RADIUS: f64 = 25.0;
 /// Tile presets this close to the entry tile are part of the same entry (multi-tile stairs).
@@ -65,8 +70,9 @@ pub struct GameState {
     /// (level id, preset x, y).
     #[serde(default)]
     killed: HashSet<LevelPos>,
-    /// Consumable quest objects (Diablo seals) seen operated in this game, by (level id, live
-    /// x, y). Their presets are hidden for the game, also once the live object unloads.
+    /// Consumable quest objects (Diablo seals) seen operated and super chest objects seen opened
+    /// in this game, by (level id, live x, y). Their presets are hidden for the game, also once
+    /// the live object unloads.
     #[serde(default)]
     operated: HashSet<LevelPos>,
     /// Player position on arriving in each level of this game, by level id.
@@ -428,17 +434,21 @@ impl Session {
         }
     }
 
-    /// Notes the operated quest objects, then keeps monster presets only for superuniques and
-    /// quest monsters not killed in this game, and drops quest objects seen operated.
+    /// Notes the operated quest objects and opened chests, then keeps monster presets only for
+    /// superuniques and quest monsters not killed in this game, and drops quest objects seen
+    /// operated and super chests seen opened.
     fn drop_spent_presets(&mut self, snap: &mut Snapshot) {
         let level = snap.level.id;
+        // Opened chests matter only where super chests are drawn; elsewhere they'd pile up.
         for o in &snap.operated_objects {
+            if is_super_chest_object(o.txt) && !SUPER_CHEST_LEVELS.contains(&level) {
+                continue;
+            }
             self.changed |= self.state.operated.insert((level, o.x, o.y));
         }
-        let operated_near = |x: u32, y: u32| {
+        let operated_near = |x: u32, y: u32, radius: f64| {
             self.state.operated.iter().any(|&(l, ox, oy)| {
-                l == level
-                    && (f64::from(x) - f64::from(ox)).hypot(f64::from(y) - f64::from(oy)) <= OPERATED_RADIUS
+                l == level && (f64::from(x) - f64::from(ox)).hypot(f64::from(y) - f64::from(oy)) <= radius
             })
         };
         snap.presets.retain(|p| match p.kind {
@@ -446,7 +456,12 @@ impl Session {
                 (superunique(p.txt).is_some() || quest_monster(p.txt).is_some())
                     && !self.state.killed.contains(&(level, p.x, p.y))
             }
-            PresetKind::Object => !(is_consumable_quest_object(p.txt) && operated_near(p.x, p.y)),
+            PresetKind::Object if p.txt == SUPER_CHEST_PRESET => {
+                !operated_near(p.x, p.y, OPENED_CHEST_RADIUS)
+            }
+            PresetKind::Object => {
+                !(is_consumable_quest_object(p.txt) && operated_near(p.x, p.y, OPERATED_RADIUS))
+            }
             _ => true,
         });
     }
@@ -1171,6 +1186,35 @@ mod tests {
         next.presets = seals();
         assert!(s.apply(&mut next).new_game);
         assert_eq!(txts(&next), vec![392, 393, 119]);
+    }
+
+    #[test]
+    fn opened_super_chest_marker_is_removed_for_the_game() {
+        let chests = || {
+            vec![
+                preset(PresetKind::Object, 584, 5000, 5000),
+                preset(PresetKind::Object, 584, 5004, 5000), // another super chest, 4 tiles away
+            ]
+        };
+        let xs = |s: &Snapshot| s.presets.iter().map(|p| p.x).collect::<Vec<_>>();
+        let opened = |x| OperatedObject { txt: 183, x, y: 5000 };
+        let mut s = Session::default();
+        let mut a = snap(1, 0xa000, 79);
+        a.presets = chests();
+        a.operated_objects = vec![opened(5001)];
+        s.apply(&mut a);
+        assert_eq!(xs(&a), vec![5004], "the chest on the first preset is open");
+        // The live chest unloads: still hidden.
+        let mut b = snap(1, 0xa000, 79);
+        b.presets = chests();
+        s.apply(&mut b);
+        assert_eq!(xs(&b), vec![5004]);
+        // An ordinary chest opened 3 tiles off the second one doesn't hide it.
+        let mut c = snap(1, 0xa000, 79);
+        c.presets = chests();
+        c.operated_objects = vec![opened(5007)];
+        s.apply(&mut c);
+        assert_eq!(xs(&c), vec![5004]);
     }
 
     fn at(mut s: Snapshot, x: u16, y: u16, presets: &[Preset]) -> Snapshot {

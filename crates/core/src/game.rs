@@ -89,7 +89,8 @@ pub struct Snapshot {
     pub shrines: Vec<Shrine>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wells: Vec<Well>,
-    /// Operated consumable quest objects near the player (Diablo seals).
+    /// Operated consumable quest objects (Diablo seals) and opened super chest objects near
+    /// the player.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub operated_objects: Vec<OperatedObject>,
     /// Items in the player's inventory, shown or not.
@@ -477,7 +478,7 @@ pub struct Well {
     pub y: u32,
 }
 
-/// A consumable quest object that has been operated.
+/// A consumable quest object that has been operated, or a super chest object opened.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperatedObject {
     /// objects.txt row.

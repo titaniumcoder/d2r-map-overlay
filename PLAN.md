@@ -534,6 +534,34 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
   mode 0 its star is hidden for the rest of the game. Drawn: unused shrines whose type is in config `[shrines] show` (user list: refilling,
   skill, stamina, experience, gem, monster), all wells. Hellforge (376) is a quest object.
 
+## Super chests (2026-11-22, user request: "mark the super chest places in lower kurast for the runes"; not verified live)
+- **What they are**: ds1 object preset "PlaceUniqueChest" (objpreset Act 3 Index 2), not an objects.txt chest row.
+  Classic game code (ThePhrozenKeep/D2MOO `Objects.cpp`): preset classes > 573 are placeholders,
+  `OBJECTS_SpawnPresetObject` index `class − 574` = 6 shrines, **580 `OBJECTS_SpawnSpecialChest`**, 581 random chest,
+  582 arcane symbol. The special chest spawns as an ordinary chest object of the act (Act 3 outside Travincal:
+  **181 jungle chest / 183 jungle medium chest left**, `OBJECTS_SpawnPresetChest`) with the spark-chest flag:
+  `OBJECTS_OperateFunction04_Chest` then rolls magic (95 %) or rare (5 %) quality, always drops (no 25 % empty roll)
+  and retries up to 10 times for a magic+ item. Its TC is the ordinary chest TC; "better" means the forced quality.
+- **Ids**: classic 1.13 numbers it 580, the name map tools use (MapAssist / PrimeMH `GoodChest = 580` → `SuperChest`,
+  D2RMH `580=Chest ;Unique Chest`, kolbot `sdk.objects.SuperChest: 580`; 581 `NotSoGoodChest` = the random chest).
+  D2R added rows 574–577 (three ancient statues, ControlObject) before the placeholders, so D2R objects.txt (blizzhackers/d2data
+  `objects.json` `*ID`) has **584 PlaceUniqueChest**, 585 PlaceRandomTreasureChest; a D2R memory bot
+  (Tyniann/d2r-offline-farming-bot, generated from D2R 3.2 objects.txt) lists 584 too. The preset txt in memory is
+  the objects.txt `*ID` (seals 392–396 live), so the reader should see **584** (`objects::SUPER_CHEST_PRESET`).
+  The map tools' 580 comes from the classic map generator, not D2R memory.
+- **Where** (classic MPQ ds1, `research/ds1_objects.py`, lvlprest 605–652; D2MOO `DrlgOutJung.cpp`: Lower Kurast
+  places up to 4 random "Slums 16x16" pieces): Lower Kurast (79) `Slums16x16_1.ds1` = the bonfire hut piece
+  (FireSmall + 7 braziers) with **3** PlaceUniqueChest each; no other Slums piece has one. Kurast Bazaar (80)
+  `BurbsTemple3.ds1` 1; Upper Kurast (81) `MetroTemple3.ds1`, `Metro16x08_0.ds1`, `Metro16x16_1.ds1` 1 each.
+  Assumes D2R kept the classic ds1 objects (unverified).
+- **Drawn** (`render::Marker::SuperChest`): in levels 79–81 only (`objects::SUPER_CHEST_LEVELS`; other acts'
+  PlaceUniqueChest presets aren't drawn), a 10 × 7 px wooden chest with a gold rim and lid seam, from the preset,
+  so it shows once its room is known. No tag.
+- **Opened**: the reader reports chest objects 181/183 out of mode 0 (1 operating, 2 opened) as operated objects;
+  the session hides a super chest preset with an opened chest within 2 tiles (`OPENED_CHEST_RADIUS`, the chest
+  spawns on the preset) for the rest of the game, also after the chest unloads. Live check: the marker sits on the
+  hut chest and goes away after opening it.
+
 ## Terror Zones (2026-11-15)
 - states.txt 189 = "desecrated" = Terror Zone state. Unit stat list (unit +0x88) holds a 256-bit state field at
   `+0xB30` (8 × u32; bit n in dword n/32). Live in the terrorized Moo Moo Farm: all 24 cows had bit 189, the player

@@ -14,6 +14,7 @@ use crate::guidance::Tier;
 use crate::guidance::{Action, Advice, Side};
 use crate::guidance::{Category, Guidance, Mark, MarkKind, Marks};
 use crate::items::{CharmSize, DropKind, GemColour};
+use crate::objects::{SUPER_CHEST_LEVELS, SUPER_CHEST_PRESET};
 use crate::offsets::monster_data;
 use crate::{info, session, tombs, xp};
 
@@ -411,6 +412,10 @@ const SHRINE_OUTLINE: Rgba = [255, 255, 255, 230];
 const WELL_CYAN: Rgba = [0, 230, 255, 255];
 const WELL_RING_WIDTH: f32 = 2.0;
 const WELL_BACKING_WIDTH: f32 = 3.5;
+/// Super chest: wooden fill, gold rim and lid seam.
+const CHEST_WOOD: Rgba = [150, 90, 35, 255];
+const CHEST_RIM_WIDTH: f32 = 1.5;
+const CHEST_BACKING_WIDTH: f32 = 3.5;
 
 /// Outline shape of a marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -432,6 +437,8 @@ pub enum Shape {
     Worm,
     /// Three steps descending to the right ([`stairs_path`]); the size is half the side.
     Stairs,
+    /// A chest: a box wider than tall ([`chest_path`]); the size is half the width.
+    Chest,
 }
 
 /// Something drawn on the map. Variant order is draw order (player last, on top).
@@ -461,6 +468,8 @@ pub enum Marker {
     /// A quest object or quest monster preset, with its label. Above the landmark star, so both
     /// show when they overlap.
     QuestObject(&'static str),
+    /// An unopened super chest preset in Kurast ([`SUPER_CHEST_LEVELS`]).
+    SuperChest,
     /// A well (wells refill: drawn used or not).
     Well,
     /// An unused shrine, with its shrines.txt code.
@@ -533,6 +542,7 @@ impl Marker {
             Self::Worm => (LANDMARK_GOLD, 9.0, Shape::Worm),
             Self::Orifice => (LANDMARK_GOLD, 7.0, Shape::Circle),
             Self::QuestObject(_) => (LANDMARK_GOLD, 6.0, Shape::Star),
+            Self::SuperChest => (CHEST_WOOD, 5.0, Shape::Chest),
             Self::Well => (WELL_CYAN, 4.5, Shape::Circle),
             Self::Shrine(code) => (shrine_colour(code), 4.0, Shape::Circle),
             Self::Monster => ([255, 120, 120, 200], 2.0, Shape::Circle),
@@ -710,10 +720,12 @@ fn replaced_by_live(p: &Preset, marker: Marker, live: &[(f64, f64)]) -> bool {
             .any(|&(mx, my)| (f64::from(p.x) - mx).hypot(f64::from(p.y) - my) <= LIVE_REPLACES_PRESET_RADIUS)
 }
 
-/// The marker a preset is drawn as, if any.
+/// The marker a preset is drawn as, if any; a super chest in any level (`markers_with` keeps it
+/// to [`SUPER_CHEST_LEVELS`]).
 pub fn preset_marker(p: &Preset) -> Option<Marker> {
     match p.kind {
         PresetKind::Object if WAYPOINT_IDS.contains(&p.txt) => Some(Marker::Waypoint),
+        PresetKind::Object if p.txt == SUPER_CHEST_PRESET => Some(Marker::SuperChest),
         PresetKind::Object => quest_object(p.txt).map(Marker::QuestObject),
         PresetKind::Tile if p.entry => Some(Marker::Entry),
         PresetKind::Tile => Some(Marker::Exit),
@@ -1014,7 +1026,10 @@ fn markers_with(snap: &Snapshot, marks: &Marks, rules: &[LandmarkRule]) -> Vec<(
         .presets
         .iter()
         .filter_map(|p| {
-            let marker = preset_marker(p).filter(|&m| !replaced_by_live(p, m, &live_bosses))?;
+            let marker = preset_marker(p).filter(|&m| {
+                !replaced_by_live(p, m, &live_bosses)
+                    && (m != Marker::SuperChest || SUPER_CHEST_LEVELS.contains(&snap.level.id))
+            })?;
             Some((marker, f64::from(p.x), f64::from(p.y)))
         })
         .chain(
@@ -1203,6 +1218,7 @@ fn draw_marker(pm: &mut Pixmap, font: Option<&FontVec>, marker: Marker, cx: f32,
         Marker::Orifice => draw_orifice(pm, colour, geom),
         Marker::Ring { .. } => draw_mark_ring(pm, marker, &dot, geom),
         Marker::Well => draw_well(pm, &dot, colour),
+        Marker::SuperChest => draw_chest(pm, &dot, colour, geom),
         Marker::Shrine(_) => fill_then_outline(pm, &dot, colour, SHRINE_OUTLINE),
         Marker::QuestObject(_) => outline_then_fill(pm, &dot, colour, &round_join(3.0)),
         _ => match shape {
@@ -1216,7 +1232,7 @@ fn draw_marker(pm: &mut Pixmap, font: Option<&FontVec>, marker: Marker, cx: f32,
                 // Round joins: a miter on the sharp tips would spike out into the halo.
                 outline_then_fill(pm, &dot, colour, &round_join(4.0));
             }
-            Shape::Circle | Shape::Diamond | Shape::Square => {
+            Shape::Circle | Shape::Diamond | Shape::Square | Shape::Chest => {
                 fill_then_outline(pm, &dot, colour, MARKER_OUTLINE);
             }
         },
@@ -1687,6 +1703,43 @@ fn draw_well(pm: &mut Pixmap, circle: &Path, colour: Rgba) {
     }
 }
 
+/// A super chest: `body` ([`chest_path`]) on a dark backing, filled `colour`, with a gold rim
+/// and a gold lid seam a third of the way down.
+fn draw_chest(pm: &mut Pixmap, body: &Path, colour: Rgba, (cx, cy, size): (f32, f32, f32)) {
+    let stroke = |width| Stroke {
+        width,
+        ..Stroke::default()
+    };
+    pm.stroke_path(
+        body,
+        &paint(MARKER_OUTLINE),
+        &stroke(CHEST_BACKING_WIDTH),
+        Transform::identity(),
+        None,
+    );
+    solid(pm, body, colour);
+    pm.stroke_path(
+        body,
+        &paint(LANDMARK_GOLD),
+        &stroke(CHEST_RIM_WIDTH),
+        Transform::identity(),
+        None,
+    );
+    let seam_y = cy - size * CHEST_HEIGHT / 3.0;
+    let mut pb = PathBuilder::new();
+    pb.move_to(cx - size, seam_y);
+    pb.line_to(cx + size, seam_y);
+    if let Some(seam) = pb.finish() {
+        pm.stroke_path(
+            &seam,
+            &paint(LANDMARK_GOLD),
+            &stroke(CHEST_RIM_WIDTH),
+            Transform::identity(),
+            None,
+        );
+    }
+}
+
 /// A superunique or boss skull: `dot` is its [`skull_path`] with the eye holes, centred on
 /// (`cx`, `cy`) with `size`.
 fn draw_skull(pm: &mut Pixmap, dot: &Path, colour: Rgba, (cx, cy, size): (f32, f32, f32), horns: bool) {
@@ -1940,7 +1993,17 @@ fn marker_path(shape: Shape, cx: f32, cy: f32, size: f32) -> Option<Path> {
             pb.finish()
         }
         Shape::Star => star_path(cx, cy, size),
+        Shape::Chest => chest_path(cx, cy, size),
     }
+}
+
+/// Half-height of a chest as a fraction of its half-width.
+const CHEST_HEIGHT: f32 = 0.7;
+
+/// A chest box centred on (`cx`, `cy`), `2 × size` wide and `2 × 0.7 × size` tall.
+fn chest_path(cx: f32, cy: f32, size: f32) -> Option<Path> {
+    let half_h = size * CHEST_HEIGHT;
+    Rect::from_xywh(cx - size, cy - half_h, 2.0 * size, 2.0 * half_h).map(PathBuilder::from_rect)
 }
 
 /// A five-pointed star, one tip up: ten points alternating tip (`size` from the centre) and
@@ -2636,6 +2699,52 @@ mod tests {
             .count();
         assert!(gold >= 30, "gold pixels {gold}");
         assert_eq!(rgba(&pm, 20, 5)?[3], 0, "nothing far above the body");
+        Ok(())
+    }
+
+    #[test]
+    fn super_chests_draw_as_gold_rimmed_chests_in_kurast_only() -> Result<()> {
+        let mut snap = empty_snapshot(5, 5);
+        snap.presets = vec![object(584, 50, 50), object(181, 60, 60)];
+        let chests = |snap: &Snapshot| {
+            markers_with(snap, &Marks::default(), LANDMARKS)
+                .into_iter()
+                .filter(|&(m, _, _)| m == Marker::SuperChest)
+                .count()
+        };
+        for (level, want) in [(78, 0), (79, 1), (80, 1), (81, 1), (82, 0), (108, 0)] {
+            snap.level.id = level;
+            assert_eq!(chests(&snap), want, "level {level}");
+        }
+        assert_eq!(
+            preset_marker(&object(181, 0, 0)),
+            None,
+            "an ordinary jungle chest"
+        );
+        assert_eq!(
+            preset_marker(&Preset {
+                kind: PresetKind::Monster,
+                ..object(584, 0, 0)
+            }),
+            Some(Marker::Special(None)),
+            "584 on a monster preset is no chest"
+        );
+
+        let (colour, _, shape) = Marker::SuperChest.style();
+        assert_eq!((colour, shape), (CHEST_WOOD, Shape::Chest));
+        let mut pm = Pixmap::new(40, 40).context("pixmap")?;
+        draw_marker(&mut pm, None, Marker::SuperChest, 20.0, 20.0);
+        // A 10 × 7 px box: wood inside, gold rim and lid seam, a dark edge, nothing beyond.
+        assert_eq!(rgba(&pm, 20, 21)?, CHEST_WOOD, "body");
+        assert_eq!(rgba(&pm, 20, 18)?, LANDMARK_GOLD, "lid seam");
+        assert_eq!(rgba(&pm, 20, 23)?, LANDMARK_GOLD, "bottom rim");
+        let edge = rgba(&pm, 20, 24)?;
+        assert!(
+            edge[0] < 100 && edge[3] > 200,
+            "dark edge under the rim: {edge:?}"
+        );
+        assert_eq!(rgba(&pm, 20, 13)?[3], 0, "nothing above the lid");
+        assert_eq!(rgba(&pm, 27, 20)?[3], 0, "nothing right of the box");
         Ok(())
     }
 

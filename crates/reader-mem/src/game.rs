@@ -12,7 +12,7 @@ use d2r_core::game::{
     maybe_white_base,
 };
 use d2r_core::items::{self, DropKind};
-use d2r_core::objects::is_consumable_quest_object;
+use d2r_core::objects::{is_consumable_quest_object, is_super_chest_object};
 use d2r_core::offsets::{
     ROOM_TILE_SCALE, act, act_misc, inventory, item_data, item_mode, level, level_preset, monster_data,
     object_data, object_mode, path, player_data, preset, room_tile, room1, room2, skill, skill_txt, skills,
@@ -1275,8 +1275,8 @@ impl<'a, M: ReadMem> Reader<'a, M> {
             .collect()
     }
 
-    /// The shrines, wells and operated consumable quest objects among the loaded object units;
-    /// other objects are skipped unread.
+    /// The shrines, wells, operated consumable quest objects and opened super chest objects among
+    /// the loaded object units; other objects are skipped unread.
     fn objects(&mut self, unit_table: u64) -> (Vec<Shrine>, Vec<Well>, Vec<OperatedObject>) {
         let mut shrines = Vec::new();
         let mut wells = Vec::new();
@@ -1293,12 +1293,12 @@ impl<'a, M: ReadMem> Reader<'a, M> {
         (shrines, wells, operated)
     }
 
-    /// The object unit at `addr` as a shrine, well or operated consumable quest object; `None`
-    /// for any other object, a shrine object without a shrine type in [`SHRINE_TYPES`], and an
-    /// untouched consumable quest object.
+    /// The object unit at `addr` as a shrine, well, or operated consumable quest object or
+    /// super chest object; `None` for any other object, a shrine object without a shrine type in
+    /// [`SHRINE_TYPES`], and an untouched consumable quest object or chest.
     fn object(&self, addr: u64) -> Result<Option<Object>> {
         let head = self.unit_head(addr, unit_table::OBJECT)?;
-        if is_consumable_quest_object(head.txt) {
+        if is_consumable_quest_object(head.txt) || is_super_chest_object(head.txt) {
             if head.mode == object_mode::NEUTRAL {
                 return Ok(None);
             }
@@ -4743,12 +4743,15 @@ mod tests {
         object(&mut m, O0, (392, 2, 0), (7800, 5300), O1)?;
         object(&mut m, O1, (393, 0, 0), (7820, 5310), O2)?;
         object(&mut m, O2, (396, 1, 0), (7700, 5290), O3)?;
-        object(&mut m, O3, (236, 2, 2), (7710, 5280), 0)?;
+        object(&mut m, O3, (236, 2, 2), (7710, 5280), O4)?;
+        // O4 opened jungle chest 183 (mode 2) → O5 closed jungle chest 181: only the opened one.
+        object(&mut m, O4, (183, 2, 0), (5100, 5200), O5)?;
+        object(&mut m, O5, (181, 0, 0), (5120, 5220), 0)?;
         let s = snapshot(&m, TABLE, None, None, None)?;
         let op = |txt, x, y| OperatedObject { txt, x, y };
         assert_eq!(
             s.operated_objects,
-            vec![op(392, 7800, 5300), op(396, 7700, 5290)],
+            vec![op(392, 7800, 5300), op(396, 7700, 5290), op(183, 5100, 5200)],
             "mode 0 is untouched"
         );
         assert_eq!(s.shrines.len(), 1);
