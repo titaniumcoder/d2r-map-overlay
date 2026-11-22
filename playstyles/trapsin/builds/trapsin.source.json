@@ -10,7 +10,7 @@
  },
  "stat_source": "Maxroll Season 16 guide text (skills, setups, Gear Options, gameplay); item stats and required levels from blizzhackers/d2data (uniqueitems.json, setitems.json, runes.json + misc.json rune levels, magicprefix/suffix.json).",
  "targets": {
-  "skill_order": "Reset at 38 (43 points): Lightning Sentry 15, Charged Bolt Sentry 10, Death Sentry 9, Burst of Speed 3, Cloak of Shadows 1, Mind Blast 1 and the prerequisites. Then 1 point each in Fade and Weapon Block, and max Lightning Sentry, Shock Web, Charged Bolt Sentry, Death Sentry, Fire Blast in that order (the Standard setup); the last point to Weapon Block, Wake of Fire or Shadow Master. 110 points at 99.",
+  "skill_order": "Reset at 38 (43 points): Lightning Sentry 15, Charged Bolt Sentry 10, Death Sentry 9, Burst of Speed 3, Cloak of Shadows 1, Mind Blast 1 and the prerequisites. Then 1 point in Weapon Block, and max Lightning Sentry, Shock Web, Charged Bolt Sentry, Death Sentry, Fire Blast in that order (the Standard setup); then 1 point to Weapon Block, Wake of Fire or Shadow Master; Fade last, at 99 (user: Burst of Speed instead). 110 points at 99.",
   "traps": "Lay 5 Lightning Sentries on one spot so they focus one target; once the first monsters die, 1-2 Death Sentries explode the corpses (fire + physical). Baal waves: 4 Lightning Sentries beside the spawn, 1 Death Sentry far enough away to keep its charges for corpse explosions.",
   "lightning_resistance": "Patch 2.6: -x% enemy lightning resistance on gear applies to the traps: Griffon's Eye, Crescent Moon on the swap right after laying traps, the merc's Infinity (Conviction).",
   "immunes": "Lower Resist from the Wand of Lower Resistance until Infinity; Crack of the Heavens sunders lightning immunity; Fire Blast for lightning and physical immunes; Death Sentry and the merc for the rest, or skip them."
@@ -97,13 +97,6 @@
    },
    {
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
-    "level": "39",
-    "skill": "Fade",
-    "points": 1,
-    "note": "The endgame guide's 1-point skills: Fade (resistances, damage reduction) instead of Burst of Speed when resistances are short."
-   },
-   {
-    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
     "level": "Izual (Nightmare)",
     "skill": "Lightning Sentry",
     "points": 2,
@@ -111,21 +104,21 @@
    },
    {
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
-    "level": "40",
+    "level": "39",
     "skill": "Weapon Block",
     "points": 1,
     "note": "1 point (blocks only while dual-wielding claws)."
    },
    {
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
-    "level": "41-43",
+    "level": "40-42",
     "skill": "Lightning Sentry",
     "points": 3,
     "note": "Lightning Sentry 20; then the endgame guide's order: Shock Web, Charged Bolt Sentry, Death Sentry, Fire Blast."
    },
    {
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
-    "level": "44-60",
+    "level": "43-59",
     "skill": "Shock Web",
     "points": 17,
     "note": "Synergy of Lightning Sentry."
@@ -146,7 +139,7 @@
    },
    {
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
-    "level": "61-70",
+    "level": "60-69",
     "skill": "Charged Bolt Sentry",
     "points": 10,
     "note": "Charged Bolt Sentry 20 (synergy)."
@@ -160,24 +153,31 @@
    },
    {
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
-    "level": "71-79",
+    "level": "70-78",
     "skill": "Death Sentry",
     "points": 9,
     "note": "Death Sentry 20."
    },
    {
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
-    "level": "80-98",
+    "level": "79-97",
     "skill": "Fire Blast",
     "points": 19,
     "note": "Fire Blast 20: fire damage for lightning immunes."
    },
    {
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
-    "level": "99",
+    "level": "98",
     "skill": "Weapon Block",
     "points": 1,
-    "note": "The last point (110 = 98 levels + 12 quest points): Weapon Block, Wake of Fire or Shadow Master per the guide."
+    "note": "The second-last point: Weapon Block, Wake of Fire or Shadow Master per the guide."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "99",
+    "skill": "Fade",
+    "points": 1,
+    "note": "The last point, once everything else is maxed (user, 2026-11-22: Burst of Speed is too good, Fade has too many disadvantages; only one of the two is active at a time)."
    }
   ]
  },
@@ -1717,7 +1717,7 @@
     "From 45: two Cunning Greater Talons of Quickness (+3 Traps) from Anya in Nightmare / Hell, unsocketed (no socket quest).",
     "Start runs with Battle Command twice and Battle Orders from Call to Arms, then the swap with the most +skills for Burst of Speed.",
     "MIN-MAX: swap to Crescent Moon right after laying the Lightning Sentries and stay there until the traps are done.",
-    "Keep the merc close to the fight for Infinity's Conviction; Fire Blast on lightning and physical immunes; Fade instead of Burst of Speed to cap resistances."
+    "Keep the merc close to the fight for Infinity's Conviction; Fire Blast on lightning and physical immunes."
    ]
   }
  ]

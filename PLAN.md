@@ -1755,8 +1755,9 @@ gear farming immediately starts the same as with the fury druid. think of it as 
   BUILDS `playstyle = "trapsin"`): Fire Wake Assassin from 13 (class default; the guide's points up
   to 13 as one target, Wake of Fire 20 by 31, Fire Blast 17 by 38; Leaf → Spirit, Ancients'
   Pledge, Lore, Stealth, Insight merc; `next = "trapsin"`, `switch_level = 38`, auto, no
-  `switch_requires`) → Trapsin (reset at 38: Lightning Sentry 20 by 43, then Shock Web, Charged Bolt
-  Sentry, Death Sentry, Fire Blast; +3 Traps claws, Griffon's Eye, Enigma, Magefist, Arachnid Mesh,
+  `switch_requires`) → Trapsin (reset at 38: Lightning Sentry 20 by 42, then Shock Web, Charged Bolt
+  Sentry, Death Sentry, Fire Blast; Fade only as the last point at 99, user 2026-11-22: "never
+  used fade, it has too many disadvantages and burst of speed is too good"; +3 Traps claws, Griffon's Eye, Enigma, Magefist, Arachnid Mesh,
   Mara's, SoJ ×2, CTA swap, guide alternatives; Act 2 Holy Freeze merc: Infinity, Fortitude,
   Andariel's Visage; 8 Traps grand charms). Farm list: a Fire Wake group and the Trapsin's endgame
   gear. Route: Countess, Andariel, Mephisto, Diablo, Baal (agent's pick: the guide's farming tab
