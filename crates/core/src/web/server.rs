@@ -194,6 +194,18 @@ fn handle<P: Playstyle>(stream: TcpStream, files: &Files) {
                 api_character_delete::<P>(files, &String::from_utf8_lossy(&body))
             }
             ("POST", "/api/not-needed") => api_not_needed::<P>(files, &String::from_utf8_lossy(&body)),
+            ("GET", "/api/sounds") => respond_no_store(
+                "200 OK",
+                "application/json",
+                &crate::sounds::current().json().to_string(),
+            ),
+            ("POST", "/api/sounds") => api_sounds(
+                crate::sounds::default_path().as_deref(),
+                &String::from_utf8_lossy(&body),
+            ),
+            ("POST", "/api/sounds/test") => {
+                api_sound_test(&String::from_utf8_lossy(&body), crate::sounds::play)
+            }
             _ => respond("404 Not Found", "text/plain", "not found\n"),
         },
     };
@@ -448,6 +460,68 @@ fn api_not_needed<P: Playstyle>(files: &Files, body: &str) -> String {
         return respond("400 Bad Request", "text/plain", "needed must be true or false\n");
     };
     save(|| P::set_not_needed(files, build, name, needed))
+}
+
+/// `POST /api/sounds` with `{"on": bool}` (all sounds) or `{"sound": "<name>", "on": bool}`:
+/// saves the switches to `path` and answers with them as `GET /api/sounds` does.
+fn api_sounds(path: Option<&Path>, body: &str) -> String {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return respond("400 Bad Request", "text/plain", "bad json\n");
+    };
+    let Some(on) = json.get("on").and_then(serde_json::Value::as_bool) else {
+        return respond("400 Bad Request", "text/plain", "on must be true or false\n");
+    };
+    let sound = match json.get("sound") {
+        None => None,
+        Some(name) => match name.as_str().and_then(crate::sounds::Sound::from_name) {
+            Some(sound) => Some(sound),
+            None => return respond("400 Bad Request", "text/plain", "unknown sound\n"),
+        },
+    };
+    let Some(path) = path else {
+        return respond(
+            "500 Internal Server Error",
+            "text/plain",
+            "no data dir (HOME unset)\n",
+        );
+    };
+    let _guard = CONFIG_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut settings = crate::sounds::load(path);
+    match sound {
+        None => settings.on = on,
+        Some(sound) if on => {
+            settings.off.remove(sound.name());
+        }
+        Some(sound) => {
+            settings.off.insert(sound.name().to_owned());
+        }
+    }
+    if let Err(e) = crate::sounds::save(path, &settings) {
+        return respond("500 Internal Server Error", "text/plain", &format!("{e}\n"));
+    }
+    let answer = settings.json().to_string();
+    crate::sounds::set_current(settings);
+    respond_no_store("200 OK", "application/json", &answer)
+}
+
+/// `POST /api/sounds/test` with `{"sound": "<name>"}`: `play`s it, whatever the switches say.
+fn api_sound_test(body: &str, play: impl FnOnce(crate::sounds::Sound)) -> String {
+    let sound = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|json| {
+            json.get("sound")?
+                .as_str()
+                .and_then(crate::sounds::Sound::from_name)
+        });
+    let Some(sound) = sound else {
+        return respond(
+            "400 Bad Request",
+            "text/plain",
+            "sound must be a known sound name\n",
+        );
+    };
+    play(sound);
+    respond("200 OK", "application/json", "{\"played\": true}")
 }
 
 #[cfg(test)]
@@ -773,6 +847,57 @@ mod tests {
     }
 
     #[test]
+    fn sound_switches_are_saved_and_bad_requests_rejected() -> Result<()> {
+        let dir = crate::testutil::temp_dir("api-sounds")?;
+        let path = dir.join("sounds.json");
+        for body in [
+            "not json",
+            "{}",
+            r#"{"on": "yes"}"#,
+            r#"{"sound": "chime", "on": false}"#,
+            r#"{"sound": 3, "on": false}"#,
+        ] {
+            let answer = api_sounds(Some(&path), body);
+            assert!(answer.starts_with("HTTP/1.1 400"), "{body}: {answer}");
+            // Through the route too: a 400 answers before the real settings file is touched.
+            assert!(post("/api/sounds", body)?.starts_with("HTTP/1.1 400"), "{body}");
+        }
+        assert!(!path.exists(), "a bad request saves nothing");
+        let answer = api_sounds(Some(&path), r#"{"sound": "bossStop", "on": false}"#);
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        assert!(answer.contains(r#""name":"bossStop","on":false"#), "{answer}");
+        api_sounds(Some(&path), r#"{"on": false}"#);
+        let saved = crate::sounds::load(&path);
+        assert!(!saved.on && saved.off.contains("bossStop"), "{saved:?}");
+        api_sounds(Some(&path), r#"{"sound": "bossStop", "on": true}"#);
+        assert!(crate::sounds::load(&path).off.is_empty());
+        assert!(api_sounds(None, r#"{"on": true}"#).starts_with("HTTP/1.1 500"));
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn the_sound_test_plays_a_known_sound_only() -> Result<()> {
+        for body in ["not json", "{}", r#"{"sound": "chime"}"#, r#"{"sound": 1}"#] {
+            let mut played = None;
+            let answer = api_sound_test(body, |s| played = Some(s));
+            assert!(
+                answer.starts_with("HTTP/1.1 400") && played.is_none(),
+                "{body}: {answer}"
+            );
+            assert!(
+                post("/api/sounds/test", body)?.starts_with("HTTP/1.1 400"),
+                "{body}"
+            );
+        }
+        let mut played = None;
+        let answer = api_sound_test(r#"{"sound": "pickup"}"#, |s| played = Some(s));
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        assert_eq!(played, Some(crate::sounds::Sound::Pickup));
+        Ok(())
+    }
+
+    #[test]
     fn root_is_the_dashboard_and_config_moved() {
         for path in ["/", "/index.html", "/dashboard"] {
             let r = html_page(path);
@@ -800,7 +925,7 @@ mod tests {
         let config = html_page("/config");
         assert_eq!(
             (dashboard.len(), format!("{:#018x}", fnv1a(dashboard.as_bytes()))),
-            (55_952, "0x001ad8b46afbc48c".to_owned()),
+            (50_571, "0xafe56ebd7eb2ab6c".to_owned()),
             "dashboard page"
         );
         assert_eq!(

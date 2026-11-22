@@ -150,7 +150,11 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .soundmenu { inset: 52px 16px auto auto; margin: 0; max-width: calc(100vw - 32px); background: var(--panel2);
   color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; font-size: 13px; }
 .soundmenu .t { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }
-.soundmenu label { display: block; line-height: 1.8; cursor: pointer; }
+.soundmenu .snd { display: flex; align-items: center; gap: 8px; line-height: 1.8; }
+.soundmenu label { flex: 1; cursor: pointer; }
+.soundmenu .test { background: none; border: 1px solid var(--line); border-radius: 4px; color: var(--faint);
+  font-size: 10px; line-height: 1; padding: 3px 5px; cursor: pointer; }
+.soundmenu .test:hover { color: var(--gold); border-color: var(--gold); }
 .soundmenu .loud { color: var(--gold); font-size: 11px; }
 .soundmenu .hint { color: var(--faint); font-size: 11px; margin-top: 6px; }
 .upbar { background: rgba(111,220,111,.08); border-bottom: 1px solid rgba(111,220,111,.35); }
@@ -252,7 +256,7 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
   <span class="sound"><button type="button" class="bell" id="bell" aria-pressed="false" title="sounds off (click to enable)">🔔</button><button type="button" class="bell pick" popovertarget="soundmenu" title="which sounds play">▾</button></span>
 </div></div>
 <div id="soundmenu" class="soundmenu" popover><div class="t">Sounds</div><div id="soundlist"></div>
-  <div class="hint">🔔 switches them all; each plays once per event.</div></div>
+  <div class="hint">🔔 switches them all; each plays once per event, from the overlay (this page needn't be open).</div></div>
 <div class="upbar" id="upgrades" hidden></div>
 <div class="nnstatus" id="nnstatus" role="status" hidden></div>
 <div class="wrap">

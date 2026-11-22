@@ -40,6 +40,7 @@ pub mod session;
 pub mod shop;
 pub mod skills_data;
 pub mod socket_bases;
+pub mod sounds;
 pub mod stash;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;

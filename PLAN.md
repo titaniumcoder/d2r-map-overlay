@@ -937,7 +937,7 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   build). (User request 2026-11-22: "a separate list somewhere where we can get them back".)
 - **Upgrades + chime**: `upgrades` in the live JSON = owned/stash pieces of the current stage wearable now
   and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
-  are all owned. The page chimes (WebAudio, 🔔 toggle) when a key appears that this character hasn't had.
+  are all owned. The overlay chimes (see Overlay sounds) when a key appears that this character hasn't had.
 - [x] Guide stages, recipes panel, upgrade chime, favicon (2026-11-17).
 - [x] **Dashboard sounds** (user's picks, 2026-11-20): six more WebAudio sounds beside the upgrade
   chime, each under 0.6 s and once per event. Louder: a farm-list drop on the ground (a `farm`
@@ -953,6 +953,23 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   records. Several in one frame queue (at most three, the louder first; a backlog over 2 s is
   dropped). 🔔 stays the master switch (`d2r-chime`); the ▾ popover holds one checkbox per sound
   (`d2r-sounds` in localStorage, all on by default; ticking one previews it).
+- [x] **Overlay sounds** (user decision 2026-11-22: "From the overlay itself: it plays the sounds
+  directly through your speakers (PipeWire), regardless of the browser and whether the dashboard
+  is even open. The on/off switches per sound stay on the dashboard."). Chrome muted the page's
+  WebAudio after every auto-reload until a click, so most sounds were lost. Now `crates/core/src/sounds/`:
+  `events.rs` (`Memory::frame`, the old `soundEvents` ported over the same live JSON value the
+  dashboard gets; same keys; `play_all` then plays the first three switched-on ones, loud first; quiet first frame per
+  character, after overlay start / D2R restart, and after a menu or loading tick
+  (`Memory::pause`, beside `web::clear_live`)), `synth.rs` (the same tones and envelope as 16-bit
+  mono PCM at 48 kHz in a WAV; peak 0.32 loud, 0.12 quiet), `player.rs` (one background thread
+  pipes each WAV into `pw-play -`, else `paplay`, else `aplay -q -`, one after another; a sound
+  queued over 2 s is dropped; a player still running after 5 s is killed; a failing player
+  hands over to the next; no player found is logged once). Switches: `sounds.json` in the data dir (`{"on": true, "off": ["bossStop"]}`,
+  missing = all on), served by `GET /api/sounds` (`{on, sounds: [{name, label, loud, on}]}`),
+  set by `POST /api/sounds` (`{"on": bool}` or `{"sound": name, "on": bool}`), and
+  `POST /api/sounds/test` (`{"sound": name}`) plays one regardless of the switches. The page
+  keeps 🔔 and the ▾ checkboxes, each with a ▶ test button; it no longer plays audio itself.
+  The old localStorage switches are not migrated (default: everything on).
 - **Quest-reward recipes** (user request, 2026-11-18): a `[[recipes]]` entry may name its quest
   (`quest = "Tools of the Trade"`, `"Siege on Harrogath"`, `"Prison of Ice"`; names in
   `src/quests.rs`). The Recipes panel drops it once the reward is used (bit 0 set, bit 1 clear),

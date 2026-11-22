@@ -19,11 +19,12 @@ the screen. The minimap shows:
   The breakpoint guide (cast/hit-recovery frames, resistances), level suggestions, gear and
   keep / sell / give-away lists live on the web dashboard (`/`, served by the overlay's localhost
   web app; `/api/live`). The overlay hides in towns.
-- **Dashboard sounds**: the 🔔 in the dashboard's top bar turns sound on; the ▾ beside it picks
-  which ones play. Louder: a farm-list item on the ground, ready to switch stage. Quiet: an
-  upgrade available, an S / A trade item on the ground, a farm-list item picked up, a boss no
-  longer worth farming. Each plays once per event; nothing sounds on the first
-  frame after loading, a reconnect, a menu return or a character change.
+- **Sounds**: the overlay plays them through the speakers (`pw-play`, else `paplay` or `aplay`),
+  whether or not the dashboard is open. The 🔔 in the dashboard's top bar switches them all; the
+  ▾ beside it picks which ones play (▶ plays one to try it). Louder: a farm-list item on the
+  ground, ready to switch stage. Quiet: an upgrade available, an S / A trade item on the ground,
+  a farm-list item picked up, a boss no longer worth farming. Each plays once per event; nothing
+  sounds on the first frame after the overlay starts, a menu return or a character change.
 
 ## ⚠️ Use at your own risk: it could get your account banned
 

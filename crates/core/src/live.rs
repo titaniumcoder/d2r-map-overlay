@@ -17,7 +17,7 @@ use crate::session::Session;
 use crate::ui_marks::{self, UiMarks};
 use ab_glyph::FontVec;
 
-use crate::{config, cows, game_file, info, journal, played, render, web};
+use crate::{config, cows, game_file, info, journal, played, render, sounds, web};
 
 const TICK: Duration = Duration::from_millis(200);
 const RETRY: Duration = Duration::from_secs(2);
@@ -168,9 +168,10 @@ fn reload_config(config: &mut config::Config, path: &Path) {
     }
 }
 
-/// Publishes the dashboard JSON and the gear state the config page annotates from; returns the
-/// in-game UI marks, which share the Vendor panel's notes.
+/// Publishes the dashboard JSON and the gear state the config page annotates from, and plays
+/// the frame's sounds; returns the in-game UI marks, which share the Vendor panel's notes.
 fn publish_web<'a, P: Playstyle>(
+    sound_memory: &mut sounds::Memory,
     snap: &game::Snapshot,
     playstyle: &'a P,
     evaluation: &'a EvaluationOf<'_, P>,
@@ -186,10 +187,19 @@ fn publish_web<'a, P: Playstyle>(
         equipped: snap.equipped.clone(),
         merc_equipped: snap.merc_equipped.clone(),
     });
-    publish_dashboard(snap, playstyle, evaluation, &blocks, quests, stash_open)
+    publish_dashboard(
+        sound_memory,
+        snap,
+        playstyle,
+        evaluation,
+        &blocks,
+        quests,
+        stash_open,
+    )
 }
 
 fn publish_dashboard<'a, P: Playstyle>(
+    sound_memory: &mut sounds::Memory,
     snap: &game::Snapshot,
     playstyle: &'a P,
     evaluation: &'a EvaluationOf<'_, P>,
@@ -230,7 +240,9 @@ fn publish_dashboard<'a, P: Playstyle>(
         &evaluation.guidance.items,
         stash_open,
     );
-    web::publish_live(web::live_json(&info, panels));
+    let live = web::live_value(&info, panels);
+    sounds::play_all(&sound_memory.frame(&live));
+    web::publish_live(live.to_string());
     marks
 }
 
@@ -290,6 +302,7 @@ fn follow_game<P: Playstyle>(
     });
     let mut dedup = Dedup::default();
     let mut shown_marks = UiMarks::default();
+    let mut sound_memory = sounds::Memory::default();
     // The previous tick's wants, by player unit id: the drop marks are needed before the
     // session merge that the evaluation needs, so keep marks run one tick late.
     let mut wants = (None, P::Wants::default());
@@ -330,7 +343,15 @@ fn follow_game<P: Playstyle>(
                 cow_stats.record(&update, session.cow_kills());
                 saver.tick(&mut session, Instant::now());
                 // The panels judge the trade window's items by the wants too.
-                let marks = publish_web(&snap, &*playstyle, &evaluation, w, quests, stash_open);
+                let marks = publish_web(
+                    &mut sound_memory,
+                    &snap,
+                    &*playstyle,
+                    &evaluation,
+                    w,
+                    quests,
+                    stash_open,
+                );
                 if let Some(msg) = marks_msg(&mut shown_marks, marks) {
                     send(tx, msg)?;
                 }
@@ -346,6 +367,7 @@ fn follow_game<P: Playstyle>(
                     return Ok(());
                 }
                 web::clear_live();
+                sound_memory.pause();
                 reader.forget_quests();
                 if let Some(msg) = marks_msg(&mut shown_marks, UiMarks::default()) {
                     send(tx, msg)?;

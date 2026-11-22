@@ -94,6 +94,12 @@ pub struct Panels<'a> {
 /// Serializes one tick's dashboard: the core panels from `info` plus the playstyle's `panels`.
 #[must_use]
 pub fn live_json(info: &LiveInfo, panels: Panels) -> String {
+    live_value(info, panels).to_string()
+}
+
+/// [`live_json`] before serializing (the sounds read it too).
+#[must_use]
+pub fn live_value(info: &LiveInfo, panels: Panels) -> serde_json::Value {
     let class = CLASS_NAMES
         .get(usize::try_from(info.class).unwrap_or(usize::MAX))
         .map_or_else(|| format!("class {}", info.class), |name| (*name).to_owned());
@@ -122,7 +128,7 @@ pub fn live_json(info: &LiveInfo, panels: Panels) -> String {
             obj.entry(key).or_insert(value);
         }
     }
-    json.to_string()
+    json
 }
 
 /// The marked ground drops sorted by unit id, so an unchanged frame gives the same JSON.

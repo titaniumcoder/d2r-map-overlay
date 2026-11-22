@@ -241,150 +241,43 @@ function sell(r) {
     + run("Give away", r.give)
     || '<div class="empty">nothing to sell or keep right now</div>';
 }
-// Dashboard sounds (upgrade chime 2026-11-17; the others are the user's picks, 2026-11-20).
-// The bell is the master switch (its click is the user gesture browsers need before audio may
-// play); the ▾ beside it opens one checkbox per sound, all on until unticked. Both choices are
-// remembered. Each sound is a few WebAudio tones under 0.6 s; the two important ones (a
-// farm-list drop, ready to switch stage) are louder.
-const SOUNDS = [
-  ["farmDrop", "farm-list item on the ground", true],
-  ["switchReady", "ready to switch stage", true],
-  ["upgrade", "upgrade available", false],
-  ["tradeDrop", "trade item (S / A) on the ground", false],
-  ["pickup", "farm-list item picked up", false],
-  ["bossStop", "a boss is no longer worth farming", false],
-];
-// Per sound: [start offset s, frequency Hz, length s, wave, glide-to Hz].
-const TONES = {
-  farmDrop: [[0, 1318.5, 0.12, "triangle"], [0.08, 1661.2, 0.12, "triangle"], [0.16, 1975.5, 0.3, "triangle"]],
-  switchReady: [[0, 523.25, 0.14, "triangle"], [0.1, 659.25, 0.14, "triangle"], [0.2, 783.99, 0.14, "triangle"], [0.3, 1046.5, 0.28, "triangle"]],
-  upgrade: [[0, 659.25, 0.24], [0.16, 987.77, 0.24]],
-  tradeDrop: [[0, 880, 0.08, "triangle"], [0.12, 1174.66, 0.08, "triangle"]],
-  pickup: [[0, 784, 0.22, "sine", 1046.5]],
-  bossStop: [[0, 659.25, 0.45, "sine", 329.63]],
-};
-const LOUD = new Set(SOUNDS.filter(s => s[2]).map(s => s[0]));
-let soundOn = false, soundOff = {}, audio = null, soundEnd = 0;
-try { soundOn = localStorage.getItem("d2r-chime") === "on"; } catch (e) { /* storage blocked */ }
-try { soundOff = JSON.parse(localStorage.getItem("d2r-sounds") || "{}") || {}; } catch (e) { soundOff = {}; }
-function ensureAudio() {
-  const AC = window.AudioContext || window.webkitAudioContext;
-  if (!audio && AC) audio = new AC();
-  if (audio && audio.state === "suspended") audio.resume().catch(() => {});
+// Sounds: the overlay plays them through the speakers (user decision 2026-11-22), whether or
+// not this page is open; the page only sets its switches (`/api/sounds`). The bell switches
+// them all; the ▾ beside it opens one checkbox per sound and a ▶ that plays it once.
+let soundState = null;
+function soundUi() {
+  const b = $("bell"), on = !!(soundState && soundState.on);
+  b.classList.toggle("on", on);
+  b.setAttribute("aria-pressed", on ? "true" : "false");
+  b.title = on ? "sounds on (click to mute; ▾ picks which)" : "sounds off (click to enable)";
+  $("soundlist").innerHTML = (soundState ? soundState.sounds : []).map(s =>
+    `<div class="snd"><label><input type="checkbox" data-sound="${esc(s.name)}"${s.on ? " checked" : ""}> ${esc(s.label)}`
+    + `${s.loud ? ' <span class="loud">louder</span>' : ""}</label>`
+    + `<button type="button" class="test" data-test="${esc(s.name)}" title="play it once">▶</button></div>`).join("");
 }
-// Queues one sound after the ones still playing (so a busy frame plays them in turn, not on
-// top of each other); a backlog over 2 s drops the newcomer instead of piling up.
-function playSound(name) {
-  const tones = TONES[name];
-  if (!audio || !tones) return;
-  const play = () => {
-    const now = audio.currentTime, t = Math.max(now, soundEnd);
-    if (t - now > 2) return;
-    const peak = LOUD.has(name) ? 0.32 : 0.12;
-    let end = t;
-    for (const [d, f, len, type, to] of tones) {
-      const o = audio.createOscillator(), g = audio.createGain(), at = t + d;
-      o.type = type || "sine";
-      o.frequency.setValueAtTime(f, at);
-      if (to) o.frequency.exponentialRampToValueAtTime(to, at + len);
-      g.gain.setValueAtTime(0.0001, at);
-      g.gain.exponentialRampToValueAtTime(peak, at + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, at + len);
-      o.connect(g); g.connect(audio.destination);
-      o.start(at); o.stop(at + len + 0.02);
-      end = Math.max(end, at + len);
-    }
-    soundEnd = end + 0.12;
-  };
-  if (audio.state === "running") play(); else audio.resume().then(play).catch(() => {});
+function soundPost(path, body) {
+  return fetch(path, { method: "POST", body: JSON.stringify(body) })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error(r.status)));
 }
-// The sounds of one live frame `r`, compared with what this page has seen for the character
-// (`mem`, updated in place). Every key only ever joins its sound's seen set, so a key that
-// flickers away for a tick never sounds twice; a `quiet` frame (the first after loading, a
-// reconnect, a menu return, a new character) records its keys without sounding. Keys: drop unit
-// ids (farm marks; trade marks of tier S / A), farm entries "for|name|copies" once held
-// (`farm.held`; a further copy of a multi-copy entry is a new key),
-// "<stage>><next stage>" when the switch groups are all met or the stage switched, and
-// "<difficulty>|<boss>" for a worth-farming boss gone two frames in a row. Pure but for `mem`.
-function soundEvents(mem, r, quiet) {
-  const drops = r.drops || [];
-  const keys = {
-    farmDrop: drops.filter(d => d.kind === "farm").map(d => "d" + d.id),
-    tradeDrop: drops.filter(d => d.kind === "trade" && (d.tier === "S" || d.tier === "A")).map(d => "d" + d.id),
-    upgrade: (r.upgrades || []).map(u => u.key),
-    pickup: ((r.farm && r.farm.held) || []).map(h => `${h.for}|${h.name}|${h.copies}`),
-    switchReady: [],
-    bossStop: [],
-  };
-  const st = r.stage;
-  if (st && st.next && st.next.ready) keys.switchReady.push(`${st.slug}>${st.next.slug}`);
-  // The stage moved on to its own next (an automatic switch); a build picked by hand on the
-  // config page doesn't sound.
-  if (st && mem.stage && mem.stage !== st.slug && mem.nextStage === st.slug) keys.switchReady.push(`${mem.stage}>${st.slug}`);
-  if (st) { mem.stage = st.slug; mem.nextStage = st.next ? st.next.slug : null; }
-  const w = r.farm && r.farm.worth;
-  if (w && w.difficulty) {
-    const now = new Set((w.bosses || []).map(b => b.boss));
-    const was = mem.worth.get(w.difficulty) || new Set();
-    const absent = new Set();
-    for (const b of was) {
-      const k = `${w.difficulty}|${b}`;
-      if (now.has(b)) continue;
-      absent.add(k);
-      if (quiet || mem.absent.has(k)) keys.bossStop.push(k);
-    }
-    mem.absent = absent;
-    now.forEach(b => was.add(b));
-    mem.worth.set(w.difficulty, was);
-  }
-  const out = [];
-  for (const [name] of SOUNDS) {
-    const seen = mem.seen[name] || (mem.seen[name] = new Set());
-    const fresh = keys[name].filter(k => !seen.has(k));
-    fresh.forEach(k => seen.add(k));
-    if (fresh.length && !quiet) out.push(name);
-  }
-  return out;
+function soundSet(body) {
+  soundPost("/api/sounds", body).then(s => { soundState = s; soundUi(); })
+    .catch(() => { nnStatus("could not save the sound switch"); soundUi(); });
 }
-function newSoundMemory(who) {
-  return { who, seen: {}, worth: new Map(), absent: new Set(), stage: null, nextStage: null };
-}
-let soundMem = newSoundMemory(null), soundQuiet = true;
-// Called with every live frame: a new character starts over (quiet); then at most the three
-// most important sounds of the frame play, queued, the switched-off ones skipped.
-function sounds(r, who) {
-  if (who !== soundMem.who) { soundMem = newSoundMemory(who); soundQuiet = true; }
-  const events = soundEvents(soundMem, r, soundQuiet);
-  soundQuiet = false;
-  if (!soundOn) return;
-  events.filter(e => soundOff[e] !== true).slice(0, 3).forEach(playSound);
-}
-function bellUi() {
-  const b = $("bell");
-  b.classList.toggle("on", soundOn);
-  b.setAttribute("aria-pressed", soundOn ? "true" : "false");
-  b.title = soundOn ? "sounds on (click to mute; ▾ picks which)" : "sounds off (click to enable)";
-}
+fetch("/api/sounds").then(r => r.json()).then(s => { soundState = s; soundUi(); }).catch(() => {});
 $("bell").addEventListener("click", () => {
-  soundOn = !soundOn;
-  try { localStorage.setItem("d2r-chime", soundOn ? "on" : "off"); } catch (e) { /* storage blocked */ }
-  if (soundOn) { ensureAudio(); playSound("upgrade"); }
-  bellUi();
+  if (!soundState) return;
+  const on = !soundState.on;
+  soundSet({ on });
+  if (on) soundPost("/api/sounds/test", { sound: "upgrade" }).catch(() => {});
 });
-// The ▾ popover: one checkbox per sound; ticking one plays it as a preview.
-$("soundlist").innerHTML = SOUNDS.map(([name, label, loud]) =>
-  `<label><input type="checkbox" data-sound="${esc(name)}"${soundOff[name] === true ? "" : " checked"}> ${esc(label)}`
-  + `${loud ? ' <span class="loud">louder</span>' : ""}</label>`).join("");
 $("soundlist").addEventListener("change", e => {
   const name = e.target.dataset && e.target.dataset.sound;
-  if (!name) return;
-  if (e.target.checked) delete soundOff[name]; else soundOff[name] = true;
-  try { localStorage.setItem("d2r-sounds", JSON.stringify(soundOff)); } catch (err) { /* storage blocked */ }
-  if (e.target.checked && soundOn) { ensureAudio(); playSound(name); }
+  if (name) soundSet({ sound: name, on: e.target.checked });
 });
-// A remembered "on" still needs one gesture on the page before audio may start.
-document.addEventListener("pointerdown", () => { if (soundOn) ensureAudio(); }, true);
-bellUi();
+$("soundlist").addEventListener("click", e => {
+  const name = e.target.dataset && e.target.dataset.test;
+  if (name) soundPost("/api/sounds/test", { sound: name }).catch(() => nnStatus("could not play the sound"));
+});
 function upgrades(list) {
   list = list || [];
   const el = $("upgrades");
@@ -507,8 +400,6 @@ function render(r) {
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
     shop(null);
-    // The sound keys stay remembered; the first frame back from the menu only records.
-    soundQuiet = true;
     $("upgrades").hidden = true;
     $("skillsum").textContent = "";
     $("updated").textContent = "";
@@ -525,9 +416,6 @@ function render(r) {
   document.title = `${r.offline ? "(offline) " : ""}${p.name}${p.level != null ? " L" + p.level : ""} · ${r.area || "?"} — D2R Dashboard`;
   guide(r.guide);
   upgrades(r.upgrades);
-  // An offline frame is the last one seen again: nothing new to sound, and the frame after
-  // it only records.
-  if (r.offline) soundQuiet = true; else sounds(r, p.name);
   shop(r.shop);
   gear(r.gear);
   skillTrees(r.skills);
@@ -545,6 +433,6 @@ stream.onmessage = e => {
   try { render(JSON.parse(e.data)); } catch (err) { /* a partial event: the next one wins */ }
 };
 let streamLost = false;
-stream.onerror = () => { soundQuiet = true; streamLost = true; };
+stream.onerror = () => { streamLost = true; };
 const reloadAfterOverlayRestart = () => { if (streamLost) location.reload(); };
 stream.onopen = reloadAfterOverlayRestart;
