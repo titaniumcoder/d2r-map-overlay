@@ -36,6 +36,9 @@ pub struct Mark {
     pub trade: Option<(Tier, Category)>,
     /// The valuables rule's name, the piece's name, or "<runeword> base".
     pub rule: String,
+    /// The short map tag drawn beside the ring (at most 4 characters: `5os`, `Shae`, `KoT`);
+    /// empty for none.
+    pub label: String,
     /// The match rests on what the overlay can't check (an unidentified unique's name, the
     /// item's stats such as an unknown enhanced defense): drawn dashed.
     pub uncertain: bool,

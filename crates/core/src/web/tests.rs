@@ -142,6 +142,7 @@ fn live_json_lists_the_marked_drops_by_id() -> Result<()> {
         kind,
         trade,
         rule: "rule".to_owned(),
+        label: String::new(),
         uncertain: false,
     };
     let marks: Marks = [

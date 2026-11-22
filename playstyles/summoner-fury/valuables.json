@@ -78,6 +78,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Annihilus",
+      "label": "Anni",
       "note": "Dropped by Uber Diablo / DClone. Value depends on roll but always keep.",
       "item_names": [
         "Annihilus"
@@ -96,6 +97,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Hellfire Torch",
+      "label": "Torc",
       "note": "Uber Tristram. Class + roll decide price; every one sells.",
       "item_names": [
         "Hellfire Torch"
@@ -138,6 +140,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Harlequin Crest (Shako)",
+      "label": "Shak",
       "note": "Staple caster helm, always liquid.",
       "item_names": [
         "Harlequin Crest"
@@ -156,6 +159,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Griffon's Eye",
+      "label": "Grif",
       "note": "Lightning sorc/LS assassin; high value.",
       "item_names": [
         "Griffon's Eye"
@@ -174,6 +178,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Stone of Jordan",
+      "label": "SoJ",
       "note": "Secondary currency; DClone trigger.",
       "item_names": [
         "The Stone of Jordan"
@@ -495,6 +500,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Colossal Jewels",
+      "label": "CJ",
       "note": "Unique Colossal Jewels from the Colossal Ancients fight (lvl 75 req). Reward items, rarely seen on the ground.",
       "item_names": [
         "Defender's Bile",
@@ -522,6 +528,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Tal Rasha's Wrappings",
+      "label": "TalS",
       "note": "Armor (Guardianship/Howling Wind) and amulet sell best. Base \"amu\"/\"xsk\" shared with other sets/uniques: needs the set name.",
       "item_names": [
         "Tal Rasha's Howling Wind",
@@ -553,6 +560,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Immortal King",
+      "label": "IK",
       "note": "Stone Crusher only tradable with 40% CB; whole set popular early ladder.",
       "item_names": [
         "Immortal King's Soul Cage",
@@ -586,6 +594,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Trang-Oul's Avatar",
+      "label": "Trng",
       "note": "Claws are used outside the set; rest early-ladder demand.",
       "item_names": [
         "Trang-Oul's Claws",
@@ -612,6 +621,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Laying of Hands",
+      "label": "LoH",
       "note": "Bramble Mitts; demand from Paladins/Barbs (IAS + dmg vs demons).",
       "item_names": [
         "Laying of Hands"
@@ -757,6 +767,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Colossal Ancient Statues",
+      "label": "Stat",
       "note": "RotW: 5 needed (one per act) to open the Colossal Summit; drop from terrorized act bosses in Hell. Drop rate nerfed in 3.3.",
       "base_names": [
         "Uber Ancient Summon Material Act 1",
@@ -781,6 +792,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Colossal Jewel upgrade materials",
+      "label": "CJM",
       "note": "RotW Uber Ancient upgrade materials (named Defender's Fire, Guardian's Light, ...).",
       "base_names": [
         "Uber Ancient Upgrade Material  Fire",
@@ -805,6 +817,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Worldstone Shards",
+      "label": "Shrd",
       "note": "RotW Terror Zone drop; rate reduced in 3.3.",
       "base_names": [
         "Western Worldstone Shard",
@@ -922,6 +935,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Magic jewels",
+      "label": "MJ",
       "note": "40/15 IAS jewels, 30-40 ED (Fervor), 10-15 all res. Needs stats.",
       "needs_stats": true,
       "base_names": [
@@ -938,6 +952,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Rare jewels",
+      "label": "RJ",
       "note": "ED/IAS/res/-req rares can sell. Needs stats.",
       "needs_stats": true,
       "base_names": [
@@ -960,6 +975,7 @@
       ],
       "ethereal": null,
       "name": "Socketed magic circlets/tiaras/diadems",
+      "label": "Circ",
       "note": "2-3 os magic circlets (Artisan's, +2 class skills/FCR/FRW). Sockets are visible; affixes need stats.",
       "needs_stats": true,
       "base_names": [
@@ -982,6 +998,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Rare circlets",
+      "label": "Circ",
       "note": "+2 skills / FCR / FRW / sockets. Needs stats.",
       "needs_stats": true,
       "base_names": [
@@ -1004,6 +1021,7 @@
       ],
       "ethereal": null,
       "name": "Jeweler's Monarch (magic 4os)",
+      "label": "JMon",
       "note": "A magic Monarch with 4 sockets is necessarily the Jeweler's prefix; \"of Deflecting\" suffix makes it very high.",
       "base_names": [
         "Monarch"
@@ -2268,6 +2286,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Sigon's Complete Steel",
+      "label": "Sigo",
       "note": "Cheap full set for a twink (life leech, def, fire res; full set bonus). One of each piece is enough.",
       "item_names": [
         "Sigon's Visor",

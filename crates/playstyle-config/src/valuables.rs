@@ -82,6 +82,10 @@ struct Rule {
     base_names: Vec<String>,
     #[serde(default)]
     keep: Copies,
+    /// The map tag of the rule's drops (at most 4 characters, [`crate::labels`]), where the rule
+    /// names one item or a natural group (`Shak`, `TalS`); absent: the built-in tags.
+    #[serde(default)]
+    label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,6 +226,16 @@ pub fn keep_tiers() -> config::Valuables {
     }
 }
 
+/// The `label` of the best rule of any tier matching `drop` as `name`, if that match is
+/// certain: an unidentified ring must not be tagged `SoJ`.
+#[must_use]
+pub fn rule_label(drop: &ItemDrop, name: Option<&str>) -> Option<&'static str> {
+    match best_rule(&RULES, drop, name, &EVERYTHING)? {
+        (rule, false) => rule.label.as_deref(),
+        (_, true) => None,
+    }
+}
+
 /// What to call `item` in the lists: its unique/set name if known; else the base name
 /// (from the rules, else the armor / weapon / misc tables, else the item code), with "eth" before and the socket count after. The
 /// stash panel names its items the same way (see [`d2r_core::stash::stash_item`]).
@@ -352,6 +366,18 @@ mod tests {
         assert_eq!(parsed.schema, SCHEMA);
         assert_eq!(parsed.rules.len(), RULES.len());
         assert!(RULES.len() > 50, "{} rules", RULES.len());
+        for r in parsed
+            .rules
+            .iter()
+            .filter_map(|r| r.label.as_ref().map(|l| (&r.name, l)))
+        {
+            assert!(
+                !r.1.is_empty() && r.1.chars().count() <= 4,
+                "label {:?} of {}: 1 to 4 characters",
+                r.1,
+                r.0
+            );
+        }
         Ok(())
     }
 

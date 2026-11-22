@@ -15,6 +15,7 @@
 //! Magic and rare drops get no keep mark: their stats aren't known before pickup.
 
 use crate::config;
+use crate::labels;
 use crate::valuables::{self, Tier};
 use d2r_core::game::ItemDrop;
 use d2r_core::guidance::{Mark, MarkKind, Marks};
@@ -63,6 +64,7 @@ fn mark(
             kind: MarkKind::Trade,
             trade: Some((h.tier, h.category)),
             rule: h.rule,
+            label: labels::label(drop),
             uncertain: h.uncertain || roll_unknown(drop),
         })
     };
@@ -74,6 +76,7 @@ fn mark(
             kind: if farm { MarkKind::Farm } else { MarkKind::Keep },
             trade: None,
             rule,
+            label: labels::label(drop),
             uncertain,
         });
     }
@@ -82,6 +85,7 @@ fn mark(
             kind: MarkKind::Keep,
             trade: None,
             rule: format!("{word} base"),
+            label: labels::label(drop),
             uncertain: false,
         });
     }

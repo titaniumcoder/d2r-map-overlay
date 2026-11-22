@@ -5,7 +5,8 @@
 //!
 //! What sits behind the trait:
 //! - [`marks`]: the ground-drop marks: keep and farm from the item plan's wants
-//!   ([`stash_plan::Wants`]), trade from [`valuables`] (rules from the folder's `valuables.json`);
+//!   ([`stash_plan::Wants`]), trade from [`valuables`] (rules from the folder's `valuables.json`),
+//!   each with its short map tag ([`labels`]);
 //! - the builds, their stage chain and its latch (`config::Settings::stage`; the reached stage
 //!   is persisted by the core in `played.json` as one opaque string per character);
 //! - [`stash_plan`]: sell / move / keep of the player's items, with [`gear_score`] for magic and
@@ -22,6 +23,7 @@ pub mod config;
 mod config_driven;
 pub mod files;
 pub mod gear_score;
+pub mod labels;
 pub mod marks;
 pub mod route;
 pub mod stash_plan;

@@ -152,6 +152,33 @@ pub fn named_bases(name: &str) -> Vec<(u32, &'static str)> {
         .collect()
 }
 
+/// The unique or set `index` name of a drop of `quality` on base `code` when that base carries
+/// only one item of the quality (an unidentified unique Shako is always Harlequin Crest);
+/// `None` for other qualities and shared bases.
+#[must_use]
+pub fn sole_name(quality: u32, code: &str) -> Option<&'static str> {
+    let (names, codes) = match quality {
+        item_data::QUALITY_UNIQUE => (item_names_data::UNIQUE_NAMES, item_names_data::UNIQUE_CODES),
+        item_data::QUALITY_SET => (item_names_data::SET_NAMES, item_names_data::SET_CODES),
+        _ => return None,
+    };
+    let mut rows = codes.iter().filter(|&&(_, c)| c == code).map(|&(row, _)| row);
+    let row = rows.next()?;
+    if rows.next().is_some() {
+        return None;
+    }
+    let i = names.binary_search_by_key(&row, |&(r, _)| r).ok()?;
+    names.get(i).map(|&(_, name)| name)
+}
+
+/// The base name of item `code` from the core's armor, weapon and misc tables.
+#[must_use]
+pub fn base_name(code: &str) -> Option<&'static str> {
+    crate::item_levels_data::armor_name(code)
+        .or_else(|| crate::weapons_data::name(code))
+        .or_else(|| crate::affixes_data::misc(code).map(|(_, name)| name))
+}
+
 /// The display name of an item: the unique or set name when known, else the base name with
 /// `eth` and sockets (`"eth Crystal Sword 4os"`), from the core's item tables. The stash pages
 /// are named with it ([`crate::stash::stash_item`]).
@@ -164,10 +191,7 @@ pub fn display_name(item: &ItemDrop) -> String {
         return shown(name).to_owned();
     }
     let code = item.code.as_deref().unwrap_or("?");
-    let base = crate::item_levels_data::armor_name(code)
-        .or_else(|| crate::weapons_data::name(code))
-        .or_else(|| crate::affixes_data::misc(code).map(|(_, name)| name))
-        .unwrap_or(code);
+    let base = base_name(code).unwrap_or(code);
     let mut name = String::new();
     if item.ethereal {
         name.push_str("eth ");
@@ -191,6 +215,17 @@ mod tests {
         assert!(same_name("Hustle (weapon)", "hustle"), "bare matches either base");
         assert!(same_name("Hustle", "Hustle (armor)"));
         assert!(!same_name("Hustle (weapon)", "Hustle (armor)"));
+    }
+
+    #[test]
+    fn sole_name_only_for_a_base_with_one_item() {
+        let unique = item_data::QUALITY_UNIQUE;
+        assert_eq!(sole_name(unique, "uap"), Some("Harlequin Crest"));
+        assert_eq!(sole_name(unique, "cm1"), Some("Annihilus"));
+        assert_eq!(sole_name(unique, "cm2"), Some("Hellfire Torch"));
+        assert_eq!(sole_name(unique, "rin"), None, "many unique rings");
+        assert_eq!(sole_name(unique, "cm3"), None, "Gheed's and the sunders");
+        assert_eq!(sole_name(item_data::QUALITY_NORMAL, "uap"), None);
     }
 
     #[test]

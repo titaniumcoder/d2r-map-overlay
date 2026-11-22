@@ -1016,6 +1016,7 @@ mod tests {
                 kind: MarkKind::Trade,
                 trade: Some((Tier::S, Category::Trade)),
                 rule: "Unique grand charms".into(),
+                label: "Ghee".into(),
                 uncertain: true,
             },
         )]);

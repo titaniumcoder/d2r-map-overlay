@@ -714,9 +714,15 @@ pub struct LabelSize {
 /// The [`LabelSize`] of `text` set as a map label in `font`.
 #[must_use]
 pub fn label_size(font: &FontVec, text: &str) -> LabelSize {
-    let scaled = font.as_scaled(PxScale::from(LABEL_PX));
+    label_size_at(font, LABEL_PX, text)
+}
+
+/// [`label_size`] at `size` px (the drop tags are smaller than the exit names).
+#[must_use]
+pub fn label_size_at(font: &FontVec, size: f32, text: &str) -> LabelSize {
+    let scaled = font.as_scaled(PxScale::from(size));
     LabelSize {
-        width: text_width_at(font, LABEL_PX, text),
+        width: text_width_at(font, size, text),
         ascent: scaled.ascent(),
         descent: scaled.descent(),
     }
@@ -729,13 +735,20 @@ pub struct LabelSpec {
     pub size: LabelSize,
     pub at: (f32, f32),
     pub keep: bool,
+    /// The radius in px of a disc around the marker the label's box stays out of (a drop's
+    /// ring); `None`: the default distances, which suit a plain marker dot.
+    pub clear: Option<f32>,
+    /// A canvas box `[x0, y0, x1, y1]` (the player's dot) the label avoids while another spot
+    /// is free of it.
+    pub avoid: Option<[f32; 4]>,
 }
 
 /// Places map `labels`, highest priority first, on a `canvas_w` px wide canvas above `bottom` (the
 /// map area's height, so labels stay off the info line). Each goes to the first spot around its
 /// marker (above, below, right, left), pushed inside the canvas edges, whose box overlaps no label
-/// placed before it. A label with no free spot is dropped (`None`), unless it is `keep`: then it
-/// goes above its marker anyway. Returns each label's pen position and baseline, in input order.
+/// placed before it, preferring a spot off its `avoid` box. A label with no free spot is dropped
+/// (`None`), unless it is `keep`: then it goes above its marker anyway. Returns each label's pen
+/// position and baseline, in input order.
 #[must_use]
 pub fn place_labels(labels: &[LabelSpec], canvas_w: f32, bottom: f32) -> Vec<Option<(f32, f32)>> {
     let mut taken: Vec<[f32; 4]> = Vec::new();
@@ -743,10 +756,17 @@ pub fn place_labels(labels: &[LabelSpec], canvas_w: f32, bottom: f32) -> Vec<Opt
         .iter()
         .map(|l| {
             let spots = [0, 1, 2, 3].map(|slot| label_spot(l, slot, canvas_w, bottom));
-            let free = spots.into_iter().find(|&s| {
-                let b = label_box(l.size, s);
+            let free = |s: &(f32, f32)| {
+                let b = label_box(l.size, *s);
                 !taken.iter().any(|t| boxes_overlap(*t, b))
-            });
+            };
+            let off_avoid =
+                |s: &(f32, f32)| !l.avoid.is_some_and(|a| boxes_overlap(a, label_box(l.size, *s)));
+            let free = spots
+                .iter()
+                .find(|s| free(s) && off_avoid(s))
+                .or_else(|| spots.iter().find(|s| free(s)))
+                .copied();
             let spot = free.or_else(|| l.keep.then_some(spots[0]))?;
             taken.push(label_box(l.size, spot));
             Some(spot)
@@ -763,14 +783,18 @@ fn label_spot(l: &LabelSpec, slot: u8, canvas_w: f32, bottom: f32) -> (f32, f32)
         descent,
     } = l.size;
     let (cx, cy) = l.at;
-    // Above: the box's bottom edge sits `LABEL_RAISE + descent` px above the centre; below
-    // mirrors it. Beside: the box is centred on the marker's height.
+    // Above: the box's bottom edge sits `raise + descent` px above the centre; below mirrors
+    // it. Beside: the box is centred on the marker's height. With `clear`, the box's near edge
+    // (outline included, see `label_box`) is `clear` px from the centre.
+    let (raise, side) = l
+        .clear
+        .map_or((LABEL_RAISE, LABEL_SIDE), |r| (r + 1.0 - descent, r + 1.0));
     let beside = cy + f32::midpoint(ascent, descent);
     let (pen, baseline) = match slot {
-        0 => (cx - width / 2.0, cy - LABEL_RAISE),
-        1 => (cx - width / 2.0, cy + LABEL_RAISE + descent + ascent),
-        2 => (cx + LABEL_SIDE, beside),
-        _ => (cx - LABEL_SIDE - width, beside),
+        0 => (cx - width / 2.0, cy - raise),
+        1 => (cx - width / 2.0, cy + raise + descent + ascent),
+        2 => (cx + side, beside),
+        _ => (cx - side - width, beside),
     };
     // +1/+2: room for the outline. The lowest baseline keeps the descenders and outline above
     // `bottom`.
@@ -798,7 +822,19 @@ fn boxes_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
 /// Draws `text` as a map label in `colour` with the info line's dark outline, at the pen position
 /// and baseline [`place_labels`] gave it.
 pub fn draw_label(pm: &mut Pixmap, font: &FontVec, colour: [u8; 4], text: &str, at: (f32, f32)) {
-    draw_outlined(pm, font, LABEL_PX, colour, text, at, false);
+    draw_label_at(pm, font, LABEL_PX, colour, text, at);
+}
+
+/// [`draw_label`] at `size` px ([`label_size_at`]).
+pub fn draw_label_at(
+    pm: &mut Pixmap,
+    font: &FontVec,
+    size: f32,
+    colour: [u8; 4],
+    text: &str,
+    at: (f32, f32),
+) {
+    draw_outlined(pm, font, size, colour, text, at, false);
 }
 
 /// Draws `c` at `size` px in `colour` with the info line's dark 1 px outline, its ink box centred
@@ -978,7 +1014,13 @@ mod tests {
     };
 
     fn spec(at: (f32, f32), keep: bool) -> LabelSpec {
-        LabelSpec { size: SIZE, at, keep }
+        LabelSpec {
+            size: SIZE,
+            at,
+            keep,
+            clear: None,
+            avoid: None,
+        }
     }
 
     fn placed_box(at: Option<(f32, f32)>) -> Option<[f32; 4]> {
@@ -1004,6 +1046,40 @@ mod tests {
                 assert!(!boxes_overlap(*a, *b), "{a:?} overlaps {b:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_clear_radius_keeps_every_spot_off_the_ring() {
+        let at = (200.0, 200.0);
+        let l = LabelSpec {
+            clear: Some(10.0),
+            ..spec(at, false)
+        };
+        let [above, below, right, left] =
+            [0, 1, 2, 3].map(|slot| label_box(SIZE, label_spot(&l, slot, 400.0, 400.0)));
+        assert!((above[3] - 190.0).abs() < 0.01, "{above:?}");
+        assert!(below[1] >= 210.0, "{below:?}");
+        assert!((right[0] - 210.0).abs() < 0.01, "{right:?}");
+        assert!((left[2] - 190.0).abs() < 0.01, "{left:?}");
+    }
+
+    #[test]
+    fn a_label_avoids_its_box_while_another_spot_is_free() {
+        let at = (200.0, 200.0);
+        let above = label_box(SIZE, label_spot(&spec(at, false), 0, 400.0, 400.0));
+        let l = LabelSpec {
+            avoid: Some(above),
+            ..spec(at, false)
+        };
+        let got = place_labels(&[l], 400.0, 400.0);
+        assert_eq!(got, vec![Some(label_spot(&l, 1, 400.0, 400.0))], "moved below");
+        // Every spot covers the box: drawn anyway, in the first free one.
+        let l = LabelSpec {
+            avoid: Some([0.0, 0.0, 400.0, 400.0]),
+            ..spec(at, false)
+        };
+        let got = place_labels(&[l], 400.0, 400.0);
+        assert_eq!(got, vec![Some(label_spot(&l, 0, 400.0, 400.0))]);
     }
 
     #[test]

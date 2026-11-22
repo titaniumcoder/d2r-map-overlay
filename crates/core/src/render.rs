@@ -487,6 +487,11 @@ const RING_DASH: [f32; 2] = [3.0, 2.5];
 const KEEP_GREEN: Rgba = [60, 240, 150, 255];
 /// The farm ring's star: size (tip radius, px), sitting on the ring at its upper right.
 const FARM_STAR: f32 = 3.5;
+/// A marked drop's tag ([`Mark::label`]: `5os`, `Shae`, `KoT`): text size in px, smaller than
+/// the exit names, and the px between the ring and the tag's box, which clears the ring's
+/// stroke and the star on it.
+const DROP_LABEL_PX: f32 = 11.0;
+const DROP_LABEL_CLEAR: f32 = 3.0;
 /// Live elites: the dot and the superunique and boss skulls.
 const ELITE_RED: Rgba = [230, 30, 30, 255];
 /// Skull icons: the dark outline is stroked under the fill, so about 1 px of it shows around the
@@ -1366,7 +1371,8 @@ fn render_rules(
         }
     }
     if let Some(font) = font {
-        draw_labels(&mut pm, view, font, snap, &tagged);
+        let drops = drop_tags(view, snap, &guidance.marks);
+        draw_labels(&mut pm, view, font, snap, &tagged, &drops);
         draw_info_line(&mut pm, font, snap, guidance.rating);
     }
     draw_player_on_top(&mut pm, view, snap, &ring);
@@ -1405,11 +1411,50 @@ const REAL_TOMB_STAR: f32 = 5.0;
 const REAL_TOMB_STAR_GAP: f32 = 3.0;
 
 /// What a map label shows: text, or a tomb's symbol in place of the seven identical
-/// "Tal Rasha's Tomb" names (`real`: the tomb with the orifice).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// "Tal Rasha's Tomb" names (`real`: the tomb with the orifice), or a marked drop's small tag
+/// kept `clear` px off the drop's centre (its ring).
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum LabelBody<'a> {
     Text(&'a str),
     Tomb { symbol: tombs::Symbol, real: bool },
+    Drop { text: &'a str, clear: f32 },
+}
+
+/// A marked drop's tag for [`draw_labels`]: the mark's label in its ring's colour.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DropTag<'a> {
+    text: &'a str,
+    look: RingLook,
+    at: (f32, f32),
+    /// The ring's radius plus [`DROP_LABEL_CLEAR`].
+    clear: f32,
+}
+
+/// The tags of the marked drops with a label, most valuable first (they win a crowded spot):
+/// S, A, B trade, then farm, then keep; snapshot order within one look.
+fn drop_tags<'a>(view: View, snap: &Snapshot, marks: &'a Marks) -> Vec<DropTag<'a>> {
+    let mut tags: Vec<DropTag> = snap
+        .drops
+        .iter()
+        .filter_map(|d| {
+            let mark = marks.get(&d.id).filter(|m| !m.label.is_empty())?;
+            let look = RingLook::of(mark);
+            let ring = Marker::Ring {
+                kind: d.kind,
+                look,
+                uncertain: mark.uncertain,
+            };
+            Some(DropTag {
+                text: &mark.label,
+                look,
+                at: view.to_screen(f64::from(d.x), f64::from(d.y)),
+                clear: ring.style().1 + DROP_LABEL_CLEAR,
+            })
+        })
+        .collect();
+    // Stable, highest look first.
+    tags.sort_by_key(|t| std::cmp::Reverse(t.look));
+    tags
 }
 
 /// The box a tomb symbol label takes, as [`info::LabelSize`]: the symbol's square plus 2 px
@@ -1491,9 +1536,17 @@ fn draw_tomb_label(
 /// character gets almost no experience ([`xp::is_low`]), white otherwise; a Tal Rasha's Tomb
 /// exit shows the tomb's symbol ([`tombs::symbol`]) in that colour instead, except the real
 /// tomb's ([`Snapshot::staff_tomb`]): bigger and gold (over grey too) with a star. Then the short tags of `tagged` markers ([`marker_tag`]) in
-/// [`marker_label_colour`]. Where labels would overlap, [`info::place_labels`] moves or drops
-/// the lower-ranked one; exit labels are always drawn.
-fn draw_labels(pm: &mut Pixmap, view: View, font: &FontVec, snap: &Snapshot, tagged: &[(Marker, f32, f32)]) {
+/// [`marker_label_colour`], then the marked drops' tags ([`drop_tags`]), small, in the ring's
+/// colour, kept off the player's dot where they can. Where labels would overlap,
+/// [`info::place_labels`] moves or drops the lower-ranked one; exit labels are always drawn.
+fn draw_labels(
+    pm: &mut Pixmap,
+    view: View,
+    font: &FontVec,
+    snap: &Snapshot,
+    tagged: &[(Marker, f32, f32)],
+    drops: &[DropTag],
+) {
     let names: Vec<(u32, String, f64, f64)> = exit_labels(snap)
         .into_iter()
         .map(|(id, x, y)| {
@@ -1530,15 +1583,38 @@ fn draw_labels(pm: &mut Pixmap, view: View, font: &FontVec, snap: &Snapshot, tag
         tags.into_iter()
             .map(|(_, tag, colour, at)| (LabelBody::Text(tag), colour, at, false)),
     );
+    labels.extend(drops.iter().map(|t| {
+        let body = LabelBody::Drop {
+            text: t.text,
+            clear: t.clear,
+        };
+        (body, t.look.colour(), t.at, false)
+    }));
+    // The player's dot with its padding disc ([`draw_player_on_top`]).
+    let player = {
+        let (px, py) = view.to_screen(f64::from(snap.player.x), f64::from(snap.player.y));
+        let r = Marker::Player.style().1 + PLAYER_PADDING;
+        [px - r, py - r, px + r, py + r]
+    };
     let specs: Vec<info::LabelSpec> = labels
         .iter()
-        .map(|&(body, _, at, keep)| info::LabelSpec {
-            size: match body {
-                LabelBody::Text(text) => info::label_size(font, text),
-                LabelBody::Tomb { real, .. } => tomb_label_size(real),
-            },
-            at,
-            keep,
+        .map(|&(body, _, at, keep)| {
+            let (size, clear, avoid) = match body {
+                LabelBody::Text(text) => (info::label_size(font, text), None, None),
+                LabelBody::Tomb { real, .. } => (tomb_label_size(real), None, None),
+                LabelBody::Drop { text, clear } => (
+                    info::label_size_at(font, DROP_LABEL_PX, text),
+                    Some(clear),
+                    Some(player),
+                ),
+            };
+            info::LabelSpec {
+                size,
+                at,
+                keep,
+                clear,
+                avoid,
+            }
         })
         .collect();
     let bottom = map_height(pm.height(), Some(font));
@@ -1548,6 +1624,9 @@ fn draw_labels(pm: &mut Pixmap, view: View, font: &FontVec, snap: &Snapshot, tag
         match (body, spot) {
             (LabelBody::Text(text), Some(spot)) => info::draw_label(pm, font, colour, text, spot),
             (LabelBody::Tomb { symbol, real }, Some(spot)) => draw_tomb_label(pm, symbol, real, colour, spot),
+            (LabelBody::Drop { text, .. }, Some(spot)) => {
+                info::draw_label_at(pm, font, DROP_LABEL_PX, colour, text, spot);
+            }
             (_, None) => {}
         }
     }
@@ -2799,6 +2878,7 @@ mod tests {
                 RingLook::Keep | RingLook::Farm => None,
             },
             rule: "test".into(),
+            label: "Test".into(),
             uncertain,
         };
         let id = d.id;
@@ -2938,6 +3018,78 @@ mod tests {
             "apart from set diamonds"
         );
         Ok(())
+    }
+
+    /// Pixels near `colour` (glyph cores and anti-aliasing allowed for) farther than `clear` px
+    /// and at most `reach` px from `at`.
+    fn tinted_between(pm: &Pixmap, at: (f32, f32), (clear, reach): (f32, f32), colour: Rgba) -> Result<u32> {
+        let mut n = 0;
+        for y in 0..pm.height() {
+            for x in 0..pm.width() {
+                let d = (f32::from(u16::try_from(x)?) + 0.5 - at.0)
+                    .hypot(f32::from(u16::try_from(y)?) + 0.5 - at.1);
+                let p = rgba(pm, x, y)?;
+                let close = p.iter().zip(colour).take(3).all(|(&a, b)| a.abs_diff(b) <= 60);
+                n += u32::from(d > clear && d <= reach && close && p[3] >= 200);
+            }
+        }
+        Ok(n)
+    }
+
+    #[test]
+    fn a_marked_drop_gets_its_tag_in_the_ring_colour_outside_the_ring() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let (w, h) = (400, 400);
+        let orange = RingLook::Trade(Tier::A).colour();
+        let render_tag = |label: &str| -> Result<u32> {
+            let (d, (id, mut mark)) = highlighted(DropKind::Base, 60, RingLook::Trade(Tier::A), false);
+            mark.label = label.into();
+            let mut snap = empty_snapshot(5, 115);
+            snap.level.rooms = vec![room(0, 0, false), room(60, 0, true)];
+            snap.drops = vec![d];
+            let guidance = Guidance {
+                marks: Marks::from([(id, mark)]),
+                ..Guidance::default()
+            };
+            let pm = render_with(&snap, &guidance, w, h, Some(font))?;
+            let v = View::fit(level_bounds(&snap), w, map_height(h, Some(font)));
+            let at = v.to_screen(60.0, 30.0);
+            let ring = Marker::Drop(DropKind::Base).style().1 + RING_GAP;
+            // Beyond the ring's stroke, within a short tag's reach.
+            tinted_between(&pm, at, (ring + 2.5, 40.0), orange)
+        };
+        let with_tag = render_tag("5os")?;
+        assert!(with_tag >= 8, "only {with_tag} orange tag pixels");
+        assert_eq!(render_tag("")?, 0, "no tag for an empty label");
+        Ok(())
+    }
+
+    #[test]
+    fn drop_tags_rank_the_most_valuable_first() {
+        let mut snap = empty_snapshot(5, 5);
+        let marks: Marks;
+        (snap.drops, marks) = [
+            highlighted(DropKind::Base, 20, RingLook::Keep, false),
+            highlighted(DropKind::Base, 40, RingLook::Trade(Tier::B), false),
+            highlighted(DropKind::Unique, 60, RingLook::Trade(Tier::S), false),
+            highlighted(DropKind::Base, 80, RingLook::Farm, false),
+        ]
+        .into_iter()
+        .unzip();
+        let v = View::fit(level_bounds(&snap), 400, 400);
+        let looks: Vec<RingLook> = drop_tags(v, &snap, &marks).iter().map(|t| t.look).collect();
+        assert_eq!(
+            looks,
+            vec![
+                RingLook::Trade(Tier::S),
+                RingLook::Trade(Tier::B),
+                RingLook::Farm,
+                RingLook::Keep
+            ]
+        );
     }
 
     #[test]
