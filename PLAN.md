@@ -794,10 +794,11 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   Runes, and to Materials the uber keys (pk1–3), organs (dhn, bey, mbr), essences and Token of
   Absolution (tes, ceh, bet, fed, toa), Standard of Heroes (std), Colossal Ancient statues (ua1–5),
   Colossal Jewel upgrade materials (um1–6), worldstone shards (xa1–5) and rejuvenation potions (rvs,
-  rvl; the screenshot's Materials tab holds two stacks). Such an item in the inventory, cube, personal
+  rvl; the screenshot's Materials tab holds two stacks). Such an item in the inventory, personal
   stash or on pages 1–4 gets `Action::Stow(Tab)` ("Key of Terror (inv → mats)", in the Move list,
-  target `gems` / `mats` / `runes`) before any other rule: never a page move, never sold. Exception:
-  rejuvenation potions in the inventory (drunk from there). The tab's own stacks are not judged (no
+  target `gems` / `mats` / `runes`) before any other rule: never a page move, never sold. Exceptions
+  (no advice at all, never judged by other rules): anything in the cube (a recipe in progress)
+  and rejuvenation potions in the inventory (drunk from there). The tab's own stacks are not judged (no
   action) but count as held; page 5 stays ignored.
 - **Page 5 is the "ignore page"** (user, 2026-11-20: "things i keep around for stupidity"): its
   items get no verdict and appear in no list, and nothing is ever moved there. They still count

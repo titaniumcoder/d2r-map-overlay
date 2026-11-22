@@ -7,8 +7,8 @@
 //! 4. the first letters of the item's name: the unique or set name (also of an unidentified one
 //!    whose base carries only that item, [`names::sole_name`]), else the base name.
 //!
-//! Gems, runes and materials (uber keys, organs, essences, token, Standard of Heroes; statues,
-//! shards and upgrade materials through their rules' empty `label`) get no tag at all (user,
+//! Gems, runes and materials (everything the stash's Gems / Materials / Runes tabs hold,
+//! [`d2r_core::stash::tab_of`]) get no tag at all (user,
 //! 2026-11-22: "for gems skip the label, useless", then "for the key of terror and runes too.
 //! just show it"): the in-game loot filter already names them, so the ring is enough.
 
@@ -22,18 +22,13 @@ use crate::valuables;
 /// Most characters of a tag.
 const MAX: usize = 4;
 
-/// Codes of materials that get no tag: the uber keys, organs, essences, token and the Standard
-/// of Heroes.
-const NO_TAG: [&str; 12] = [
-    "bet", "bey", "ceh", "dhn", "fed", "mbr", "pk1", "pk2", "pk3", "std", "tes", "toa",
-];
-
 /// The map tag of `drop` (see the module docs); empty (no tag) for a gem, rune or material, or
 /// an item with neither code nor name.
 #[must_use]
 pub fn label(drop: &ItemDrop) -> String {
     let code = drop.code.as_deref().unwrap_or("");
-    if matches!(drop.kind, DropKind::Gem(_) | DropKind::Rune(_)) || NO_TAG.contains(&code) {
+    // Everything the stash's Gems / Materials / Runes tabs hold (one list, `stash::tab_of`).
+    if matches!(drop.kind, DropKind::Gem(_) | DropKind::Rune(_)) || d2r_core::stash::tab_of(code).is_some() {
         return String::new();
     }
     let unique_or_set = matches!(drop.quality, item_data::QUALITY_UNIQUE | item_data::QUALITY_SET);

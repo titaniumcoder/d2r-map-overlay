@@ -770,16 +770,23 @@ fn fills(need: &BaseNeed, base: &ItemDrop) -> bool {
 }
 
 /// The stash tab `h` belongs in when it is a gem, rune or material ([`stash::tab_of`]); `None`
-/// for anything else and for a rejuvenation potion in the inventory (drunk from there).
+/// for anything else, for anything in the cube (a recipe in progress) and for a rejuvenation
+/// potion in the inventory (drunk from there).
 fn stow(h: &Held) -> Option<Tab> {
     let code = h.item.code.as_deref()?;
     let potion = matches!(code, "rvs" | "rvl");
-    stash::tab_of(code).filter(|_| !(potion && h.spot == Spot::Inventory))
+    stash::tab_of(code).filter(|_| h.spot != Spot::Cube && !(potion && h.spot == Spot::Inventory))
 }
 
-/// An item the plan leaves alone: charms in the inventory (they work there) and finished
-/// runewords that aren't a build piece. Gems and runes go to their tab ([`stow`]).
+/// An item the plan leaves alone: charms in the inventory (they work there), finished
+/// runewords that aren't a build piece, and gems, runes and materials that [`stow`] doesn't
+/// move (in the cube, an inventory rejuv, or a gem or rune without a code): they are never
+/// judged by the trade or sell rules.
 fn left_alone(h: &Held) -> bool {
+    let stackable = h.item.code.as_deref().and_then(stash::tab_of).is_some();
+    if stackable || matches!(h.item.kind, DropKind::Gem(_) | DropKind::Rune(_)) {
+        return stow(h).is_none();
+    }
     match h.item.kind {
         DropKind::Gem(_) | DropKind::Rune(_) => false,
         DropKind::Charm { .. } => h.spot == Spot::Inventory,
@@ -1844,6 +1851,7 @@ mod tests {
             at(base("pk1", 0), Spot::Inventory),
             at(base("pk1", 0), Spot::Page(3)),
             at(base("mbr", 0), Spot::Page(1)),
+            // In the cube (a recipe in progress) it stays, and no other rule judges it.
             at(base("xa2", 0), Spot::Cube),
             at(base("rvl", 0), Spot::Stash),
             at(vex.clone(), Spot::Page(1)),
@@ -1856,12 +1864,6 @@ mod tests {
             rows(&items, &harmony_needs()),
             vec![
                 row("Perfect Amethyst", Spot::Page(4), Action::Stow(Tab::Gems), 1),
-                row(
-                    "Eastern Worldstone Shard",
-                    Spot::Cube,
-                    Action::Stow(Tab::Materials),
-                    1
-                ),
                 row(
                     "Full Rejuvenation Potion",
                     Spot::Stash,
