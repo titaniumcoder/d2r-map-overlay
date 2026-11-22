@@ -27,6 +27,18 @@ pub struct PanelInfo<'a> {
     /// The build names of the current stage and every later one.
     pub stage_chain: &'a [String],
     pub next: Option<&'a crate::route::Advice>,
+    /// The marks in force per build ([`crate::not_needed::Marks`]), for the undo lists.
+    pub not_needed: &'a crate::not_needed::Marks,
+}
+
+impl PanelInfo<'_> {
+    /// The marks in force for build (or `[bis]` key) `build`.
+    #[must_use]
+    pub fn marks_of(&self, build: &str) -> &[crate::not_needed::Marked] {
+        self.not_needed
+            .get(&build.trim().to_lowercase())
+            .map_or(&[], Vec::as_slice)
+    }
 }
 
 /// The playstyle's part of one tick's dashboard.

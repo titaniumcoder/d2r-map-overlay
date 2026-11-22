@@ -106,6 +106,7 @@ struct Loaded {
     builds_broken: bool,
     farm: Option<Vec<FarmGroup>>,
     route: Option<Route>,
+    marks: not_needed::Marks,
     /// The old-place files in use, for the notice.
     old: Vec<String>,
 }
@@ -173,10 +174,15 @@ fn read_all(files: &Files) -> Loaded {
     old.extend(old_place(from, "farm.toml"));
     let route = read_route(files);
     let (mut build_defs, builds_broken) = load_builds(files, &mut old);
-    let marked = read(files, files.not_needed_path().as_deref(), not_needed::parse);
-    if let Say::Value(marked) = marked {
-        not_needed::apply(&marked, &mut build_defs, farm.as_deref_mut().unwrap_or_default());
-    }
+    let mut marks = match read(files, files.not_needed_path().as_deref(), not_needed::parse) {
+        Say::Value(marked) => not_needed::marks(&marked, &build_defs),
+        Say::Silent | Say::Broken => not_needed::Marks::new(),
+    };
+    not_needed::apply(
+        &mut marks,
+        &mut build_defs,
+        farm.as_deref_mut().unwrap_or_default(),
+    );
     Loaded {
         name,
         filter_name,
@@ -187,6 +193,7 @@ fn read_all(files: &Files) -> Loaded {
         builds_broken,
         farm,
         route,
+        marks,
         old,
     }
 }
@@ -310,6 +317,7 @@ pub fn load(files: &Files) -> Settings {
         build_defs: loaded.build_defs,
         farm: loaded.farm.unwrap_or_default(),
         route: loaded.route.unwrap_or_default(),
+        not_needed: loaded.marks,
     }
 }
 
@@ -331,6 +339,7 @@ pub fn reload(settings: &mut Settings, files: &Files) {
     let farm_groups = loaded.farm.as_ref().map(Vec::len);
     replace(files, &mut settings.farm, loaded.farm, "farm list");
     replace(files, &mut settings.route, loaded.route, "route");
+    settings.not_needed = loaded.marks;
     replace(
         files,
         &mut settings.build_defs,
@@ -738,7 +747,11 @@ mod tests {
                 .is_some_and(|p| p.iter().any(|e| e.starts_with("Duress@")));
             let farmed = group.items.iter().any(|i| i.name == "Duress");
             let recipe = build.recipes.iter().any(|r| r.name == "Duress");
-            Ok((in_body, farmed, recipe, build.not_needed.clone()))
+            let marks = settings
+                .not_needed
+                .get("fury druid")
+                .map_or_else(Vec::new, |list| list.iter().map(|m| m.name.clone()).collect());
+            Ok((in_body, farmed, recipe, marks))
         };
         assert_eq!(fury(&load(&files))?, (true, true, true, vec![]));
         set_not_needed(&files, "Fury Druid", "Duress", false)?;
@@ -752,12 +765,17 @@ mod tests {
         let marked = load(&files);
         assert_eq!(
             fury(&marked)?,
-            (false, false, false, vec!["Duress".to_owned()]),
-            "the unknown name is ignored"
+            (
+                false,
+                false,
+                false,
+                vec!["Duress".to_owned(), "No Such Piece".to_owned()]
+            ),
+            "the unknown name changes nothing but stays listed for its undo"
         );
-        let summoner = marked.build_defs.get("summoner druid").context("summoner")?;
-        assert!(summoner.not_needed.is_empty(), "per build");
+        assert_eq!(marked.not_needed.get("summoner druid"), None, "no earlier stage");
         set_not_needed(&files, "fury druid", "duress", true)?;
+        set_not_needed(&files, "Fury Druid", "No Such Piece", true)?;
         assert_eq!(fury(&load(&files))?, (true, true, true, vec![]), "undone");
         // A failed write leaves the file as it was: the temporary name is taken by a folder.
         let before = std::fs::read_to_string(&path)?;

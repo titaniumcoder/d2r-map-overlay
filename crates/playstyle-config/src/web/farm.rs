@@ -97,10 +97,11 @@ pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
     let spots = Spots::new(info, &materials);
     let groups: Vec<serde_json::Value> = groups
         .into_iter()
-        .filter(|(group, needed)| !needed.is_empty() || !group.not_needed.is_empty())
-        .map(|(group, needed)| {
+        .map(|(group, needed)| (group, needed, info.marks_of(&group.target)))
+        .filter(|(_, needed, marks)| !needed.is_empty() || !marks.is_empty())
+        .map(|(group, needed, marks)| {
             let items: Vec<serde_json::Value> = needed.iter().map(|n| needed_json(n, &spots)).collect();
-            serde_json::json!({ "for": group.target, "items": items, "not_needed": group.not_needed })
+            serde_json::json!({ "for": group.target, "items": items, "not_needed": marks })
         })
         .collect();
     let runes = rune_needs_json(wanted, &materials, &stash_materials(info));

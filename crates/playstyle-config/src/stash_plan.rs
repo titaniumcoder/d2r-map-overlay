@@ -1214,7 +1214,6 @@ mod tests {
         use crate::config::{FarmGroup, FarmItem, FarmSlot};
         let config = Settings {
             farm: vec![FarmGroup {
-                not_needed: Vec::new(),
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
                     name: "Insight".to_owned(),
@@ -1987,7 +1986,6 @@ mod tests {
             },
         );
         config.farm = vec![FarmGroup {
-            not_needed: Vec::new(),
             target: "Fury".to_owned(),
             items: vec![FarmItem {
                 name: "Insight".to_owned(),
@@ -2058,7 +2056,6 @@ mod tests {
         use crate::config::{FarmGroup, FarmItem, FarmSlot};
         let config = Settings {
             farm: vec![FarmGroup {
-                not_needed: Vec::new(),
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
                     name: "Harmony".to_owned(),
@@ -2160,7 +2157,6 @@ mod tests {
         use d2r_core::stash::StashItem;
         let config = Settings {
             farm: vec![FarmGroup {
-                not_needed: Vec::new(),
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
                     name: "Harmony".to_owned(),
@@ -2538,7 +2534,8 @@ mod tests {
             "fury druid".to_owned(),
             vec!["Grief".to_owned(), "Tomb Reaver".to_owned()],
         )]);
-        crate::not_needed::apply(&marked, &mut config.build_defs, &mut config.farm);
+        let mut marks = crate::not_needed::marks(&marked, &config.build_defs);
+        crate::not_needed::apply(&mut marks, &mut config.build_defs, &mut config.farm);
         let needs = fury_needs(&config)?;
         assert_eq!(wants(&needs, "Grief"), (false, false), "no Grief base kept");
         assert_eq!(wants(&needs, "Tomb Reaver"), (false, false));
@@ -2548,6 +2545,42 @@ mod tests {
                 .all(|(_, _, action, _)| *action != Action::Keep(Side::Own)),
             "falls through to the trade / sell rules: {:?}",
             rows(&tomb_reaver, &needs)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_mark_made_on_the_summoner_stage_holds_for_the_fury_stage_after_it() -> anyhow::Result<()> {
+        // Manald Heal is in both builds' ring slots and the Summoner's farm group; the
+        // Summoner's stash plan keeps for the whole chain.
+        let wanted = |needs: &Needs| {
+            needs
+                .pieces
+                .iter()
+                .any(|(n, c)| same_name(n, "Manald Heal") && *c > 0)
+        };
+        let mut config = shipped();
+        let ring = [at(named("rin", item_data::QUALITY_UNIQUE, 121), Spot::Page(1))];
+        let needs = shipped_needs(&config, "summoner druid")?;
+        assert!(wanted(&needs));
+        assert_eq!(
+            rows(&ring, &needs),
+            vec![row("Manald Heal", Spot::Page(1), Action::Keep(Side::Own), 1)]
+        );
+        let marked = crate::not_needed::NotNeeded::from([(
+            "summoner druid".to_owned(),
+            vec!["Manald Heal".to_owned()],
+        )]);
+        let mut marks = crate::not_needed::marks(&marked, &config.build_defs);
+        crate::not_needed::apply(&mut marks, &mut config.build_defs, &mut config.farm);
+        let needs = shipped_needs(&config, "summoner druid")?;
+        assert!(!wanted(&needs), "{:?}", needs.pieces);
+        assert!(
+            rows(&ring, &needs)
+                .iter()
+                .all(|(_, _, action, _)| *action != Action::Keep(Side::Own)),
+            "{:?}",
+            rows(&ring, &needs)
         );
         Ok(())
     }

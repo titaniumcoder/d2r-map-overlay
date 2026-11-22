@@ -91,6 +91,7 @@ impl Playstyle for ConfigDriven {
             route: &self.config.route,
             stage_chain: &extra.chain,
             next: extra.route.as_ref(),
+            not_needed: &self.config.not_needed,
         })
     }
 

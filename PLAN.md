@@ -765,15 +765,23 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   `{build, name, needed: bool}` (`Playstyle::set_not_needed`; toml_edit, comments kept, temp
   file + rename; bad input 400). The load (`not_needed::apply`) takes a marked piece out of that
   build's slots, merc slots and extras, its runeword recipe (unless another piece of the build
-  still names the runeword) and the build's farm group; the build files stay unchanged and an
-  unknown name or build is ignored, a broken file marks nothing. So the stash plan keeps
-  neither the piece nor a base for it (it falls through to the trade / sell rules), and the
-  farm list, gear grid, upgrades and Recipes panel leave it out. A build marks only its own
-  pieces: a piece another build of the chain still lists stays wanted; `switch_requires` items
-  stay wanted. Dashboard: a ✕ on each gear-grid piece and farm card (dim until hover); "show N
-  not needed" under the grid and under each farm group lists the marked pieces struck through,
-  ↺ undoes (`d2r-show-hidden` in localStorage). A clicked card fades until the live stream
-  sends the reloaded frame; with the game closed that frame waits for the next game.
+  still names the runeword) and the build's farm group, and likewise out of every later stage
+  of its chain (`next` links) and their farm groups (`not_needed::marks`): the stash plan keeps
+  for the whole chain, so a piece marked while playing the Summoner isn't kept through the
+  Fury stage either; a mark never reaches back to an earlier stage. A character's own
+  `[bis.<name>]` slots take the marks of their `build` key, or of the character's name without
+  one (`Settings::resolved_bis`; the ✕ writes there). The build files stay unchanged; an
+  unknown name or build has no effect (listed for its undo), a broken file marks nothing. So
+  the stash plan keeps neither the piece nor a base for it (it falls through to the trade /
+  sell rules), and the farm list, gear grid, upgrades and Recipes panel leave it out;
+  `switch_requires` items stay wanted. The live JSON's `gear.not_needed` / `farm.groups[].not_needed`
+  are `[{name, build}]`, `build` being where the mark was made (the undo writes there).
+  Dashboard: a ✕ on each gear-grid piece and farm card (dim until hover); "show N not needed"
+  under the grid and under each farm group lists the marked pieces struck through ("(Summoner
+  Druid)" for an inherited one), ↺ undoes (`d2r-show-hidden` in localStorage). A clicked
+  control stays faded and disabled across re-renders until a frame no longer shows it; a failed
+  save shows a red line under the top bar. With the game closed the reloaded frame waits for
+  the next game.
 - **Upgrades + chime**: `upgrades` in the live JSON = owned/stash pieces of the current stage wearable now
   and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
   are all owned. The page chimes (WebAudio, 🔔 toggle) when a key appears that this character hasn't had.

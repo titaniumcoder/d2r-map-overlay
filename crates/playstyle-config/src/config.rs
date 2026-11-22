@@ -29,6 +29,9 @@ pub struct Settings {
     pub farm: Vec<FarmGroup>,
     /// `route.toml`.
     pub route: crate::route::Route,
+    /// `not-needed.toml`, already taken out of `build_defs` and `farm`; still applied to a
+    /// character's own `[bis.<name>]` slots ([`Settings::resolved_bis`]).
+    pub not_needed: crate::not_needed::Marks,
 }
 
 /// `[valuables]`: the tiers highlighted per category (see [`crate::valuables`]).
@@ -315,8 +318,6 @@ pub struct Build {
     pub tips: Vec<Tip>,
     /// One line per level range.
     pub stats_plan: Vec<String>,
-    /// The pieces `not-needed.toml` took out of this build ([`crate::not_needed::apply`]).
-    pub not_needed: Vec<String>,
 }
 
 impl Build {
@@ -445,9 +446,6 @@ pub struct FarmGroup {
     #[serde(rename = "for")]
     pub target: String,
     pub items: Vec<FarmItem>,
-    /// The entries `not-needed.toml` took out ([`crate::not_needed::apply`]).
-    #[serde(skip)]
-    pub not_needed: Vec<String>,
 }
 
 /// One farm-list entry: a unique, set or runeword by name, or a rolled item (`kind = "rolled"`:
@@ -855,7 +853,15 @@ impl Settings {
         if let Some(bis) = self.bis.get(&name.to_lowercase())
             && (!bis.slots.is_empty() || !bis.merc_slots.is_empty())
         {
-            return Some(bis.clone());
+            let mut bis = bis.clone();
+            // The dashboard's ✕ writes under `bis.build`: without a selection, the character.
+            if bis.build.is_empty() {
+                name.clone_into(&mut bis.build);
+            }
+            if let Some(marks) = self.not_needed.get(&bis.build.to_lowercase()) {
+                crate::not_needed::bis_without(&mut bis, marks);
+            }
+            return Some(bis);
         }
         let def = self.stage(name, class, level, owns, reached)?.build;
         Some(Bis {
@@ -1090,7 +1096,6 @@ pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de:
             recipes: raw.recipes,
             tips,
             stats_plan: clean_pieces(&raw.stats_plan),
-            not_needed: Vec::new(),
         },
         warnings,
     ))

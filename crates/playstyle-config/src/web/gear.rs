@@ -505,7 +505,7 @@ pub fn gear_json(info: &PanelInfo) -> serde_json::Value {
         "tips": tips_json(info),
         "merc": merc_columns(info),
         "extras": extras,
-        "not_needed": info.build.map_or(&[][..], |b| b.not_needed.as_slice()),
+        "not_needed": info.bis.map_or(&[][..], |b| info.marks_of(&b.build)),
     })
 }
 

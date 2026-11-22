@@ -20,6 +20,8 @@ static NO_ROUTE: crate::route::Route = crate::route::Route {
     step: Vec::new(),
 };
 
+static NO_MARKS: crate::not_needed::Marks = BTreeMap::new();
+
 fn live_info<'a>(
     class: u32,
     blocks: &'a d2r_core::render::TextBlocks,
@@ -36,6 +38,7 @@ fn live_info<'a>(
         route: &NO_ROUTE,
         stage_chain: &[],
         next: None,
+        not_needed: &NO_MARKS,
     }
 }
 
@@ -646,6 +649,7 @@ fn gear_grid<'a>(
         route: &NO_ROUTE,
         stage_chain: &[],
         next: None,
+        not_needed: &NO_MARKS,
     };
     gear_json(&info)
 }
@@ -1509,6 +1513,7 @@ fn shop_marks_items_better_than_the_worn_ones() {
         route: &NO_ROUTE,
         stage_chain: &[],
         next: None,
+        not_needed: &NO_MARKS,
     };
     let rows = shop_better_rows(&shop_json(&info));
     assert_eq!(
@@ -1581,6 +1586,7 @@ fn score_profile_takes_the_weapon_kind_from_gear_or_build() {
             route: &NO_ROUTE,
             stage_chain: &[],
             next: None,
+            not_needed: &NO_MARKS,
         });
         (profile.weapon, profile.caster)
     };
@@ -2743,23 +2749,46 @@ fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
     Ok(())
 }
 
+/// Applies `file`'s marks to `builds` and `farm` as the load does.
+fn mark(
+    file: &[(&str, &[&str])],
+    builds: &mut BTreeMap<String, config::Build>,
+    farm: &mut [config::FarmGroup],
+) -> crate::not_needed::Marks {
+    let file: crate::not_needed::NotNeeded = file
+        .iter()
+        .map(|(build, names)| ((*build).to_owned(), names.iter().map(|&n| n.to_owned()).collect()))
+        .collect();
+    let mut marks = crate::not_needed::marks(&file, builds);
+    crate::not_needed::apply(&mut marks, builds, farm);
+    marks
+}
+
+fn marked_json(names: &[&str], build: &str) -> serde_json::Value {
+    names
+        .iter()
+        .map(|n| serde_json::json!({ "name": n, "build": build }))
+        .collect()
+}
+
 #[test]
 fn farm_leaves_out_pieces_marked_not_needed_and_lists_them_for_the_undo() -> Result<()> {
     let mut farm = fury_farm()?;
-    let marked = crate::not_needed::NotNeeded::from([(
-        "fury druid".to_owned(),
-        vec!["Raven Frost".to_owned(), "Bulwark".to_owned()],
-    )]);
-    crate::not_needed::apply(&marked, &mut BTreeMap::new(), &mut farm);
+    let marks = mark(
+        &[("fury druid", &["Raven Frost", "Bulwark"])],
+        &mut BTreeMap::new(),
+        &mut farm,
+    );
     let blocks = d2r_core::render::TextBlocks::default();
     let mut info = live_info(5, &blocks, &[], &[], &[]);
     info.farm = &farm;
+    info.not_needed = &marks;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     let names: Vec<String> = farm_needed(&json).into_iter().map(|(_, n)| n).collect();
     assert_eq!(names, ["Fortitude", "Ribcracker", "Lawbringer", "Smoke"]);
     assert_eq!(
         json.pointer("/farm/groups/0/not_needed"),
-        Some(&serde_json::json!(["Raven Frost", "Bulwark"]))
+        Some(&marked_json(&["Raven Frost", "Bulwark"], "fury druid"))
     );
     let rune_for: Vec<&str> = json
         .pointer("/farm/runes")
@@ -2776,17 +2805,15 @@ fn farm_leaves_out_pieces_marked_not_needed_and_lists_them_for_the_undo() -> Res
         .collect();
     assert!(!rune_for.contains(&"Bulwark"), "no runes for it: {rune_for:?}");
     // Every entry marked: the group stays, empty, so the undo is still there.
-    let all = fury_farm()?
+    let all: Vec<String> = fury_farm()?
         .iter()
         .flat_map(|g| g.items.iter().map(|i| i.name.clone()))
         .collect();
+    let all: Vec<&str> = all.iter().map(String::as_str).collect();
     let mut farm = fury_farm()?;
-    crate::not_needed::apply(
-        &crate::not_needed::NotNeeded::from([("fury druid".to_owned(), all)]),
-        &mut BTreeMap::new(),
-        &mut farm,
-    );
+    let marks = mark(&[("fury druid", &all)], &mut BTreeMap::new(), &mut farm);
     info.farm = &farm;
+    info.not_needed = &marks;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(
         farm_groups(&json),
@@ -2810,11 +2837,11 @@ fn gear_grid_and_upgrades_leave_out_pieces_marked_not_needed() -> Result<()> {
         .extras
         .insert("charms".to_owned(), vec!["Annihilus@70".to_owned()]);
     let mut builds = BTreeMap::from([("fury druid".to_owned(), build)]);
-    let marked = crate::not_needed::NotNeeded::from([(
-        "fury druid".to_owned(),
-        vec!["Harlequin Crest".to_owned(), "Annihilus".to_owned()],
-    )]);
-    crate::not_needed::apply(&marked, &mut builds, &mut []);
+    let marks = mark(
+        &[("fury druid", &["Harlequin Crest", "Annihilus"])],
+        &mut builds,
+        &mut [],
+    );
     let build = builds.get("fury druid").context("the build stays")?;
     let bis = crate::config::Bis {
         build: build.name.clone(),
@@ -2825,6 +2852,7 @@ fn gear_grid_and_upgrades_leave_out_pieces_marked_not_needed() -> Result<()> {
     let mut info = live_info(5, &blocks, &[], &[], &[]);
     info.bis = Some(&bis);
     info.build = Some(build);
+    info.not_needed = &marks;
     // An owned Harlequin Crest would be an upgrade to wear; marked, it isn't.
     let owned = ["Harlequin Crest".to_owned()];
     info.live.owned = &owned;
@@ -2841,7 +2869,7 @@ fn gear_grid_and_upgrades_leave_out_pieces_marked_not_needed() -> Result<()> {
     assert_eq!(gear.get("extras"), Some(&serde_json::json!([])));
     assert_eq!(
         gear.get("not_needed"),
-        Some(&serde_json::json!(["Harlequin Crest", "Annihilus"]))
+        Some(&marked_json(&["Harlequin Crest", "Annihilus"], "Fury Druid"))
     );
     let upgrades = upgrades_json(&info);
     assert!(upgrades.is_empty(), "{upgrades:?}");
@@ -2851,6 +2879,28 @@ fn gear_grid_and_upgrades_leave_out_pieces_marked_not_needed() -> Result<()> {
     };
     info.bis = Some(&unmarked);
     assert_eq!(upgrades_json(&info).len(), 1, "the check above can fail");
+    Ok(())
+}
+
+#[test]
+fn a_characters_own_bis_slots_take_its_marks_too() -> Result<()> {
+    let (mut config, warnings) =
+        settings("[bis.Vex]\nslots = { helm = [\"Harlequin Crest@62\", \"Jalal's Mane@42\"] }\n")?;
+    assert!(warnings.is_empty(), "{warnings:?}");
+    config.not_needed = mark(&[("vex", &["Harlequin Crest"])], &mut BTreeMap::new(), &mut []);
+    let bis = config
+        .resolved_bis("Vex", Some(5), Some(70), &config::owns_nothing, None)
+        .context("inline slots")?;
+    assert_eq!(bis.build, "Vex", "the ✕ writes under the character");
+    assert_eq!(bis.slots.get("helm"), Some(&vec!["Jalal's Mane@42".to_owned()]));
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.bis = Some(&bis);
+    info.not_needed = &config.not_needed;
+    assert_eq!(
+        gear_json(&info).get("not_needed"),
+        Some(&marked_json(&["Harlequin Crest"], "vex"))
+    );
     Ok(())
 }
 
