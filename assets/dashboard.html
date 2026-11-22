@@ -85,6 +85,10 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .pc .lv { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pc .tick { color: var(--good); font-weight: 700; font-size: 12px; }
 .pc .tick.have { color: var(--have); }
+.pc .tick.part { color: var(--dim); font-weight: 600; }
+.pc ul.st.need { color: var(--dim); }
+.pc ul.st.need li::before { content: "needs "; }
+.pc.found { opacity: .6; }
 .pc .sub { font-size: 11.5px; color: var(--dim); }
 .pc ul.st { margin: 3px 0 0; padding: 0; list-style: none; font-size: 11.5px; color: #b9c4ff; }
 .pc ul.st li::before { content: "· "; color: var(--faint); }
@@ -263,13 +267,13 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
 <details class="help"><summary>How to read this</summary>
 Each card is a slot. The dashed box shows what is equipped (name and required level), and below it are the build's pieces, best first.
 ▲ / green outline = an upgrade you can wear now, faded = above the level gate (character level + 5), struck through = already beaten by what you wear.
-✓ = owned, ✓ stash = in the shared stash. ✕ on a piece = not needed for this build: no longer kept, given a base, farmed or suggested; “show … not needed” lists them with ↺ to undo. A runeword the reader can't decode shows as “runeword (unnamed)”. The Swap card mirrors the active weapon set.
+✓ = owned, ✓ stash = in the shared stash. ✕ on a piece = not needed for this build: no longer kept, given a base, farmed or suggested; “show … not needed” lists them with ↺ to undo. Charms: every charm the build wants until found, ✓ when all wanted copies are owned, else owned/wanted; a badge names the later stage a charm is for. A runeword the reader can't decode shows as “runeword (unnamed)”. The Swap card mirrors the active weapon set.
 </details>
 <ul class="targets stats" id="statsplan"></ul>
 <div class="gear" id="gear"></div>
 <div id="gearhidden"></div>
 <div id="mercbox"><h3 class="row-h">Mercenary · charms · sockets</h3>
-<div class="gear" id="merc"></div><div class="gear extras" id="extras"></div></div></div></section>
+<div class="gear" id="merc"></div><div class="gear extras" id="charms"></div><div class="gear extras" id="extras"></div></div></div></section>
 <section class="panel full" id="recipepanel" hidden><h2>Recipes <span class="sub">✓ = you have it (shared stash, inventory, cube, stash) · bases can't be read: check them</span></h2>
 <div id="recipes"></div></section>
 <section class="panel full" id="farmpanel" hidden><h2>Farm list <span class="sub">still missing across characters (held ones left out) · runes short in red · where = where it drops in this difficulty · ⚑ in the stash runes = needed</span></h2>

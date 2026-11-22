@@ -136,8 +136,25 @@ function gear(g) {
   }).join("");
   $("merc").innerHTML = (g.merc || []).map(c => slotCard(c.title, null, c.pieces, g.build)).join("");
   $("extras").innerHTML = (g.extras || []).map(c => slotCard(c.title, null, c.pieces, g.build)).join("");
+  $("charms").innerHTML = (g.charms || []).length
+    ? `<div class="slot"><div class="slot-h"><span>Charms</span></div><div class="pieces">${g.charms.map(c => charmLine(c, g.build)).join("")}</div></div>` : "";
   $("gearhidden").innerHTML = hiddenList(g.build, g.not_needed, `Not needed for ${g.build || "this build"}`);
-  $("mercbox").hidden = !(g.merc || []).length && !(g.extras || []).length;
+  $("mercbox").hidden = !(g.merc || []).length && !(g.extras || []).length && !(g.charms || []).length;
+}
+// One charm wish (user 2026-11-22: "all of them until found"): ✓ once every wanted copy is
+// owned, else have/wanted; a later stage's wish (the summoner sees the Fury's) carries its
+// build name; the conditions an owned charm must meet are listed under it.
+function charmLine(c, build) {
+  const done = c.have >= c.count;
+  const got = done ? ` <span class="tick">✓${c.count > 1 ? " " + c.count : ""}</span>`
+    : c.have > 0 ? ` <span class="tick part">${c.have}/${c.count}</span>`
+    : c.count > 1 ? ` <span class="tick part">0/${c.count}</span>` : "";
+  const stage = c.stage ? ` <span class="badge">${esc(c.stage)}</span>` : "";
+  const lvl = c.level != null ? `<span class="lv">lvl ${c.level}</span>` : "";
+  const sub = c.base || c.size ? `<div class="sub">${esc(c.base || c.size)}</div>` : "";
+  const list = (items, cls) => (items || []).length ? `<ul class="${cls}">${items.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : "";
+  const why = (c.why ? `<div class="why">${esc(c.why)}</div>` : "") + (c.notes ? `<div class="note">${esc(c.notes)}</div>` : "");
+  return `<div class="pc ${esc(c.kind)} ${done ? "found" : "neutral"}${nnPend(build, c.name, false)}"><div class="top"><span class="nm">${esc(c.name)}${got}</span>${stage}${lvl}${nnButton(build, c.name, false)}</div>${sub}${list(c.need, "st need")}${list(c.stats, "st")}${why}</div>`;
 }
 // The shared stash: five page cards in UI order, then the gem/rune/material stacks.
 function stash(r) {
@@ -486,7 +503,7 @@ function render(r) {
   gearFold(r);
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
-    for (const id of ["guide", "gear", "gearhidden", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
+    for (const id of ["guide", "gear", "gearhidden", "merc", "extras", "charms", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
     shop(null);

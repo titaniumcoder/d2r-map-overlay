@@ -1,6 +1,7 @@
 //! The config-driven playstyle plugin ([`ConfigDriven`]): builds, stages, farm list, route and
 //! valuables of a playstyle folder (`playstyles/<name>/`), behind [`d2r_core::playstyle::Playstyle`].
 
+pub mod charms;
 pub mod config;
 mod config_driven;
 pub mod files;

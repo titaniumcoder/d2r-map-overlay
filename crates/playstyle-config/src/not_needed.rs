@@ -198,6 +198,7 @@ fn build_without(build: &mut Build, marks: &[Marked], took: &mut Vec<String>) {
     slots_without(&mut build.slots, marks, took);
     slots_without(&mut build.merc_slots, marks, took);
     slots_without(&mut build.extras, marks, took);
+    build.charms.retain(|wish| kept(marks, &wish.name, took));
     let still_named = |name: &str| {
         build
             .slots
@@ -335,6 +336,33 @@ mod tests {
             name: name.to_owned(),
             build: build.to_owned(),
         }
+    }
+
+    #[test]
+    fn apply_takes_a_marked_charm_wish_out_by_its_name() -> Result<()> {
+        let mut fury = Build {
+            name: "Fury Druid".to_owned(),
+            ..Build::default()
+        };
+        fury.charms = toml::from_str::<BTreeMap<String, Vec<crate::charms::CharmWish>>>(
+            "[[charms]]\nname = \"Bone Break\"\nunique = true\n\
+             [[charms]]\nname = \"FHR small charm\"\nsize = \"small\"\nstats = [{ stat = \"fhr\", min = 5 }]\n",
+        )?
+        .remove("charms")
+        .unwrap_or_default();
+        let mut builds = BTreeMap::from([("fury druid".to_owned(), fury)]);
+        let file = NotNeeded::from([("fury druid".to_owned(), list(&["fhr small charm"]))]);
+        let mut marks = marks(&file, &builds);
+        apply(&mut marks, &mut builds, &mut []);
+        let fury = builds.get("fury druid").context("the build stays")?;
+        let charms: Vec<&str> = fury.charms.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(charms, ["Bone Break"]);
+        assert_eq!(
+            marks.get("fury druid"),
+            Some(&vec![marked("fhr small charm", "Fury Druid")]),
+            "kept for the undo"
+        );
+        Ok(())
     }
 
     #[test]

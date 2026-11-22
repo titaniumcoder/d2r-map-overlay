@@ -5,7 +5,7 @@
   "author": "agent-computed from the game data, not from a guide",
   "setup_legend": {
     "standard": "USER CHOICE (the farm list's Fury Druid core): Ribcracker, Fortitude, Jalal's Mane, Laying of Hands, Raven Frost; for the merc 2x Lawbringer, Smoke, Bulwark. The druid always fights two-handed for full damage, never one-handed and never with a shield (user, 2026-11-20); both Lawbringers are the Act 5 merc's dual-wield swords until something better turns up (very endgame). Bulwark (helm) and Smoke (body armor) are merc gear: Jalal's Mane is the druid's helm, and Smoke is always the merc's. Jalal's Mane and Raven Frost are already worn by the summoner before the reset; the druid wears Stealth until Fortitude.",
-    "alternative": "User's endgame options (Enigma, Duress, Dracul's Grasp, String of Ears, Verdungo's Hearty Cord, Gore Rider, War Traveler, Atma's Scarab, The Cat's Eye, Highlord's Wrath, Harmony), ranked below the core pick in the same slot; belt, boots and amulet have no core pick and are ranked by value for a werewolf Fury. Call to Arms + Phoenix on the swap is a late option the user isn't sure helps a Fury. Rings: ring1 after Raven Frost and ring2 list the Maxroll Fury Druid guide's unique/set rings (Nature's Peace, Dwarf Star, Wisp Projector, Nagelring, Manald Heal, Angelic Halo); one copy each is wanted, whichever ring slot it fills. Other slots (user, 2026-11-22: \"Yes, all slots as alternatives, without one-handers and shields\"): after the user's options in each slot, the Maxroll Fury Druid guide's unique/set/runeword pieces (weapons two-handed only, no off-hand or shield, no rare/crafted entries), its weapon-swap Brand and its unique charms in the extras; one copy each is wanted. Merc (user, 2026-11-22: \"can we get that for the mercs too\"): the guide's merc armor and helms any merc wears (Vampire Gaze, Guillaume's Face, Shaftstop, Treachery) after Bulwark and Smoke; Pride and The Reaper's Toll only for the later Act 2 Might merc after Bone Break (charm), ranked after both Lawbringers."
+    "alternative": "User's endgame options (Enigma, Duress, Dracul's Grasp, String of Ears, Verdungo's Hearty Cord, Gore Rider, War Traveler, Atma's Scarab, The Cat's Eye, Highlord's Wrath, Harmony), ranked below the core pick in the same slot; belt, boots and amulet have no core pick and are ranked by value for a werewolf Fury. Call to Arms + Phoenix on the swap is a late option the user isn't sure helps a Fury. Rings: ring1 after Raven Frost and ring2 list the Maxroll Fury Druid guide's unique/set rings (Nature's Peace, Dwarf Star, Wisp Projector, Nagelring, Manald Heal, Angelic Halo); one copy each is wanted, whichever ring slot it fills. Other slots (user, 2026-11-22: \"Yes, all slots as alternatives, without one-handers and shields\"): after the user's options in each slot, the Maxroll Fury Druid guide's unique/set/runeword pieces (weapons two-handed only, no off-hand or shield, no rare/crafted entries), its weapon-swap Brand and its unique charms (listed in the charm wishlist, `charms`, not as alternatives); one copy each is wanted. Merc (user, 2026-11-22: \"can we get that for the mercs too\"): the guide's merc armor and helms any merc wears (Vampire Gaze, Guillaume's Face, Shaftstop, Treachery) after Bulwark and Smoke; Pride and The Reaper's Toll only for the later Act 2 Might merc after Bone Break (charm), ranked after both Lawbringers."
   },
   "stat_source": "Numbers computed from the D2R game tables (blizzhackers/d2data JSON, current with the Warlock class): skill formulas/params from skills.json + skilldesc.json, runewords from runes.json + misc.json, bases/WSM from weapons.json, uniques/sets from uniqueitems.json/setitems.json, life-steal divisors from difficultylevels.json. Attack frames: werewolf A1 = 13 frames at speed 256 (animdata.d2 entry 40A1HTH, classic d2exp.mpq) with the attack-speed formulas from maxroll's Attack Speed resource (primary and shapeshift equations, faster one wins since patch 2.4). Not from a build guide.",
   "targets": {
@@ -1984,6 +1984,116 @@
       "why": "Maxroll Fury Druid guide, unique charms list: Sunders monster physical immunity (to 95% physical resistance): with Amplify Damage / Decrepify (the merc's Lawbringers proc Decrepify) Fury hits physical immunes.",
       "rank_in_slot": 4,
       "notes": "Once owned, the merc may move to Act 2 Might with Pride (merc alternatives)."
+    }
+  ],
+  "charms": [
+    {
+      "name": "Annihilus",
+      "unique": true
+    },
+    {
+      "name": "Hellfire Torch",
+      "unique": true,
+      "stats": [
+        {
+          "stat": "class_skills",
+          "min": 3
+        }
+      ],
+      "why": "Only a druid Hellfire Torch (+3 druid skills) counts; another class's torch is a trade good."
+    },
+    {
+      "name": "Gheed's Fortune",
+      "unique": true
+    },
+    {
+      "name": "Bone Break",
+      "unique": true
+    },
+    {
+      "name": "Shape Shifting skiller",
+      "size": "grand",
+      "count": 6,
+      "stats": [
+        {
+          "stat": "skill_tab",
+          "tab": "Shape Shifting",
+          "min": 1
+        }
+      ],
+      "why": "+1 to Fury, Werewolf, Feral Rage and Lycanthropy each; one with life (30+) is the one to aim for."
+    },
+    {
+      "name": "10/60 grand charm",
+      "size": "grand",
+      "count": 1,
+      "stats": [
+        {
+          "stat": "max_damage",
+          "min": 10
+        },
+        {
+          "stat": "attack_rating",
+          "min": 60
+        }
+      ],
+      "why": "Sharp: +10 max damage and 60+ attack rating for Fury's physical hits; 10/70/35 with life is the top roll. Fury only (attack power)."
+    },
+    {
+      "name": "Max damage / AR / life small charm",
+      "size": "small",
+      "count": 2,
+      "stats": [
+        {
+          "stat": "max_damage",
+          "min": 2
+        },
+        {
+          "stat": "attack_rating",
+          "min": 10
+        },
+        {
+          "stat": "life",
+          "min": 15
+        }
+      ],
+      "why": "Fine of Vita: damage, attack rating and life in one cell; 3/20/20 is the top roll. Fury only (attack power)."
+    },
+    {
+      "name": "Life small charm",
+      "size": "small",
+      "count": 2,
+      "stats": [
+        {
+          "stat": "life",
+          "min": 15
+        }
+      ],
+      "why": "15-20 life (of Vita) on a small charm."
+    },
+    {
+      "name": "Resistance small charm",
+      "size": "small",
+      "count": 1,
+      "stats": [
+        {
+          "stat": "all_res",
+          "min": 5
+        }
+      ],
+      "why": "5 all resistances (Shimmering) for Hell's -100."
+    },
+    {
+      "name": "FHR small charm",
+      "size": "small",
+      "count": 1,
+      "stats": [
+        {
+          "stat": "fhr",
+          "min": 5
+        }
+      ],
+      "why": "5% faster hit recovery (of Balance) toward the next FHR breakpoint."
     }
   ],
   "recipes": [

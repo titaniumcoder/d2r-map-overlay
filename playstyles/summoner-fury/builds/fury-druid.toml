@@ -60,8 +60,69 @@ helm = ["Bulwark@35", "Vampire Gaze@41", "Guillaume's Face@34"]
 offhand = ["Lawbringer@43"]
 weapon = ["Lawbringer@43", "Pride@67", "The Reaper's Toll@75"]
 
-[extras]
-charms = ["Annihilus@70", "Hellfire Torch@75", "Gheed's Fortune@62", "Bone Break@75"]
+[[charms]]
+name = "Annihilus"
+unique = true
+level = 70
+
+[[charms]]
+name = "Hellfire Torch"
+unique = true
+level = 75
+stats = [{ stat = "class_skills", min = 3 }]
+why = "Only a druid Hellfire Torch (+3 druid skills) counts; another class's torch is a trade good."
+
+[[charms]]
+name = "Gheed's Fortune"
+unique = true
+level = 62
+
+[[charms]]
+name = "Bone Break"
+unique = true
+level = 75
+
+[[charms]]
+name = "Shape Shifting skiller"
+size = "grand"
+count = 6
+stats = [{ stat = "skill_tab", tab = "Shape Shifting", min = 1 }]
+why = "+1 to Fury, Werewolf, Feral Rage and Lycanthropy each; one with life (30+) is the one to aim for."
+
+[[charms]]
+name = "10/60 grand charm"
+size = "grand"
+count = 1
+stats = [{ stat = "max_damage", min = 10 }, { stat = "attack_rating", min = 60 }]
+why = "Sharp: +10 max damage and 60+ attack rating for Fury's physical hits; 10/70/35 with life is the top roll. Fury only (attack power)."
+
+[[charms]]
+name = "Max damage / AR / life small charm"
+size = "small"
+count = 2
+stats = [{ stat = "max_damage", min = 2 }, { stat = "attack_rating", min = 10 }, { stat = "life", min = 15 }]
+why = "Fine of Vita: damage, attack rating and life in one cell; 3/20/20 is the top roll. Fury only (attack power)."
+
+[[charms]]
+name = "Life small charm"
+size = "small"
+count = 2
+stats = [{ stat = "life", min = 15 }]
+why = "15-20 life (of Vita) on a small charm."
+
+[[charms]]
+name = "Resistance small charm"
+size = "small"
+count = 1
+stats = [{ stat = "all_res", min = 5 }]
+why = "5 all resistances (Shimmering) for Hell's -100."
+
+[[charms]]
+name = "FHR small charm"
+size = "small"
+count = 1
+stats = [{ stat = "fhr", min = 5 }]
+why = "5% faster hit recovery (of Balance) toward the next FHR breakpoint."
 
 [pieces."Eternity"]
 kind = "runeword"

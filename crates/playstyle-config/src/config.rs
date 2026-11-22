@@ -299,8 +299,10 @@ pub struct Build {
     pub pieces: BTreeMap<String, PieceInfo>,
     /// Free-text goals shown above the gear grid.
     pub targets: Vec<String>,
-    /// `[extras]`: group name → pieces outside the equipment slots (charms, jewels, runes).
+    /// `[extras]`: group name → pieces outside the equipment slots (jewels, runes).
     pub extras: BTreeMap<String, Vec<String>>,
+    /// `[[charms]]`: the charm wishlist, in the gear grid's order.
+    pub charms: Vec<crate::charms::CharmWish>,
     pub class: Option<u32>,
     /// The build of a character of [`Build::class`] without a `[bis.<name>]` selection.
     pub default_for_class: bool,
@@ -909,6 +911,7 @@ struct RawBuild {
     pieces: BTreeMap<String, PieceInfo>,
     targets: Vec<String>,
     extras: BTreeMap<String, Vec<String>>,
+    charms: Vec<crate::charms::CharmWish>,
     class: String,
     default_for_class: bool,
     next: String,
@@ -1085,6 +1088,7 @@ pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de:
             pieces: raw.pieces,
             targets: clean_pieces(&raw.targets),
             extras: clean_extras(raw.extras),
+            charms: crate::charms::clean(raw.charms, &label, &mut warnings),
             class,
             default_for_class: raw.default_for_class,
             next: (!next.is_empty()).then_some(next),

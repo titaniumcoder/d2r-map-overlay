@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 pub use d2r_core::guidance::{Action, Advice, Side, Spot};
 
+use crate::charms::CharmWish;
 use crate::config::{Bis, Build};
 use crate::config::{FarmGroup, FarmKind, Settings};
 use crate::gear_score::{self, Piece, Profile};
@@ -52,7 +53,7 @@ pub fn held(snap: &Snapshot) -> Vec<Held> {
     held_from(&snap.owned_items, &snap.stash)
 }
 
-fn held_from(owned: &[(ItemDrop, Place)], tabs: &[StashTab]) -> Vec<Held> {
+pub(crate) fn held_from(owned: &[(ItemDrop, Place)], tabs: &[StashTab]) -> Vec<Held> {
     carried(owned).chain(on_pages(tabs)).collect()
 }
 
@@ -113,6 +114,8 @@ pub struct Scoring {
     pub weapon_types: Vec<&'static str>,
     /// The mercenary acts of the chain's builds; empty means Act 2.
     pub merc_acts: Vec<MercAct>,
+    /// The charm wishlists of the chain's builds: a matching charm is kept for own use.
+    pub charms: Vec<CharmWish>,
 }
 
 impl Scoring {
@@ -146,6 +149,7 @@ impl Scoring {
                 .collect(),
             weapon_types: build_weapon_types(builds.iter().copied(), class),
             merc_acts: merc_acts_of(&builds),
+            charms: builds.iter().flat_map(|b| b.charms.iter().cloned()).collect(),
         }
     }
 
@@ -595,8 +599,9 @@ impl Needs {
         needs
     }
 
-    /// The slots, extras and `switch_requires` of `build`. A group with alternatives wants each
-    /// as a piece but no base: that would keep a base for every alternative runeword.
+    /// The slots, extras, unique charm wishes and `switch_requires` of `build`. A group with
+    /// alternatives wants each as a piece but no base: that would keep a base for every
+    /// alternative runeword.
     fn build(&mut self, build: &Build, class: u32, spare: &mut Vec<BaseNeed>) {
         let player = Wearer::Player(build.class.unwrap_or(class));
         self.slots(&build.slots, player);
@@ -604,6 +609,9 @@ impl Needs {
         for entry in build.extras.values().flatten() {
             self.piece(entry, 1);
             self.base(entry, player, None);
+        }
+        for wish in build.charms.iter().filter(|w| w.unique) {
+            self.piece(&wish.name, wish.count);
         }
         for group in &build.switch_requires {
             let single = group.any.len() == 1;
@@ -1059,14 +1067,18 @@ const fn magic_charm(item: &ItemDrop) -> bool {
     matches!(item.kind, DropKind::Charm { unique: false, .. }) && item.quality == item_data::QUALITY_MAGIC
 }
 
-/// The action for a stored magic charm (user rule, 2026-11-22): own use when the builds use
-/// it, else a trade keep when a valuables rule wants it, else sold. None while its stats are
-/// unread.
+/// The action for a stored magic charm (user rule, 2026-11-22): own use when a charm wish of
+/// the chain matches it or the builds use it, else a trade keep when a valuables rule wants
+/// it, else sold. None while its stats are unread.
 fn charm_action(h: &Held, scoring: &Scoring) -> Option<Decided> {
     if !judgeable(&h.item) {
         return None;
     }
-    Some(if own_charm(&h.item, &scoring.profile) {
+    let wished = scoring
+        .charms
+        .iter()
+        .any(|wish| wish.matches(&h.item, Some(scoring.profile.class)));
+    Some(if wished || own_charm(&h.item, &scoring.profile) {
         (keep_or_move(Side::Own, h.spot), None)
     } else if trade_worthy(&h.item) {
         (keep_or_move(Side::Trade, h.spot), None)
@@ -1952,6 +1964,7 @@ mod tests {
                 caster,
                 ..Profile::default()
             },
+            charms: builds.iter().flat_map(|b| b.charms.iter().cloned()).collect(),
             ..Scoring::default()
         }
     }
@@ -2048,8 +2061,17 @@ mod tests {
         );
         assert_eq!(
             one(&gc_10_60, &summoner),
+            own("Magic Grand Charm"),
+            "10/60: the chain's Fury stage wishes for one"
+        );
+        let caster = Scoring {
+            charms: Vec::new(),
+            ..summoner
+        };
+        assert_eq!(
+            one(&gc_10_60, &caster),
             trade("Magic Grand Charm"),
-            "10/60: a caster sells it"
+            "10/60: without the wishlist a caster trades it"
         );
         let gold = charm("cm1", &[(stat::GOLD_FIND, 0, 10)]);
         assert_eq!(
@@ -2057,6 +2079,33 @@ mod tests {
             trade("Magic Small Charm"),
             "gold find: no build stat"
         );
+    }
+
+    #[test]
+    fn a_charm_the_wishlist_wants_is_kept_for_own_use() -> anyhow::Result<()> {
+        // Gold find is no build stat: a trade good, unless a wish names it.
+        let fury = shipped_druid("fury druid", false);
+        let gold = || at(charm("cm1", &[(stat::GOLD_FIND, 0, 10)]), Spot::Page(3));
+        let row = |action| [("Magic Small Charm".to_owned(), Spot::Page(3), action, None)];
+        assert_eq!(judged(&[gold()], &fury), row(Action::Keep(Side::Trade)));
+        let wish: CharmWish = toml::from_str(
+            "name = \"Gold small charm\"\nsize = \"small\"\nstats = [{ stat = \"gold_find\", min = 10 }]",
+        )?;
+        let wishing = Scoring {
+            charms: vec![wish],
+            ..fury
+        };
+        assert_eq!(judged(&[gold()], &wishing), row(Action::Move(Side::Own)));
+        // The unique wishes are build pieces: one copy each is wanted (Annihilus, Torch, ...).
+        let needs = shipped_needs(&shipped(), "summoner druid")?;
+        for name in ["Annihilus", "Hellfire Torch", "Gheed's Fortune", "Bone Break"] {
+            assert!(
+                needs.pieces.iter().any(|(n, c)| n == name && *c == 1),
+                "{name}: {:?}",
+                needs.pieces
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -2913,7 +2962,8 @@ mod tests {
             ["Bulwark@35", "Vampire Gaze@41", "Guillaume's Face@34"]
         );
         assert_eq!(slot("body"), ["Smoke@37", "Shaftstop@38", "Treachery@43"]);
-        assert!(fury.extras.values().flatten().any(|c| c == "Bone Break@75"));
+        assert!(fury.charms.iter().any(|c| c.unique && c.name == "Bone Break"));
+        assert!(fury.extras.is_empty(), "the unique charms left the extras");
         assert_eq!(fury.merc_wearer("Pride@67", Some(4)), MercAct::Act2);
         assert_eq!(fury.merc_wearer("Treachery@43", Some(3)), MercAct::Act5);
         let needs = shipped_needs(&config, "fury druid")?;

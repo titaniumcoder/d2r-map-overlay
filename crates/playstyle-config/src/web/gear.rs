@@ -651,8 +651,68 @@ pub fn gear_json(info: &PanelInfo) -> serde_json::Value {
         "tips": tips_json(info),
         "merc": merc_columns(info),
         "extras": extras,
+        "charms": charms_json(info),
         "not_needed": info.bis.map_or(&[][..], |b| info.marks_of(&b.build)),
     })
+}
+
+/// The charm wishlist: the current stage's `[[charms]]`, then the next stage's whose name it
+/// doesn't list (a same-named wish of the next stage is left out, whatever its count; `stage` =
+/// that build's name: the summoner sees the Fury's), each with `have` = the owned
+/// charms that fill it ([`crate::charms::found`]: carried, cube, stash, shared stash pages),
+/// `need` = its stat conditions, and a unique's build-file details.
+fn charms_json(info: &PanelInfo) -> Vec<serde_json::Value> {
+    use crate::charms::CharmWish;
+    let mut wishes: Vec<(&CharmWish, Option<&crate::config::Build>)> = info
+        .build
+        .map_or(&[][..], |b| b.charms.as_slice())
+        .iter()
+        .map(|w| (w, None))
+        .collect();
+    if let Some((_, next)) = info.stage.and_then(|s| s.next) {
+        for wish in &next.charms {
+            if !wishes
+                .iter()
+                .any(|(w, _)| d2r_core::names::same_name(&w.name, &wish.name))
+            {
+                wishes.push((wish, Some(next)));
+            }
+        }
+    }
+    let held = crate::stash_plan::held_from(info.live.owned_items, info.live.stash);
+    let refs: Vec<&CharmWish> = wishes.iter().map(|&(w, _)| w).collect();
+    let have = crate::charms::found(&refs, held.iter().map(|h| &h.item), Some(info.live.class));
+    wishes
+        .iter()
+        .zip(have)
+        .map(|(&(wish, later), have)| {
+            let mut json = serde_json::json!({
+                "name": wish.name,
+                "kind": if wish.unique { "unique" } else { "magic" },
+                "size": wish.size.map(|s| match s {
+                    d2r_core::items::CharmSize::Small => "Small Charm",
+                    d2r_core::items::CharmSize::Large => "Large Charm",
+                    d2r_core::items::CharmSize::Grand => "Grand Charm",
+                }),
+                "level": wish.level,
+                "count": wish.count,
+                "have": have,
+                "need": wish.describe(),
+                "stage": later.map(|b| b.name.as_str()),
+            });
+            if wish.unique {
+                add_piece_details(&mut json, &wish.name, later.or(info.build));
+            }
+            if let Some(obj) = json.as_object_mut() {
+                // A unique charm's piece is a guide alternative: here it is simply wanted.
+                obj.remove("setup");
+                if !wish.why.is_empty() {
+                    obj.insert("why".to_owned(), serde_json::json!(wish.why));
+                }
+            }
+            json
+        })
+        .collect()
 }
 
 /// The pieces of both ring slots, deduplicated, best first.

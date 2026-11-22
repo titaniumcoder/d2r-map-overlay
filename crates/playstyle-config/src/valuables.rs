@@ -94,6 +94,34 @@ enum StatKind {
 }
 
 impl StatKind {
+    /// The stat's short name in [`StatNeed::describe`].
+    const fn label(self) -> &'static str {
+        match self {
+            Self::SkillTab => "skill tree",
+            Self::ClassSkills => "class skills",
+            Self::SingleSkill => "skill",
+            Self::Fcr => "FCR",
+            Self::Ias => "IAS",
+            Self::Life => "life",
+            Self::Mana => "mana",
+            Self::Mf => "MF",
+            Self::GoldFind => "gold find",
+            Self::AllRes => "all res",
+            Self::FireRes => "fire res",
+            Self::ColdRes => "cold res",
+            Self::LightningRes => "lightning res",
+            Self::PoisonRes => "poison res",
+            Self::ElementalRes => "fire, cold or lightning res",
+            Self::MaxDamage => "max damage",
+            Self::AttackRating => "attack rating",
+            Self::Fhr => "FHR",
+            Self::Frw => "FRW",
+            Self::PoisonDamage => "poison damage",
+            Self::LightningMaxDamage => "max lightning damage",
+            Self::FireMaxDamage => "max fire damage",
+        }
+    }
+
     /// The stat ids whose best entry is the amount; empty for the computed kinds.
     const fn ids(self) -> &'static [u16] {
         match self {
@@ -139,22 +167,43 @@ fn poison_total(stats: &[ItemStat]) -> i32 {
     i32::try_from((rate * frames + 128) / 256).unwrap_or(i32::MAX)
 }
 
-/// One `stats` condition: the item's amount of `stat` (among `skills`) is at least `min`.
-#[derive(Debug, Deserialize)]
+/// One `stats` condition: the item's amount of `stat` (among `skills`, on tree `tab`) is at
+/// least `min`. Shared with the build files' `[[charms]]` wishes ([`crate::charms`]).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StatNeed {
+pub struct StatNeed {
     stat: StatKind,
     /// `single_skill` only: skill names, any of them; empty = any skill.
     #[serde(default)]
     skills: Vec<String>,
+    /// `skill_tab` only: the skill tree's name ("Shape Shifting"); empty = any tree.
+    #[serde(default)]
+    tab: String,
     min: i32,
 }
 
 impl StatNeed {
-    fn holds(&self, stats: &[ItemStat]) -> bool {
-        let named = |s: &ItemStat| {
-            self.skills.is_empty()
-                || skills_data::name(s.param).is_some_and(|n| self.skills.iter().any(|w| w == n))
+    /// Whether `stats` meet the condition; with `class` set, a `skill_tab` or `class_skills`
+    /// stat counts only for that class (a necromancer Summoning skiller is no druid's).
+    #[must_use]
+    pub fn holds(&self, stats: &[ItemStat], class: Option<u32>) -> bool {
+        let fits = |s: &ItemStat| match self.stat {
+            StatKind::SingleSkill => {
+                self.skills.is_empty()
+                    || skills_data::name(s.param).is_some_and(|n| self.skills.iter().any(|w| w == n))
+            }
+            StatKind::SkillTab => {
+                let (tab_class, page) = (u32::from(s.param / 8), usize::from(s.param % 8));
+                class.is_none_or(|c| c == tab_class)
+                    && (self.tab.trim().is_empty()
+                        || usize::try_from(tab_class)
+                            .ok()
+                            .and_then(|c| skills_data::TREES.get(c))
+                            .and_then(|trees| trees.get(page))
+                            .is_some_and(|t| t.eq_ignore_ascii_case(self.tab.trim())))
+            }
+            StatKind::ClassSkills => class.is_none_or(|c| c == u32::from(s.param)),
+            _ => true,
         };
         let amount = match self.stat {
             StatKind::AllRes => [
@@ -168,9 +217,57 @@ impl StatNeed {
             .min()
             .unwrap_or(0),
             StatKind::PoisonDamage => poison_total(stats),
-            kind => best_value(stats, kind.ids(), named),
+            kind => best_value(stats, kind.ids(), fits),
         };
         amount >= self.min
+    }
+
+    /// The checks serde can't make: a positive `min`, `skills` only on `single_skill` and each
+    /// a known skill, `tab` only on `skill_tab` and a known tree.
+    ///
+    /// # Errors
+    /// The first check that fails, as a message.
+    pub fn check(&self) -> Result<(), String> {
+        if self.min <= 0 {
+            return Err(format!("stats min {} is not positive", self.min));
+        }
+        if self.stat != StatKind::SingleSkill && !self.skills.is_empty() {
+            return Err("skills only go with single_skill".to_owned());
+        }
+        if let Some(n) = self
+            .skills
+            .iter()
+            .find(|n| !skills_data::SKILLS.iter().any(|s| s.name == n.as_str()))
+        {
+            return Err(format!("unknown skill {n:?}"));
+        }
+        if !self.tab.trim().is_empty() {
+            if self.stat != StatKind::SkillTab {
+                return Err("tab only goes with skill_tab".to_owned());
+            }
+            if !skills_data::TREES
+                .iter()
+                .flatten()
+                .any(|t| t.eq_ignore_ascii_case(self.tab.trim()))
+            {
+                return Err(format!("unknown skill tree {:?}", self.tab));
+            }
+        }
+        Ok(())
+    }
+
+    /// The condition as a short line for the dashboard: "+1 Shape Shifting skills", "life 20+".
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let min = self.min;
+        match self.stat {
+            StatKind::SkillTab if self.tab.trim().is_empty() => format!("+{min} to a skill tree"),
+            StatKind::SkillTab => format!("+{min} {} skills", self.tab.trim()),
+            StatKind::ClassSkills => format!("+{min} class skills"),
+            StatKind::SingleSkill if self.skills.is_empty() => format!("+{min} to a skill"),
+            StatKind::SingleSkill => format!("+{min} {}", self.skills.join(" / ")),
+            kind => format!("{} {min}+", kind.label()),
+        }
     }
 }
 
@@ -244,10 +341,9 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
     }
 });
 
-/// The checks serde can't make: labels of at most 4 characters, `stats` conditions with a
-/// positive `min`, `skills` only on `single_skill` and every skill name known, no `stats`
-/// or `item_names` on an unidentified-only rule (such an item has neither), and `stats` on an
-/// own-use rule.
+/// The checks serde can't make: labels of at most 4 characters, `stats` conditions that pass
+/// [`StatNeed::check`], no `stats` or `item_names` on an unidentified-only rule (such an item
+/// has neither), and `stats` on an own-use rule.
 fn validate(rules: &[Rule]) -> Result<(), String> {
     for r in rules {
         if r.own && r.stats.is_empty() {
@@ -263,19 +359,7 @@ fn validate(rules: &[Rule]) -> Result<(), String> {
             ));
         }
         for need in &r.stats {
-            if need.min <= 0 {
-                return Err(format!("{}: stats min {} is not positive", r.name, need.min));
-            }
-            if need.stat != StatKind::SingleSkill && !need.skills.is_empty() {
-                return Err(format!("{}: skills only go with single_skill", r.name));
-            }
-            if let Some(n) = need
-                .skills
-                .iter()
-                .find(|n| !skills_data::SKILLS.iter().any(|s| s.name == n.as_str()))
-            {
-                return Err(format!("{}: unknown skill {n:?}", r.name));
-            }
+            need.check().map_err(|e| format!("{}: {e}", r.name))?;
         }
     }
     Ok(())
@@ -316,7 +400,7 @@ fn check(rule: &Rule, drop: &ItemDrop, name: Option<&str>) -> Option<bool> {
         && rule
             .identified
             .is_none_or(|i| i == (drop.flags & item_data::FLAG_IDENTIFIED != 0))
-        && rule.stats.iter().all(|need| need.holds(&drop.stats));
+        && rule.stats.iter().all(|need| need.holds(&drop.stats, None));
     if !fits {
         return None;
     }

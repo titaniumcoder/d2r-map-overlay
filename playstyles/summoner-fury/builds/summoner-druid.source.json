@@ -11,7 +11,7 @@
     "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)": "Grizzly to 20 by 51 (+10% damage to every wolf and the bear per point). Hire the Nightmare Act 2 Might merc. Jalal's Mane, Raven Frost and String of Ears are worn now and stay on after the Fury respec. Smoke is merc gear (the merc's armor); the druid keeps Stealth for its Faster Cast Rate.",
     "lvl 60-75 (Hell: Spirit Wolf 20, Heart of Wolverine)": "Spirit Wolf to 20 by 60 (with the Hell Den of Evil point) (+25% attack rating for Dire Wolves and the Grizzly per point), then Heart of Wolverine to 20 by 75 (+7% damage and +7% attack rating per point for you, the merc and every pet: +153% damage, +158% attack rating at 20). From 75 with the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) the Fury switch is possible (optional).",
     "lvl 75-99 (Hell endgame: Ravens to 20)": "Without the switch the summoner goes on to 99: Ravens 20 by 90, then only the last 9 reserve points go to Arctic Blast 1 (prerequisite) and Cyclone Armor 8 (absorbs 124 fire/cold/lightning damage per cast). Endgame summoner gear: Heart of the Oak, Jalal's Mane, Enigma, Mara's Kaleidoscope, Arachnid Mesh.",
-    "alternative": "The Maxroll Summon Druid guide's Gear Options (user, 2026-11-22: \"did you do it for the summoner druid too?\"): its unique/set/runeword pieces of every slot after this build's own stage pieces, one-handed weapons and shields included (the summoner fights with sword and shield), the weapon-swap list, both ring slots (ring2 lists the same rings) and its unique charms in the extras; no rare, crafted, magic or plain socketed entries (no build-file form). Merc (user: \"can we get that for the mercs too\"): the guide's Act 2 Might merc pieces (The Reaper's Toll, Hustle, Fortitude, Treachery, Guillaume's Face) after Insight, Smoke and Bulwark. One copy each is wanted."
+    "alternative": "The Maxroll Summon Druid guide's Gear Options (user, 2026-11-22: \"did you do it for the summoner druid too?\"): its unique/set/runeword pieces of every slot after this build's own stage pieces, one-handed weapons and shields included (the summoner fights with sword and shield), the weapon-swap list, both ring slots (ring2 lists the same rings) and its unique charms (listed in the charm wishlist, `charms`, not as alternatives); no rare, crafted, magic or plain socketed entries (no build-file form). Merc (user: \"can we get that for the mercs too\"): the guide's Act 2 Might merc pieces (The Reaper's Toll, Hustle, Fortitude, Treachery, Guillaume's Face) after Insight, Smoke and Bulwark. One copy each is wanted."
   },
   "stat_source": "All numbers are computed from the D2R game tables (blizzhackers/d2data JSON, current with the Warlock class): skill requirements, petmax/HP/damage/synergy formulas from skills.json and skilldesc.json, runeword runes/types/levels from runes.json + misc.json (rune levelreq), base requirements and socket limits from weapons.json/armor.json/itemtypes.json, unique/set stats from uniqueitems.json/setitems.json, merc auras from hireling.json. Not from a build guide.",
   "targets": {
@@ -1891,6 +1891,92 @@
       ],
       "why": "Maxroll Summon Druid guide, rings list: 10% FCR, Energy and magic find (Reign of the Warlock ring).",
       "rank_in_slot": 7
+    }
+  ],
+  "charms": [
+    {
+      "name": "Annihilus",
+      "unique": true
+    },
+    {
+      "name": "Hellfire Torch",
+      "unique": true,
+      "stats": [
+        {
+          "stat": "class_skills",
+          "min": 3
+        }
+      ],
+      "why": "Only a druid Hellfire Torch (+3 druid skills) counts; another class's torch is a trade good."
+    },
+    {
+      "name": "Gheed's Fortune",
+      "unique": true
+    },
+    {
+      "name": "Bone Break",
+      "unique": true
+    },
+    {
+      "name": "Summoning skiller",
+      "size": "grand",
+      "count": 7,
+      "stats": [
+        {
+          "stat": "skill_tab",
+          "tab": "Summoning",
+          "min": 1
+        }
+      ],
+      "why": "+1 to every druid summon (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Heart of Wolverine, Oak Sage); one with life (30+) is the one to aim for."
+    },
+    {
+      "name": "Life small charm",
+      "size": "small",
+      "count": 2,
+      "stats": [
+        {
+          "stat": "life",
+          "min": 15
+        }
+      ],
+      "why": "15-20 life (of Vita) on a small charm."
+    },
+    {
+      "name": "Resistance small charm",
+      "size": "small",
+      "count": 2,
+      "stats": [
+        {
+          "stat": "all_res",
+          "min": 5
+        }
+      ],
+      "why": "5 all resistances (Shimmering) for Hell's -100."
+    },
+    {
+      "name": "FHR small charm",
+      "size": "small",
+      "count": 1,
+      "stats": [
+        {
+          "stat": "fhr",
+          "min": 5
+        }
+      ],
+      "why": "5% faster hit recovery (of Balance) toward the next FHR breakpoint."
+    },
+    {
+      "name": "Mana small charm",
+      "size": "small",
+      "count": 1,
+      "stats": [
+        {
+          "stat": "mana",
+          "min": 15
+        }
+      ],
+      "why": "15-17 mana (Serpent's) for re-summoning; summoner only."
     }
   ],
   "recipes": [

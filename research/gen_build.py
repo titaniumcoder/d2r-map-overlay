@@ -32,6 +32,12 @@ live in BUILDS below, keyed by the source file's stem (`druid-leveling.source` c
   own `merc_act` (an alternative act's piece: Harmony for the Act 1 rogue) sorts after the
   primary act's pieces of its slot; the key itself isn't written out.
 
+- The source's `charms` list (optional) becomes the `[[charms]]` wishlist, in order: unique
+  charms `{name, unique: true, stats?, why?}` (the level is the source item's `req_level`) and
+  magic ones `{name, size: small|large|grand, count, stats: [{stat, min, tab?, skills?}], why}`
+  in the valuables' stat vocabulary. Items of slot `charm` give only their `[pieces]` details
+  (no `[extras]` group): the wishlist lists the charms, not the alternatives fold.
+
 Skill names are checked against crates/core/src/skills_data.rs (class skills); mismatches are reported
 on stderr and in the exit summary.
 """
@@ -97,7 +103,7 @@ BUILDS_DIR = os.path.normpath(os.path.join(HERE, "..", "playstyles", "summoner-f
 CLASS_IDS = {"amazon": 0, "sorceress": 1, "necromancer": 2, "paladin": 3, "barbarian": 4,
              "druid": 5, "assassin": 6, "warlock": 7}
 SLOTMAP = {"ring": "ring1"}
-EXTRA = {"charm": "charms", "jewel": "jewels", "rune": "runes"}
+EXTRA = {"jewel": "jewels", "rune": "runes"}
 ORDER = ["weapon", "offhand", "swap", "helm", "body", "gloves", "belt", "boots", "amulet", "ring1", "ring2"]
 MAX_POINTS = 20
 # Known guide-text errors, fixed deterministically (build, level, skill) -> skill.
@@ -122,6 +128,17 @@ def req_group(g):
     parts = [f"label = {q(g['label'])}", "any = [" + ", ".join(q(x) for x in g["any"]) + "]"]
     if "count" in g:
         parts.append(f"count = {int(g['count'])}")
+    return "{ " + ", ".join(parts) + " }"
+
+
+def stat_need(n):
+    """One charm `stats` condition as an inline table, keys in the valuables' order."""
+    parts = [f"stat = {q(n['stat'])}"]
+    if n.get("tab"):
+        parts.append(f"tab = {q(n['tab'])}")
+    if n.get("skills"):
+        parts.append("skills = [" + ", ".join(q(x) for x in n["skills"]) + "]")
+    parts.append(f"min = {int(n['min'])}")
     return "{ " + ", ".join(parts) + " }"
 
 
@@ -420,6 +437,8 @@ def main(argv):
         s = i["slot"]
         if s.startswith("merc_"):
             lst = merc.setdefault(s[5:], [])
+        elif s == "charm":
+            continue
         elif s in EXTRA:
             lst = extras.setdefault(EXTRA[s], [])
         else:
@@ -551,7 +570,23 @@ def main(argv):
         if s in slots:
             L.append(f"{s} = [" + ", ".join(q(x) for x in slots[s]) + "]")
     L += ["", "[merc_slots]"] + [f"{s} = [" + ", ".join(q(x) for x in v) + "]" for s, v in merc.items()]
-    L += ["", "[extras]"] + [f"{s} = [" + ", ".join(q(x) for x in v) + "]" for s, v in extras.items()]
+    if extras:
+        L += ["", "[extras]"] + [f"{s} = [" + ", ".join(q(x) for x in v) + "]" for s, v in extras.items()]
+    levels = {i["name"]: i.get("req_level") for i in d["items"]}
+    for c in d.get("charms") or []:
+        L += ["", "[[charms]]", f"name = {q(c['name'])}"]
+        if c.get("unique"):
+            L.append("unique = true")
+            if levels.get(c["name"]):
+                L.append(f"level = {int(levels[c['name']])}")
+            else:
+                problems.append(f"{stem}: unique charm {c['name']!r} has no source item with req_level")
+        else:
+            L += [f"size = {q(c['size'])}", f"count = {int(c.get('count', 1))}"]
+        if c.get("stats"):
+            L.append("stats = [" + ", ".join(stat_need(x) for x in c["stats"]) + "]")
+        if c.get("why"):
+            L.append(f"why = {q(c['why'])}")
     for n, p in pieces.items():
         L += ["", f"[pieces.{q(n)}]"]
         for k in ["kind", "setup", "base", "why", "notes"]:

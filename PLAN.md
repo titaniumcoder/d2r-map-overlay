@@ -517,13 +517,40 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
     `gear_score::MIN_GAIN` (8: life, resistances, FHR, FRW, mana for a caster, max damage and
     AR for a fighter: charm flat damage now scores, half of it as average damage), or an
     own-rule keeper scoring at all. Else **keep trade** for a certain S/A match (7% MF, gold
-    find, poison, off-build skillers, 10/60 GC for the caster), else **sell** ("no keeper
+    find, poison, off-build skillers; a 10/60 GC only without a wish for it), else **sell** ("no keeper
     stats"). Charms in the inventory stay left alone; unique charms keep the old path.
   - Magic charms drop UNIDENTIFIED (journal evidence above): the stat rules only judge
     identified charms (inventory, stash, a charm identified on the ground). The three generic
     magic charm rules (A grand, B small, B large, `needs_stats`) now carry `identified: false`:
     on the ground nothing changes (the same dashed ring), an identified charm is judged by the
     stat rules only, and the stash plan gives an unidentified charm no line (identify first).
+  - **Charm wishlist (user request 2026-11-22: "charms should be listed according to what is
+    needed meaning all of them until found ... focus on the fury ... only the shapeshifting and
+    attack power is fury only")**: `[[charms]]` in a build file (from the source JSON's
+    `charms`, `research/gen_build.py`), `charms::CharmWish`: a unique by name (`unique = true`,
+    `level`; "Renewed <name>" counts too) or a magic charm by `size` (small / large / grand),
+    each with `count` and `stats` conditions in the valuables' vocabulary (`valuables::StatNeed`,
+    now with `tab = "<skill tree>"` for `skill_tab`); with the build's class a `skill_tab` /
+    `class_skills` stat counts only for that class (a necromancer Summoning skiller, a sorceress
+    Hellfire Torch don't). Invalid wishes are warned and dropped (`charms::clean`). The unique
+    charms left `[extras]`, so nothing shows twice. Wanted counts fill a druid inventory of
+    10 × 4 to 36 cells (9 grand charms, the Torch, Annihilus, 6 small charms; one 4-cell column
+    stays free for loot):
+    - Fury: Annihilus, Hellfire Torch (+3 druid skills), Gheed's Fortune, Bone Break; Shape
+      Shifting skiller GC ×6; 10/60 GC ×1; max damage 2 / AR 10 / life 15 SC ×2; life 15 SC ×2;
+      5 all res SC ×1; 5 FHR SC ×1.
+    - Summoner: the same uniques; Summoning skiller GC ×7; life 15 SC ×2; 5 all res SC ×2;
+      5 FHR SC ×1; 15 mana SC ×1.
+    - Gear grid: a "Charms" card (no alternatives fold) lists every wish of the current stage,
+      then the next stage's wishes it lacks with that build's name as a badge (the summoner
+      sees the Fury's Shape Shifting skillers, 10/60 GC and damage SCs). `have` = owned
+      identified charms that fill it (`charms::found`: carried, cube, stash and the shared
+      stash pages; each charm counts once, for the first wish in order it matches with room):
+      ✓ when all are owned, else have/count; found ones fade. The ✕ marks a wish not needed by
+      its name (`not_needed::apply` drops it from the build's `charms`).
+    - Stash plan: a magic charm any wish of the stage chain matches is keep own (before the
+      gear score rule), so the summoner keeps a 10/60 GC for the Fury; the unique wishes are
+      build pieces (`Needs::build`, one copy each).
 
 ## Shrines and wells (2026-11-15)
 - Object units: unit block 2, static path position (+0x10/+0x14). ObjectData (unit +0x10) `+0x08` u8 = shrine type
@@ -853,7 +880,8 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   one-handers and shields")**: every other slot lists the Maxroll guide's unique/set/runeword
   pieces as `alternative`, after the user's options (weapons two-handed only: eth Tomb Reaver,
   Oath, Grief in a two-handed base, Hustle, Unbending Will in a Colossus Blade; swap Brand; no
-  off-hand, shield, Demon Limb or charge wand), and its unique charms in `[extras] charms`.
+  off-hand, shield, Demon Limb or charge wand); its unique charms moved to the charm wishlist
+  (below).
   Stats and levels from d2data (runewords with their rune bonuses). One copy each is "keep own";
   each runeword also wants a base like the user's own runeword options. The lists are ranked, so
   an owned stage piece below the worn one is no equip upgrade and is struck in the grid (Ring
@@ -864,14 +892,13 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   breakpoint, `MIN_GAIN`) = "better" and an equip upgrade, `MIN_GAIN` or more below = struck,
   else neutral; an unowned one (or one without stats: runewords, the merc's) is neutral (dimmed
   only when too high) and never "findable". Ring column unchanged. A worn piece is never struck in its own column (`"neutral"` with its ✓, no "wear now"), though its level equals the equipped one. The merc stays the Act 5 2x Lawbringer (the guide's Act 2 Might
-  merc is not taken). Open: magic charm types (Sharp / Shimmering / Fine ... of Vita) have no
-  build-file form.
+  merc is not taken). Magic charm types now have a build-file form: the charm wishlist.
 - **Summoner guide and merc alternatives (user, 2026-11-22: "did you do it for the summoner
   druid too?", "can we get that for the mercs too")**: the Summoner lists the Maxroll Summon
   Druid guide's unique/set/runeword pieces after its own stage pieces (gen_build sorts a
   leveling build's `alternative` pieces after the stage gear), one-handers and shields included
   (sword + shield), a weapon-swap list (Call to Arms, Wizardspike, Naj's Puzzler), ring2 = the
-  guide's rings, its unique charms in `[extras]`; its Act 2 merc gets The Reaper's Toll, Hustle,
+  guide's rings (its unique charms: the charm wishlist); its Act 2 merc gets The Reaper's Toll, Hustle,
   Fortitude, Treachery, Guillaume's Face after Insight / Smoke / Bulwark. The Fury merc gets the
   guide's armor and helms any merc wears (Shaftstop, Treachery, Vampire Gaze, Guillaume's Face);
   `merc_acts = [5, 2]`: Pride and The Reaper's Toll are for a later Act 2 Might merc once Bone

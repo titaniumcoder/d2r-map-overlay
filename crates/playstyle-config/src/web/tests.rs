@@ -3517,3 +3517,100 @@ fn merc_guide_alternatives_are_not_struck_below_the_worn_piece() {
     // Insight is worn: never struck; Harmony was struck before.
     assert_eq!(states, ["neutral", "neutral", "worse"], "{gear}");
 }
+
+/// The shipped playstyle (`playstyles/summoner-fury`).
+fn shipped_settings() -> crate::config::Settings {
+    crate::files::load(&d2r_core::playstyle::Files {
+        shipped: Some(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury"),
+        ),
+        quiet: true,
+        ..d2r_core::playstyle::Files::default()
+    })
+}
+
+#[test]
+fn gear_lists_the_charm_wishlist_with_what_is_found_and_the_next_stage_s_wishes() -> Result<()> {
+    use crate::charms::tests::{magic, unique};
+    use d2r_core::item_stats::stat;
+    let config = shipped_settings();
+    let build = |slug: &str| config.build_defs.get(slug).ok_or_else(|| anyhow!("no {slug}"));
+    let (summoner, fury) = (build("summoner druid")?, build("fury druid")?);
+    let stage = config::Stage {
+        slug: "summoner druid",
+        build: summoner,
+        class_default: true,
+        next: Some(("fury druid", fury)),
+    };
+    let summoning = || magic("cm3", &[(stat::SKILL_TAB, 5 * 8, 1)]);
+    let owned = [
+        (unique("cm1", 381, &[]), d2r_core::game::Place::Inventory),
+        (summoning(), d2r_core::game::Place::Inventory),
+        (summoning(), d2r_core::game::Place::Cube),
+        // The live shared stash items carry no page: the pages below count instead.
+        (summoning(), d2r_core::game::Place::Shared),
+    ];
+    let stash = [d2r_core::stash::StashTab {
+        kind: d2r_core::stash::TabKind::Page(3),
+        items: vec![d2r_core::stash::stash_item(
+            &magic("cm3", &[(stat::SKILL_TAB, 5 * 8 + 1, 1)]),
+            None,
+        )],
+    }];
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &stash, &[]);
+    info.live.owned_items = &owned;
+    info.build = Some(summoner);
+    info.stage = Some(stage);
+    let gear = gear_json(&info);
+    let rows: Vec<(String, u64, u64, Option<String>)> = gear
+        .get("charms")
+        .and_then(serde_json::Value::as_array)
+        .context("charms")?
+        .iter()
+        .map(|c| {
+            let text = |k: &str| c.get(k).and_then(serde_json::Value::as_str).map(str::to_owned);
+            let num = |k: &str| c.get(k).and_then(serde_json::Value::as_u64).unwrap_or(99);
+            (
+                text("name").unwrap_or_default(),
+                num("have"),
+                num("count"),
+                text("stage"),
+            )
+        })
+        .collect();
+    let row = |name: &str, have, count, stage: Option<&str>| {
+        (name.to_owned(), have, count, stage.map(str::to_owned))
+    };
+    assert_eq!(
+        rows,
+        [
+            row("Annihilus", 1, 1, None),
+            row("Hellfire Torch", 0, 1, None),
+            row("Gheed's Fortune", 0, 1, None),
+            row("Bone Break", 0, 1, None),
+            row("Summoning skiller", 2, 7, None),
+            row("Life small charm", 0, 2, None),
+            row("Resistance small charm", 0, 2, None),
+            row("FHR small charm", 0, 1, None),
+            row("Mana small charm", 0, 1, None),
+            row("Shape Shifting skiller", 1, 6, Some("Fury Druid")),
+            row("10/60 grand charm", 0, 1, Some("Fury Druid")),
+            row("Max damage / AR / life small charm", 0, 2, Some("Fury Druid")),
+        ]
+    );
+    let at = |path: &str| gear.pointer(path).cloned().unwrap_or_default();
+    assert_eq!(at("/charms/0/base"), "Small Charm", "the unique's piece details");
+    assert!(at("/charms/0/setup").is_null(), "no alternative fold");
+    assert_eq!(at("/charms/4/size"), "Grand Charm");
+    assert_eq!(at("/charms/4/need"), serde_json::json!(["+1 Summoning skills"]));
+    assert_eq!(at("/charms/1/need"), serde_json::json!(["+3 class skills"]));
+    assert!(
+        gear.get("extras")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "the unique charms are no extras: {:?}",
+        gear.get("extras")
+    );
+    Ok(())
+}

@@ -139,8 +139,62 @@ body = ["Smoke@37", "Fortitude@59", "Treachery@43"]
 helm = ["Bulwark@35", "Guillaume's Face@34"]
 weapon = ["Insight@27", "Soul Harvest@19", "The Battlebranch@17", "The Reaper's Toll@75", "Hustle (weapon)@39", "Harmony@39"]
 
-[extras]
-charms = ["Bone Break@75", "Gheed's Fortune@62", "Hellfire Torch@75", "Annihilus@70"]
+[[charms]]
+name = "Annihilus"
+unique = true
+level = 70
+
+[[charms]]
+name = "Hellfire Torch"
+unique = true
+level = 75
+stats = [{ stat = "class_skills", min = 3 }]
+why = "Only a druid Hellfire Torch (+3 druid skills) counts; another class's torch is a trade good."
+
+[[charms]]
+name = "Gheed's Fortune"
+unique = true
+level = 62
+
+[[charms]]
+name = "Bone Break"
+unique = true
+level = 75
+
+[[charms]]
+name = "Summoning skiller"
+size = "grand"
+count = 7
+stats = [{ stat = "skill_tab", tab = "Summoning", min = 1 }]
+why = "+1 to every druid summon (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Heart of Wolverine, Oak Sage); one with life (30+) is the one to aim for."
+
+[[charms]]
+name = "Life small charm"
+size = "small"
+count = 2
+stats = [{ stat = "life", min = 15 }]
+why = "15-20 life (of Vita) on a small charm."
+
+[[charms]]
+name = "Resistance small charm"
+size = "small"
+count = 2
+stats = [{ stat = "all_res", min = 5 }]
+why = "5 all resistances (Shimmering) for Hell's -100."
+
+[[charms]]
+name = "FHR small charm"
+size = "small"
+count = 1
+stats = [{ stat = "fhr", min = 5 }]
+why = "5% faster hit recovery (of Balance) toward the next FHR breakpoint."
+
+[[charms]]
+name = "Mana small charm"
+size = "small"
+count = 1
+stats = [{ stat = "mana", min = 15 }]
+why = "15-17 mana (Serpent's) for re-summoning; summoner only."
 
 [pieces."Jalal's Mane"]
 kind = "unique"
