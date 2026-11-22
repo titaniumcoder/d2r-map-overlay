@@ -1,13 +1,14 @@
 //! In-game UI marks: a click-through layer over the whole screen that points at things in the
 //! game's own windows. While a vendor trade window is open it lists the worthwhile store items
-//! in a box at the top centre and frames the inventory's items by the stash plan's action;
-//! store-grid and stash-grid frames take the shown tab, which is not read yet.
+//! in a box at the top centre and frames the inventory's items to sell; the stash window's
+//! frames ([`Window::Stash`]) and the store-grid frames take state the reader doesn't have yet
+//! (whether the stash is open, its shown tab, the shown store tab).
 
 use ab_glyph::FontVec;
 use tiny_skia::{Paint, PathBuilder, Pixmap, Rect as SkRect, Stroke, Transform};
 
 use crate::game::CellRect;
-use crate::guidance::{Action, Advice, MarkKind, Side, Spot};
+use crate::guidance::{Action, Advice, MarkKind, Spot};
 use crate::offsets::stat_list;
 use crate::shop::{Shop, ShopItem};
 use crate::web::ShopNote;
@@ -22,7 +23,7 @@ pub const BOX_TOP: u32 = 12;
 pub const MAX_LINES: usize = 8;
 /// A build piece, an upgrade over the worn item, or a runeword base the builds want.
 pub const BUILD: Rgba = [120, 235, 130, 255];
-/// Sells for a lot (a valuables match that gets the coin on the map); a kept trade item.
+/// Sells for a lot (a valuables match that gets the coin on the map).
 pub const MONEY: Rgba = [255, 205, 40, 255];
 /// Sell.
 pub const SELL: Rgba = [240, 60, 50, 255];
@@ -186,20 +187,35 @@ const fn pick_colour(pick: Pick) -> Rgba {
     }
 }
 
-/// Frames around the player's items in their grids, coloured by the stash plan's action:
-/// the inventory's always, the stash grid's when it shows `stash` ([`Spot::Stash`] or a
-/// shared [`Spot::Page`]; `None`: the stash window is closed or its tab unknown).
+/// The game window the player's item frames are for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Window {
+    /// A trade window: the inventory's items to sell.
+    Vendor,
+    /// The stash window showing `Some(spot)` ([`Spot::Stash`] or a shared [`Spot::Page`];
+    /// `None`: tab unknown): that tab's items to sell or to move, and the inventory's items
+    /// to put into the stash.
+    Stash(Option<Spot>),
+}
+
+/// Frames around the player's items in the grids `window` shows, by the stash plan's action:
+/// sell red, move / stow orange. Each window marks only what is done there: at a vendor the
+/// inventory's sell items; at the stash its shown tab's sell and move items and the
+/// inventory's move items. Kept and give-away items get no frame.
 #[must_use]
-pub fn item_frames(advice: &[Advice], stash: Option<Spot>) -> Vec<(Rect, Rgba)> {
+pub fn item_frames(advice: &[Advice], window: Window) -> Vec<(Rect, Rgba)> {
     let mut frames = Vec::new();
     for line in advice {
-        let grid = match line.spot {
-            Spot::Inventory => INVENTORY_GRID,
-            Spot::Stash | Spot::Page(_) if stash == Some(line.spot) => STASH_GRID,
-            Spot::Stash | Spot::Page(_) | Spot::Cube => continue,
+        let colour = match line.action {
+            Action::Sell => SELL,
+            Action::Move(_) | Action::Stow(_) => MOVE,
+            Action::Keep(_) | Action::GiveAway => continue,
         };
-        let Some(colour) = action_colour(line.action) else {
-            continue;
+        let grid = match (window, line.spot) {
+            (Window::Vendor, Spot::Inventory) if colour == SELL => INVENTORY_GRID,
+            (Window::Stash(_), Spot::Inventory) if colour == MOVE => INVENTORY_GRID,
+            (Window::Stash(Some(shown)), Spot::Stash | Spot::Page(_)) if shown == line.spot => STASH_GRID,
+            _ => continue,
         };
         frames.extend(
             line.cells
@@ -209,18 +225,6 @@ pub fn item_frames(advice: &[Advice], stash: Option<Spot>) -> Vec<(Rect, Rgba)> 
         );
     }
     frames
-}
-
-/// Sell red, move / stow orange, keep for trade gold, keep for the builds green; give-away
-/// items get no frame.
-const fn action_colour(action: Action) -> Option<Rgba> {
-    match action {
-        Action::Sell => Some(SELL),
-        Action::Move(_) | Action::Stow(_) => Some(MOVE),
-        Action::Keep(Side::Trade) => Some(MONEY),
-        Action::Keep(Side::Own) => Some(BUILD),
-        Action::GiveAway => None,
-    }
 }
 
 fn pick(note: &ShopNote) -> Option<Pick> {
@@ -344,7 +348,7 @@ const fn px(n: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::guidance::{Category, Mark, Tier};
+    use crate::guidance::{Category, Mark, Side, Tier};
     use crate::item_stats::ItemStat;
     use crate::shop::shop_item;
     use anyhow::{Context, Result};
@@ -518,10 +522,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn item_frames_follow_the_plans_actions() {
+    fn every_action_everywhere() -> Vec<Advice> {
         use crate::guidance::Tab;
-        let plan = [
+        vec![
             advice(
                 Spot::Inventory,
                 Action::Sell,
@@ -534,30 +537,47 @@ mod tests {
             advice(Spot::Inventory, Action::GiveAway, &[cells(9, 0, 1, 1)]),
             advice(Spot::Cube, Action::Sell, &[cells(0, 0, 1, 1)]),
             advice(Spot::Stash, Action::Sell, &[cells(0, 0, 1, 1)]),
+            advice(Spot::Stash, Action::Keep(Side::Own), &[cells(5, 5, 1, 1)]),
             advice(Spot::Page(3), Action::Move(Side::Own), &[cells(1, 1, 1, 1)]),
-        ];
-        let inv = |x: u32, w: u32| rect(1269 + 49 * x, 552, w, w);
-        let carried = [
-            (inv(0, 48), SELL),
-            (inv(2, 48), SELL),
-            (inv(4, 97), BUILD),
-            (inv(6, 48), MONEY),
-            (inv(7, 48), MOVE),
-            (inv(8, 48), MOVE),
-        ];
+            advice(Spot::Page(3), Action::Stow(Tab::Gems), &[cells(2, 2, 1, 1)]),
+            advice(Spot::Page(3), Action::Keep(Side::Trade), &[cells(3, 3, 1, 1)]),
+        ]
+    }
+
+    fn inv(x: u32) -> Rect {
+        rect(1269 + 49 * x, 552, 48, 48)
+    }
+
+    #[test]
+    fn at_a_vendor_only_the_inventorys_sell_items() {
         assert_eq!(
-            item_frames(&plan, None),
-            carried,
-            "no give-away frame, no cube grid"
+            item_frames(&every_action_everywhere(), Window::Vendor),
+            [(inv(0), SELL), (inv(2), SELL)],
+            "no move, stow, keep or give-away frames; no cube or stash grid"
+        );
+    }
+
+    #[test]
+    fn at_the_stash_the_shown_tabs_sell_and_move_items_and_the_inventorys_moves() {
+        let plan = every_action_everywhere();
+        let inventory = [(inv(7), MOVE), (inv(8), MOVE)];
+        assert_eq!(
+            item_frames(&plan, Window::Stash(None)),
+            inventory,
+            "tab unknown: the inventory's items for the stash, no sell marks"
         );
         assert_eq!(
-            item_frames(&plan, Some(Spot::Page(3))),
-            [carried.as_slice(), &[(rect(212, 262, 48, 48), MOVE)]].concat(),
-            "shared page 3 shown: its items too, not the personal stash's"
+            item_frames(&plan, Window::Stash(Some(Spot::Page(3)))),
+            [
+                inventory.as_slice(),
+                &[(rect(212, 262, 48, 48), MOVE), (rect(261, 311, 48, 48), MOVE)]
+            ]
+            .concat(),
+            "shared page 3 shown: its move and stow items, not its kept one"
         );
         assert_eq!(
-            item_frames(&plan, Some(Spot::Stash)),
-            [carried.as_slice(), &[(rect(163, 213, 48, 48), SELL)]].concat(),
+            item_frames(&plan, Window::Stash(Some(Spot::Stash))),
+            [inventory.as_slice(), &[(rect(163, 213, 48, 48), SELL)]].concat(),
             "the personal tab shown: its sell item, not page 3's"
         );
     }
