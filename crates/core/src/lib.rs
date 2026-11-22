@@ -13,6 +13,7 @@ pub mod game_file;
 pub mod guidance;
 pub mod hypr;
 pub mod info;
+pub mod inv_sizes_data;
 pub mod item_levels_data;
 pub mod item_names_data;
 pub mod item_stats;
