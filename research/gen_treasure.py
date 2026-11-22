@@ -26,12 +26,17 @@ The Countess also has a dedicated rune TC beside her item TC (`Countess` = `Coun
 NoDrop 5. Those are her reliable runes; `COUNTESS_RUNES` lists, per difficulty, each rune it
 reaches with the chance of at least one per kill, 1 - (1 - p)^picks, p the chained per-pick
 chance (solo: NoDrop as listed, no /players). Higher runes come only through her item TC.
+`AREA_85`: what any monster of a Hell area of monster level 85 (`MonLvlEx(H)`) can drop: the
+area's `nmon1..25` with their `TreasureClass(H)` / `TreasureClassChamp(H)` /
+`TreasureClassUnique(H)`, each upgraded in its group to the monster's level (normal 85,
+champion 87, unique 88); the item level the playstyle checks quality levels against is 85.
 Unique / set items are matched against these codes by the playstyle (`playstyle::worth`)
 with the existing name / code / qlvl tables (item_names_data.rs, item_levels_data.rs).
 """
 import json
 import math
 import re
+import textwrap
 import sys
 
 src = sys.argv[1]
@@ -152,6 +157,19 @@ for shown, source, key in BOSSES:
     rows.append((shown, lvls, sets, roots))
 
 
+AREA_LEVEL = 85
+# Hell: champions are 2 levels above the area, uniques 3.
+AREA_TCS = [("TreasureClass(H)", 0), ("TreasureClassChamp(H)", 2), ("TreasureClassUnique(H)", 3)]
+area_ids = sorted(i for i, r in levels.items() if r.get("MonLvlEx(H)") == AREA_LEVEL)
+area_monsters = sorted({levels[i][f"nmon{n}"] for i in area_ids for n in range(1, 26) if levels[i].get(f"nmon{n}")})
+area_codes = set()
+for mon in area_monsters:
+    for column, plus in AREA_TCS:
+        tc = monstats[mon].get(column)
+        if tc:
+            area_codes |= flatten(upgrade(tc, AREA_LEVEL + plus))
+area_codes = sorted(area_codes)
+
 
 def pick_chances(name):
     """Per-pick chance of each item code under TC `name`, NoDrop included at every level."""
@@ -187,6 +205,8 @@ for _, _, sets, _ in rows:
     for s in sets:
         if s not in lists:
             lists.append(s)
+if area_codes not in lists:
+    lists.append(area_codes)
 
 
 def rust_str(s):
@@ -223,3 +243,9 @@ for tc, runes in countess_runes:
     print(f"    // {tc}")
     print(f"    &[{', '.join(f'({rust_str(c)}, {p:.4f})' for c, p in runes)}],")
 print("];")
+print()
+print(f"/// What any monster of a Hell area of monster level {AREA_LEVEL} can drop: (the item level")
+print("/// quality levels are checked against, the sorted item codes their TCs reach). Areas:")
+for line in textwrap.wrap(", ".join(levels[i]["LevelName"] for i in area_ids), 94):
+    print(f"/// {line}")
+print(f"pub const AREA_85: (u32, &[&str]) = ({AREA_LEVEL}, D{lists.index(area_codes)});")

@@ -49,12 +49,38 @@ pub fn worth(
     let Some((ilvl, drops)) = boss_drops(boss, difficulty) else {
         return Vec::new();
     };
-    let drops_code = |code: &str| drops.binary_search(&code).is_ok();
     let rune_floor = rune_floor(boss, difficulty);
-    let farmed_here = |rune: &str| {
-        rune_rank(rune).is_some_and(|rank| rune_floor.is_none_or(|floor| rank > floor))
-            && rune_code(rune).is_some_and(|c| drops_code(&c))
-    };
+    let counts = |rune: &str| rune_rank(rune).is_some_and(|rank| rune_floor.is_none_or(|floor| rank > floor));
+    worth_in(ilvl, drops, &counts, farm, holdings, materials)
+}
+
+/// The still-missing farm entries any monster of a Hell area of level 85 can drop
+/// ([`d2r_core::drops_data::AREA_85`]), as [`worth`] gives them; the runes the Countess drops
+/// reliably in `difficulty` are left to her (none without a difficulty).
+#[must_use]
+pub fn area_85(
+    difficulty: Option<u8>,
+    farm: &[FarmGroup],
+    holdings: &Holdings,
+    materials: &[(String, u32)],
+) -> Vec<(String, Why)> {
+    let (ilvl, drops) = d2r_core::drops_data::AREA_85;
+    let counts = |rune: &str| difficulty.is_none_or(|d| countess_rune_chance(rune, d).is_none());
+    worth_in(ilvl, drops, &counts, farm, holdings, materials)
+}
+
+/// The still-missing farm entries a drop of item level `ilvl` from the sorted codes `drops`
+/// can be, a runeword only for its missing runes that `counts`.
+fn worth_in(
+    ilvl: u32,
+    drops: &[&str],
+    counts: &dyn Fn(&str) -> bool,
+    farm: &[FarmGroup],
+    holdings: &Holdings,
+    materials: &[(String, u32)],
+) -> Vec<(String, Why)> {
+    let drops_code = |code: &str| drops.binary_search(&code).is_ok();
+    let farmed_here = |rune: &str| counts(rune) && rune_code(rune).is_some_and(|c| drops_code(&c));
     let mut out: Vec<(String, Why)> = Vec::new();
     for item in farm.iter().flat_map(|g| &g.items) {
         if out.iter().any(|(name, _)| same_name(name, &item.name)) {
@@ -537,6 +563,40 @@ mod tests {
         assert!(!andariel.iter().any(|w| w == "Arachnid Mesh"), "qlvl 87");
         assert!(!andariel.iter().any(|w| w.contains('(')), "{andariel:?}");
         assert!(mephisto.iter().any(|w| w == "Heart of the Oak (Pul)"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_level_85_area_drops_qlvl_85_and_leaves_reliable_runes_to_the_countess() -> Result<()> {
+        // Highlord's Wrath qlvl 73, Arachnid Mesh qlvl 87; Hell Countess: Um reliable, Vex not.
+        let farm = farm_of(
+            "{ name = \"Highlord's Wrath\", kind = \"unique\" },\n\
+             { name = \"Arachnid Mesh\", kind = \"unique\" },\n\
+             { name = \"Heart of the Oak\", kind = \"runeword\" },\n\
+             { name = \"Duress\", kind = \"runeword\" },",
+        )?;
+        let owned: Vec<(String, u32)> = ["Shael", "Thul"]
+            .iter()
+            .map(|r| (format!("{r} Rune"), 1))
+            .collect();
+        let shown = |d: Option<u8>| -> Vec<String> {
+            area_85(d, &farm, &NO_HOLDINGS, &owned)
+                .into_iter()
+                .map(|(name, why)| match why {
+                    Why::Drops => name,
+                    Why::Runes(r) => format!("{name} ({})", r.join(", ")),
+                })
+                .collect()
+        };
+        assert_eq!(shown(Some(HELL)), ["Highlord's Wrath", "Heart of the Oak (Vex)"]);
+        assert_eq!(
+            shown(None),
+            [
+                "Highlord's Wrath",
+                "Heart of the Oak (Ko, Vex, Pul)",
+                "Duress (Um)"
+            ]
+        );
         Ok(())
     }
 
