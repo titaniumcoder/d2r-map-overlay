@@ -16,6 +16,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::game::ItemDrop;
+use crate::guidance::Tab;
 use crate::items::{self, DropKind};
 use crate::names::ItemKind;
 use crate::offsets::item_data;
@@ -196,9 +197,11 @@ pub fn runes_level(word: &Runeword) -> Option<u32> {
 /// Gem grade prefixes by [`items::gem`] grade; the normal grade has none.
 const GEM_GRADES: [&str; 5] = ["Chipped ", "Flawed ", "", "Flawless ", "Perfect "];
 
-/// Names of the other stackable codes the materials tab can hold (classic misc.txt plus the
-/// D2R uber keys, organs and essences). Unknown codes keep their code as the name.
-const OTHER_MATERIALS: [(&str, &str); 13] = [
+/// Names of the stackables the game sorts into the stash's Materials tab (user screenshot,
+/// 2026-11-22: uber keys, organs, rejuvenation potions, the Colossal Ancient statues, essences,
+/// token, Standard of Heroes, worldstone shards; misc.txt names). [`tab_of`] takes its codes
+/// as the Materials tab's. Unknown codes keep their code as the name.
+const OTHER_MATERIALS: [(&str, &str); 30] = [
     ("rvs", "Rejuvenation Potion"),
     ("rvl", "Full Rejuvenation Potion"),
     ("pk1", "Key of Terror"),
@@ -212,7 +215,43 @@ const OTHER_MATERIALS: [(&str, &str); 13] = [
     ("bet", "Burning Essence of Terror"),
     ("fed", "Festering Essence of Destruction"),
     ("toa", "Token of Absolution"),
+    ("std", "Standard of Heroes"),
+    ("ua1", "Talic's Anguish"),
+    ("ua2", "Korlic's Pain"),
+    ("ua3", "Madawc's Ire"),
+    ("ua4", "Bul-Kathos' Nightmare"),
+    ("ua5", "Worusk's End"),
+    ("um1", "Defender's Fire"),
+    ("um2", "Defender's Bile"),
+    ("um3", "Protector's Frost"),
+    ("um4", "Protector's Stone"),
+    ("um5", "Guardian's Thunder"),
+    ("um6", "Guardian's Light"),
+    ("xa1", "Western Worldstone Shard"),
+    ("xa2", "Eastern Worldstone Shard"),
+    ("xa3", "Southern Worldstone Shard"),
+    ("xa4", "Deep Worldstone Shard"),
+    ("xa5", "Northern Worldstone Shard"),
 ];
+
+/// The stash tab the game sorts a stackable of item code `code` into (user rule, 2026-11-22:
+/// "materials all go to Materials, gems to the Gems tab, runes to the Runes tab"): every gem
+/// and skull grade to Gems, the runes to Runes, the [`OTHER_MATERIALS`] to Materials; `None`
+/// for anything else.
+#[must_use]
+pub fn tab_of(code: &str) -> Option<Tab> {
+    if OTHER_MATERIALS.iter().any(|(c, _)| *c == code) {
+        return Some(Tab::Materials);
+    }
+    let bytes = items::code_bytes(code)?;
+    if items::gem(bytes).is_some() {
+        return Some(Tab::Gems);
+    }
+    match items::code_kind(bytes) {
+        Some(DropKind::Rune(_)) => Some(Tab::Runes),
+        _ => None,
+    }
+}
 
 /// The in-game name of a gem, rune or other stackable by its code (`"gcv"` → `"Chipped
 /// Amethyst"`, `"r01"` → `"El Rune"`); `None` for an unknown code.
@@ -537,6 +576,24 @@ mod tests {
         assert_eq!(material_name("rvl").as_deref(), Some("Full Rejuvenation Potion"));
         assert_eq!(material_name("r34"), None);
         assert_eq!(material_name("crs"), None);
+        assert_eq!(material_name("xa4").as_deref(), Some("Deep Worldstone Shard"));
+    }
+
+    #[test]
+    fn stackables_sort_into_their_stash_tab() {
+        for code in [
+            "pk1", "pk3", "mbr", "tes", "toa", "std", "ua1", "um6", "xa5", "rvl",
+        ] {
+            assert_eq!(tab_of(code), Some(Tab::Materials), "{code}");
+        }
+        for code in ["gcv", "gpw", "skc", "skz"] {
+            assert_eq!(tab_of(code), Some(Tab::Gems), "{code}");
+        }
+        assert_eq!(tab_of("r01"), Some(Tab::Runes));
+        assert_eq!(tab_of("r33"), Some(Tab::Runes));
+        for code in ["r34", "crs", "cm3", "jew", "hp5", "key"] {
+            assert_eq!(tab_of(code), None, "{code}");
+        }
     }
 
     /// An item with `code`, `quality` and `sockets` (no flags) for the holdings tests.

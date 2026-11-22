@@ -42,8 +42,16 @@
 //! [`gear_score::teleport_wanted`]); with one it is scored like any other. A Teleport weapon
 //! of a type no build uses is still sold as "not a build weapon".
 //! On the map nothing changes: a ground drop's stats aren't read before pickup.
-//! Gems, runes, charms in the inventory (they work there), finished runewords that aren't
-//! build pieces, quest items and anything else no rule speaks about get no action.
+//! **Stow** (user rule, 2026-11-22): D2R's stash window has its own Gems, Materials and Runes
+//! tabs, and the game sorts every stackable into one by type ([`stash::tab_of`]): gems and
+//! skulls, runes, and the materials (uber keys, organs, essences, token, Standard of Heroes,
+//! statues, worldstone shards, Colossal Jewel upgrade materials, rejuvenation potions). Such an
+//! item anywhere else (inventory, cube, personal stash, pages 1–4) is moved to its tab, before
+//! any other rule: never to a trade page, never sold. Rejuvenation potions in the inventory
+//! stay (they are drunk from there). What already sits in those tabs is not judged; it counts
+//! as held (the recipes' runes and gems, `web::recipes::materials_of`).
+//! Charms in the inventory (they work there), finished runewords that aren't build pieces,
+//! quest items and anything else no rule speaks about get no action.
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -56,13 +64,14 @@ use crate::gear_score::{self, Piece, Profile};
 use crate::valuables::{self, Tier, Verdict};
 use crate::web::farm::{FarmStatus, farm_status};
 use d2r_core::game::{ItemDrop, Place, Snapshot};
+use d2r_core::guidance::Tab;
 use d2r_core::item_stats::{ItemStat, stat};
 use d2r_core::items::DropKind;
 use d2r_core::names::same_name;
 use d2r_core::offsets::item_data;
 use d2r_core::runewords_data::{self, Runeword};
 use d2r_core::socket_bases::{self, MercAct, Wearer};
-use d2r_core::stash::{StashTab, TabKind};
+use d2r_core::stash::{self, StashTab, TabKind};
 
 /// The last shared-stash page for the player's own items; the pages after it are for trade.
 const LAST_OWN_PAGE: u8 = 2;
@@ -760,11 +769,19 @@ fn fills(need: &BaseNeed, base: &ItemDrop) -> bool {
         })
 }
 
-/// An item the plan leaves alone: gems and runes (their own tab), charms in the inventory
-/// (they work there) and finished runewords that aren't a build piece.
+/// The stash tab `h` belongs in when it is a gem, rune or material ([`stash::tab_of`]); `None`
+/// for anything else and for a rejuvenation potion in the inventory (drunk from there).
+fn stow(h: &Held) -> Option<Tab> {
+    let code = h.item.code.as_deref()?;
+    let potion = matches!(code, "rvs" | "rvl");
+    stash::tab_of(code).filter(|_| !(potion && h.spot == Spot::Inventory))
+}
+
+/// An item the plan leaves alone: charms in the inventory (they work there) and finished
+/// runewords that aren't a build piece. Gems and runes go to their tab ([`stow`]).
 fn left_alone(h: &Held) -> bool {
     match h.item.kind {
-        DropKind::Gem(_) | DropKind::Rune(_) => true,
+        DropKind::Gem(_) | DropKind::Rune(_) => false,
         DropKind::Charm { .. } => h.spot == Spot::Inventory,
         DropKind::Base | DropKind::Set | DropKind::Unique => h.item.flags & item_data::FLAG_RUNEWORD != 0,
     }
@@ -1034,8 +1051,11 @@ pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> (Vec<Advice>, W
         if slot.is_some() || left_alone(h) {
             continue;
         }
-        // A Teleport item is own gear before any trade rule ([`keeps_teleport`]).
-        let action = if trade_worthy(&h.item) && !keeps_teleport(&h.item, scoring) {
+        // A gem, rune or material goes to its tab before any other rule; a Teleport item is
+        // own gear before any trade rule ([`keeps_teleport`]).
+        let action = if let Some(tab) = stow(h) {
+            Some(Action::Stow(tab))
+        } else if trade_worthy(&h.item) && !keeps_teleport(&h.item, scoring) {
             match valuables::keep_one_name(&h.item) {
                 Some(name) if kept_one.contains(&name) => Some(Action::GiveAway),
                 one => {
@@ -1795,29 +1815,66 @@ mod tests {
     }
 
     #[test]
-    fn gems_runes_carried_charms_and_other_items_are_left_alone() {
-        let mut vex = base("r26", 0);
-        vex.kind = DropKind::Rune(26);
-        let mut gem = base("gpv", 0);
-        gem.kind = DropKind::Gem(d2r_core::items::GemColour::Amethyst);
+    fn carried_charms_and_other_items_are_left_alone() {
         let mut torch = named("cm2", 7, 381);
         torch.kind = DropKind::Charm {
             size: d2r_core::items::CharmSize::Large,
             unique: true,
         };
-        let mut potion = base("hp1", 0);
-        potion.kind = DropKind::Base;
         let mut spirit = base("crs", 4);
         spirit.flags |= item_data::FLAG_RUNEWORD;
         let items = [
-            at(vex.clone(), Spot::Page(1)),
-            at(vex, Spot::Inventory),
-            at(gem, Spot::Page(4)),
             at(torch, Spot::Inventory),
-            at(potion, Spot::Inventory),
+            at(base("hp1", 0), Spot::Inventory),
+            at(base("rvl", 0), Spot::Inventory),
             at(spirit, Spot::Page(4)),
         ];
         assert_eq!(rows(&items, &harmony_needs()), vec![]);
+    }
+
+    /// User report, 2026-11-22: a Key of Terror was sent to the trade pages, but the game has a
+    /// Materials tab for it (and Gems and Runes tabs).
+    #[test]
+    fn gems_runes_and_materials_go_to_their_stash_tab() {
+        let mut vex = base("r26", 0);
+        vex.kind = DropKind::Rune(26);
+        let mut gem = base("gpv", 0);
+        gem.kind = DropKind::Gem(d2r_core::items::GemColour::Amethyst);
+        let items = [
+            at(base("pk1", 0), Spot::Inventory),
+            at(base("pk1", 0), Spot::Page(3)),
+            at(base("mbr", 0), Spot::Page(1)),
+            at(base("xa2", 0), Spot::Cube),
+            at(base("rvl", 0), Spot::Stash),
+            at(vex.clone(), Spot::Page(1)),
+            at(vex, Spot::Inventory),
+            at(gem, Spot::Page(4)),
+            // The ignored page stays ignored.
+            at(base("pk2", 0), Spot::Page(IGNORED_PAGE)),
+        ];
+        assert_eq!(
+            rows(&items, &harmony_needs()),
+            vec![
+                row("Perfect Amethyst", Spot::Page(4), Action::Stow(Tab::Gems), 1),
+                row(
+                    "Eastern Worldstone Shard",
+                    Spot::Cube,
+                    Action::Stow(Tab::Materials),
+                    1
+                ),
+                row(
+                    "Full Rejuvenation Potion",
+                    Spot::Stash,
+                    Action::Stow(Tab::Materials),
+                    1
+                ),
+                row("Key of Terror", Spot::Inventory, Action::Stow(Tab::Materials), 1),
+                row("Key of Terror", Spot::Page(3), Action::Stow(Tab::Materials), 1),
+                row("Mephisto's Brain", Spot::Page(1), Action::Stow(Tab::Materials), 1),
+                row("Vex Rune", Spot::Inventory, Action::Stow(Tab::Runes), 1),
+                row("Vex Rune", Spot::Page(1), Action::Stow(Tab::Runes), 1),
+            ]
+        );
     }
 
     #[test]

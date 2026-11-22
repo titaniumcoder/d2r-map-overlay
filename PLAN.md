@@ -428,6 +428,11 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   `+0x10` next. Normal pages are numbered 1-based in list order (`stash::TabKind::Page(n)`), the advanced tab is
   `TabKind::Materials`. A listed tab whose unit isn't in the unit table is an empty tab (numbers never shift). No list
   but live tab units: pages in unit-table order plus a snapshot warning. Verified: Sigon's set on page 5, 49 stacks.
+- **One advanced unit, three UI tabs** (user screenshot 2026-11-22): the stash window shows `Personal | Shared |
+  Gems | Materials | Runes`; in memory Gems, Materials and Runes are the one advanced tab unit (the log's
+  "6 tabs" = 5 shared pages + it). The reader reads all its stacks; which UI tab a stack shows in follows
+  from its item type (`stash::tab_of`), not from memory. Its stacks already count as held: the recipes'
+  runes and gems (`web::recipes::materials_of`) and the dashboard's materials panel.
 - **Tab items**: each tab unit's `Inventory + 0x10` = first item unit, then `ItemData + 0xB0` = next item in the
   same inventory (`item_data::NEXT_IN_INVENTORY`), capped at 100 per tab. The advanced tab's stacks have `OWNER`
   `NO_OWNER`, page 4, no stat list, and their stack size at `ItemData + 0x9C` (`item_data::QUANTITY`); zero-size
@@ -784,7 +789,17 @@ progress per character and difficulty (like the build stage in `played.json`).
 **Item places: sell / move / keep (user rule, 2026-11-20)** — playstyle logic, part of step 5's
 trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel.
 - Shared stash pages 1–2 are the player's own (build pieces, simple bases until something good
-  drops), pages 3–4 are for trading. The gem / rune / materials tab is out of scope.
+  drops), pages 3–4 are for trading.
+- **Gems / Materials / Runes tabs** (user, 2026-11-22: "materials all go to Materials, gems to the Gems
+  tab, runes to the Runes tab"): `stash::tab_of` sorts gems and skulls (all grades) to Gems, runes to
+  Runes, and to Materials the uber keys (pk1–3), organs (dhn, bey, mbr), essences and Token of
+  Absolution (tes, ceh, bet, fed, toa), Standard of Heroes (std), Colossal Ancient statues (ua1–5),
+  Colossal Jewel upgrade materials (um1–6), worldstone shards (xa1–5) and rejuvenation potions (rvs,
+  rvl; the screenshot's Materials tab holds two stacks). Such an item in the inventory, cube, personal
+  stash or on pages 1–4 gets `Action::Stow(Tab)` ("Key of Terror (inv → mats)", in the Move list,
+  target `gems` / `mats` / `runes`) before any other rule: never a page move, never sold. Exception:
+  rejuvenation potions in the inventory (drunk from there). The tab's own stacks are not judged (no
+  action) but count as held; page 5 stays ignored.
 - **Page 5 is the "ignore page"** (user, 2026-11-20: "things i keep around for stupidity"): its
   items get no verdict and appear in no list, and nothing is ever moved there. They still count
   as held (`Snapshot::holdings`), so a runeword on page 5 still drops its base need.

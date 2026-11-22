@@ -476,13 +476,15 @@ pub fn font() -> Option<&'static FontVec> {
 }
 
 /// One Sell / Keep panel entry as text: `Gravenspine (inv)`, `Magefist ×2 (stash)`, a move
-/// with its target pages `Hunter's Bow 4os (page 4 → 1–2)`, a scored sell with its reason
-/// `Rare Ring (page 4, no build stats)`.
+/// with its target pages `Hunter's Bow 4os (page 4 → 1–2)` or stash tab `Key of Terror (inv →
+/// mats)`, a scored sell with its reason `Rare Ring (page 4, no build stats)`.
 #[must_use]
 pub fn advice_entry(a: &Advice) -> String {
     let mut place = a.spot.label();
-    if let Action::Move(side) = a.action {
-        place = format!("{place} → {}", side.pages());
+    match a.action {
+        Action::Move(side) => place = format!("{place} → {}", side.pages()),
+        Action::Stow(tab) => place = format!("{place} → {}", tab.label()),
+        Action::Sell | Action::Keep(_) | Action::GiveAway => {}
     }
     if let Some(reason) = a.reason {
         place = format!("{place}, {reason}");
@@ -1235,7 +1237,7 @@ mod tests {
 
     #[test]
     fn advice_entries() {
-        use crate::guidance::{Side, Spot};
+        use crate::guidance::{Side, Spot, Tab};
         let advice = |name: &str, spot, action, count| Advice {
             name: name.into(),
             spot,
@@ -1263,6 +1265,15 @@ mod tests {
         assert_eq!(
             advice_entry(&advice("Shako", Spot::Cube, Action::Move(Side::Trade), 1)),
             "Shako (cube → 3–4)"
+        );
+        assert_eq!(
+            advice_entry(&advice(
+                "Key of Terror",
+                Spot::Inventory,
+                Action::Stow(Tab::Materials),
+                2
+            )),
+            "Key of Terror ×2 (inv → mats)"
         );
         assert_eq!(
             advice_entry(&advice("a", Spot::Page(1), Action::Keep(Side::Own), 1)),

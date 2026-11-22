@@ -279,7 +279,7 @@ pub fn level_range(setup: &str) -> Option<(u32, u32)> {
 /// The item plan's entries as `{ "text", "colour", "name", "count", "place", "target",
 /// "wrong_place", "reason" }` objects in the block's colour: `text` is the whole entry
 /// ([`d2r_core::info::advice_entry`]); `place` the spot (`inv`, `page 4`); `target` the pages a
-/// move goes to (`1–2`, else `null`); `wrong_place` whether the item sits where it doesn't
+/// move goes to (`1–2`, or the tab: `mats`, `gems`, `runes`; else `null`); `wrong_place` whether the item sits where it doesn't
 /// belong (every move: the page shows the place in red, user request 2026-11-20); `reason` why
 /// a scored item is sold (else `null`).
 #[must_use]
@@ -290,6 +290,7 @@ pub fn advice_lines(list: &[crate::stash_plan::Advice], colour: [u8; 4]) -> Vec<
         .map(|a| {
             let target = match a.action {
                 Action::Move(side) => Some(side.pages()),
+                Action::Stow(tab) => Some(tab.label()),
                 Action::Sell | Action::Keep(_) | Action::GiveAway => None,
             };
             serde_json::json!({

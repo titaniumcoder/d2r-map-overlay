@@ -123,12 +123,37 @@ impl Side {
     }
 }
 
+/// One of the stash window's tabs for stackables (D2R shows `Personal | Shared | Gems |
+/// Materials | Runes`; the game sorts each stackable into its tab by type,
+/// [`crate::stash::tab_of`]). In memory the three are one "advanced" tab unit
+/// ([`crate::stash::TabKind::Materials`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Tab {
+    Gems,
+    Materials,
+    Runes,
+}
+
+impl Tab {
+    /// The short label shown as a move's target: `gems`, `mats`, `runes`.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Gems => "gems",
+            Self::Materials => "mats",
+            Self::Runes => "runes",
+        }
+    }
+}
+
 /// What to do with an item. Declared in the dashboard's order (the derived `Ord` sorts by it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Action {
     Sell,
     /// Kept, but on the wrong place: move it to the side's pages.
     Move(Side),
+    /// A gem, rune or material outside its stash tab: move it there (user rule, 2026-11-22).
+    Stow(Tab),
     /// Kept where it is.
     Keep(Side),
     GiveAway,

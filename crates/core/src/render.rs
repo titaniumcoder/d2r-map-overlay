@@ -1241,7 +1241,7 @@ pub fn text_blocks(snap: &Snapshot, guidance: &Guidance, width: u32, font: Optio
                 .collect(),
         // Every entry: the dashboard lays them out as one wrapping run.
         sell: entries(guidance, |a| a == Action::Sell),
-        moves: entries(guidance, |a| matches!(a, Action::Move(_))),
+        moves: entries(guidance, |a| matches!(a, Action::Move(_) | Action::Stow(_))),
         keep_own: entries(guidance, |a| a == Action::Keep(Side::Own)),
         keep_trade: entries(guidance, |a| a == Action::Keep(Side::Trade)),
         give: entries(guidance, |a| a == Action::GiveAway),
