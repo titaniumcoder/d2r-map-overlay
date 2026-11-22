@@ -11,6 +11,7 @@ use super::recipes::{Input, runeword_slots, socket_count};
 use super::*;
 use crate::config;
 use d2r_core::build::Damage;
+use d2r_core::socket_bases::WeaponRule;
 use d2r_core::web::LiveInfo;
 use d2r_core::web::fixtures::{EMPTY_MARKS, EMPTY_SKILLS, lines_of, stash_item, test_stash};
 
@@ -3723,6 +3724,18 @@ fn next_stage_gear_lists_the_next_build_s_charm_wishes() -> Result<()> {
 /// The next stage's Body column for a Fury wanting `body`, with `bases` (armour code, sockets)
 /// on page 1 and one of each of `runes` held.
 fn next_body(body: &[&str], bases: &[(&str, u8)], runes: &[&str]) -> Result<Vec<serde_json::Value>> {
+    next_column("body", WeaponRule::default(), body, bases, runes)
+}
+
+/// The next stage's only column, `slot`, for a Fury with weapon rule `rule` wanting `pieces`,
+/// with `bases` (code, sockets) on page 1 and one of each of `runes` held.
+fn next_column(
+    slot: &str,
+    rule: WeaponRule,
+    pieces: &[&str],
+    bases: &[(&str, u8)],
+    runes: &[&str],
+) -> Result<Vec<serde_json::Value>> {
     use d2r_core::offsets::item_data::QUALITY_NORMAL;
     let summoner = config::Build {
         name: "Summoner".to_owned(),
@@ -3731,7 +3744,8 @@ fn next_body(body: &[&str], bases: &[(&str, u8)], runes: &[&str]) -> Result<Vec<
     };
     let fury = config::Build {
         name: "Fury".to_owned(),
-        slots: [("body".to_owned(), body.iter().map(|p| (*p).to_owned()).collect())].into(),
+        slots: [(slot.to_owned(), pieces.iter().map(|p| (*p).to_owned()).collect())].into(),
+        weapon_rule: rule,
         ..config::Build::default()
     };
     let items = bases
@@ -3762,6 +3776,29 @@ fn next_body(body: &[&str], bases: &[(&str, u8)], runes: &[&str]) -> Result<Vec<
         .and_then(serde_json::Value::as_array)
         .cloned()
         .context("body pieces")
+}
+
+#[test]
+fn next_stage_gear_crafts_no_werewolf_weapon_in_a_bow() -> Result<()> {
+    // Breath of the Dying: every rune and a Gothic Bow 6os; the werewolf can't shoot.
+    let botd = |rule| {
+        next_column(
+            "weapon",
+            rule,
+            &["Breath of the Dying@69"],
+            &[("8lw", 6)],
+            &["Vex", "Hel", "El", "Eld", "Zod", "Eth"],
+        )
+    };
+    let craft = |pieces: &[serde_json::Value]| pieces.first().and_then(|p| p.get("craft")).cloned();
+    let any = botd(WeaponRule::default())?;
+    assert!(craft(&any).is_some_and(|c| c.is_string()), "{any:?}");
+    let fury = botd(WeaponRule {
+        two_handed: true,
+        melee: true,
+    })?;
+    assert!(craft(&fury).is_some_and(|c| c.is_null()), "{fury:?}");
+    Ok(())
 }
 
 #[test]

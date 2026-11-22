@@ -156,7 +156,8 @@ fn chain(from: &str, builds: &BTreeMap<String, Build>) -> Vec<String> {
 /// Takes the marked pieces out of `builds` (keyed by slug) and of the `farm` groups for them.
 /// A runeword recipe leaves only once no piece of the build still names that runeword
 /// ("Hustle (weapon)" marked, "Hustle (armor)" kept: the recipe stays). `switch_requires` is
-/// left alone: a stage switch keeps wanting its items. Afterwards `marks` keeps, per build,
+/// left alone, so a stage switch keeps its conditions; the stash plan skips the marked items
+/// there ([`covers`]). Afterwards `marks` keeps, per build,
 /// its own marks and the inherited ones that took something there (for the dashboard's
 /// undo); a name that matches nothing has no effect.
 pub fn apply(marks: &mut Marks, builds: &mut BTreeMap<String, Build>, farm: &mut [FarmGroup]) {
@@ -213,6 +214,12 @@ fn build_without(build: &mut Build, marks: &[Marked], took: &mut Vec<String>) {
     build.recipes.retain(|r| {
         r.kind != "runeword" || !took.iter().any(|n| same_name(n, &r.name)) || still_named(&r.name)
     });
+}
+
+/// Whether one of `marks` covers piece `name`.
+#[must_use]
+pub fn covers(marks: &[Marked], name: &str) -> bool {
+    find(marks, name).is_some()
 }
 
 /// The mark `name` falls under, compared as item names are ([`same_name`]): "Hustle" marked

@@ -140,6 +140,25 @@ pub fn two_handed_for(code: &str, wearer: Wearer) -> bool {
         && !(barbarian && crate::weapons_data::one_or_two_handed(code))
 }
 
+/// What a build's own `weapon` slot takes on top of what the class can hold (a build file's
+/// `weapon_rule`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WeaponRule {
+    /// Two-handed weapons only, as the wearer holds them ([`two_handed_for`]).
+    pub two_handed: bool,
+    /// No missile weapons (bows, crossbows): a shapeshifted druid can't shoot.
+    pub melee: bool,
+}
+
+impl WeaponRule {
+    /// Whether weapon base `code` keeps to the rule for `wearer`.
+    #[must_use]
+    pub fn allows(self, code: &str, wearer: Wearer) -> bool {
+        let missile = bases_data::base(code).is_some_and(|b| is_a(b.kind, "miss", 0));
+        (!self.two_handed || two_handed_for(code, wearer)) && !(self.melee && missile)
+    }
+}
+
 /// Whether a base of body slot `base_slot` goes in the wanted `slot` (`None`: any); a
 /// dual-wielding merc's off-hand takes a weapon.
 fn in_slot(wearer: Wearer, slot: Option<u8>, base_slot: u8) -> bool {
@@ -494,6 +513,25 @@ mod tests {
                 .all(|w| w.first().map(|p| p.def) >= w.get(1).map(|p| p.def))
         );
         Ok(())
+    }
+
+    #[test]
+    fn a_weapon_rule_takes_out_bows_and_one_handers() {
+        let fury = WeaponRule {
+            two_handed: true,
+            melee: true,
+        };
+        // Gothic Bow, Colossus Crossbow: missile weapons. Broad Sword: one-handed.
+        assert!(!fury.allows("8lw", DRUID) && !fury.allows("6hx", DRUID));
+        assert!(!fury.allows("bsd", DRUID));
+        // Legend Sword and Zweihander: 1-or-2-handed swords a druid holds in both hands.
+        assert!(fury.allows("72h", DRUID) && fury.allows("9fb", DRUID));
+        assert!(
+            !fury.allows("72h", Wearer::Player(4)),
+            "a barbarian holds it in one hand"
+        );
+        let any = WeaponRule::default();
+        assert!(any.allows("8lw", DRUID) && any.allows("bsd", DRUID));
     }
 
     #[test]

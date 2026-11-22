@@ -302,6 +302,8 @@ pub struct Build {
     pub merc_slots: BTreeMap<String, Vec<String>>,
     /// `merc_acts = [2, 1]` (or `merc_act = 5`), primary first; empty reads as Act 2.
     pub merc_acts: Vec<MercAct>,
+    /// `weapon_rule = { two_handed, melee }`: what the player's `weapon` slot takes.
+    pub weapon_rule: d2r_core::socket_bases::WeaponRule,
     /// `[pieces."<name>"]`: what the dashboard shows under a piece.
     pub pieces: BTreeMap<String, PieceInfo>,
     /// Free-text goals shown above the gear grid.
@@ -915,6 +917,7 @@ struct RawBuild {
     merc_slots: BTreeMap<String, Vec<String>>,
     merc_act: Option<u8>,
     merc_acts: Vec<u8>,
+    weapon_rule: RawWeaponRule,
     pieces: BTreeMap<String, PieceInfo>,
     targets: Vec<String>,
     extras: BTreeMap<String, Vec<String>>,
@@ -930,6 +933,14 @@ struct RawBuild {
     recipes: Vec<Recipe>,
     tips: Vec<RawTip>,
     stats_plan: Vec<String>,
+}
+
+/// `weapon_rule = { two_handed = true, melee = true }`: what the player's `weapon` slot takes.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawWeaponRule {
+    two_handed: bool,
+    melee: bool,
 }
 
 /// A `switch_requires` entry: an item name, or `{ label, any = [...], count }`. Hand-written
@@ -1092,6 +1103,10 @@ pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de:
             slots,
             merc_slots,
             merc_acts,
+            weapon_rule: d2r_core::socket_bases::WeaponRule {
+                two_handed: raw.weapon_rule.two_handed,
+                melee: raw.weapon_rule.melee,
+            },
             pieces: raw.pieces,
             targets: clean_pieces(&raw.targets),
             extras: clean_extras(raw.extras),
@@ -2117,6 +2132,22 @@ mod tests {
         let (_, odd, warnings) = parse_build("name = \"B\"\nmerc_act = 3\nmerc_acts = [5, 4, 5]\n")?;
         assert_eq!(odd.merc_acts, vec![MercAct::Act5]);
         assert_eq!(warnings.len(), 3, "{warnings:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_build_names_its_weapon_rule() -> Result<(), toml::de::Error> {
+        use d2r_core::socket_bases::WeaponRule;
+        let (_, build, _) = parse_build("name = \"B\"\nweapon_rule = { two_handed = true, melee = true }\n")?;
+        assert_eq!(
+            build.weapon_rule,
+            WeaponRule {
+                two_handed: true,
+                melee: true
+            }
+        );
+        let (_, plain, _) = parse_build("name = \"B\"\n")?;
+        assert_eq!(plain.weapon_rule, WeaponRule::default());
         Ok(())
     }
 }

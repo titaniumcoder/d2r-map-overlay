@@ -6,7 +6,7 @@
 use d2r_core::guidance::Spot;
 use d2r_core::offsets::item_data;
 use d2r_core::runewords_data::Runeword;
-use d2r_core::socket_bases::Wearer;
+use d2r_core::socket_bases::{WeaponRule, Wearer};
 
 use super::gear::{
     GRID_COLUMNS, MERC_COLUMNS, RING_COLUMN_AT, add_piece_details, charm_wishes_json, ring_pieces,
@@ -45,8 +45,9 @@ pub fn next_gear_json(info: &PanelInfo) -> serde_json::Value {
     };
     let class = info.live.class;
     let offhand = build.slots.contains_key("offhand");
-    // The player's columns in display order (title, pieces, body, wearer), then the merc's.
-    let mut player: Vec<(&str, Vec<String>, u8, Wearer)> = GRID_COLUMNS
+    // The player's columns in display order (title, pieces, body, wearer, the weapon slot's
+    // rule), then the merc's.
+    let mut player: Vec<(&str, Vec<String>, u8, Wearer, WeaponRule)> = GRID_COLUMNS
         .iter()
         .map(|&(title, slot, bodies)| {
             let wearer = if slot == "weapon" && offhand {
@@ -54,25 +55,42 @@ pub fn next_gear_json(info: &PanelInfo) -> serde_json::Value {
             } else {
                 Wearer::Player(class)
             };
+            let rule = if slot == "weapon" {
+                build.weapon_rule
+            } else {
+                WeaponRule::default()
+            };
             let pieces = build.slots.get(slot).cloned().unwrap_or_default();
-            (title, pieces, bodies.first().copied().unwrap_or(0), wearer)
+            (title, pieces, bodies.first().copied().unwrap_or(0), wearer, rule)
         })
         .collect();
     player.insert(
         RING_COLUMN_AT,
-        ("Ring", ring_pieces(Some(&build.slots)), 6, Wearer::Player(class)),
+        (
+            "Ring",
+            ring_pieces(Some(&build.slots)),
+            6,
+            Wearer::Player(class),
+            WeaponRule::default(),
+        ),
     );
     let columns: Vec<_> = player
         .iter()
-        .map(|(title, pieces, body, wearer)| {
-            (*title, pieces_json(pieces, |_| (Some(*body), *wearer), &mut next))
+        .map(|(title, pieces, body, wearer, rule)| {
+            (
+                *title,
+                pieces_json(pieces, |_| (Some(*body), *wearer, *rule), &mut next),
+            )
         })
         .collect();
     let merc: Vec<_> = MERC_COLUMNS
         .iter()
         .filter_map(|&(title, slot, body)| {
             let pieces = build.merc_slots.get(slot)?;
-            let wearer = |piece: &str| (Some(body), Wearer::Merc(build.merc_wearer(piece, Some(body))));
+            let wearer = |piece: &str| {
+                let act = build.merc_wearer(piece, Some(body));
+                (Some(body), Wearer::Merc(act), WeaponRule::default())
+            };
             Some((title, pieces_json(pieces, wearer, &mut next)))
         })
         .collect();
@@ -95,7 +113,7 @@ pub fn next_gear_json(info: &PanelInfo) -> serde_json::Value {
 
 fn pieces_json(
     pieces: &[String],
-    wearer: impl Fn(&str) -> (Option<u8>, Wearer),
+    wearer: impl Fn(&str) -> (Option<u8>, Wearer, WeaponRule),
     next: &mut Next,
 ) -> Vec<serde_json::Value> {
     pieces
@@ -112,7 +130,7 @@ fn pieces_json(
 /// piece past its leveling window leaves unless held.
 fn piece_json(
     piece: &str,
-    (slot, wearer): (Option<u8>, Wearer),
+    (slot, wearer, rule): (Option<u8>, Wearer, WeaponRule),
     next: &mut Next,
 ) -> Option<serde_json::Value> {
     let info = next.info;
@@ -123,7 +141,7 @@ fn piece_json(
         return None;
     }
     let word = d2r_core::runewords_data::lookup(name);
-    let found = word.and_then(|w| held_base(w, slot, wearer, &next.held));
+    let found = word.and_then(|w| held_base(w, (slot, wearer, rule), &next.held));
     let missing = word.map_or_else(Vec::new, |w| missing_runes(w, &next.materials));
     let craft = match (tick, word, &found) {
         (None, Some(w), Some((at, base))) if missing.is_empty() => {
@@ -216,8 +234,13 @@ fn missing_runes(word: &Runeword, materials: &[(String, u32)]) -> Vec<String> {
 }
 
 /// The first held white or superior base with exactly `word`'s socket count that can carry it
-/// for `wearer` in body `slot`: its index in `held` and `"Loricated Mail 4os (base on page 1)"`.
-fn held_base(word: &Runeword, slot: Option<u8>, wearer: Wearer, held: &[Held]) -> Option<(usize, String)> {
+/// for `wearer` in body `slot` under `rule`: its index in `held` and `"Loricated Mail 4os (base
+/// on page 1)"`.
+fn held_base(
+    word: &Runeword,
+    (slot, wearer, rule): (Option<u8>, Wearer, WeaponRule),
+    held: &[Held],
+) -> Option<(usize, String)> {
     held.iter().enumerate().find_map(|(i, h)| {
         let item = &h.item;
         let code = item.code.as_deref()?;
@@ -226,7 +249,8 @@ fn held_base(word: &Runeword, slot: Option<u8>, wearer: Wearer, held: &[Held]) -
             item_data::QUALITY_NORMAL | item_data::QUALITY_SUPERIOR
         ) && item.flags & item_data::FLAG_RUNEWORD == 0
             && usize::from(item.sockets) == word.runes.len()
-            && d2r_core::socket_bases::fits(word, code, wearer, slot);
+            && d2r_core::socket_bases::fits(word, code, wearer, slot)
+            && rule.allows(code, wearer);
         if !fits {
             return None;
         }

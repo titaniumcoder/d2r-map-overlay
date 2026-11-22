@@ -971,8 +971,10 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   one (`Settings::resolved_bis`; the ✕ writes there). The build files stay unchanged; an
   unknown name or build has no effect (listed for its undo), a broken file marks nothing. So
   the stash plan keeps neither the piece nor a base for it (it falls through to the trade /
-  sell rules), and the farm list, gear grid, upgrades and Recipes panel leave it out;
-  `switch_requires` items stay wanted. The live JSON's `gear.not_needed` / `farm.groups[].not_needed`
+  sell rules), and the farm list, gear grid, upgrades and Recipes panel leave it out.
+  `switch_requires` keeps the item as a switch condition, but the stash plan wants neither it
+  nor a base for it when it is marked for that build or the stage it switches to
+  (`Needs::switch_gear`, `not_needed::covers`; user decision 2026-11-22). The live JSON's `gear.not_needed` / `farm.groups[].not_needed`
   are `[{name, build}]`, `build` being where the mark was made (the undo writes there).
   Dashboard: a ✕ on each gear-grid piece and farm card (dim until hover); "show N not needed"
   under the grid and under each farm group lists the marked pieces struck through ("(Summoner
@@ -1330,10 +1332,13 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   as held (`Snapshot::holdings`), so a runeword on page 5 still drops its base need.
 - Judged: inventory, cube, personal stash and shared pages 1–4 (pages from the session-cached
   stash; the reader now also reads stored white bases and magic / rare / crafted items with stats).
-- **Keep · own**: pieces of the active build and its later stages (`BiS` slots, extras,
-  `switch_requires`) and of the farm list, as many copies as needed minus the worn ones; one white
+- **Keep · own**: pieces of the active build and its later stages (`BiS` slots without the
+  pieces whose leveling window the character has passed, extras, `switch_requires` without the
+  not-needed ones and, for a met any-of group, only its held candidates) and of the farm list,
+  as many copies as needed minus the worn ones; one white
   base per (runeword, wearer, slot) need: allowed type, exactly the rune count of sockets, usable by
-  the player class or the merc of the build's act that carries it (`merc_acts`); each copy of the runeword already held (worn, carried,
+  the player class (within the build's `weapon_rule` for its `weapon` slot) or the merc of
+  the build's act that carries it (`merc_acts`); each copy of the runeword already held (worn, carried,
   stashed, merc) drops one such need, and the narrowest need picks its base first. Each need
   keeps the **best** fitting base held (user, 2026-11-20: a better base for the same runeword
   replaces the old one): higher base damage for weapons (min + max, `weapons_data::DAMAGE` from
@@ -1698,12 +1703,27 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   byte-identical; the page snapshot test passes; `cargo build --release` still writes
   `target/release/d2r-map-overlay`.
 
-## Open: stash-plan anomalies (found 2026-11-22, user: "not yet", keep all bases)
-- A not-needed mark doesn't reach `switch_requires`: Harmony (marked not needed) still keeps a Colossus Crossbow 4os via the Summoner's switch group.
-- Any-of switch groups (merc life-leech helm, Cannot Be Frozen, powerful weapon) want every candidate as a piece even when the group is already met by a worn item (Bulwark worn → Isenhart's Horns still kept).
-- Base fit ignores the build's weapon rules: a Gothic Bow 6os is kept for the Fury's Breath of the Dying (a werewolf can't use a bow); a Legend Sword 3os for Hustle (one-handed, against the always-two-handed rule).
-- Sigon's Sabot kept for a Summoner level window (40-60) the character has passed (plus a Fury guide alternative).
-User decided 2026-11-22: guide alternatives keep their bases ("the bases are fine, keep them").
+## Stash-plan anomalies (found 2026-11-22; fixed the same day by user decision)
+User decided 2026-11-22: fix these four; guide alternatives keep their bases ("the bases are
+fine, keep them").
+- [x] A not-needed mark reaches `switch_requires`: Harmony (marked on the Summoner) no longer
+  wants the piece or a base via the Summoner's one-item switch group (`Needs::switch_gear`);
+  the switch condition itself is unchanged. The Colossus Crossbow 4os stays kept, now as the
+  Fury's swap Brand base (a guide alternative); a second 4os bow is sold.
+- [x] An any-of switch group met by the held copies (worn, merc, carried, stash: the same
+  count as the switch) wants only its held candidates: the merc wears Bulwark → Isenhart's
+  Horns is no piece any more. Unmet: every candidate as before.
+- [x] A build's `weapon_rule = { two_handed, melee }` (build file, from `gen_build.py`'s
+  BUILDS; `socket_bases::WeaponRule`) limits the bases of its player `weapon` slot (stash plan
+  `fills`, next stage gear `held_base`): the Fury has both (werewolf: no bows or crossbows;
+  user, 2026-11-20: never one-handed), so a Gothic Bow 6os is no Breath of the Dying base and a
+  Broad Sword no Hustle base. A Legend Sword (like the Zweihander) is a `1or2handed` sword a
+  druid holds in both hands, so it stays a Hustle base. `swap` (Harmony, Brand bows) and merc
+  bases (the Act 5 merc's one-handed Lawbringers) are unaffected. Base hints (`base_hint`)
+  still list one-handers.
+- [x] A build piece whose leveling window (`setup = "lvl a-b"`) ends below the character's
+  level is no need of that build (`stash_plan::current`; runes never outgrow): Sigon's Sabot
+  (Summoner lvl 40-60, character 77) is kept only as the Fury's guide alternative.
 
 ## Milestones
 - [x] **M0 setup**: mise Rust pin, `cargo init`, lint config, rustfmt, PLAN.md + CLAUDE.md + .gitignore, `git init`, first commit.

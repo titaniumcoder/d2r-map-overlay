@@ -22,6 +22,9 @@ live in BUILDS below, keyed by the source file's stem (`druid-leveling.source` c
   all be met before the switch to `next`; each entry is a plain name (a group of one) or a dict
   {label, any, count?} (met when the copies owned of `any` sum to `count`, default 1), emitted as
   a top-level `switch_requires = [...]` (strings, inline tables) after `auto_switch`, only when set.
+- BUILDS `weapon_rule` (Fury Druid: {two_handed, melee}): the player's `weapon` slot takes
+  two-handed / non-missile bases only (runeword bases in the stash plan and the next stage
+  gear); `swap` is unaffected. Emitted as `weapon_rule = { ... }` after `merc_acts`, only when set.
 - `--prerequisites` (the stage before a manual switch): the next stage's `prerequisites`
   become this stage's `switch_note`.
 
@@ -94,6 +97,9 @@ BUILDS = {
     "fury-druid": dict(
         name="Fury Druid", cls="druid", damages=["physical"],
         notes="Fury Werewolf from the optional skill reset at 75 (Summoner Druid with Raven Frost); standard = the user's core (Ribcracker, Fortitude, Jalal's Mane, Laying of Hands, Raven Frost; the merc's 2x Lawbringer, Smoke, Bulwark); the druid always fights two-handed. Durations, breakpoints and skill order computed from the D2R game tables, not from a guide.",
+        # The werewolf can't shoot, and fights two-handed only (user, 2026-11-20: "never one
+        # handed"); the swap (Harmony) is out of form and keeps its bow.
+        weapon_rule=dict(two_handed=True, melee=True),
     ),
 }
 
@@ -550,6 +556,8 @@ def main(argv):
             problems.append(f"{stem}: {i['name']}: merc_act {i['merc_act']!r} is not in merc.acts")
     if merc_acts:
         L.append("merc_acts = [" + ", ".join(str(int(a)) for a in merc_acts) + "]")
+    if cfg.get("weapon_rule"):
+        L.append("weapon_rule = { " + ", ".join(f"{k} = true" for k, on in cfg["weapon_rule"].items() if on) + " }")
     if cfg.get("next"):
         L += [f"next = {q(cfg['next'])}", f"switch_level = {cfg['switch_level']}",
               f"auto_switch = {'true' if cfg['auto_switch'] else 'false'}"]
