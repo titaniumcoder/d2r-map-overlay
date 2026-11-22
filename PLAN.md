@@ -416,22 +416,25 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
   `single_skill` (107, `skills` = skills.txt names, any of them), `fcr` (105), `ias` (93), each with a
   `min`; quality `rolled` = magic, rare or crafted. Checked at load (`valuables::validate`: known skill
   names, `skills` only on `single_skill`, `min` > 0, labels ≤ 4 characters; a bad file = no
-  highlights). A stats rule never matches an item without read stats, so its match is certain. 20
-  rules, all trade with `label` "" (affix ranges from d2data magicprefix/magicsuffix: +3 tab is a
-  magic-only level-60 prefix, rares top out at +2 tab; 20 FCR "of the Magus" only on wands / staves /
-  scepters / orbs / circlets, amulets reach 10 FCR magic or rare):
-  - S: +3 tab + 20 FCR on wands, orbs, scepters, circlets; 2/20 (+2 class skills, 20 FCR) circlets
-    and amulets (crafted); +3 jav tab / +3 Lightning Fury / +3 Charged Strike javelins; +3 tab + +3
-    Battle Orders barbarian helms; +3 tab + +3 Fury / Tornado / Summon Grizzly pelts; +3 tab + +3
-    Lightning / Death Sentry claws.
-  - A: +3 tab on any class item (wands, necro heads, orbs, paladin shields, scepters, pelts, barbarian
-    helms, warlock grimoires, amazon bows / javelins / spears, claws); +3 tab amulets / circlets; +2 tab + 10 FCR and +2
-    class skills + 10 FCR amulets / circlets; +2 class skills or +2 tab with 20 FCR on wands, orbs,
-    scepters (the rare caster items); +3 single skills: orbs Fire Ball / Meteor / Lightning / Chain
-    Lightning / Blizzard / Frozen Orb, wands and heads Bone Spear / Corpse Explosion, javelins
-    Lightning Fury / Charged Strike, scepters Fist of the Heavens / Blessed Hammer, pelts Fury /
-    Tornado / Summon Grizzly, barbarian helms Battle Orders, claws Venom / Fade / Lightning / Death
-    Sentry.
+  highlights). A stats rule never matches an item without read stats, so its match is certain.
+  - Only what vendors pay well for (user correction 2026-11-22: "you marked me a spear to keep.
+    those are worthless. the only ones that vendors in game buy a lot for is wands, scepters, and
+    the sorc orbs and daggers (because of warlock). the rest is not worth keeping around for money,
+    so only mark those for cash."). Every money rule (ring + coin, stash plan "Keep · trade") holds
+    only wands (12), scepters (9), sorceress orbs (15) and daggers (12: bases_data kind `knif`, i.e.
+    dagger / dirk / kriss / blade and their exceptional and elite versions; not throwing knives
+    `tkni`, not the Gidbinn quest items). The javelin, spear, bow, pelt, barbarian helm, paladin
+    shield, necro head, claw, grimoire, amulet and circlet skill rules are gone (12 rules); the
+    pre-existing circlet, amulet and jewel trade rules stay. A `rules_parse` test holds every stat
+    rule to those 48 bases.
+  - 8 rules, all trade with `label` "" (affix ranges from d2data magicprefix/magicsuffix: +3 tab is
+    a magic-only level-60 prefix, rares top out at +2 tab; 20 FCR "of the Magus" only on wands /
+    staves / scepters / orbs; daggers (`knif`) roll +1..+3 to the necromancer Poison and Bone tab
+    and the three Warlock tabs, no single skills, no FCR):
+    S: +3 tab + 20 FCR on wands, orbs, scepters. A: +3 tab on wands, scepters, orbs, daggers; +2
+    class skills or +2 tab with 20 FCR on wands, orbs, scepters (the rare caster items); +3 single
+    skills: orbs Fire Ball / Meteor / Lightning / Chain Lightning / Blizzard / Frozen Orb, wands Bone
+    Spear / Corpse Explosion, scepters Fist of the Heavens / Blessed Hammer; white scepters (below).
   - White scepters (user decision 2026-11-22: "Scepters: actually white ones with +3 because they
     are easy. staves no, not for selling, too big in inventory"). The A trade rule "+3 skill white
     scepters" (label "", quality `normal` = normal or superior, `single_skill` min 3, any skill) on
@@ -448,18 +451,18 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
     show up; whether an unidentified item's stat array is empty or holds only base stats is not yet
     seen live.
   - Unidentified candidates (user decision 2026-11-22: "every magic class-only item gets the coin
-    (you pick them up and identify in town; more marks on the map)"). The A trade rule
-    "Unidentified magic class items" (label "", `needs_stats`, so a dashed ring with the coin) holds
-    every class-only base (bases_data `class`, from itemtypes `Class`: amazon 15, assassin 21,
-    barbarian 15, druid 15, necromancer 15, paladin 15, sorceress 15, warlock 15) and the 12 wands,
-    138 codes, quality magic only (rares roll at most +2 tab). A rule's `identified` (`false` = only
+    (you pick them up and identify in town; more marks on the map)"; narrowed the same day to what
+    vendors pay well for, see above). The A trade rule "Unidentified magic wands, scepters, orbs
+    and daggers" (label "", `needs_stats`, so a dashed ring with the coin) holds the 48 vendor
+    bases, quality magic only (rares roll at most +2 tab). A rule's `identified` (`false` = only
     unidentified items; validated: no `stats` or `item_names` with it) ends the match once the item
     is identified: then only the +3 stat rules decide (solid ring and coin, or nothing for junk).
     An empty label holds for an uncertain match too (`rule_label`), so the candidates carry no tag.
     The stash plan gives an unidentified candidate no line (`valuables::worth_identifying`), neither
     "Keep · trade" nor the own-use "not a build weapon" sale; identified, the stat rules make it a
-    trade keep or the own-use scoring judges it. Replaces the B "Class-specific magic items" rule.
-    Scepters and staves (+3 paladin / sorceress tabs) are not candidates. The rules are hand-added to the JSON like the labels;
+    trade keep or the own-use scoring judges it (a magic Amazon spear: "not a build weapon" sale).
+    Replaces the B "Class-specific magic items" rule. Staves are not candidates. The rules are
+    hand-added to the JSON like the labels;
     `research/gen_valuables.py` has neither yet.
 
 ## Shrines and wells (2026-11-15)

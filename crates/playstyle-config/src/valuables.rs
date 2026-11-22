@@ -469,8 +469,17 @@ mod tests {
         assert!(RULES.len() > 50, "{} rules", RULES.len());
         assert_eq!(validate(&parsed.rules), Ok(()));
         let skill_rules: Vec<&Rule> = RULES.iter().filter(|r| !r.stats.is_empty()).collect();
-        assert!(skill_rules.len() >= 19, "{} stat rules", skill_rules.len());
+        assert_eq!(skill_rules.len(), 8, "stat rules");
         for r in skill_rules {
+            let vendor = |c: &String| {
+                d2r_core::bases_data::base(c)
+                    .is_some_and(|b| ["wand", "scep", "orb", "knif"].contains(&b.kind))
+            };
+            assert!(
+                r.item_codes.iter().all(vendor),
+                "{}: only what vendors pay well for",
+                r.name
+            );
             assert_eq!(r.category, Category::Trade, "{}: sold, so trade", r.name);
             assert!(r.tier >= Tier::A, "{}: A or S gets the coin", r.name);
             assert_eq!(r.label.as_deref(), Some(""), "{}: ring and coin, no tag", r.name);
@@ -567,7 +576,7 @@ mod tests {
         vec![
             (
                 rolled("7bw", MAGIC, &[(stat::SKILL_TAB, poison_bone, 3)]),
-                Some((Tier::A, "+3 skill tab class items")),
+                Some((Tier::A, "+3 skill tab wands, scepters, orbs and daggers")),
                 "+3 Poison and Bone Lich Wand",
             ),
             (
@@ -647,9 +656,24 @@ mod tests {
         ]
     }
 
-    /// Javelins, helms, pelts, circlets, amulets and a white wand.
+    /// Daggers (the Warlock tabs), a white wand, and the class items vendors pay little for.
     fn other_cases() -> Vec<SkillCase> {
         vec![
+            (
+                rolled("9kr", MAGIC, &[(stat::SKILL_TAB, tab(7, 1), 3)]),
+                Some((Tier::A, "+3 skill tab wands, scepters, orbs and daggers")),
+                "+3 Warlock tab Cinquedeas",
+            ),
+            (
+                rolled("dgr", MAGIC, &[(stat::SKILL_TAB, tab(2, 1), 3)]),
+                Some((Tier::A, "+3 skill tab wands, scepters, orbs and daggers")),
+                "+3 Poison and Bone Dagger",
+            ),
+            (
+                rolled("tkf", MAGIC, &[(stat::SKILL_TAB, tab(7, 1), 3)]),
+                None,
+                "a throwing knife is no dagger",
+            ),
             (
                 rolled(
                     "amf",
@@ -660,61 +684,33 @@ mod tests {
                         (stat::SINGLE_SKILL, skill("Charged Strike"), 3),
                     ],
                 ),
-                Some((Tier::S, "+3/+3/+3 javelins")),
-                "+3/+3/+3 Matriarchal Javelin",
+                None,
+                "+3/+3/+3 javelin: vendors pay little",
             ),
             (
-                rolled(
-                    "amf",
-                    RARE,
-                    &[
-                        (stat::SINGLE_SKILL, skill("Lightning Fury"), 3),
-                        (stat::IAS, 0, 40),
-                    ],
-                ),
-                Some((Tier::A, "+3 Lightning Fury / Charged Strike javelins")),
-                "rare +3 LF javelin",
+                rolled("am3", MAGIC, &[(stat::SKILL_TAB, tab(0, 2), 3)]),
+                None,
+                "+3 tab amazon spear",
             ),
             (
-                rolled(
-                    "ba5",
-                    MAGIC,
-                    &[
-                        (stat::SKILL_TAB, tab(4, 2), 3),
-                        (stat::SINGLE_SKILL, skill("Battle Orders"), 3),
-                    ],
-                ),
-                Some((Tier::S, "+3 Warcries / +3 Battle Orders helms")),
-                "+3 Warcries +3 BO helm",
+                rolled("dr8", MAGIC, &[(stat::SKILL_TAB, tab(5, 0), 3)]),
+                None,
+                "+3 tab pelt",
             ),
             (
-                rolled("dr8", MAGIC, &[(stat::SINGLE_SKILL, skill("Fury"), 3)]),
-                Some((Tier::A, "+3 Fury / Tornado / Grizzly pelts")),
-                "+3 Fury pelt",
+                rolled("ba5", MAGIC, &[(stat::SINGLE_SKILL, skill("Battle Orders"), 3)]),
+                None,
+                "+3 BO helm",
             ),
             (
                 rolled("ci3", RARE, &[(stat::CLASS_SKILLS, 5, 2), (stat::FCR, 0, 20)]),
-                Some((Tier::S, "2/20 circlets and amulets")),
-                "rare 2/20 diadem",
+                None,
+                "rare 2/20 diadem: no skill rule (only the B rare circlet rule)",
             ),
             (
                 rolled("amu", CRAFTED, &[(stat::CLASS_SKILLS, 1, 2), (stat::FCR, 0, 20)]),
-                Some((Tier::S, "2/20 circlets and amulets")),
-                "crafted 2/20 amulet",
-            ),
-            (
-                rolled(
-                    "amu",
-                    MAGIC,
-                    &[(stat::SKILL_TAB, tab(5, 2), 2), (stat::FCR, 0, 10)],
-                ),
-                Some((Tier::A, "+2 skill tab amulets and circlets with FCR")),
-                "+2 Elemental amulet of the Apprentice",
-            ),
-            (
-                rolled("amu", RARE, &[(stat::FCR, 0, 10), (stat::RES_FIRE, 0, 30)]),
                 None,
-                "rare amulet without skills: only the B rule",
+                "crafted 2/20 amulet: no skill rule",
             ),
             (
                 rolled("7bw", 2, &[(stat::SINGLE_SKILL, skill("Bone Spear"), 3)]),
@@ -740,10 +736,10 @@ mod tests {
         }
     }
 
-    const CANDIDATES: &str = "Unidentified magic class items";
+    const CANDIDATES: &str = "Unidentified magic wands, scepters, orbs and daggers";
 
     #[test]
-    fn the_candidate_rule_holds_every_class_only_base_and_the_wands() {
+    fn the_candidate_rule_holds_the_wands_scepters_orbs_and_daggers() {
         let rule = RULES.iter().find(|r| r.name == CANDIDATES);
         let mut codes: Vec<&str> = rule
             .iter()
@@ -752,11 +748,17 @@ mod tests {
         codes.sort_unstable();
         let want: Vec<&str> = d2r_core::bases_data::BASES
             .iter()
-            .filter(|&&(_, _, kind, class, _, _)| class.is_some() || kind == "wand")
+            .filter(|&&(code, _, kind, _, _, _)| {
+                ["wand", "scep", "orb", "knif"].contains(&kind) && !["g33", "d33"].contains(&code)
+            })
             .map(|row| row.0)
             .collect();
         assert_eq!(codes, want);
-        assert_eq!(want.len(), 138, "126 class-only bases and 12 wands");
+        assert_eq!(
+            want.len(),
+            48,
+            "12 wands, 9 scepters, 15 orbs, 12 daggers (no Gidbinn)"
+        );
         assert!(rule.is_some_and(|r| r.identified == Some(false)
             && r.needs_stats
             && r.quality == Quality::Magic
@@ -776,9 +778,7 @@ mod tests {
             best(d, &config::Valuables::default()).map(|h| (h.tier, h.category, h.rule, h.uncertain))
         };
         let candidate = Some((Tier::A, Category::Trade, CANDIDATES.to_owned(), true));
-        for code in [
-            "wnd", "obf", "dr8", "pa9", "ne1", "ba5", "am7", "7wb", "ktr", "wa1",
-        ] {
+        for code in ["wnd", "7ws", "obf", "9kr", "dgr"] {
             let d = unid(code, MAGIC);
             assert_eq!(mark(&d), candidate, "{code}: coin, dashed ring");
             assert_eq!(rule_label(&d, None), Some(""), "{code}: no tag");
@@ -789,7 +789,12 @@ mod tests {
             None,
             "a rare rolls no +3 tab"
         );
-        assert_eq!(mark(&unid("lsd", MAGIC)), None, "a sword is no class item");
+        for code in [
+            "lsd", "am3", "am7", "dr8", "pa9", "ne1", "ba5", "7wb", "ktr", "wa1", "tkf",
+        ] {
+            assert_eq!(mark(&unid(code, MAGIC)), None, "{code}: vendors pay little");
+            assert!(!worth_identifying(&unid(code, MAGIC)), "{code}");
+        }
 
         let junk = rolled("wnd", MAGIC, &[(stat::FCR, 0, 10)]);
         assert_eq!(mark(&junk), None, "identified junk wand: no mark");
@@ -800,13 +805,15 @@ mod tests {
             Some((
                 Tier::A,
                 Category::Trade,
-                "+3 skill tab class items".to_owned(),
+                "+3 skill tab wands, scepters, orbs and daggers".to_owned(),
                 false
             )),
             "identified +3 wand: solid ring and coin"
         );
         let grimoire = rolled("waf", MAGIC, &[(stat::SKILL_TAB, tab(7, 0), 3)]);
-        assert_eq!(mark(&grimoire).map(|h| h.3), Some(false), "a +3 grimoire too");
+        assert_eq!(mark(&grimoire), None, "a +3 grimoire: vendors pay little");
+        let dagger = rolled("7kr", MAGIC, &[(stat::SKILL_TAB, tab(7, 2), 3)]);
+        assert_eq!(mark(&dagger).map(|h| h.3), Some(false), "a +3 Warlock dagger");
     }
 
     /// (item, expected (tier, category, uncertain), what).
