@@ -1,6 +1,5 @@
-//! The Proton/Linux platform layer: the game is a Wine process found through `/proc`, its memory
-//! is read with `/proc/<pid>/mem`, and the image's encrypted pages are read through Wine's
-//! readable memfd alias ([`image::find_image`]).
+//! The Proton/Linux platform: the game is a Wine process under `/proc`, read through
+//! `/proc/<pid>/mem` and Wine's readable memfd alias of the image ([`image::find_image`]).
 
 use std::fs;
 use std::io;
@@ -40,8 +39,7 @@ impl Platform for Proton {
         Ok(process::heap_regions(&process::read_maps(pid)?))
     }
 
-    /// From the process's `WINEPREFIX` (its environment: same user, so no ptrace capability
-    /// is needed).
+    /// From the process's `WINEPREFIX` (reading its environment needs no ptrace capability).
     fn save_dir(&self, pid: u32) -> Option<PathBuf> {
         fs::read(format!("/proc/{pid}/environ"))
             .ok()

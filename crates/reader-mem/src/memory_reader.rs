@@ -1,9 +1,4 @@
 //! [`MemoryReader`]: the game layer's [`GameReader`], over any [`Platform`].
-//!
-//! Attaching finds the game, opens its memory and locates the unit table (code signature,
-//! per-build cache, structural search; retried with a backoff while the process lives). The
-//! item-code table is searched once per process, in a background thread, when the first item
-//! is seen; the quest-flags global is searched during a game with a small budget.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -60,14 +55,12 @@ struct Attached<M> {
     buffs: BuffGate,
 }
 
-/// The player's states across ticks: covers a failed state read with the last read value
-/// (same game), and lets the raw stat-list dump for the journal's `buffs` event be read
-/// only when the shown states ([`buffs::shown`]) changed since the last dump.
+/// The player's states across ticks: a failed read keeps the last states of the same game, and
+/// the journal's raw stat-list dump is read only when the shown states ([`buffs::shown`]) change.
 #[derive(Debug, Default)]
 struct BuffGate {
-    /// (player unit id, act address) the fields below belong to (the journal's game key).
+    /// (player unit id, act address): the journal's game key.
     game: Option<(u32, Option<u64>)>,
-    /// The last states read.
     last: Option<Vec<u32>>,
     /// The shown states at the last dump.
     dumped: Option<Vec<u32>>,
@@ -83,7 +76,7 @@ impl BuffGate {
     }
 
     /// Fills unread states in `snap` from the last read ones of the same game; true if the
-    /// shown states are known and differ from the last dump's (a new game starts over).
+    /// shown states are known and differ from the last dump's.
     fn settle(&mut self, snap: &mut Snapshot) -> bool {
         let game = (snap.player.id, snap.player.act.map(|a| a.0));
         if self.game != Some(game) {
@@ -132,9 +125,8 @@ impl<P: Platform> MemoryReader<P> {
         }
     }
 
-    /// Finds the unit table, retrying with [`table_retry_delay`] while the process lives (the
-    /// structural search needs a game in progress). Only the first attempt reads the whole
-    /// image; retries read just its header and `.data`. `None` once the process is gone.
+    /// Finds the unit table, retrying while the process lives (the structural search needs a
+    /// game in progress); only the first attempt scans the code. `None` once the process is gone.
     fn find_table(&self, pid: u32, mem: &P::Mem) -> Option<u64> {
         let mut last_err = String::new();
         let mut failures = 0u32;
@@ -164,6 +156,18 @@ impl<P: Platform> MemoryReader<P> {
         }
         None
     }
+
+    /// Prints `e` (and the platform's hint) unless it repeats the last open error.
+    fn log_open_error(&mut self, e: &anyhow::Error) {
+        let msg = format!("{e:#}");
+        if msg != self.open_err {
+            eprintln!("{msg}");
+            if let Some(hint) = self.platform.access_hint(e) {
+                eprintln!("{hint}");
+            }
+            self.open_err = msg;
+        }
+    }
 }
 
 impl<P: Platform> GameReader for MemoryReader<P> {
@@ -179,14 +183,7 @@ impl<P: Platform> GameReader for MemoryReader<P> {
         let mem = match self.platform.open(pid) {
             Ok(mem) => mem,
             Err(e) => {
-                let msg = format!("{e:#}");
-                if msg != self.open_err {
-                    eprintln!("{msg}");
-                    if let Some(hint) = self.platform.access_hint(&e) {
-                        eprintln!("{hint}");
-                    }
-                    self.open_err = msg;
-                }
+                self.log_open_error(&e);
                 return Attach::Waiting;
             }
         };
@@ -246,8 +243,8 @@ impl<P: Platform> GameReader for MemoryReader<P> {
                 a.buffs.dumped(&snap);
             }
         }
-        // Codes are needed for ground drops and for the inventory keep list.
-        if snap.ground_items > 0 || snap.inventory_items > 0 {
+        let item_codes_needed = snap.ground_items > 0 || snap.inventory_items > 0;
+        if item_codes_needed {
             a.items.search(&self.platform, a.pid);
         }
         Ok(snap)
@@ -288,24 +285,18 @@ fn locate_items<P: Platform>(platform: &P, pid: u32, mem: &P::Mem) -> Option<u64
     }
 }
 
-/// Wait between searches for the quest-flags global while it isn't found.
 const QUEST_SEARCH_EVERY: Duration = Duration::from_secs(10);
-/// Failed searches before giving up until the next game (each one reads `.data` and ~45k
-/// headers on the tick thread, so a miss must not repeat forever).
+/// Failed searches per game: each reads `.data` and ~45k headers on the tick thread.
 const QUEST_SEARCH_TRIES: u32 = 3;
 
-/// The quest-flags global of the attached process ([`crate::image::Image::quest_flags_global`]):
-/// searched during a game, at most every [`QUEST_SEARCH_EVERY`] and [`QUEST_SEARCH_TRIES`]
-/// times per game, until found; then the record is read through it each tick (48 words,
-/// cheap). The last good record is kept across a failed read, so used quest recipes don't
-/// flicker back; it is dropped on a new game and when the snapshot fails (menu, exit).
+/// The quest-flags global ([`crate::image::Image::quest_flags_global`]), searched on a budget
+/// until found, and the last good record read through it (kept so used quests don't flicker).
 #[derive(Debug)]
 struct QuestFlags {
     global: Option<u64>,
     last_search: Option<Instant>,
     /// Failed searches in this game.
     failures: u32,
-    /// The last record read successfully.
     record: Vec<u16>,
     /// The last search error printed (a repeat isn't printed again).
     last_err: String,
@@ -329,34 +320,42 @@ impl QuestFlags {
             self.record.clear();
             self.failures = 0;
         }
-        let due = self.last_search.is_none_or(|t| t.elapsed() >= QUEST_SEARCH_EVERY);
-        if self.global.is_none() && self.failures < QUEST_SEARCH_TRIES && due {
-            self.last_search = Some(Instant::now());
-            let found = platform
-                .find_image(pid, mem)
-                .and_then(|img| img.quest_flags_global(mem));
-            match found {
-                Ok(addr) => {
-                    eprintln!("quest flags at {addr:#x}");
-                    self.global = Some(addr);
-                }
-                Err(e) => {
-                    self.failures += 1;
-                    let msg = format!("{e:#}");
-                    if msg != self.last_err {
-                        eprintln!(
-                            "quest flags not found ({}/{QUEST_SEARCH_TRIES} this game): {msg}",
-                            self.failures
-                        );
-                        self.last_err = msg;
-                    }
-                }
-            }
+        if self.search_due() {
+            self.search(platform, pid, mem);
         }
         if let Some(words) = self.global.and_then(|g| quests::read(mem, g).ok()) {
             self.record = words;
         }
         &self.record
+    }
+
+    fn search_due(&self) -> bool {
+        let waited = self.last_search.is_none_or(|t| t.elapsed() >= QUEST_SEARCH_EVERY);
+        self.global.is_none() && self.failures < QUEST_SEARCH_TRIES && waited
+    }
+
+    fn search<P: Platform>(&mut self, platform: &P, pid: u32, mem: &P::Mem) {
+        self.last_search = Some(Instant::now());
+        let found = platform
+            .find_image(pid, mem)
+            .and_then(|img| img.quest_flags_global(mem));
+        match found {
+            Ok(addr) => {
+                eprintln!("quest flags at {addr:#x}");
+                self.global = Some(addr);
+            }
+            Err(e) => {
+                self.failures += 1;
+                let msg = format!("{e:#}");
+                if msg != self.last_err {
+                    eprintln!(
+                        "quest flags not found ({}/{QUEST_SEARCH_TRIES} this game): {msg}",
+                        self.failures
+                    );
+                    self.last_err = msg;
+                }
+            }
+        }
     }
 
     /// Drops the record (no game: menu, loading, exit); the global and budget stay.
@@ -365,14 +364,12 @@ impl QuestFlags {
     }
 }
 
-/// The item-code table of the attached process ([`items::locate`]). The search reads gigabytes
-/// (about a second or more), so it runs on its own thread with its own memory handle while the
-/// snapshots go on; until it's done, only unique and set drops are shown.
+/// The item-code table ([`items::locate`]). The search reads gigabytes, so it runs once per
+/// process on its own thread with its own memory handle.
 #[derive(Debug)]
 enum ItemsTable {
     NotSearched,
     Searching(Receiver<Option<u64>>),
-    /// Searched once: found or not, it isn't searched again for this process.
     Done(Option<u64>),
 }
 
@@ -383,8 +380,6 @@ impl ItemsTable {
             return;
         }
         let (tx, rx) = mpsc::channel();
-        // The thread gets its own copy of the platform (hence `Platform: Clone + Send`) and
-        // opens its own handle, so the tick loop's handle is never shared across threads.
         let platform = platform.clone();
         let spawned = thread::Builder::new().name("items-scan".into()).spawn(move || {
             let found = platform.open(pid).map_or_else(
@@ -394,7 +389,7 @@ impl ItemsTable {
                 },
                 |mem| locate_items(&platform, pid, &mem),
             );
-            // The reader may have moved on to another process: nobody to tell, that's fine.
+            // The receiver is gone if the reader moved on to another process.
             let _ = tx.send(found);
         });
         *self = match spawned {
@@ -417,7 +412,6 @@ impl ItemsTable {
                     base
                 }
                 Err(TryRecvError::Empty) => None,
-                // The search thread died without an answer (panicked): give up for this process.
                 Err(TryRecvError::Disconnected) => {
                     *self = Self::Done(None);
                     None
@@ -450,8 +444,11 @@ mod tests {
             }
             (changed, snap.player.states.clone())
         };
-        // Unread before anything was read: stays unread, nothing to dump.
-        assert_eq!(tick(None, &mut gate, &mut snap), (false, None));
+        assert_eq!(
+            tick(None, &mut gate, &mut snap),
+            (false, None),
+            "unread before any read"
+        );
         assert_eq!(
             tick(Some(vec![32]), &mut gate, &mut snap),
             (true, Some(vec![32])),
@@ -462,24 +459,26 @@ mod tests {
             (false, Some(vec![32])),
             "unchanged"
         );
-        // A failed read keeps the last states: no flicker, no change.
         assert_eq!(
             tick(None, &mut gate, &mut snap),
             (false, Some(vec![32])),
-            "carried over"
+            "a failed read is carried over"
         );
-        // A hidden state (justhit) is no change; a new buff is.
         assert_eq!(
             tick(Some(vec![32, 86]), &mut gate, &mut snap),
-            (false, Some(vec![32, 86]))
+            (false, Some(vec![32, 86])),
+            "a hidden state (justhit) is no change"
         );
         assert_eq!(
             tick(Some(vec![32, 120]), &mut gate, &mut snap),
-            (true, Some(vec![32, 120]))
+            (true, Some(vec![32, 120])),
+            "a new buff"
         );
-        // Read as empty (not failed): every buff gone is a change.
-        assert_eq!(tick(Some(vec![]), &mut gate, &mut snap), (true, Some(vec![])));
-        // A new game: nothing carried over from the old one, the first read dumps again.
+        assert_eq!(
+            tick(Some(vec![]), &mut gate, &mut snap),
+            (true, Some(vec![])),
+            "every buff gone"
+        );
         snap.player.id += 1;
         assert_eq!(
             tick(None, &mut gate, &mut snap),

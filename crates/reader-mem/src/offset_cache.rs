@@ -1,15 +1,5 @@
-//! Per-build cache of offsets found at runtime (the filesystem side of the unit-table lookup).
-//!
-//! D2R re-encrypts code pages, so a signature that matched once may stop matching. The offsets it
-//! (or the structural search) found are stored per build in a tiny TOML subset:
-//!
-//! ```toml
-//! [build."<TimeDateStamp>-<SizeOfImage>"]   # both hex
-//! unit_table_rva = 0x1ebe5f0
-//! ```
-//!
-//! Hand-parsed (no `toml` dependency): only the lines this module writes are understood;
-//! other tables and keys are ignored, and are dropped when the file is rewritten.
+//! Per-build cache of the unit-table offset: D2R re-encrypts code pages, so a signature that
+//! matched once may stop matching. Hand-parsed TOML subset ([`HEADER`]); other lines are dropped.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

@@ -15,31 +15,30 @@ const D2R_CMDLINE: &str = "Diablo II Resurrected\\D2R.exe";
 /// The game process's `/proc/<pid>/comm` (Wine names the main thread `Main`).
 const D2R_COMM: &str = "Main";
 
-/// Finds the pid of the running D2R process by scanning `/proc/*/cmdline`.
-///
-/// If several processes match (should not happen), the lowest pid wins, which is
-/// normally the oldest one.
+/// The pid of the running D2R process; the lowest (normally the oldest) if several match.
 ///
 /// # Errors
 /// Fails if `/proc` can't be listed or no process matches.
 pub fn find_d2r_pid() -> Result<u32> {
-    let mut found: Option<u32> = None;
-    for entry in fs::read_dir("/proc").context("listing /proc")? {
-        let Ok(entry) = entry else { continue };
-        let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
-            continue;
-        };
-        // Processes can exit or deny access between listing and reading; skip those.
-        let Ok(cmdline) = fs::read(entry.path().join("cmdline")) else {
-            continue;
-        };
-        // The game's comm is `Main`; this rules out launchers or `pgrep`s quoting the path.
-        let comm = fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
-        if is_d2r_cmdline(&cmdline) && comm.trim_end() == D2R_COMM {
-            found = Some(found.map_or(pid, |f| f.min(pid)));
-        }
-    }
-    found.context("no running D2R process found (cmdline containing `Diablo II Resurrected\\D2R.exe`)")
+    fs::read_dir("/proc")
+        .context("listing /proc")?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
+            is_d2r_process(&entry.path()).then_some(pid)
+        })
+        .min()
+        .context("no running D2R process found (cmdline containing `Diablo II Resurrected\\D2R.exe`)")
+}
+
+/// True if the `/proc/<pid>` directory `dir` is the game's; a process that exits or denies
+/// access mid-scan is not. The comm check rules out launchers and `pgrep`s quoting the path.
+fn is_d2r_process(dir: &Path) -> bool {
+    let Ok(cmdline) = fs::read(dir.join("cmdline")) else {
+        return false;
+    };
+    let comm = fs::read_to_string(dir.join("comm")).unwrap_or_default();
+    is_d2r_cmdline(&cmdline) && comm.trim_end() == D2R_COMM
 }
 
 /// True if a raw (NUL-separated) cmdline belongs to the game.
