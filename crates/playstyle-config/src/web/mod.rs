@@ -26,7 +26,6 @@ pub struct PanelInfo<'a> {
     pub route: &'a crate::route::Route,
     /// The build names of the current stage and every later one.
     pub stage_chain: &'a [String],
-    pub next: Option<&'a crate::route::Advice>,
     /// The marks in force per build ([`crate::not_needed::Marks`]), for the undo lists.
     pub not_needed: &'a crate::not_needed::Marks,
 }
@@ -61,7 +60,6 @@ pub fn panels<'a>(info: &PanelInfo<'a>) -> Panels<'a> {
         "gear_attention_why": attention,
         "upgrades": upgrades,
         "farm": farm::farm_json(info),
-        "next": info.next.map(crate::route::Advice::json),
     });
     let serde_json::Value::Object(sections) = sections else {
         return Panels::default();

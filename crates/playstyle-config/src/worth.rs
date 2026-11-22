@@ -258,84 +258,6 @@ pub fn countess_parts(difficulty: u8, worth: &[(String, Why)]) -> Vec<String> {
     .collect()
 }
 
-/// The runes the Countess drops in `difficulty` still missing over the whole farm list, with
-/// how many (owned `materials` subtracted): reliable ones first, then rare ones, each by rank.
-#[must_use]
-pub fn countess_missing(
-    difficulty: u8,
-    farm: &[FarmGroup],
-    holdings: &Holdings,
-    materials: &[(String, u32)],
-) -> Vec<(&'static str, u32)> {
-    let Some((_, drops)) = boss_drops(COUNTESS, difficulty) else {
-        return Vec::new();
-    };
-    let need = runes_to_build(farm, holdings);
-    let mut out: Vec<(&'static str, u32)> = need
-        .into_iter()
-        .filter(|(rune, _)| rune_code(rune).is_some_and(|c| drops.binary_search(&c.as_str()).is_ok()))
-        .map(|(rune, n)| (rune, n.saturating_sub(rune_count(rune, materials))))
-        .filter(|&(_, n)| n > 0)
-        .collect();
-    out.sort_by_key(|&(rune, _)| (countess_rune_chance(rune, difficulty).is_none(), rune_rank(rune)));
-    out
-}
-
-/// Every rune of the still-missing runeword entries (each name once) × the copies still to
-/// build, summed per rune.
-fn runes_to_build(farm: &[FarmGroup], holdings: &Holdings) -> Vec<(&'static str, u32)> {
-    let mut seen: Vec<&str> = Vec::new();
-    let mut need: Vec<(&'static str, u32)> = Vec::new();
-    for item in farm.iter().flat_map(|g| &g.items) {
-        if item.kind != FarmKind::Runeword || seen.iter().any(|n| same_name(n, &item.name)) {
-            continue;
-        }
-        seen.push(&item.name);
-        let Some(to_build) = copies_to_build(item, holdings) else {
-            continue;
-        };
-        let Some(word) = d2r_core::runewords_data::lookup(&item.name) else {
-            continue;
-        };
-        for &rune in word.runes {
-            match need.iter_mut().find(|(r, _)| *r == rune) {
-                Some((_, n)) => *n = n.saturating_add(to_build),
-                None => need.push((rune, to_build)),
-            }
-        }
-    }
-    need
-}
-
-/// The Countess's Next-panel text from [`countess_missing`]: `"Ko ×3 (1 in 43), Pul (1 in
-/// 108) · rare: Vex, Lo"` (×1 left out), or `"no runes missing"`.
-#[must_use]
-pub fn countess_next(difficulty: u8, missing: &[(&str, u32)]) -> String {
-    let times = |rune: &str, n: u32| {
-        if n > 1 {
-            format!("{rune} ×{n}")
-        } else {
-            rune.to_owned()
-        }
-    };
-    let mut reliable: Vec<String> = Vec::new();
-    let mut rare: Vec<String> = Vec::new();
-    for &(rune, n) in missing {
-        match countess_rune_chance(rune, difficulty) {
-            Some(chance) => reliable.push(format!("{} (1 in {})", times(rune, n), (100.0 / chance).round())),
-            None => rare.push(times(rune, n)),
-        }
-    }
-    let rare = (!rare.is_empty()).then(|| format!("rare: {}", rare.join(", ")));
-    let reliable = (!reliable.is_empty()).then(|| reliable.join(", "));
-    let parts: Vec<String> = [reliable, rare].into_iter().flatten().collect();
-    if parts.is_empty() {
-        "no runes missing".to_owned()
-    } else {
-        parts.join(" · ")
-    }
-}
-
 /// The rank (0 = El) of the Countess's highest droppable rune in `difficulty`.
 fn countess_top_rune(difficulty: u8) -> Option<usize> {
     let (_, drops) = boss_drops(COUNTESS, difficulty)?;
@@ -642,16 +564,6 @@ mod tests {
         assert_eq!(ko.one_in().map(|n| n.to_string()), Some("43".to_owned()));
         let ist = countess_rune_chance("Ist", HELL).unwrap_or_default();
         assert!((0.4..0.43).contains(&ist), "Ist {ist}%");
-    }
-
-    #[test]
-    fn countess_next_shows_counts_and_no_runes_missing() {
-        assert_eq!(countess_next(HELL, &[]), "no runes missing");
-        assert_eq!(
-            countess_next(HELL, &[("Ko", 3), ("Vex", 1), ("Lo", 2)]),
-            "Ko ×3 (1 in 43) · rare: Vex, Lo ×2"
-        );
-        assert_eq!(countess_next(NIGHTMARE, &[("Ko", 1)]), "rare: Ko");
     }
 
     #[test]

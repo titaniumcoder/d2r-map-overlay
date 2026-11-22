@@ -1,17 +1,15 @@
 //! The playstyle read from the playstyle folder's files ([`crate::files`]).
 
-use d2r_core::build::{self, Damage};
+use d2r_core::build;
 use d2r_core::game::{ItemDrop, Snapshot};
 use d2r_core::guidance::{Guidance, Marks};
 use d2r_core::played::Played;
 use d2r_core::playstyle::{Evaluation, EvaluationOf, Files, Playstyle};
-use d2r_core::quest_log::QuestsDone;
-use d2r_core::stash::Holdings;
 use d2r_core::web::{GearInfo, LiveInfo, Panels};
 
 use crate::config::{Settings, Stage};
 use crate::stash_plan::Wants;
-use crate::{files, marks, route, stash_plan, web};
+use crate::{files, marks, stash_plan, web};
 
 /// The playstyle of the folder's files: the character's selected build (else its class's
 /// default) followed along its stage chain, the farm list and the valuables tiers.
@@ -27,8 +25,6 @@ pub struct Extra<'a> {
     pub stage: Option<Stage<'a>>,
     /// The names of the current stage and its later ones, for the farm panel.
     pub chain: Vec<String>,
-    /// The route's current step, for the "Next" panel ([`advise`]).
-    pub route: Option<route::Advice>,
 }
 
 impl Playstyle for ConfigDriven {
@@ -49,12 +45,7 @@ impl Playstyle for ConfigDriven {
         marks::apply(drops, &self.config.valuables, wants)
     }
 
-    fn evaluate(
-        &self,
-        snap: &Snapshot,
-        reached: Option<&str>,
-        quests: Option<&QuestsDone>,
-    ) -> EvaluationOf<'_, Self> {
+    fn evaluate(&self, snap: &Snapshot, reached: Option<&str>) -> EvaluationOf<'_, Self> {
         let config = &self.config;
         let (class, level) = (Some(snap.player.class), snap.player.char_level);
         let holdings = snap.holdings();
@@ -66,7 +57,6 @@ impl Playstyle for ConfigDriven {
         let moved_on = stage_to_remember(config, stage, reached);
         let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
         let (items, wants) = stash_plan::for_snapshot(snap, config, &chain, bis.as_ref());
-        let route = advise(config, snap, &holdings, damages, quests);
         Evaluation {
             guidance: Guidance {
                 rating: build::rate(snap.level.id, snap.difficulty, damages),
@@ -76,7 +66,7 @@ impl Playstyle for ConfigDriven {
             },
             wants,
             reached: moved_on,
-            extra: Extra { stage, chain, route },
+            extra: Extra { stage, chain },
         }
     }
 
@@ -90,7 +80,6 @@ impl Playstyle for ConfigDriven {
             farm: &self.config.farm,
             route: &self.config.route,
             stage_chain: &extra.chain,
-            next: extra.route.as_ref(),
             not_needed: &self.config.not_needed,
         })
     }
@@ -132,73 +121,10 @@ fn stage_to_remember<'a>(
         .filter(|&slug| !reached.is_some_and(|reached| config.leads_to(slug, reached)))
 }
 
-/// The route's current step for `snap`'s character ([`route::current`]); `None` without
-/// steps, with the level or difficulty unknown, or with the quests unknown (record not read
-/// this game) and the current step depending on them (no false advice).
-fn advise(
-    config: &Settings,
-    snap: &Snapshot,
-    holdings: &Holdings,
-    damages: &[Damage],
-    quests: Option<&QuestsDone>,
-) -> Option<route::Advice> {
-    let (Some(level), Some(difficulty)) = (snap.player.char_level, snap.difficulty) else {
-        return None;
-    };
-    if config.route.step.is_empty() {
-        return None;
-    }
-    let materials = web::recipes::materials_of(&snap.held_materials, &snap.stash);
-    let worth = route::worth_for(&config.route, difficulty, &config.farm, holdings, &materials);
-    let max_areas = route::max_areas(damages);
-    route::current(
-        &config.route,
-        &route::Facts {
-            level,
-            difficulty,
-            quests,
-            worth: &worth,
-            max_areas: &max_areas,
-        },
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::{Context, Result};
-
-    #[test]
-    fn quest_steps_hide_while_the_quests_are_unknown() -> Result<()> {
-        let mut snap: Snapshot =
-            serde_json::from_str(include_str!("../../../tests/fixtures/jail1-snapshot.json"))
-                .context("parsing fixture")?;
-        snap.player.char_level = Some(10);
-        snap.difficulty = Some(0);
-        let playstyle = ConfigDriven::load(&Files {
-            shipped: Some(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury"),
-            ),
-            quiet: true,
-            ..Files::default()
-        });
-        for quests in [None, Some(&QuestsDone::default())] {
-            let advice = playstyle.evaluate(&snap, None, quests).extra.route;
-            assert_eq!(advice.map(|a| a.id).as_deref(), Some("normal-tristram"));
-        }
-        snap.player.char_level = Some(16);
-        assert_eq!(
-            playstyle.evaluate(&snap, None, None).extra.route,
-            None,
-            "unread record"
-        );
-        let advice = playstyle
-            .evaluate(&snap, None, Some(&QuestsDone::default()))
-            .extra
-            .route;
-        assert_eq!(advice.map(|a| a.id).as_deref(), Some("normal-canyon"));
-        Ok(())
-    }
 
     #[test]
     fn ground_drops_get_keep_farm_and_trade_marks() -> Result<()> {
@@ -215,7 +141,7 @@ mod tests {
             quiet: true,
             ..Files::default()
         });
-        let wants = playstyle.evaluate(&snap, None, None).wants;
+        let wants = playstyle.evaluate(&snap, None).wants;
         let mut drops = snap.drops.clone();
         let marks = playstyle.mark_drops(&mut drops, &wants);
         let got: Vec<_> = drops

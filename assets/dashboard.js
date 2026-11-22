@@ -224,7 +224,7 @@ function sell(r) {
     + run("Give away", r.give)
     || '<div class="empty">nothing to sell or keep right now</div>';
 }
-// Dashboard sounds (upgrade chime 2026-11-17; the other six are the user's picks, 2026-11-20).
+// Dashboard sounds (upgrade chime 2026-11-17; the others are the user's picks, 2026-11-20).
 // The bell is the master switch (its click is the user gesture browsers need before audio may
 // play); the ▾ beside it opens one checkbox per sound, all on until unticked. Both choices are
 // remembered. Each sound is a few WebAudio tones under 0.6 s; the two important ones (a
@@ -235,7 +235,6 @@ const SOUNDS = [
   ["upgrade", "upgrade available", false],
   ["tradeDrop", "trade item (S / A) on the ground", false],
   ["pickup", "farm-list item picked up", false],
-  ["nextStep", "next route step", false],
   ["bossStop", "a boss is no longer worth farming", false],
 ];
 // Per sound: [start offset s, frequency Hz, length s, wave, glide-to Hz].
@@ -245,7 +244,6 @@ const TONES = {
   upgrade: [[0, 659.25, 0.24], [0.16, 987.77, 0.24]],
   tradeDrop: [[0, 880, 0.08, "triangle"], [0.12, 1174.66, 0.08, "triangle"]],
   pickup: [[0, 784, 0.22, "sine", 1046.5]],
-  nextStep: [[0, 392, 0.16, "triangle"], [0.14, 523.25, 0.22, "triangle"]],
   bossStop: [[0, 659.25, 0.45, "sine", 329.63]],
 };
 const LOUD = new Set(SOUNDS.filter(s => s[2]).map(s => s[0]));
@@ -288,8 +286,8 @@ function playSound(name) {
 // flickers away for a tick never sounds twice; a `quiet` frame (the first after loading, a
 // reconnect, a menu return, a new character) records its keys without sounding. Keys: drop unit
 // ids (farm marks; trade marks of tier S / A), farm entries "for|name|copies" once held
-// (`farm.held`; a further copy of a multi-copy entry is a new key), the route step
-// id, "<stage>><next stage>" when the switch groups are all met or the stage switched, and
+// (`farm.held`; a further copy of a multi-copy entry is a new key),
+// "<stage>><next stage>" when the switch groups are all met or the stage switched, and
 // "<difficulty>|<boss>" for a worth-farming boss gone two frames in a row. Pure but for `mem`.
 function soundEvents(mem, r, quiet) {
   const drops = r.drops || [];
@@ -298,7 +296,6 @@ function soundEvents(mem, r, quiet) {
     tradeDrop: drops.filter(d => d.kind === "trade" && (d.tier === "S" || d.tier === "A")).map(d => "d" + d.id),
     upgrade: (r.upgrades || []).map(u => u.key),
     pickup: ((r.farm && r.farm.held) || []).map(h => `${h.for}|${h.name}|${h.copies}`),
-    nextStep: r.next && r.next.id ? [r.next.id] : [],
     switchReady: [],
     bossStop: [],
   };
@@ -445,16 +442,6 @@ function farm(f) {
       + hiddenList(g.for, g.not_needed, "Not needed");
   }).join("");
 }
-// The route's current step: its title, what to do, why, and the step after it.
-function next(n) {
-  $("nextpanel").hidden = !n;
-  $("next").innerHTML = n
-    ? `<div class="step">${esc(n.title)}</div>`
-      + ((n.todo || []).length ? `<ul class="todo">${n.todo.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : "")
-      + (n.note ? `<div class="note">${esc(n.note)}</div>` : "")
-      + (n.then ? `<div class="then">then: ${esc(n.then)}</div>` : "")
-    : "";
-}
 // The open trade window: one column per store tab, the build's pieces first and bold (with
 // their slot), then the items whose stats beat the worn ones ("▲ better" and why), the ones
 // above the character level dimmed.
@@ -502,7 +489,6 @@ function render(r) {
     for (const id of ["guide", "gear", "gearhidden", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
-    next(null);
     shop(null);
     // The sound keys stay remembered; the first frame back from the menu only records.
     soundQuiet = true;
@@ -525,7 +511,6 @@ function render(r) {
   // An offline frame is the last one seen again: nothing new to sound, and the frame after
   // it only records.
   if (r.offline) soundQuiet = true; else sounds(r, p.name);
-  next(r.next);
   shop(r.shop);
   gear(r.gear);
   skillTrees(r.skills);

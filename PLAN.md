@@ -63,7 +63,7 @@ src/main.rs        — the binary: args, `TheReader` / `ThePlaystyle` from the f
                      (reader thread → channel → overlay), `--probe` / `--dump` / `--render` / `--show`
 playstyles/<name>/ — a playstyle folder (step 7); shipped: `summoner-fury/` = playstyle.toml (name,
                      description, `[valuables]`, `[damages]`), builds/*.toml + *.source.json
-                     (research/gen_build.py writes here by default), farm.toml, route.toml,
+                     (research/gen_build.py writes here by default), farm.toml, route.toml (bosses),
                      valuables.json (compiled in). Overrides per file: ~/.config/d2r-map-overlay/playstyle/
 assets/            — the dashboard pages (`include_str!` from `crates/core/src/web/page.rs`)
 crates/core/       — `d2r-core` (lib `d2r_core`): everything both plugins and the binary share
@@ -795,7 +795,7 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   mark), ready to switch stage (`stage.next.ready`: every `switch_requires` group met, or the
   stage switched on to its `next`). Quiet: an S / A trade mark on the ground, a farm entry held
   (missing → found / done, rolled entries too; a further copy of a multi-copy entry counts
-  again), the route's `next.id` changing, a `farm.worth` boss gone (two frames in a row, per
+  again), the route's `next.id` changing (removed with the Next panel, 2026-11-22), a `farm.worth` boss gone (two frames in a row, per
   difficulty). Server side: the core's live JSON gained `drops: [{id, kind, tier}]` (the
   marked ground drops by unit id, from `Guidance::marks` via `LiveInfo::marks`), the playstyle's
   `stage.next` gained `ready`. The page (`soundEvents` in `assets/dashboard.js`) keys each sound
@@ -1255,7 +1255,7 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   the next. … just the runes that I am still missing and how many for her"): "The Countess: Ko
   ×3 (1 in 43), Lem ×2 (1 in 82), Pul (1 in 108), Um (1 in 162) · rare: Vex, Lo" (no level, no
   farm entries, no items; ×1 left out; "The Countess: no runes missing" when she is worth it for
-  items only). `worth::countess_missing` counts each rune she drops over the whole farm list
+  items only). Removed with the Next panel (2026-11-22). `worth::countess_missing` counted each rune she drops over the whole farm list
   (every still-missing runeword entry's runes × copies still to build, summed, minus the owned
   runes), reliable first then rare, by rank; `countess_next` = the text. The farm panel's worth
   line keeps the detailed `countess_parts` form.
@@ -1277,7 +1277,7 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   order: name, kind, count / stashed, its runes short (`{rune, need, have}`, owned ones left
   out), bases / `base_hint`, slot / needs / note, and `where` (one short line, `null` when
   unknown): "any level-85 area" (`worth::area_85`, Hell or no difficulty), a unique / set's
-  route bosses (`route::bosses` × `worth::worth`, "Mephisto, Baal"), a runeword's short runes
+  route bosses (`Route::bosses` × `worth::worth`, "Mephisto, Baal"), a runeword's short runes
   grouped by spot: the Countess's reliable rune drop with each rune's odds ("Countess: Ko 1 in
   43, Pul 1 in 108"), else any level-85 area, else the route bosses dropping it (the Countess's
   rare item drop as plain "Countess"); one spot alone is just its name, several are parts
@@ -1320,6 +1320,15 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   before `evaluate`, which now takes `Option<&QuestsDone>`; `Evaluation::route` → `PanelInfo::next` →
   the live JSON's `next` section. **Dashboard**: a compact "Next" panel at the top (title, todo
   lines, note, "then: …"); page snapshot updated.
+  **Removed** (user, 2026-11-22: "remove the whole whats next list, dont need it"): the Next
+  panel, the live JSON's `next`, the route-step sound and its toggle, the step engine (steps,
+  conditions, options, quest sets, notes, `current` / `Advice` / `worth_for` / `max_areas`,
+  `worth::countess_missing` / `countess_next`) and the quest memory (`quest_log.rs`,
+  `quests.json`; `Playstyle::evaluate` lost its `quests` argument; the live quest flags still
+  feed the recipes' quest status). What remains: `route.toml` = `bosses = ["The Countess",
+  "Mephisto", "Andariel", "Baal"]` (`route::Route { bosses }`, a warning for a boss without
+  drop data), read only by the farm list's "where:" line. The boss-stop sound keys on
+  `farm.worth` (`worth::bosses`, every boss with drop data), not on the route.
 - [x] 10. Keep and trade marks v2. `Playstyle::mark_drops(drops, &Wants)` returns marks of three
   **kinds** (`guidance::Mark { kind, trade: Option<(tier, category)>, rule, uncertain }`), drawn
   by the core per kind (`render::RingLook`): **Keep** (for the player's own builds: a mint-green

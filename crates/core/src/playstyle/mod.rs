@@ -8,7 +8,6 @@ pub use files::{DIR_VAR, Files};
 use crate::game::{ItemDrop, Snapshot};
 use crate::guidance::{Guidance, Marks};
 use crate::played::Played;
-use crate::quest_log::QuestsDone;
 use crate::web::{GearInfo, LiveInfo, Panels};
 
 /// One snapshot's evaluation ([`Playstyle::evaluate`]).
@@ -45,13 +44,8 @@ pub trait Playstyle {
     /// Runs before [`Playstyle::evaluate`], so `wants` are an earlier evaluation's.
     fn mark_drops(&self, drops: &mut Vec<ItemDrop>, wants: &Self::Wants) -> Marks;
 
-    /// `reached` is an earlier [`Evaluation::reached`]; `quests` is `None` while unknown.
-    fn evaluate(
-        &self,
-        snap: &Snapshot,
-        reached: Option<&str>,
-        quests: Option<&QuestsDone>,
-    ) -> EvaluationOf<'_, Self>;
+    /// `reached` is an earlier [`Evaluation::reached`].
+    fn evaluate(&self, snap: &Snapshot, reached: Option<&str>) -> EvaluationOf<'_, Self>;
 
     /// The playstyle's part of one tick's dashboard.
     fn panels<'a>(&'a self, evaluation: &'a EvaluationOf<'_, Self>, info: &LiveInfo<'a>) -> Panels<'a>;

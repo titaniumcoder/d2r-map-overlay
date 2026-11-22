@@ -21,8 +21,8 @@ the screen. The minimap shows:
   web app; `/api/live`). The overlay hides in towns.
 - **Dashboard sounds**: the 🔔 in the dashboard's top bar turns sound on; the ▾ beside it picks
   which ones play. Louder: a farm-list item on the ground, ready to switch stage. Quiet: an
-  upgrade available, an S / A trade item on the ground, a farm-list item picked up, the next route
-  step, a boss no longer worth farming. Each plays once per event; nothing sounds on the first
+  upgrade available, an S / A trade item on the ground, a farm-list item picked up, a boss no
+  longer worth farming. Each plays once per event; nothing sounds on the first
   frame after loading, a reconnect, a menu return or a character change.
 
 ## ⚠️ Use at your own risk: it could get your account banned
@@ -104,7 +104,8 @@ level 75):
   `{ name = "Teleport Amulet", kind = "rolled", slot = "amulet", needs = ["Teleport"], note = "until Enigma" }`:
   done once such an item is in the shared stash, found while the character has one; an entry
   needing Teleport is hidden once Enigma is held. An unknown `needs` name fails the file.
-- `route.toml`: the leveling and farming route (the dashboard's Next panel)
+- `route.toml`: the route's bosses (`bosses = [...]`): the farm list's "where:" line names
+  those that drop a missing entry
 - `valuables.json`: the drop mark rules (compiled in)
 - `loot-filter.json`: a D2R in-game loot filter profile; the `/config` page's "Copy filter JSON"
   button copies it (served at `/api/loot-filter`) for import in the game. `filter_name` in

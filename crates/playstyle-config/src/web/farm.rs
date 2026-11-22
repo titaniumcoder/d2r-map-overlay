@@ -209,7 +209,7 @@ fn needed_json(n: &Needed, spots: &Spots) -> serde_json::Value {
 }
 
 /// Where the still-missing entries drop in the played difficulty: any level-85 area
-/// ([`crate::worth::area_85`]) and the route's bosses ([`crate::route::bosses`]) with what
+/// ([`crate::worth::area_85`]) and the route's bosses ([`crate::route::Route`]) with what
 /// each drops ([`crate::worth::worth`]).
 struct Spots<'a> {
     difficulty: Option<u8>,
@@ -222,11 +222,12 @@ impl<'a> Spots<'a> {
         let holdings = info.live.holdings();
         let difficulty = info.live.difficulty;
         let bosses = difficulty.map_or_else(Vec::new, |d| {
-            crate::route::bosses(info.route)
-                .into_iter()
+            info.route
+                .bosses
+                .iter()
                 .map(|boss| {
                     let drops = crate::worth::worth(boss, d, info.farm, &holdings, materials);
-                    (boss, drops)
+                    (boss.as_str(), drops)
                 })
                 .collect()
         });

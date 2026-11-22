@@ -148,7 +148,7 @@ fn dump(player: Option<&str>, files: &Files) -> Result<()> {
     eprintln!("quest flags: {:04x?}", reader.quest_flags(true));
     let mut snap = reader.snapshot(player, None)?;
     let playstyle = ThePlaystyle::load(files);
-    let wants = playstyle.evaluate(&snap, None, None).wants;
+    let wants = playstyle.evaluate(&snap, None).wants;
     let marks = playstyle.mark_drops(&mut snap.drops, &wants);
     if !marks.is_empty() {
         eprintln!("marks: {marks:?}");
@@ -184,7 +184,7 @@ fn load_for_drawing(
     let playstyle = ThePlaystyle::load(files);
     session::Session::default().apply(&mut snap);
     config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
-    let evaluation = playstyle.evaluate(&snap, None, None);
+    let evaluation = playstyle.evaluate(&snap, None);
     let marks = playstyle.mark_drops(&mut snap.drops, &evaluation.wants);
     let mut guidance = evaluation.guidance;
     guidance.marks = marks;

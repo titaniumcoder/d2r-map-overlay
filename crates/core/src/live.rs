@@ -16,7 +16,7 @@ use crate::reader::{Attach, GameReader};
 use crate::session::Session;
 use ab_glyph::FontVec;
 
-use crate::{config, cows, game_file, info, journal, played, quest_log, render, web};
+use crate::{config, cows, game_file, info, journal, played, render, web};
 
 const TICK: Duration = Duration::from_millis(200);
 const RETRY: Duration = Duration::from_secs(2);
@@ -248,8 +248,6 @@ fn follow_game<P: Playstyle>(
             .save_dir()
             .map_or_else(played::Played::new, |dir| played::seed_from_saves(&dir))
     });
-    // The game shows only the current difficulty's quests; this remembers the others.
-    let mut quest_memory = quest_log::Memory::open(quest_log::default_path());
     let mut dedup = Dedup::default();
     // The previous tick's wants, by player unit id: the drop marks are needed before the
     // session merge that the evaluation needs, so keep marks run one tick late.
@@ -276,9 +274,7 @@ fn follow_game<P: Playstyle>(
                 let update = session.apply(&mut snap);
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
                 let quests = reader.quest_flags(update.new_game);
-                let quests_done = quest_memory.observe(&snap.player.name, snap.difficulty, quests);
-                let mut evaluation =
-                    playstyle.evaluate(&snap, last_played.reached(&snap.player.name), quests_done);
+                let mut evaluation = playstyle.evaluate(&snap, last_played.reached(&snap.player.name));
                 if let Some(slug) = evaluation.reached {
                     last_played.reach(&snap.player.name, slug);
                 }

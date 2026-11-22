@@ -14,11 +14,7 @@ use d2r_core::build::Damage;
 use d2r_core::web::fixtures::{EMPTY_MARKS, EMPTY_SKILLS, lines_of, stash_item, test_stash};
 use d2r_core::web::{GearInfo, LiveInfo};
 
-static NO_ROUTE: crate::route::Route = crate::route::Route {
-    options: BTreeMap::new(),
-    quest_sets: BTreeMap::new(),
-    step: Vec::new(),
-};
+static NO_ROUTE: crate::route::Route = crate::route::Route { bosses: Vec::new() };
 
 static NO_MARKS: crate::not_needed::Marks = BTreeMap::new();
 
@@ -37,7 +33,6 @@ fn live_info<'a>(
         farm: &[],
         route: &NO_ROUTE,
         stage_chain: &[],
-        next: None,
         not_needed: &NO_MARKS,
     }
 }
@@ -689,7 +684,6 @@ fn gear_grid<'a>(
         farm: &[],
         route: &NO_ROUTE,
         stage_chain: &[],
-        next: None,
         not_needed: &NO_MARKS,
     };
     gear_json(&info)
@@ -1553,7 +1547,6 @@ fn shop_marks_items_better_than_the_worn_ones() {
         farm: &[],
         route: &NO_ROUTE,
         stage_chain: &[],
-        next: None,
         not_needed: &NO_MARKS,
     };
     let rows = shop_better_rows(&shop_json(&info));
@@ -1626,7 +1619,6 @@ fn score_profile_takes_the_weapon_kind_from_gear_or_build() {
             farm: &[],
             route: &NO_ROUTE,
             stage_chain: &[],
-            next: None,
             not_needed: &NO_MARKS,
         });
         (profile.weapon, profile.caster)
@@ -2964,34 +2956,6 @@ fn no_farm_list_is_null() -> Result<()> {
     let info = live_info(5, &blocks, &[], &[], &[]);
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(json.get("farm"), Some(&serde_json::Value::Null));
-    Ok(())
-}
-
-#[test]
-fn next_section_carries_the_route_step() -> Result<()> {
-    let blocks = d2r_core::render::TextBlocks::default();
-    let mut info = live_info(5, &blocks, &[], &[], &[]);
-    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    assert_eq!(json.get("next"), Some(&serde_json::Value::Null), "no route");
-    let advice = crate::route::Advice {
-        id: "nm-diablo".to_owned(),
-        title: "Finish Diablo".to_owned(),
-        todo: vec!["Quests left: Terror's End".to_owned()],
-        note: "Not worth farming.".to_owned(),
-        then: Some("The Ancients".to_owned()),
-    };
-    info.next = Some(&advice);
-    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    assert_eq!(
-        json.get("next"),
-        Some(&serde_json::json!({
-            "id": "nm-diablo",
-            "title": "Finish Diablo",
-            "todo": ["Quests left: Terror's End"],
-            "note": "Not worth farming.",
-            "then": "The Ancients",
-        }))
-    );
     Ok(())
 }
 

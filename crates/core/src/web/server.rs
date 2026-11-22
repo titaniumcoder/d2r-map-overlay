@@ -585,7 +585,6 @@ mod tests {
             &self,
             _: &crate::game::Snapshot,
             _: Option<&str>,
-            _: Option<&crate::quest_log::QuestsDone>,
         ) -> crate::playstyle::EvaluationOf<'_, Self> {
             crate::playstyle::Evaluation {
                 guidance: crate::guidance::Guidance::default(),
@@ -801,7 +800,7 @@ mod tests {
         let config = html_page("/config");
         assert_eq!(
             (dashboard.len(), format!("{:#018x}", fnv1a(dashboard.as_bytes()))),
-            (55_268, "0x695adfe2a296f63c".to_owned()),
+            (53_976, "0x3125a7b48cb01225".to_owned()),
             "dashboard page"
         );
         assert_eq!(

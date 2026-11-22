@@ -31,7 +31,6 @@ pub mod offsets;
 pub mod overlay;
 pub mod played;
 pub mod playstyle;
-pub mod quest_log;
 pub mod quests;
 pub mod reader;
 pub mod render;

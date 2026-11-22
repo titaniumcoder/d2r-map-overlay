@@ -556,7 +556,7 @@ mod tests {
             ["fury druid", "summoner druid"]
         );
         assert_eq!(settings.farm.len(), 2);
-        assert_eq!(settings.route.step.len(), 17);
+        assert_eq!(settings.route.bosses.len(), 4);
         assert_eq!(
             settings.class_default(5).map(|(slug, _)| slug),
             Some("summoner druid")
@@ -601,13 +601,11 @@ mod tests {
         write(&dir.join("shipped/builds/b.toml"), &build("B", "shipped"))?;
         write(&dir.join("shipped/builds/c.toml"), &build("C", "shipped"))?;
         write(&dir.join("shipped/builds/c.source.json"), "{}")?;
-        let route = |id: &str| format!("[[step]]\nid = \"{id}\"\n");
-        let route_ids = |settings: &Settings| -> Vec<String> {
-            settings.route.step.iter().map(|s| s.id.clone()).collect()
-        };
+        let route = |boss: &str| format!("bosses = [\"{boss}\"]\n");
+        let bosses = |settings: &Settings| settings.route.bosses.clone();
         write(&dir.join("shipped/route.toml"), &route("shipped"))?;
         let settings = load(&files);
-        assert_eq!(route_ids(&settings), ["shipped"]);
+        assert_eq!(bosses(&settings), ["shipped"]);
         assert_eq!(settings.valuables.trade, [Tier::B]);
         assert_eq!(farm_targets(&settings), ["shipped"]);
         assert_eq!(settings.build_defs.len(), 3, "only the .toml files");
@@ -619,7 +617,7 @@ mod tests {
         write(&dir.join("config/builds/b.toml"), &build("B", "old"))?;
         write(&dir.join("config/route.toml"), &route("old"))?;
         let settings = load(&files);
-        assert_eq!(route_ids(&settings), ["shipped"], "no old place for the route");
+        assert_eq!(bosses(&settings), ["shipped"], "no old place for the route");
         assert_eq!(settings.valuables.trade, [Tier::A], "config.toml [valuables]");
         assert_eq!(
             settings.builds.names.get("vex").map(Vec::as_slice),
@@ -635,7 +633,7 @@ mod tests {
         write(&dir.join("config/playstyle/builds/b.toml"), &build("B", "user"))?;
         write(&dir.join("config/playstyle/route.toml"), &route("user"))?;
         let settings = load(&files);
-        assert_eq!(route_ids(&settings), ["user"]);
+        assert_eq!(bosses(&settings), ["user"]);
         assert_eq!(
             settings.valuables,
             Valuables::default(),
