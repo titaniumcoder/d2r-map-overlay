@@ -168,8 +168,8 @@ pub enum Event {
     /// tracker"). `added` / `removed` with their states.txt names, every active state, the
     /// states of the bitfield's second copy, and a raw dump of the player's stat-list chain
     /// (each list's address, owner, flags, first `stat_list::DUMP_LEN` bytes as hex and its
-    /// `[layer, stat id, value]` entries) plus the top list's aggregated array. At most
-    /// [`MAX_BUFF_EVENTS`] per game.
+    /// `[layer, stat id, value]` entries, both capped by the reader) plus the top list's
+    /// aggregated array and whether the dump was cut. At most [`MAX_BUFF_EVENTS`] per game.
     Buffs {
         level: u32,
         added: Vec<u32>,
@@ -180,6 +180,7 @@ pub enum Event {
         states_copy: Vec<u32>,
         lists: Vec<StatListDump>,
         full: Vec<(u16, u16, u32)>,
+        truncated: bool,
     },
 }
 
@@ -352,20 +353,16 @@ impl Recorder {
     }
 
     /// The `buffs` event when the player's shown states changed since the last one (up to
-    /// [`MAX_BUFF_EVENTS`] per game). Nothing without the reader's raw dump (no stat list).
+    /// [`MAX_BUFF_EVENTS`] per game). Nothing with the states unread or without the reader's
+    /// raw dump (it is only read when the shown states changed).
     fn buffs(&mut self, snap: &Snapshot, out: &mut Vec<Event>) {
-        let Some(research) = &snap.buff_research else {
+        let (Some(states), Some(research)) = (&snap.player.states, &snap.buff_research) else {
             return;
         };
         if self.buff_events >= MAX_BUFF_EVENTS {
             return;
         }
-        let states = &snap.player.states;
-        let shown: Vec<u32> = states
-            .iter()
-            .copied()
-            .filter(|id| !buffs::HIDDEN.contains(id))
-            .collect();
+        let shown = buffs::shown(states);
         let before = self.buff_states.as_deref().unwrap_or_default();
         if self.buff_states.is_some() && before == shown.as_slice() {
             return;
@@ -387,6 +384,7 @@ impl Recorder {
             states_copy: research.states_copy.clone(),
             lists: research.lists.clone(),
             full: research.full.clone(),
+            truncated: research.truncated,
         });
         self.buff_states = Some(shown);
         self.buff_events += 1;
@@ -717,7 +715,7 @@ mod tests {
                 wsm: None,
                 strength: None,
                 dexterity: None,
-                states: Vec::new(),
+                states: None,
             },
             equipped: vec![],
             merc_equipped: vec![],
@@ -907,7 +905,7 @@ mod tests {
         let mut r = Recorder::default();
         let mut s = snap(1, 39);
         // No raw dump (no stat list): never an event.
-        s.player.states = vec![32];
+        s.player.states = Some(vec![32]);
         assert_eq!(kinds(&r.observe(&s, &Marks::default())), vec!["level"]);
         s.buff_research = Some(BuffResearch {
             states_copy: vec![32],
@@ -921,6 +919,7 @@ mod tests {
                 entries: vec![(0, 12, 30)],
             }],
             full: vec![(0, 12, 30)],
+            truncated: false,
         });
         let first = r.observe(&s, &Marks::default());
         let ev = first.first().context("first buffs event")?;
@@ -930,15 +929,20 @@ mod tests {
                 "removed": [], "removed_names": [], "states": [32], "states_copy": [32],
                 "lists": [{"addr": "0x900000", "owner_type": 0, "owner_id": 1,
                     "flags": 0x8000_0000_u32, "head": "00ff", "count": 1, "entries": [[0, 12, 30]]}],
-                "full": [[0, 12, 30]]}),
+                "full": [[0, 12, 30]], "truncated": false}),
             "the game's first snapshot is a change from nothing"
         );
         assert!(r.observe(&s, &Marks::default()).is_empty(), "unchanged");
+        // Unread states (a failed read the reader could not cover): no event, no change.
+        s.player.states = None;
+        assert!(r.observe(&s, &Marks::default()).is_empty(), "unread");
+        s.player.states = Some(vec![32]);
+        assert!(r.observe(&s, &Marks::default()).is_empty(), "back, unchanged");
         // A hidden state (justhit) coming and going is no change.
-        s.player.states = vec![32, 86];
+        s.player.states = Some(vec![32, 86]);
         assert!(r.observe(&s, &Marks::default()).is_empty(), "hidden state");
         // Battle Orders gone, Feral Rage and Lower Resist on.
-        s.player.states = vec![61, 86, 120];
+        s.player.states = Some(vec![61, 86, 120]);
         let ev = r.observe(&s, &Marks::default());
         let v = serde_json::to_value(ev.first().context("change event")?)?;
         assert_eq!(v.get("added"), Some(&json!([61, 120])));
@@ -947,14 +951,14 @@ mod tests {
         assert_eq!(v.get("states"), Some(&json!([61, 86, 120])), "hidden ones listed");
         // The per-game cap.
         for i in 0..MAX_BUFF_EVENTS {
-            s.player.states = vec![u32::try_from(i % 2)?];
+            s.player.states = Some(vec![u32::try_from(i % 2)?]);
             r.observe(&s, &Marks::default());
         }
-        s.player.states = vec![5];
+        s.player.states = Some(vec![5]);
         assert!(r.observe(&s, &Marks::default()).is_empty(), "capped");
         // A new game starts over, with the current states as added.
         let mut next = snap(2, 39);
-        next.player.states = vec![5];
+        next.player.states = Some(vec![5]);
         next.buff_research = s.buff_research.clone();
         assert_eq!(
             kinds(&r.observe(&next, &Marks::default())),

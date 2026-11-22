@@ -2113,7 +2113,7 @@ mod tests {
                 wsm: None,
                 strength: None,
                 dexterity: None,
-                states: Vec::new(),
+                states: None,
             },
             equipped: vec![],
             merc_equipped: vec![],

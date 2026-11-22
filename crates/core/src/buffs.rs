@@ -133,6 +133,13 @@ pub const BUFFS: &[Buff] = &[
 /// write a journal `buffs` event (they would on nearly every tick in a fight).
 pub const HIDDEN: &[u32] = &[18, 86, 102, 121, 185, 216];
 
+/// `states` without the [`HIDDEN`] ones: the set whose changes count (journal `buffs` event,
+/// the reader's research dump).
+#[must_use]
+pub fn shown(states: &[u32]) -> Vec<u32> {
+    states.iter().copied().filter(|id| !HIDDEN.contains(id)).collect()
+}
+
 /// The states.txt name of state `id`; `None` past the table's end.
 #[must_use]
 pub fn state_name(id: u32) -> Option<&'static str> {

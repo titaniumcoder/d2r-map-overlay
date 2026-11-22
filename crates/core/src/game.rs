@@ -250,6 +250,9 @@ pub struct BuffResearch {
     /// The top list's aggregated array ([`crate::offsets::stat_list::FULL_ENTRIES`]),
     /// `(layer, stat id, value)`; empty without one.
     pub full: Vec<(u16, u16, u32)>,
+    /// True if [`BuffResearch::lists`] stopped at the reader's list cap or byte budget, or a
+    /// list's entries were cut (its `count` is then above its `entries` length).
+    pub truncated: bool,
 }
 
 /// One raw stat list of [`BuffResearch::lists`].
@@ -264,7 +267,8 @@ pub struct StatListDump {
     pub head: String,
     /// The list's own entry count ([`crate::offsets::stat_list::COUNT`]).
     pub count: u64,
-    /// Its `(layer, stat id, value)` entries; empty when unreadable.
+    /// Its `(layer, stat id, value)` entries, at most the reader's per-list cap; empty when
+    /// unreadable.
     pub entries: Vec<(u16, u16, u32)>,
 }
 
@@ -315,9 +319,11 @@ pub struct Player {
     pub dexterity: Option<u32>,
     /// The active states (states.txt ids, ascending) from the player's state bitfield
     /// ([`crate::offsets::stat_list::STATE_FLAGS`]): the dashboard's Buffs panel
-    /// ([`crate::buffs`]). Empty when unreadable; left out of the JSON when empty.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub states: Vec<u32>,
+    /// ([`crate::buffs`]). `None` when unread (no stat list, a failed read: the live reader
+    /// then carries the last read value over, so one bad read neither empties the panel nor
+    /// logs every buff as removed); left out of the JSON when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub states: Option<Vec<u32>>,
 }
 
 /// The player's speed stats and elemental resistances (stat ids from itemstatcost.txt, summed
