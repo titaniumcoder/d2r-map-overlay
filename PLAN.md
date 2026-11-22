@@ -1201,7 +1201,7 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   (every still-missing runeword entry's runes × copies still to build, summed, minus the owned
   runes), reliable first then rare, by rank; `countess_next` = the text. The farm panel's worth
   line keeps the detailed `countess_parts` form.
-- [x] 8d. The farm list as cards (user, 2026-11-22: "make it a card per boss and what they drop
+- [x] 8d. The farm list, then cards, then per build again (user, 2026-11-22: "make it a card per boss and what they drop
   that I need", "if I have something (like laying of hands) just remove it from the list", "for
   summoner / fury druid"). **Data**: `gen_treasure.py` adds `AREA_85` to `drops_data.rs`: the
   codes any monster of a Hell area of `MonLvlEx(H)` 85 can drop (each area's `nmon1..25` with
@@ -1209,20 +1209,25 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   level 85 for quality levels; every rune El..Zod). **Worth**: `worth::area_85(difficulty, …)` =
   [`worth`]'s rules against that list, runes the Countess drops reliably in the difficulty (her
   rune TC) left out (none without a difficulty). **JSON** (`web/farm.rs`): an entry held (status
-  found / done, as `farm_status`) leaves the cards and goes to `held` (`{for, name, copies}`,
-  the pickup sound's keys); the rest is merged by name and wearer (merc or not) over the
-  groups, tagged with its builds (`tag`: the build's first word, "both" for two), sorted by
-  build (both first, then farm-group order) then name. `cards` in order: "General drops" (any
-  level-85 area: the `area_85` uniques / sets, runewords with their runes short that aren't
-  Countess-reliable, rolled entries); one card per route boss (`route::bosses`: each once, the
-  Countess first) in the played difficulty with what only it drops (`worth` uniques / sets not
-  on the general card) and, for the Countess, the runes short over the list that her rune TC
-  gives (`{rune, short, one_in, for}`, by rank); "Elsewhere" for entries on no card. A card
-  with nothing on it is left out. Each entry: name, kind, tag, `for`, the card's runes short
-  (`{rune, short}`), bases / `base_hint`, slot / needs / note. `runes` (stash ⚑, a found
-  multi-copy entry's remaining copies included) and `worth` (the boss-stop sound) stay; the
-  page no longer draws the worth line. **Page**: the cards in a responsive grid (min 300 px),
-  one line per entry (name, runes short in red, build chip, base hint small below).
+  found / done, as `farm_status`) leaves the list and goes to `held` (`{for, name, copies}`,
+  the pickup sound's keys). `runes` (stash ⚑, a found multi-copy entry's remaining copies
+  included) and `worth` (the boss-stop sound) stay.
+  **Per-build list again** (user, 2026-11-22: "I dont like the farm list. do it still summoner,
+  then fury druid like before. then show where to farm it at the bottom"; the boss cards were
+  too much effort for simple things): `groups` = per farm group in farm-list order
+  (`{for, items}`, a group with nothing missing left out), each still-missing entry in file
+  order: name, kind, count / stashed, its runes short (`{rune, need, have}`, owned ones left
+  out), bases / `base_hint`, slot / needs / note, and `where` (one short line, `null` when
+  unknown): "any level-85 area" (`worth::area_85`, Hell or no difficulty), a unique / set's
+  route bosses (`route::bosses` × `worth::worth`, "Mephisto, Baal"), a runeword's short runes
+  grouped by spot: the Countess's reliable rune drop with each rune's odds ("Countess: Ko 1 in
+  43, Pul 1 in 108"), else any level-85 area, else the route bosses dropping it (the Countess's
+  rare item drop as plain "Countess"); one spot alone is just its name, several are parts
+  ("Countess: Dol 1 in 13 · Lo: any level-85 area"); a rolled entry: any
+  level-85 area. A runeword in two groups counts its runes once. **Page**: the pre-card look:
+  per build a "for X · held/total held" heading and a grid of item cards (name, kind, status
+  pill, needs, note, runes short in red as have/need, base hint), with the where line at each
+  card's bottom. The boss-card JSON and page are gone.
 - [x] 9. The route engine and a "Next" panel on the dashboard. **Data**:
   `playstyles/summoner-fury/route.toml` (user override `~/.config/d2r-map-overlay/playstyle/route.toml`
   wins whole; no old place; hot-reloaded, a broken file keeps the current route). Format (the

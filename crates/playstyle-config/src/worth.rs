@@ -55,7 +55,7 @@ pub fn worth(
 }
 
 /// `AREA_85` is Hell data: level-85 areas exist only in Hell.
-const HELL: u8 = 2;
+pub const HELL: u8 = 2;
 
 /// The still-missing farm entries any monster of a Hell area of level 85 can drop
 /// ([`d2r_core::drops_data::AREA_85`]), as [`worth`] gives them; the runes the Countess drops

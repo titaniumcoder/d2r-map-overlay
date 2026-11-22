@@ -202,22 +202,23 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .ins .hint { flex-basis: 100%; padding-left: 36px; font-size: 11px; color: var(--good); }
 .rc .res { font-size: 12px; color: #b9c4ff; overflow-wrap: anywhere; }
 .rc .note { font-size: 11px; color: var(--faint); margin-top: 3px; }
-/* Farm list: still-missing entries on cards by where they drop */
-#farm { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-items: start; }
-.fc { background: var(--panel2); border: 1px solid var(--line2); border-top: 3px solid var(--line); border-radius: 0 0 6px 6px; padding: 8px 10px; min-width: 0; }
-.fc.general { border-top-color: var(--gold); } .fc.boss { border-top-color: var(--accent); }
-.fc h3 { margin: 0 0 4px; font-size: 13.5px; font-weight: 650; }
-.fc h3 .sub { color: var(--faint); font-weight: 400; font-size: 11.5px; }
-.fc ul { margin: 0; padding: 0; list-style: none; font-size: 13px; }
-.fc li { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: baseline; padding: 2px 0; border-top: 1px solid var(--line2); }
-.fc li:first-child { border-top: 0; }
-.fc .nm { font-weight: 600; flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.fc li.unique .nm { color: var(--unique); } .fc li.set .nm { color: var(--set); }
-.fc li.runeword .nm, .fc li.rune .nm { color: var(--rune); }
-.fc .rn { color: var(--bad); font-size: 12px; font-variant-numeric: tabular-nums; }
-.fc .odds { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
-.fc .tag { margin-left: auto; font-size: 10.5px; color: var(--dim); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
-.fc .bs { flex-basis: 100%; font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
+/* Farm list: per planned build, a card per still-missing item, where to farm it at the bottom */
+.fms { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.fm { background: var(--panel2); border: 1px solid var(--line2); border-left: 3px solid var(--line); border-radius: 0 6px 6px 0; padding: 6px 10px; min-width: 0; }
+.fm.unique { border-left-color: var(--unique); } .fm.unique .nm { color: var(--unique); }
+.fm.set { border-left-color: var(--set); } .fm.set .nm { color: var(--set); }
+.fm.runeword { border-left-color: var(--rune); } .fm.runeword .nm { color: var(--rune); }
+.fm-h { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
+.fm-h .nm { font-weight: 650; flex: 1 1 10em; min-width: 0; overflow-wrap: anywhere; }
+.fm-h .kd { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+.fst { font-size: 11px; font-weight: 650; border: 1px solid currentColor; border-radius: 999px; padding: 0 7px;
+  text-transform: uppercase; letter-spacing: .06em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fst.missing { color: var(--dim); }
+.fm .rn { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.fm .rn .missing { color: var(--bad); }
+.fm .bs { font-size: 11px; color: var(--faint); margin-top: 2px; overflow-wrap: anywhere; }
+.fm .wh { font-size: 11px; color: var(--dim); margin-top: 4px; padding-top: 3px; border-top: 1px solid var(--line2); overflow-wrap: anywhere; }
+.fm .wh::before { content: "where: "; color: var(--faint); }
 .stk.farm { border-color: var(--accent); box-shadow: inset 0 0 0 1px rgba(212,154,58,.35); }
 .stk.farm::before { content: "⚑"; color: var(--accent); font-size: 10px; }
 .stk.short .q { color: var(--bad); }
@@ -261,7 +262,7 @@ Each card is a slot. The dashed box shows what is equipped (name and required le
 <div class="gear" id="merc"></div><div class="gear extras" id="extras"></div></div></div></section>
 <section class="panel full" id="recipepanel" hidden><h2>Recipes <span class="sub">✓ = you have it (shared stash, inventory, cube, stash) · bases can't be read: check them</span></h2>
 <div id="recipes"></div></section>
-<section class="panel full" id="farmpanel" hidden><h2>Farm list <span class="sub">still missing across characters (held ones left out) · runes short in red · ⚑ in the stash runes = needed</span></h2>
+<section class="panel full" id="farmpanel" hidden><h2>Farm list <span class="sub">still missing across characters (held ones left out) · runes short in red · where = where it drops in this difficulty · ⚑ in the stash runes = needed</span></h2>
 <div id="farm"></div></section>
 <section class="panel full"><h2>Shared stash</h2><div id="stash"></div></section>
 </div>

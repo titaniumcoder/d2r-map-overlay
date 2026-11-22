@@ -708,7 +708,7 @@ mod tests {
         let config = html_page("/config");
         assert_eq!(
             (dashboard.len(), format!("{:#018x}", fnv1a(dashboard.as_bytes()))),
-            (49_228, "0xcb886646ccb696ef".to_owned()),
+            (49_665, "0xaf2448a2db838f5e".to_owned()),
             "dashboard page"
         );
         assert_eq!(

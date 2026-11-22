@@ -1779,61 +1779,57 @@ fn fury_farm() -> Result<Vec<config::FarmGroup>> {
     Ok(groups)
 }
 
-/// The farm cards as `(title, [item names])`.
-fn farm_cards(json: &serde_json::Value) -> Vec<(String, Vec<String>)> {
+/// The farm groups as `(for, [item names])`.
+fn farm_groups(json: &serde_json::Value) -> Vec<(String, Vec<String>)> {
     let str_of =
         |v: &serde_json::Value, k: &str| v.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_owned();
-    json.pointer("/farm/cards")
+    json.pointer("/farm/groups")
         .and_then(serde_json::Value::as_array)
-        .map_or_default(|cards| {
-            cards
+        .map_or_default(|groups| {
+            groups
                 .iter()
-                .map(|c| {
-                    let items = c
+                .map(|g| {
+                    let items = g
                         .get("items")
                         .and_then(serde_json::Value::as_array)
                         .map_or_default(|i| i.iter().map(|i| str_of(i, "name")).collect());
-                    (str_of(c, "title"), items)
+                    (str_of(g, "for"), items)
                 })
                 .collect()
         })
 }
 
-/// The still-needed entries over every card, each once in card order, as `(name, tag)`.
+/// The still-needed entries over every group as `(for, name)`.
 fn farm_needed(json: &serde_json::Value) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
-    for item in json
-        .pointer("/farm/cards")
+    farm_groups(json)
+        .into_iter()
+        .flat_map(|(target, items)| items.into_iter().map(move |name| (target.clone(), name)))
+        .collect()
+}
+
+/// Every entry named `name`, in group order.
+fn farm_items<'j>(json: &'j serde_json::Value, name: &str) -> Vec<&'j serde_json::Value> {
+    json.pointer("/farm/groups")
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|c| c.get("items")?.as_array())
+        .filter_map(|g| g.get("items")?.as_array())
         .flatten()
-    {
-        let s = |k: &str| {
-            item.get(k)
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_owned()
-        };
-        if !out.iter().any(|(name, _)| *name == s("name")) {
-            out.push((s("name"), s("tag")));
-        }
-    }
-    out
+        .filter(|i| i.get("name") == Some(&serde_json::json!(name)))
+        .collect()
 }
 
-/// The first card entry named `name`.
+/// The first entry named `name`.
 fn farm_item<'j>(json: &'j serde_json::Value, name: &str) -> Option<&'j serde_json::Value> {
-    json.pointer("/farm/cards")?
-        .as_array()?
-        .iter()
-        .filter_map(|c| c.get("items")?.as_array())
-        .flatten()
-        .find(|i| i.get("name") == Some(&serde_json::json!(name)))
+    farm_items(json, name).into_iter().next()
 }
 
-/// The base hint of the first card entry named `name`.
+/// The where line of the first entry named `name`; `None` without one.
+fn farm_where(json: &serde_json::Value, name: &str) -> Option<String> {
+    Some(farm_item(json, name)?.get("where")?.as_str()?.to_owned())
+}
+
+/// The base hint of the first entry named `name`.
 fn farm_hint(json: &serde_json::Value, name: &str) -> Result<String> {
     Ok(farm_item(json, name)
         .and_then(|i| i.get("base_hint")?.as_str())
@@ -1859,20 +1855,8 @@ fn farm_held(json: &serde_json::Value) -> Vec<(String, String, u64)> {
         })
 }
 
-/// The farm section as `(needed (name, tag), held (for, name, copies))`.
+/// The farm section as `(needed (for, name), held (for, name, copies))`.
 type FarmRows = (Vec<(String, String)>, Vec<(String, String, u64)>);
-
-/// A card's runes as `(rune, short)`.
-fn card_runes(card: &serde_json::Value) -> Vec<(String, u64)> {
-    card.get("runes")
-        .and_then(serde_json::Value::as_array)
-        .map_or_default(|runes| {
-            runes
-                .iter()
-                .filter_map(|r| Some((r.get("rune")?.as_str()?.to_owned(), r.get("short")?.as_u64()?)))
-                .collect()
-        })
-}
 
 fn held_row(target: &str, name: &str, copies: u64) -> (String, String, u64) {
     (target.to_owned(), name.to_owned(), copies)
@@ -1886,7 +1870,7 @@ fn shipped_route() -> Result<crate::route::Route> {
 }
 
 #[test]
-fn farm_leaves_held_entries_out_and_sorts_the_rest_onto_cards() -> Result<()> {
+fn farm_leaves_held_entries_out_and_says_where_to_farm_the_rest() -> Result<()> {
     use d2r_core::offsets::item_data::{QUALITY_NORMAL, QUALITY_UNIQUE};
     let farm = fury_farm()?;
     let route = shipped_route()?;
@@ -1924,23 +1908,22 @@ fn farm_leaves_held_entries_out_and_sorts_the_rest_onto_cards() -> Result<()> {
             held_row("Fury Druid", "Ribcracker", 1),
             held_row("Fury Druid", "Lawbringer", 2),
         ],
-        "done or found: off the cards"
+        "done or found: off the list"
     );
-    // Hell: the Countess drops Fortitude's Dol, Bulwark's Shael and Smoke's Nef / Lum
-    // reliably; Fortitude's Lo comes from any level-85 area.
-    let card = |title: &str, items: &[&str]| {
-        (
-            title.to_owned(),
-            items.iter().map(|&i| i.to_owned()).collect::<Vec<_>>(),
-        )
-    };
     assert_eq!(
-        farm_cards(&json),
-        [card("General drops", &["Fortitude"]), card("The Countess", &[])]
+        farm_needed(&json),
+        [
+            ("Fury Druid".to_owned(), "Fortitude".to_owned()),
+            ("Fury Druid".to_owned(), "Smoke".to_owned()),
+            ("Fury Druid".to_owned(), "Bulwark".to_owned()),
+        ]
     );
+    // Owned runes leave: El ×8 owned, the held Sol covers one copy, Io is in the stash.
     assert_eq!(
         farm_item(&json, "Fortitude").and_then(|i| i.get("runes")),
-        Some(&serde_json::json!([{ "rune": "Lo", "short": 1 }]))
+        Some(&serde_json::json!([
+            { "rune": "Dol", "need": 1, "have": 0 }, { "rune": "Lo", "need": 1, "have": 0 },
+        ]))
     );
     assert_eq!(
         farm_item(&json, "Fortitude").and_then(|i| i.get("bases")),
@@ -1951,30 +1934,19 @@ fn farm_leaves_held_entries_out_and_sorts_the_rest_onto_cards() -> Result<()> {
         Some(&serde_json::Value::Null),
         "unknown character level: no item level to check bases by"
     );
-    let countess = json.pointer("/farm/cards/1").context("countess card")?;
-    assert_eq!(countess.get("sub"), Some(&serde_json::json!("Hell · level 82")));
-    let short = |r: &str, n: u64| (r.to_owned(), n);
+    // Hell: the Countess drops Dol, Nef, Lum and Shael reliably; Lo comes from any level-85
+    // area. The runes are grouped by spot, the Countess's with their odds.
     assert_eq!(
-        card_runes(countess),
-        [
-            short("Nef", 1),
-            short("Sol", 1),
-            short("Shael", 1),
-            short("Dol", 1),
-            short("Lum", 1)
-        ],
-        "by rank; Sol: two needed, one held"
+        farm_where(&json, "Fortitude").as_deref(),
+        Some("Countess: Dol 1 in 13 · Lo: any level-85 area")
     );
     assert_eq!(
-        countess.pointer("/runes/1/for"),
-        Some(&serde_json::json!(["Fortitude", "Bulwark"]))
+        farm_where(&json, "Smoke").as_deref(),
+        Some("Countess: Nef 1 in 12, Lum 1 in 28")
     );
-    assert!(
-        countess
-            .pointer("/runes/0/one_in")
-            .and_then(serde_json::Value::as_f64)
-            .is_some_and(|n| n > 1.0),
-        "{countess}"
+    assert_eq!(
+        farm_where(&json, "Bulwark").as_deref(),
+        Some("Countess: Shael 1 in 9")
     );
     assert_fury_rune_needs(&json)
 }
@@ -2007,7 +1979,7 @@ fn assert_fury_rune_needs(json: &serde_json::Value) -> Result<()> {
 }
 
 #[test]
-fn farm_cards_split_general_boss_and_elsewhere_and_merge_build_tags() -> Result<()> {
+fn farm_lists_per_build_and_names_where_each_entry_drops() -> Result<()> {
     // Highlord's Wrath qlvl 73 (any level-85 area); Arachnid Mesh qlvl 87 (Hell Mephisto 87,
     // Baal 99; not Andariel 75); Lawbringer's Amn / Lem / Ko: the Hell Countess.
     let (farm, warnings) = crate::config::parse_farm(
@@ -2027,68 +1999,68 @@ fn farm_cards_split_general_boss_and_elsewhere_and_merge_build_tags() -> Result<
     info.route = &route;
     info.live.difficulty = Some(2);
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    let card = |title: &str, items: &[&str]| {
+    let group = |target: &str, items: &[&str]| {
         (
-            title.to_owned(),
+            target.to_owned(),
             items.iter().map(|&i| i.to_owned()).collect::<Vec<_>>(),
         )
     };
     assert_eq!(
-        farm_cards(&json),
+        farm_groups(&json),
         [
-            card("General drops", &["Teleport Amulet", "Highlord's Wrath"]),
-            card("The Countess", &[]),
-            card("Mephisto", &["Arachnid Mesh"]),
-            card("Baal", &["Arachnid Mesh"]),
+            group("Summoner Druid", &["Teleport Amulet", "Arachnid Mesh"]),
+            group(
+                "Fury Druid",
+                &["Teleport Amulet", "Highlord's Wrath", "Lawbringer"]
+            ),
         ],
-        "Andariel drops nothing special: no card"
+        "per build in farm-list order, an entry of both builds under each"
     );
-    let tag = |name: &str, tag: &str| (name.to_owned(), tag.to_owned());
-    assert_eq!(
-        farm_needed(&json),
+    let wheres = |json: &serde_json::Value| -> Vec<Option<String>> {
         [
-            tag("Teleport Amulet", "both"),
-            tag("Highlord's Wrath", "Fury"),
-            tag("Arachnid Mesh", "Summoner"),
+            "Teleport Amulet",
+            "Arachnid Mesh",
+            "Highlord's Wrath",
+            "Lawbringer",
         ]
-    );
+        .iter()
+        .map(|name| farm_where(json, name))
+        .collect()
+    };
+    let some = |s: &str| Some(s.to_owned());
     assert_eq!(
-        card_runes(json.pointer("/farm/cards/1").context("countess")?),
-        [("Amn".to_owned(), 2), ("Ko".to_owned(), 2), ("Lem".to_owned(), 2)]
+        wheres(&json),
+        [
+            some("any level-85 area"),
+            some("Mephisto, Baal"),
+            some("any level-85 area"),
+            some("Countess: Amn 1 in 5, Lem 1 in 82, Ko 1 in 43"),
+        ],
+        "Andariel can't drop the Mesh"
     );
-    assert_eq!(
-        json.pointer("/farm/cards/2/sub"),
-        Some(&serde_json::json!("Hell · level 87"))
-    );
-    // Nightmare has no level-85 areas: the bosses carry it; no boss reaches qlvl 87.
+    // Nightmare has no level-85 areas: the bosses carry it; no boss reaches qlvl 87. Ko is
+    // only a rare Countess drop there (her item drop: no odds).
     info.live.difficulty = Some(1);
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(
-        farm_cards(&json),
+        wheres(&json),
         [
-            card("General drops", &["Teleport Amulet"]),
-            card("The Countess", &[]),
-            card("Mephisto", &["Lawbringer"]),
-            card("Baal", &["Highlord's Wrath", "Lawbringer"]),
-            card("Elsewhere", &["Arachnid Mesh"]),
+            None,
+            None,
+            some("Baal"),
+            some("Countess: Amn 1 in 5 · Lem: Mephisto, Baal · Ko: Countess"),
         ]
     );
-    assert_eq!(
-        farm_item(&json, "Lawbringer").and_then(|i| i.get("runes")),
-        Some(&serde_json::json!([{ "rune": "Lem", "short": 2 }])),
-        "Mephisto's card: only the runes above the Countess's"
-    );
-    // Out of a game: every rune is a general drop and the bosses wait.
+    // Out of a game: every rune is a level-85 drop and the bosses wait.
     info.live.difficulty = None;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(
-        farm_cards(&json),
+        wheres(&json),
         [
-            card(
-                "General drops",
-                &["Teleport Amulet", "Highlord's Wrath", "Lawbringer"]
-            ),
-            card("Elsewhere", &["Arachnid Mesh"]),
+            some("any level-85 area"),
+            None,
+            some("any level-85 area"),
+            some("any level-85 area"),
         ]
     );
     Ok(())
@@ -2115,7 +2087,7 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
         Ok((farm_needed(&json), farm_held(&json)))
     };
     let missing = (
-        vec![("Teleport Amulet".to_owned(), "Summoner".to_owned())],
+        vec![("Summoner Druid".to_owned(), "Teleport Amulet".to_owned())],
         Vec::new(),
     );
     let held = (Vec::new(), vec![held_row("Summoner Druid", "Teleport Amulet", 1)]);
@@ -2133,8 +2105,9 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
     assert_eq!(rows(&info)?, missing);
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(
-        json.pointer("/farm/cards/0/title"),
-        Some(&serde_json::json!("General drops"))
+        farm_where(&json, "Teleport Amulet").as_deref(),
+        Some("any level-85 area"),
+        "difficulty unknown"
     );
     let entry = farm_item(&json, "Teleport Amulet").context("entry")?;
     assert_eq!(entry.get("kind"), Some(&serde_json::json!("rolled")));
@@ -2204,14 +2177,15 @@ fn farm_counts_split_and_multiply_rune_needs() -> Result<()> {
     assert_eq!(
         lawbringer(&json),
         Some(serde_json::json!([
-            { "rune": "Amn", "short": 2 }, { "rune": "Lem", "short": 2 }, { "rune": "Ko", "short": 2 },
-        ])),
-        "no route: the Countess's runes are on no boss card"
+            { "rune": "Amn", "need": 2, "have": 0 },
+            { "rune": "Lem", "need": 2, "have": 0 },
+            { "rune": "Ko", "need": 2, "have": 0 },
+        ]))
     );
     let copies = ["Lawbringer".to_owned()];
     info.live.runeword_copies = &copies;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    assert_eq!(lawbringer(&json), None, "found: off the cards");
+    assert_eq!(lawbringer(&json), None, "found: off the list");
     assert_eq!(farm_held(&json), [held_row("Fury Druid", "Lawbringer", 1)]);
     let runes = json.pointer("/farm/runes").map_or_default(ToString::to_string);
     assert!(
@@ -2590,14 +2564,8 @@ fn farm_merc_and_slot_fields_steer_the_base_hint() -> Result<()> {
     let fort = farm_hint(&json, "Fortitude")?;
     assert!(fort.starts_with("4 sockets: "), "{fort}");
     assert!(!fort.contains("weapons: ") && !fort.contains("armor: "), "{fort}");
-    let bulwarks: Vec<&str> = json
-        .pointer("/farm/cards")
-        .and_then(serde_json::Value::as_array)
+    let bulwarks: Vec<&str> = farm_items(&json, "Bulwark")
         .into_iter()
-        .flatten()
-        .filter_map(|c| c.get("items")?.as_array())
-        .flatten()
-        .filter(|i| i.get("name") == Some(&serde_json::json!("Bulwark")))
         .filter_map(|i| i.get("base_hint")?.as_str())
         .collect();
     let [merc, own] = bulwarks.as_slice() else {
@@ -2656,20 +2624,9 @@ fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
     let blocks = d2r_core::render::TextBlocks::default();
     // Every entry still listed, needed or held, as sorted "build|name".
     let names = |json: &serde_json::Value| -> Vec<String> {
-        let cards = json.pointer("/farm/cards").and_then(serde_json::Value::as_array);
-        let needed = cards
+        let needed = farm_needed(json)
             .into_iter()
-            .flatten()
-            .filter_map(|c| c.get("items")?.as_array())
-            .flatten()
-            .flat_map(|i| {
-                let name = i.get("name").and_then(|v| v.as_str()).unwrap_or_default();
-                let builds = i.get("for").and_then(serde_json::Value::as_array);
-                builds
-                    .into_iter()
-                    .flatten()
-                    .filter_map(move |b| Some(format!("{}|{name}", b.as_str()?)))
-            });
+            .map(|(b, name)| format!("{b}|{name}"));
         let held = farm_held(json)
             .into_iter()
             .map(|(b, name, _)| format!("{b}|{name}"));

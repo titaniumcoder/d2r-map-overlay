@@ -1,5 +1,5 @@
-//! The farm list panel: what the cross-character farm list (`farm.toml`) still needs, as
-//! cards by where it drops.
+//! The farm list panel: what the cross-character farm list (`farm.toml`) still needs, per
+//! build, each entry with where to farm it.
 
 use crate::config::{FarmGroup, FarmItem};
 use crate::worth::Why;
@@ -73,9 +73,10 @@ pub const fn farm_status(count: u32, stashed: u32, carried: u32) -> FarmStatus {
     }
 }
 
-/// The farm list section, `null` without one: the still-missing entries as cards
-/// ([`cards_json`]), the entries held (`held`, for the pickup sound), the runes still needed
-/// over the whole list (in rune order) and the bosses worth farming.
+/// The farm list section, `null` without one: per farm group (build, in farm-list order) its
+/// still-missing entries, each with where to farm it ([`where_text`]); the entries held
+/// (`held`, for the pickup sound), the runes still needed over the whole list (in rune order)
+/// and the bosses worth farming.
 #[must_use]
 pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
     if info.farm.is_empty() {
@@ -83,47 +84,59 @@ pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
     }
     let materials = owned_materials(info);
     let mut wanted = RuneNeeds::new();
-    let mut needed: Vec<Needed> = Vec::new();
     let mut held: Vec<serde_json::Value> = Vec::new();
-    for group in info.farm {
-        collect_group(group, info, &materials, &mut wanted, &mut needed, &mut held);
-    }
-    needed.sort_by_cached_key(|n| (build_rank(&n.builds, info.farm), n.item.name.to_lowercase()));
-    let cards = cards_json(info, &needed, &materials, &wanted);
+    let mut counted: Vec<(&str, bool)> = Vec::new();
+    let groups: Vec<(&str, Vec<Needed>)> = info
+        .farm
+        .iter()
+        .map(|group| {
+            let needed = collect_group(group, info, &materials, &mut wanted, &mut counted, &mut held);
+            (group.target.as_str(), needed)
+        })
+        .collect();
+    let spots = Spots::new(info, &materials);
+    let groups: Vec<serde_json::Value> = groups
+        .into_iter()
+        .filter(|(_, needed)| !needed.is_empty())
+        .map(|(target, needed)| {
+            let items: Vec<serde_json::Value> = needed.iter().map(|n| needed_json(n, &spots)).collect();
+            serde_json::json!({ "for": target, "items": items })
+        })
+        .collect();
     let runes = rune_needs_json(wanted, &materials, &stash_materials(info));
     serde_json::json!({
-        "cards": cards,
+        "groups": groups,
         "held": held,
         "runes": runes,
         "worth": worth_json(info, &materials),
     })
 }
 
-/// One still-missing farm entry, merged over the groups (builds) needing it.
+/// One still-missing farm entry of a group.
 struct Needed<'a> {
     item: &'a FarmItem,
-    /// The farm group targets it is for, in farm-list order.
-    builds: Vec<&'a str>,
+    stashed: u32,
     word: Option<&'static d2r_core::runewords_data::Runeword>,
-    /// Its runes still short: `(rune, how many)`, in socket order.
-    short: Vec<(&'static str, u32)>,
+    /// Its runes still short: `(rune, need, have)`, in socket order.
+    short: Vec<(&'static str, u32, u32)>,
     base_hint: Option<String>,
 }
 
-/// Sorts group `group`'s visible entries: a still-missing one joins `needed` (merged by name
-/// and wearer, its runes added to `wanted`), a held one `held` (the runes of copies still to
-/// build added to `wanted` all the same).
+/// Group `group`'s visible entries still missing, in farm-list order; a held one joins `held`.
+/// The runes of the copies still to build join `wanted` once per entry over the groups
+/// (`counted`: name and wearer already counted).
 fn collect_group<'a>(
     group: &'a FarmGroup,
     info: &PanelInfo,
     materials: &[(String, u32)],
     wanted: &mut RuneNeeds,
-    needed: &mut Vec<Needed<'a>>,
+    counted: &mut Vec<(&'a str, bool)>,
     held: &mut Vec<serde_json::Value>,
-) {
+) -> Vec<Needed<'a>> {
     let build = info
         .build
         .filter(|b| d2r_core::names::same_name(&b.name, &group.target));
+    let mut needed = Vec::new();
     for item in group
         .items
         .iter()
@@ -131,63 +144,40 @@ fn collect_group<'a>(
     {
         let (stashed, carried) = farm_copies(item, info);
         let to_build = item.count.saturating_sub(stashed.saturating_add(carried));
+        let first = !counted
+            .iter()
+            .any(|&(name, merc)| merc == item.merc && d2r_core::names::same_name(name, &item.name));
+        if first {
+            counted.push((&item.name, item.merc));
+        }
+        let mut scratch = RuneNeeds::new();
+        let sink = if first { &mut *wanted } else { &mut scratch };
+        let word = runeword_of(item);
+        let short = word.filter(|_| to_build > 0).map_or_else(Vec::new, |word| {
+            runeword_short(word, to_build, &item.name, materials, sink)
+        });
         if farm_status(item.count, stashed, carried) != FarmStatus::Missing {
             let copies = stashed.saturating_add(carried).min(item.count.max(1));
             held.push(serde_json::json!({ "for": group.target, "name": item.name, "copies": copies }));
-            if let Some(word) = runeword_of(item).filter(|_| to_build > 0) {
-                runeword_short(word, to_build, &item.name, materials, wanted);
-            }
-        } else if let Some(entry) = needed
-            .iter_mut()
-            .find(|n| n.item.merc == item.merc && d2r_core::names::same_name(&n.item.name, &item.name))
-        {
-            if !entry.builds.contains(&group.target.as_str()) {
-                entry.builds.push(&group.target);
-            }
-        } else {
-            needed.push(needed_entry(
-                item,
-                &group.target,
-                to_build,
-                info,
-                build,
-                materials,
-                wanted,
-            ));
+            continue;
         }
+        let base_hint = word.and_then(|w| {
+            let slot = item.slot.map(crate::config::FarmSlot::body);
+            if item.merc {
+                merc_base_hint(w, info, slot, build)
+            } else {
+                base_hint(w, info, slot, Wearer::Player(info.live.class))
+            }
+        });
+        needed.push(Needed {
+            item,
+            stashed,
+            word,
+            short,
+            base_hint,
+        });
     }
-}
-
-/// Still-missing entry `item` of the group for `target`, `to_build` copies to go; a runeword's
-/// runes join `wanted`. A mercenary entry's base hint is for the mercenary of `build`.
-fn needed_entry<'a>(
-    item: &'a FarmItem,
-    target: &'a str,
-    to_build: u32,
-    info: &PanelInfo,
-    build: Option<&crate::config::Build>,
-    materials: &[(String, u32)],
-    wanted: &mut RuneNeeds,
-) -> Needed<'a> {
-    let word = runeword_of(item);
-    let short = word.map_or_else(Vec::new, |word| {
-        runeword_short(word, to_build, &item.name, materials, wanted)
-    });
-    let base_hint = word.and_then(|w| {
-        let slot = item.slot.map(crate::config::FarmSlot::body);
-        if item.merc {
-            merc_base_hint(w, info, slot, build)
-        } else {
-            base_hint(w, info, slot, Wearer::Player(info.live.class))
-        }
-    });
-    Needed {
-        item,
-        builds: vec![target],
-        word,
-        short,
-        base_hint,
-    }
+    needed
 }
 
 fn runeword_of(item: &FarmItem) -> Option<&'static d2r_core::runewords_data::Runeword> {
@@ -196,237 +186,183 @@ fn runeword_of(item: &FarmItem) -> Option<&'static d2r_core::runewords_data::Run
         .flatten()
 }
 
-/// Sort rank of an entry for `builds`: one for several builds first, then by farm group.
-fn build_rank(builds: &[&str], farm: &[FarmGroup]) -> usize {
-    match builds {
-        [one] => farm
-            .iter()
-            .position(|g| g.target == *one)
-            .map_or(usize::MAX, |i| i.saturating_add(1)),
-        _ => 0,
-    }
-}
-
-/// The short build tag of an entry for `builds`: `"Fury"` for "Fury Druid", `"both"` for two.
-fn build_tag(builds: &[&str]) -> String {
-    let short = |name: &str| name.split_whitespace().next().unwrap_or(name).to_owned();
-    match builds {
-        [one] => short(one),
-        [_, _] => "both".to_owned(),
-        _ => builds.iter().map(|b| short(b)).collect::<Vec<_>>().join(" + "),
-    }
-}
-
-/// The farm cards: "General drops" (what any level-85 area drops: uniques and sets of quality
-/// level 85 at most, runes the Countess doesn't drop reliably, rolled entries), then one per
-/// route boss in the played difficulty with what only it drops (higher uniques and sets; the
-/// Countess: her reliable runes, with odds), then "Elsewhere" for entries on no card. A card
-/// with nothing on it is left out.
-fn cards_json(
-    info: &PanelInfo,
-    needed: &[Needed],
-    materials: &[(String, u32)],
-    wanted: &RuneNeeds,
-) -> Vec<serde_json::Value> {
-    let holdings = info.live.holdings();
-    let difficulty = info.live.difficulty;
-    let general = crate::worth::area_85(difficulty, info.farm, &holdings, materials);
-    let mut placed: Vec<&str> = Vec::new();
-    let mut cards: Vec<serde_json::Value> = Vec::new();
-    cards.extend(general_card(needed, &general, &mut placed));
-    if let Some(d) = difficulty {
-        for boss in crate::route::bosses(info.route) {
-            let special = boss_special(boss, d, info, &general, materials);
-            cards.extend(boss_card(
-                boss,
-                d,
-                needed,
-                &special,
-                materials,
-                wanted,
-                &mut placed,
-            ));
-        }
-    }
-    cards.extend(elsewhere_card(needed, &placed, difficulty));
-    cards
-}
-
-fn card_json(
-    kind: &str,
-    title: &str,
-    sub: &str,
-    items: Vec<serde_json::Value>,
-    runes: Vec<serde_json::Value>,
-) -> serde_json::Value {
-    let mut card = serde_json::json!({ "kind": kind, "title": title, "sub": sub });
-    if let Some(map) = card.as_object_mut() {
-        map.insert("items".to_owned(), items.into());
-        map.insert("runes".to_owned(), runes.into());
-    }
-    card
-}
-
-fn why_runes(why: &Why) -> Vec<&'static str> {
-    match why {
-        Why::Drops => Vec::new(),
-        Why::Runes(runes) => runes.clone(),
-    }
-}
-
-/// The "General drops" card: the entries of `general` ([`crate::worth::area_85`]) and the
-/// rolled entries.
-fn general_card<'a>(
-    needed: &'a [Needed],
-    general: &[(String, Why)],
-    placed: &mut Vec<&'a str>,
-) -> Option<serde_json::Value> {
-    let items: Vec<serde_json::Value> = needed
-        .iter()
-        .filter_map(|n| {
-            let runes = if n.item.kind == crate::config::FarmKind::Rolled {
-                Vec::new()
-            } else {
-                why_runes(
-                    &general
-                        .iter()
-                        .find(|(name, _)| d2r_core::names::same_name(name, &n.item.name))?
-                        .1,
-                )
-            };
-            placed.push(&n.item.name);
-            Some(card_item_json(n, &runes))
-        })
-        .collect();
-    (!items.is_empty()).then(|| card_json("general", "General drops", "any level-85 area", items, Vec::new()))
-}
-
-/// The needed entries boss `boss` drops in `difficulty` that no level-85 area (`general`) can;
-/// runewords only for bosses other than the Countess (her runes have their own lines).
-fn boss_special(
-    boss: &str,
-    difficulty: u8,
-    info: &PanelInfo,
-    general: &[(String, Why)],
-    materials: &[(String, u32)],
-) -> Vec<(String, Why)> {
-    crate::worth::worth(boss, difficulty, info.farm, &info.live.holdings(), materials)
-        .into_iter()
-        .filter(|(_, why)| *why == Why::Drops || !crate::worth::is_countess(boss))
-        .filter(|(name, _)| !general.iter().any(|(g, _)| d2r_core::names::same_name(g, name)))
-        .collect()
-}
-
-/// Boss `boss`'s card: the needed entries of `special`; the Countess adds the runes still
-/// short that her rune drop gives in `difficulty`, each with its odds per kill.
-fn boss_card<'a>(
-    boss: &str,
-    difficulty: u8,
-    needed: &'a [Needed],
-    special: &[(String, Why)],
-    materials: &[(String, u32)],
-    wanted: &RuneNeeds,
-    placed: &mut Vec<&'a str>,
-) -> Option<serde_json::Value> {
-    let (level, _) = crate::worth::boss_drops(boss, difficulty)?;
-    let items: Vec<serde_json::Value> = needed
-        .iter()
-        .filter_map(|n| {
-            let (_, why) = special
-                .iter()
-                .find(|(s, _)| d2r_core::names::same_name(s, &n.item.name))?;
-            placed.push(&n.item.name);
-            Some(card_item_json(n, &why_runes(why)))
-        })
-        .collect();
-    let runes = if crate::worth::is_countess(boss) {
-        countess_runes_short(difficulty, wanted, materials, needed, placed)
-    } else {
-        Vec::new()
-    };
-    if items.is_empty() && runes.is_empty() {
-        return None;
-    }
-    let name = d2r_core::info::difficulty_name(difficulty).unwrap_or_default();
-    Some(card_json(
-        "boss",
-        boss,
-        &format!("{name} · level {level}"),
-        items,
-        runes,
-    ))
-}
-
-/// The runes over `wanted` still short that the Countess's rune drop gives in `difficulty`,
-/// by rank: `{rune, short, one_in, for}`; the runewords needing them count as placed.
-fn countess_runes_short<'a>(
-    difficulty: u8,
-    wanted: &RuneNeeds,
-    materials: &[(String, u32)],
-    needed: &'a [Needed],
-    placed: &mut Vec<&'a str>,
-) -> Vec<serde_json::Value> {
-    let mut runes: Vec<(usize, serde_json::Value)> = Vec::new();
-    for (rune, need, words) in wanted {
-        let short = need.saturating_sub(rune_count(rune, materials));
-        let Some(chance) = crate::worth::countess_rune_chance(rune, difficulty) else {
-            continue;
-        };
-        if short == 0 {
-            continue;
-        }
-        placed.extend(
-            needed
-                .iter()
-                .filter(|n| words.iter().any(|w| w == &n.item.name))
-                .map(|n| n.item.name.as_str()),
-        );
-        let rank = d2r_core::stash::RUNE_NAMES.iter().position(|r| r == rune);
-        let one_in = (100.0 / chance).round();
-        let json = serde_json::json!({ "rune": rune, "short": short, "one_in": one_in, "for": words });
-        runes.push((rank.unwrap_or(usize::MAX), json));
-    }
-    runes.sort_by_key(|(rank, _)| *rank);
-    runes.into_iter().map(|(_, json)| json).collect()
-}
-
-/// The "Elsewhere" card: the needed entries on no other card, with all their runes short.
-fn elsewhere_card(needed: &[Needed], placed: &[&str], difficulty: Option<u8>) -> Option<serde_json::Value> {
-    let items: Vec<serde_json::Value> = needed
-        .iter()
-        .filter(|n| !placed.contains(&n.item.name.as_str()))
-        .map(|n| {
-            let runes: Vec<&'static str> = n.short.iter().map(|&(rune, _)| rune).collect();
-            card_item_json(n, &runes)
-        })
-        .collect();
-    let sub = difficulty.and_then(d2r_core::info::difficulty_name).map_or_else(
-        || "the bosses show in a game".to_owned(),
-        |name| format!("not on a card above in {name}"),
-    );
-    (!items.is_empty()).then(|| card_json("other", "Elsewhere", &sub, items, Vec::new()))
-}
-
-/// One entry on a card, with the runes `runes` of its short ones.
-fn card_item_json(n: &Needed, runes: &[&str]) -> serde_json::Value {
+fn needed_json(n: &Needed, spots: &Spots) -> serde_json::Value {
     let runes: Vec<serde_json::Value> = n
         .short
         .iter()
-        .filter(|(rune, _)| runes.contains(rune))
-        .map(|&(rune, short)| serde_json::json!({ "rune": rune, "short": short }))
+        .map(|&(rune, need, have)| serde_json::json!({ "rune": rune, "need": need, "have": have }))
         .collect();
     serde_json::json!({
         "name": n.item.name,
         "kind": n.item.kind.name(),
-        "tag": build_tag(&n.builds),
-        "for": n.builds,
+        "count": n.item.count,
+        "stashed": n.stashed,
         "runes": runes,
         "bases": n.word.map_or(&[][..], |w| w.bases),
         "base_hint": n.base_hint,
         "slot": n.item.slot.map(crate::config::FarmSlot::name),
         "needs": n.item.needs.iter().map(|n| n.name()).collect::<Vec<_>>(),
         "note": n.item.note,
+        "where": where_text(n, spots),
     })
+}
+
+/// Where the still-missing entries drop in the played difficulty: any level-85 area
+/// ([`crate::worth::area_85`]) and the route's bosses ([`crate::route::bosses`]) with what
+/// each drops ([`crate::worth::worth`]).
+struct Spots<'a> {
+    difficulty: Option<u8>,
+    area_85: Vec<(String, Why)>,
+    bosses: Vec<(&'a str, Vec<(String, Why)>)>,
+}
+
+impl<'a> Spots<'a> {
+    fn new(info: &PanelInfo<'a>, materials: &[(String, u32)]) -> Self {
+        let holdings = info.live.holdings();
+        let difficulty = info.live.difficulty;
+        let bosses = difficulty.map_or_else(Vec::new, |d| {
+            crate::route::bosses(info.route)
+                .into_iter()
+                .map(|boss| {
+                    let drops = crate::worth::worth(boss, d, info.farm, &holdings, materials);
+                    (boss, drops)
+                })
+                .collect()
+        });
+        Spots {
+            difficulty,
+            area_85: crate::worth::area_85(difficulty, info.farm, &holdings, materials),
+            bosses,
+        }
+    }
+
+    fn why<'s>(list: &'s [(String, Why)], name: &str) -> Option<&'s Why> {
+        list.iter()
+            .find(|(n, _)| d2r_core::names::same_name(n, name))
+            .map(|(_, why)| why)
+    }
+
+    /// Where unique or set `name` drops: any level-85 area, else the bosses dropping it.
+    fn item(&self, name: &str) -> Option<Spot<'a>> {
+        if Self::why(&self.area_85, name).is_some() {
+            return Some(Spot::Area85);
+        }
+        let bosses: Vec<&str> = self
+            .bosses
+            .iter()
+            .filter(|(_, drops)| Self::why(drops, name) == Some(&Why::Drops))
+            .map(|&(boss, _)| boss_name(boss))
+            .collect();
+        (!bosses.is_empty()).then_some(Spot::Bosses(bosses))
+    }
+
+    /// Where rune `rune` of runeword `word` drops: the Countess when her rune drop gives it
+    /// reliably, else any level-85 area, else the bosses dropping it (the Countess too: her
+    /// item drop, without odds).
+    fn rune(&self, word: &str, rune: &str) -> Option<Spot<'a>> {
+        let has = |list: &[(String, Why)]| matches!(Self::why(list, word), Some(Why::Runes(r)) if r.contains(&rune));
+        if let Some(chance) = self
+            .difficulty
+            .and_then(|d| crate::worth::countess_rune_chance(rune, d))
+        {
+            return Some(Spot::Countess((100.0 / chance).round()));
+        }
+        if has(&self.area_85) {
+            return Some(Spot::Area85);
+        }
+        let bosses: Vec<&str> = self
+            .bosses
+            .iter()
+            .filter(|(_, drops)| has(drops))
+            .map(|&(boss, _)| boss_name(boss))
+            .collect();
+        (!bosses.is_empty()).then_some(Spot::Bosses(bosses))
+    }
+}
+
+/// A place to farm something.
+#[derive(Debug, PartialEq)]
+enum Spot<'a> {
+    Area85,
+    /// The Countess's rune drop, one in this many kills.
+    Countess(f64),
+    Bosses(Vec<&'a str>),
+}
+
+impl Spot<'_> {
+    fn text(&self) -> String {
+        match self {
+            Spot::Area85 => "any level-85 area".to_owned(),
+            Spot::Countess(_) => "Countess".to_owned(),
+            Spot::Bosses(bosses) => bosses.join(", "),
+        }
+    }
+
+    /// Whether `other` goes into the same part of a where line: the Countess's rune drop
+    /// whatever the odds, else the same spot.
+    fn joins(&self, other: &Spot) -> bool {
+        matches!((self, other), (Spot::Countess(_), Spot::Countess(_))) || self == other
+    }
+}
+
+fn boss_name(boss: &str) -> &str {
+    if crate::worth::is_countess(boss) {
+        "Countess"
+    } else {
+        boss
+    }
+}
+
+/// Where entry `n` is farmed, one short line; `None` when unknown. A runeword's short runes
+/// are grouped by spot: one spot alone (`"any level-85 area"`), else a part per spot, the
+/// Countess's with each rune's odds (`"Countess: Ko 1 in 43, Pul 1 in 108 · Vex: any level-85
+/// area"`); runes with no known spot are left out. A rolled entry drops in any level-85 area.
+fn where_text(n: &Needed, spots: &Spots) -> Option<String> {
+    match n.item.kind {
+        crate::config::FarmKind::Unique | crate::config::FarmKind::Set => {
+            spots.item(&n.item.name).map(|s| s.text())
+        }
+        crate::config::FarmKind::Rolled => spots
+            .difficulty
+            .is_none_or(|d| d == crate::worth::HELL)
+            .then(|| Spot::Area85.text()),
+        crate::config::FarmKind::Runeword => {
+            let mut parts: Vec<(Spot, Vec<(&str, f64)>)> = Vec::new();
+            for &(rune, _, _) in &n.short {
+                let Some(spot) = spots.rune(&n.item.name, rune) else {
+                    continue;
+                };
+                let odds = if let Spot::Countess(one_in) = spot {
+                    one_in
+                } else {
+                    0.0
+                };
+                match parts.iter_mut().find(|(s, _)| s.joins(&spot)) {
+                    Some((_, runes)) => runes.push((rune, odds)),
+                    None => parts.push((spot, vec![(rune, odds)])),
+                }
+            }
+            if let [(spot, _)] = parts.as_slice()
+                && !matches!(spot, Spot::Countess(_))
+            {
+                return Some(spot.text());
+            }
+            let text: Vec<String> = parts
+                .iter()
+                .map(|(spot, runes)| {
+                    if matches!(spot, Spot::Countess(_)) {
+                        let runes: Vec<String> =
+                            runes.iter().map(|(rune, n)| format!("{rune} 1 in {n}")).collect();
+                        format!("Countess: {}", runes.join(", "))
+                    } else {
+                        let names: Vec<&str> = runes.iter().map(|&(rune, _)| rune).collect();
+                        format!("{}: {}", names.join(", "), spot.text())
+                    }
+                })
+                .collect();
+            (!text.is_empty()).then(|| text.join(" · "))
+        }
+    }
 }
 
 /// The materials of the shared stash's materials tab alone.
@@ -545,14 +481,15 @@ pub fn farm_worn(target: &str, item: &FarmItem, info: &PanelInfo) -> bool {
 }
 
 /// The runes of `to_build` copies of `word` the owned `materials` are short of, each distinct
-/// rune once in socket order; every rune's need also joins `wanted` for runeword `name`.
+/// rune once in socket order as `(rune, need, have)`; every rune's need also joins `wanted`
+/// for runeword `name`.
 fn runeword_short(
     word: &d2r_core::runewords_data::Runeword,
     to_build: u32,
     name: &str,
     materials: &[(String, u32)],
     wanted: &mut RuneNeeds,
-) -> Vec<(&'static str, u32)> {
+) -> Vec<(&'static str, u32, u32)> {
     let inputs: Vec<Input> = word
         .runes
         .iter()
@@ -571,9 +508,9 @@ fn runeword_short(
         seen.push(rune);
         let key = format!("{rune} rune").to_lowercase();
         let need = totals.iter().find(|(k, _)| *k == key).map_or(0, |(_, n)| *n);
-        let missing = need.saturating_sub(rune_count(rune, materials));
-        if missing > 0 {
-            short.push((rune, missing));
+        let have = rune_count(rune, materials);
+        if have < need {
+            short.push((rune, need, have));
         }
         add_wanted(wanted, rune, need, name);
     }

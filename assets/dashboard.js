@@ -358,26 +358,31 @@ function recipes(list) {
   });
   $("recipes").innerHTML = groups.join("");
 }
-// The farm list: only what is still missing, as cards by where it drops: any level-85 area,
-// then each route boss with what only it drops (the Countess: her runes with the odds per kill),
-// then "Elsewhere". Each entry is tagged with the build(s) it is for.
+// The farm list per build, in farm-list order: one card per still-missing entry (held ones
+// are left out, owned runes too), its runes short, base hint, and at the bottom where to farm it.
 function farm(f) {
-  const cards = (f && f.cards) || [];
-  $("farmpanel").hidden = !cards.length;
-  const times = (name, n) => esc(name) + (n > 1 ? ` ×${esc(n)}` : "");
-  const entry = i => {
-    const runes = (i.runes || []).map(x => times(x.rune, x.short)).join(" ");
-    const needs = (i.needs || []).length ? `${i.slot || "any item"} with ${i.needs.join(" + ")}` : "";
-    const hint = i.base_hint || (i.bases || []).join(", ");
-    const sub = [needs, i.note, hint].filter(Boolean).map(esc).join(" · ");
-    return `<li class="${esc(i.kind)}"><span class="nm">${esc(i.name)}</span>`
-      + (runes ? `<span class="rn">${runes}</span>` : "") + `<span class="tag">${esc(i.tag)}</span>`
-      + (sub ? `<div class="bs">${sub}</div>` : "") + "</li>";
-  };
-  const rune = r => `<li class="rune"><span class="nm">${times(r.rune, r.short)}</span>`
-    + `<span class="odds">1 in ${esc(r.one_in)}</span><div class="bs">${esc((r.for || []).join(", "))}</div></li>`;
-  $("farm").innerHTML = cards.map(c => `<div class="fc ${esc(c.kind)}"><h3>${esc(c.title)} <span class="sub">${esc(c.sub)}</span></h3>`
-    + `<ul>${(c.runes || []).map(rune).join("")}${(c.items || []).map(entry).join("")}</ul></div>`).join("");
+  const groups = (f && f.groups) || [];
+  const held = (f && f.held) || [];
+  $("farmpanel").hidden = !groups.length;
+  $("farm").innerHTML = groups.map(g => {
+    const items = g.items || [];
+    const done = held.filter(h => h.for === g.for).length;
+    const cards = items.map(i => {
+      const n = i.count > 1 ? ` ${esc(i.stashed)}/${esc(i.count)}` : "";
+      const runes = (i.runes || []).length
+        ? `<div class="rn">${i.runes.map(x => `<span class="missing">${esc(x.rune)} ${esc(x.have)}/${esc(x.need)}</span>`).join("")}</div>` : "";
+      const bases = i.base_hint ? `<div class="bs">${esc(i.base_hint)}</div>`
+        : (i.bases || []).length ? `<div class="bs">${esc(i.bases.join(", "))}</div>` : "";
+      // A rolled entry: its slot and the stats it needs ("amulet with Teleport").
+      const needs = (i.needs || []).length
+        ? `<div class="bs">${esc(i.slot || "any item")} with ${esc(i.needs.join(" + "))}</div>` : "";
+      const note = i.note ? `<div class="bs">${esc(i.note)}</div>` : "";
+      const where = i.where ? `<div class="wh">${esc(i.where)}</div>` : "";
+      return `<div class="fm ${esc(i.kind)} missing"><div class="fm-h"><span class="nm">${esc(i.name)}</span>`
+        + `<span class="kd">${esc(i.kind)}</span><span class="fst missing">missing${n}</span></div>${needs}${note}${runes}${bases}${where}</div>`;
+    }).join("");
+    return `<h3 class="row-h">for ${esc(g.for)} · ${done}/${done + items.length} held</h3><div class="fms">${cards}</div>`;
+  }).join("");
 }
 // The route's current step: its title, what to do, why, and the step after it.
 function next(n) {
