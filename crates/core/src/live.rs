@@ -222,10 +222,15 @@ fn publish_dashboard<'a, P: Playstyle>(
         updated_at: now_secs(),
     };
     let panels = playstyle.panels(evaluation, &info);
-    let marks = snap
-        .shop
-        .as_ref()
-        .map_or_else(UiMarks::default, |shop| ui_marks::vendor(shop, &panels.shop));
+    // The shown store tab and whether the stash window is open aren't read yet: no store-grid
+    // or stash-grid frames, only the inventory's (shown beside every trade window).
+    let marks = snap.shop.as_ref().map_or_else(UiMarks::default, |shop| {
+        let mut marks = ui_marks::vendor(shop, &panels.shop, None);
+        marks
+            .frames
+            .extend(ui_marks::item_frames(&evaluation.guidance.items, None));
+        marks
+    });
     web::publish_live(web::live_json(&info, panels));
     marks
 }

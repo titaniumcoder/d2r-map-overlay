@@ -1,12 +1,13 @@
 //! In-game UI marks: a click-through layer over the whole screen that points at things in the
 //! game's own windows. While a vendor trade window is open it lists the worthwhile store items
-//! in a box at the top centre. Frames around grid cells take screen rectangles; none are drawn
-//! yet (the vendor and stash grids are not calibrated).
+//! in a box at the top centre and frames the inventory's items by the stash plan's action;
+//! store-grid and stash-grid frames take the shown tab, which is not read yet.
 
 use ab_glyph::FontVec;
 use tiny_skia::{Paint, PathBuilder, Pixmap, Rect as SkRect, Stroke, Transform};
 
-use crate::guidance::MarkKind;
+use crate::game::CellRect;
+use crate::guidance::{Action, Advice, MarkKind, Side, Spot};
 use crate::offsets::stat_list;
 use crate::shop::{Shop, ShopItem};
 use crate::web::ShopNote;
@@ -21,8 +22,12 @@ pub const BOX_TOP: u32 = 12;
 pub const MAX_LINES: usize = 8;
 /// A build piece, an upgrade over the worn item, or a runeword base the builds want.
 pub const BUILD: Rgba = [120, 235, 130, 255];
-/// Sells for a lot (a valuables match that gets the coin on the map).
+/// Sells for a lot (a valuables match that gets the coin on the map); a kept trade item.
 pub const MONEY: Rgba = [255, 205, 40, 255];
+/// Sell.
+pub const SELL: Rgba = [240, 60, 50, 255];
+/// Move to other stash pages, or stow on a gems / materials / runes tab.
+pub const MOVE: Rgba = [255, 140, 30, 255];
 const MORE: Rgba = [200, 200, 200, 255];
 const BACKDROP: Rgba = [0, 0, 0, 170];
 const TEXT_PX: f32 = 15.0;
@@ -31,6 +36,63 @@ const PAD: f32 = 6.0;
 /// px between two lines.
 const LINE_GAP: f32 = 3.0;
 const FRAME_WIDTH: f32 = 2.0;
+
+/// The screen size the grids below were measured at (D2R fullscreen, 2026-11-22 screenshots);
+/// frames are drawn only at this size.
+pub const CALIBRATED: (u32, u32) = (1920, 1080);
+/// px from one grid cell to the next; a cell's own box is one px less.
+pub const CELL_PITCH: u32 = 49;
+/// The trade window's store grid (left half).
+pub const VENDOR_GRID: Grid = Grid {
+    left: 163,
+    top: 221,
+    cols: 10,
+    rows: 10,
+};
+/// The stash window's Personal tab and shared pages (left half).
+pub const STASH_GRID: Grid = Grid {
+    left: 163,
+    top: 213,
+    cols: 10,
+    rows: 10,
+};
+/// The inventory below the worn gear (right half).
+pub const INVENTORY_GRID: Grid = Grid {
+    left: 1269,
+    top: 552,
+    cols: 10,
+    rows: 4,
+};
+
+/// An item grid of the game's windows at [`CALIBRATED`]: its first cell's top-left screen px
+/// and its size in cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Grid {
+    pub left: u32,
+    pub top: u32,
+    pub cols: u8,
+    pub rows: u8,
+}
+
+impl Grid {
+    /// The screen rectangle over `cells` (cell boxes and the gaps between them); `None` when
+    /// they leave the grid.
+    #[must_use]
+    pub fn rect(self, cells: CellRect) -> Option<Rect> {
+        let fits =
+            |at: u8, len: u8, count: u8| len > 0 && at.checked_add(len).is_some_and(|end| end <= count);
+        if !fits(cells.x, cells.w, self.cols) || !fits(cells.y, cells.h, self.rows) {
+            return None;
+        }
+        let span = |len: u8| CELL_PITCH * u32::from(len) - 1;
+        Some(Rect {
+            x: self.left + CELL_PITCH * u32::from(cells.x),
+            y: self.top + CELL_PITCH * u32::from(cells.y),
+            w: span(cells.w),
+            h: span(cells.h),
+        })
+    }
+}
 
 /// A rectangle in screen px (the layer covers the whole output, so surface px are screen px).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,15 +134,22 @@ enum Pick {
 
 /// The open trade window's worthwhile items (`notes` in window order, as the dashboard's
 /// Vendor panel has them): build pieces, upgrades, wanted runeword bases, then money items;
-/// identical lines once.
+/// identical lines once. Framed in the store grid are those on the store tab `tab` (`None`:
+/// the shown tab is unknown, no frames).
 #[must_use]
-pub fn vendor(shop: &Shop, notes: &[ShopNote]) -> UiMarks {
+pub fn vendor(shop: &Shop, notes: &[ShopNote], tab: Option<u8>) -> UiMarks {
     debug_assert_eq!(shop.items.len(), notes.len(), "one note per store item");
     let mut picks: Vec<(Pick, String)> = Vec::new();
+    let mut frames = Vec::new();
     for (item, note) in shop.items.iter().zip(notes) {
         let Some(pick) = pick(note) else {
             continue;
         };
+        if tab == Some(item.page)
+            && let Some(rect) = item.cell.and_then(|c| VENDOR_GRID.rect(c))
+        {
+            frames.push((rect, pick_colour(pick)));
+        }
         let line = (pick, short_name(item));
         if !picks.contains(&line) {
             picks.push(line);
@@ -97,7 +166,7 @@ pub fn vendor(shop: &Shop, notes: &[ShopNote]) -> UiMarks {
         .take(MAX_LINES)
         .map(|(pick, text)| Line {
             text,
-            colour: if pick == Pick::Money { MONEY } else { BUILD },
+            colour: pick_colour(pick),
         })
         .collect();
     if hidden > 0 {
@@ -107,9 +176,50 @@ pub fn vendor(shop: &Shop, notes: &[ShopNote]) -> UiMarks {
             colour: MORE,
         });
     }
-    UiMarks {
-        frames: Vec::new(),
-        lines,
+    UiMarks { frames, lines }
+}
+
+const fn pick_colour(pick: Pick) -> Rgba {
+    match pick {
+        Pick::Money => MONEY,
+        Pick::Piece | Pick::Better | Pick::Base => BUILD,
+    }
+}
+
+/// Frames around the player's items in their grids, coloured by the stash plan's action:
+/// the inventory's always, the stash grid's when it shows `stash` ([`Spot::Stash`] or a
+/// shared [`Spot::Page`]; `None`: the stash window is closed or its tab unknown).
+#[must_use]
+pub fn item_frames(advice: &[Advice], stash: Option<Spot>) -> Vec<(Rect, Rgba)> {
+    let mut frames = Vec::new();
+    for line in advice {
+        let grid = match line.spot {
+            Spot::Inventory => INVENTORY_GRID,
+            Spot::Stash | Spot::Page(_) if stash == Some(line.spot) => STASH_GRID,
+            Spot::Stash | Spot::Page(_) | Spot::Cube => continue,
+        };
+        let Some(colour) = action_colour(line.action) else {
+            continue;
+        };
+        frames.extend(
+            line.cells
+                .iter()
+                .filter_map(|&c| grid.rect(c))
+                .map(|r| (r, colour)),
+        );
+    }
+    frames
+}
+
+/// Sell red, move / stow orange, keep for trade gold, keep for the builds green; give-away
+/// items get no frame.
+const fn action_colour(action: Action) -> Option<Rgba> {
+    match action {
+        Action::Sell => Some(SELL),
+        Action::Move(_) | Action::Stow(_) => Some(MOVE),
+        Action::Keep(Side::Trade) => Some(MONEY),
+        Action::Keep(Side::Own) => Some(BUILD),
+        Action::GiveAway => None,
     }
 }
 
@@ -142,15 +252,17 @@ fn short_name(item: &ShopItem) -> String {
 }
 
 /// The layer's picture at the screen size `(width, height)`; `None` when there is nothing to
-/// show (or no size yet).
+/// show (or no size yet). Frames only at [`CALIBRATED`].
 #[must_use]
 pub fn render(marks: &UiMarks, (width, height): (u32, u32), font: &FontVec) -> Option<Pixmap> {
     if marks.is_empty() {
         return None;
     }
     let mut pm = Pixmap::new(width, height)?;
-    for (rect, colour) in &marks.frames {
-        draw_frame(&mut pm, *rect, *colour);
+    if (width, height) == CALIBRATED {
+        for (rect, colour) in &marks.frames {
+            draw_frame(&mut pm, *rect, *colour);
+        }
     }
     draw_box(&mut pm, &marks.lines, font);
     Some(pm)
@@ -311,7 +423,7 @@ mod tests {
             ),
         ];
         assert_eq!(
-            texts(&vendor(&shop, &notes)),
+            texts(&vendor(&shop, &notes, None)),
             [
                 ("Heavy Gloves", BUILD),
                 ("Long Bow", BUILD),
@@ -319,6 +431,134 @@ mod tests {
                 ("Wand", MONEY),
             ],
             "piece, better, base, money; the potion, a B match and the second same wand left out"
+        );
+    }
+
+    const fn cells(x: u8, y: u8, w: u8, h: u8) -> CellRect {
+        CellRect { x, y, w, h }
+    }
+
+    const fn rect(x: u32, y: u32, w: u32, h: u32) -> Rect {
+        Rect { x, y, w, h }
+    }
+
+    #[test]
+    fn grid_cells_map_to_the_measured_screen_px() {
+        // Corners measured on the 1920×1080 screenshots: each cell box 48 px, 1 px apart.
+        assert_eq!(
+            INVENTORY_GRID.rect(cells(0, 0, 1, 1)),
+            Some(rect(1269, 552, 48, 48))
+        );
+        assert_eq!(
+            INVENTORY_GRID.rect(cells(9, 3, 1, 1)),
+            Some(rect(1710, 699, 48, 48)),
+            "the last cell box spans x 1710..=1757, y 699..=746"
+        );
+        assert_eq!(STASH_GRID.rect(cells(0, 0, 1, 1)), Some(rect(163, 213, 48, 48)));
+        assert_eq!(
+            STASH_GRID.rect(cells(9, 9, 1, 1)),
+            Some(rect(604, 654, 48, 48)),
+            "x 604..651; y within a px of the measured 655..702"
+        );
+        assert_eq!(
+            VENDOR_GRID.rect(cells(0, 0, 1, 2)),
+            Some(rect(163, 221, 48, 97)),
+            "a dagger: two cells and the gap between"
+        );
+        assert_eq!(VENDOR_GRID.rect(cells(8, 7, 2, 3)), Some(rect(555, 564, 97, 146)));
+        assert_eq!(VENDOR_GRID.rect(cells(9, 0, 2, 3)), None, "past the right edge");
+        assert_eq!(INVENTORY_GRID.rect(cells(0, 2, 1, 3)), None, "past the bottom");
+        assert_eq!(
+            INVENTORY_GRID.rect(cells(20, 21, 2, 2)),
+            None,
+            "not a grid position"
+        );
+        assert_eq!(INVENTORY_GRID.rect(cells(0, 0, 0, 1)), None, "no size");
+    }
+
+    #[test]
+    fn only_the_shown_store_tab_is_framed() {
+        let at = |code: &str, tab: u8, x: u8, y: u8| {
+            let mut item = shop_item(Some(code), 2, tab, 0, 0);
+            item.cell = CellRect::at(Some(code), x.into(), y.into());
+            item
+        };
+        let shop = shop(vec![at("crs", 1, 0, 0), at("wnd", 3, 2, 0), at("hp1", 3, 4, 0)]);
+        let notes = [
+            note(Some("weapon"), None, None),
+            note(
+                None,
+                None,
+                Some(mark(MarkKind::Trade, Some((Tier::A, Category::Trade)))),
+            ),
+            note(None, None, None),
+        ];
+        assert_eq!(vendor(&shop, &notes, None).frames, [], "tab unknown: no frames");
+        assert_eq!(vendor(&shop, &notes, None).lines.len(), 2, "the box lists both");
+        assert_eq!(
+            vendor(&shop, &notes, Some(3)).frames,
+            [(rect(261, 221, 48, 97), MONEY)],
+            "the misc tab: the wand (1×2 at column 2), not the potion"
+        );
+        assert_eq!(
+            vendor(&shop, &notes, Some(1)).frames,
+            [(rect(163, 221, 97, 146), BUILD)],
+            "the weapons tab: the sword (2×3)"
+        );
+    }
+
+    fn advice(spot: Spot, action: Action, at: &[CellRect]) -> Advice {
+        Advice {
+            name: String::new(),
+            spot,
+            action,
+            reason: None,
+            count: 1,
+            cells: at.to_vec(),
+        }
+    }
+
+    #[test]
+    fn item_frames_follow_the_plans_actions() {
+        use crate::guidance::Tab;
+        let plan = [
+            advice(
+                Spot::Inventory,
+                Action::Sell,
+                &[cells(0, 0, 1, 1), cells(2, 0, 1, 1)],
+            ),
+            advice(Spot::Inventory, Action::Keep(Side::Own), &[cells(4, 0, 2, 2)]),
+            advice(Spot::Inventory, Action::Keep(Side::Trade), &[cells(6, 0, 1, 1)]),
+            advice(Spot::Inventory, Action::Move(Side::Trade), &[cells(7, 0, 1, 1)]),
+            advice(Spot::Inventory, Action::Stow(Tab::Runes), &[cells(8, 0, 1, 1)]),
+            advice(Spot::Inventory, Action::GiveAway, &[cells(9, 0, 1, 1)]),
+            advice(Spot::Cube, Action::Sell, &[cells(0, 0, 1, 1)]),
+            advice(Spot::Stash, Action::Sell, &[cells(0, 0, 1, 1)]),
+            advice(Spot::Page(3), Action::Move(Side::Own), &[cells(1, 1, 1, 1)]),
+        ];
+        let inv = |x: u32, w: u32| rect(1269 + 49 * x, 552, w, w);
+        let carried = [
+            (inv(0, 48), SELL),
+            (inv(2, 48), SELL),
+            (inv(4, 97), BUILD),
+            (inv(6, 48), MONEY),
+            (inv(7, 48), MOVE),
+            (inv(8, 48), MOVE),
+        ];
+        assert_eq!(
+            item_frames(&plan, None),
+            carried,
+            "no give-away frame, no cube grid"
+        );
+        assert_eq!(
+            item_frames(&plan, Some(Spot::Page(3))),
+            [carried.as_slice(), &[(rect(212, 262, 48, 48), MOVE)]].concat(),
+            "shared page 3 shown: its items too, not the personal stash's"
+        );
+        assert_eq!(
+            item_frames(&plan, Some(Spot::Stash)),
+            [carried.as_slice(), &[(rect(163, 213, 48, 48), SELL)]].concat(),
+            "the personal tab shown: its sell item, not page 3's"
         );
     }
 
@@ -330,14 +570,14 @@ mod tests {
             None,
             Some(mark(MarkKind::Trade, Some((Tier::S, Category::Twink)))),
         )];
-        assert!(vendor(&shop, &notes).is_empty());
+        assert!(vendor(&shop, &notes, None).is_empty());
     }
 
     #[test]
     fn too_many_end_in_a_more_line() {
         let items: Vec<ShopItem> = (2..=11).map(|n| socketed("crs", n)).collect();
         let notes: Vec<ShopNote> = items.iter().map(|_| note(Some("weapon"), None, None)).collect();
-        let marks = vendor(&shop(items), &notes);
+        let marks = vendor(&shop(items), &notes, None);
         assert_eq!(marks.lines.len(), MAX_LINES);
         assert_eq!(
             marks.lines.last().map(|l| (l.text.as_str(), l.colour)),
@@ -345,7 +585,7 @@ mod tests {
         );
         let eight: Vec<ShopItem> = (2..=9).map(|n| socketed("crs", n)).collect();
         let notes: Vec<ShopNote> = eight.iter().map(|_| note(Some("weapon"), None, None)).collect();
-        let marks = vendor(&shop(eight), &notes);
+        let marks = vendor(&shop(eight), &notes, None);
         assert_eq!(marks.lines.len(), MAX_LINES, "exactly eight fit");
         assert!(marks.lines.iter().all(|l| l.colour == BUILD));
     }
@@ -450,7 +690,7 @@ mod tests {
             frames: vec![(cell, BUILD)],
             lines: Vec::new(),
         };
-        let pm = render(&marks, (400, 400), font).context("a picture for a frame")?;
+        let pm = render(&marks, CALIBRATED, font).context("a picture for a frame")?;
         let edge = tinted(&pm, (100, 200, 140, 202), BUILD);
         assert_eq!((edge.1, edge.2), (100, 139), "the top edge spans the cell");
         assert_eq!(
@@ -459,6 +699,12 @@ mod tests {
             "the cell's inside stays clear"
         );
         assert_eq!(tinted(&pm, (0, 0, 400, 30), BUILD).0, 0, "no box without lines");
+        let other = render(&marks, (2560, 1440), font).context("a picture at another size")?;
+        assert_eq!(
+            tinted(&other, (0, 0, 400, 400), BUILD).0,
+            0,
+            "the grids are measured at 1920×1080 only: no frames elsewhere"
+        );
         Ok(())
     }
 }

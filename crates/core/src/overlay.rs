@@ -81,6 +81,7 @@ pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
         ui_marks: UiMarks::default(),
         vis: Visibility::default(),
         scale_warned: false,
+        size_warned: false,
         closed: false,
         error: None,
     };
@@ -417,6 +418,8 @@ struct Overlay {
     vis: Visibility,
     /// "output scale is not 1" was logged.
     scale_warned: bool,
+    /// "screen size is not the grids' calibrated size" was logged.
+    size_warned: bool,
     closed: bool,
     error: Option<anyhow::Error>,
 }
@@ -447,6 +450,18 @@ impl Overlay {
 
     /// Draws the UI marks at the screen size; none before the first configure.
     fn draw_marks(&mut self) {
+        let size = self.marks.size;
+        if !self.ui_marks.frames.is_empty()
+            && size != (0, 0)
+            && size != ui_marks::CALIBRATED
+            && !self.size_warned
+        {
+            eprintln!(
+                "warning: screen {size:?}, the UI-mark grids are measured at {:?} only: no frames",
+                ui_marks::CALIBRATED
+            );
+            self.size_warned = true;
+        }
         let frame =
             crate::info::font().and_then(|font| ui_marks::render(&self.ui_marks, self.marks.size, font));
         self.marks.show(frame);
