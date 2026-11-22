@@ -83,7 +83,8 @@ struct Rule {
     #[serde(default)]
     keep: Copies,
     /// The map tag of the rule's drops (at most 4 characters, [`crate::labels`]), where the rule
-    /// names one item or a natural group (`Shak`, `TalS`); absent: the built-in tags.
+    /// names one item or a natural group (`Shak`, `TalS`); `""`: no tag (materials the in-game
+    /// loot filter already names); absent: the built-in tags.
     #[serde(default)]
     label: Option<String>,
 }
@@ -372,8 +373,8 @@ mod tests {
             .filter_map(|r| r.label.as_ref().map(|l| (&r.name, l)))
         {
             assert!(
-                !r.1.is_empty() && r.1.chars().count() <= 4,
-                "label {:?} of {}: 1 to 4 characters",
+                r.1.chars().count() <= 4,
+                "label {:?} of {}: at most 4 characters",
                 r.1,
                 r.0
             );

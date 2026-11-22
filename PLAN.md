@@ -679,12 +679,11 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   (`d2r_playstyle_config::labels`), at most 4 characters, first match wins: a valuables rule's
   `label` (new optional field in `valuables.json`, only on certain matches: Annihilus `Anni`, Torch
   `Torc`, Shako `Shak`, Griffon's `Grif`, SoJ `SoJ`, Colossal Jewels `CJ`, Tal Rasha's `TalS`, IK
-  `IK`, Trang-Oul's `Trng`, Laying of Hands `LoH`, Sigon's `Sigo`, statues `Stat`, CJ materials
-  `CJM`, Worldstone shards `Shrd`, magic / rare jewels `MJ` / `RJ`, magic / rare circlets `Circ`,
-  Jeweler's Monarch `JMon`); by code: uber keys `KoT` `KoH` `KoD`, organs `Horn` `Eye` `Brn`,
-  essences `Twst` `Chrg` `Burn` `Fest`, token `Tok`, Standard of Heroes `Std`; runes their name
-  (`Shae`, `Ber`); charms `SC` / `LC` / `GC`, unique ones `Anni` / `Torc` / `Ghee` / `Sund`
-  (sunders); gems grade + colour (`PAme`); a socketed non-unique/set base `5os`, ethereal `e4os`;
+  `IK`, Trang-Oul's `Trng`, Laying of Hands `LoH`, Sigon's `Sigo`, magic / rare jewels `MJ` /
+  `RJ`, magic / rare circlets `Circ`, Jeweler's Monarch `JMon`; `""` = no tag); NO tag for gems,
+  runes and materials (uber keys, organs, essences, token, Standard, statues, shards, CJ
+  materials; user 2026-11-22: the in-game loot filter names them, "just show it"); charms `SC` / `LC` / `GC`, unique ones `Anni` / `Torc` / `Ghee` / `Sund`
+  (sunders); a socketed non-unique/set base `5os`, ethereal `e4os`;
   else the first 4 letters of the unique / set name (also for an unidentified one whose base
   carries only that item, `names::sole_name`: an unidentified Shako is Harlequin Crest) or of the
   base name ("The " skipped). Drawn 11 px in the ring's colour with the dark outline, after the

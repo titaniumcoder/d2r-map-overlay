@@ -767,7 +767,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Colossal Ancient Statues",
-      "label": "Stat",
+      "label": "",
       "note": "RotW: 5 needed (one per act) to open the Colossal Summit; drop from terrorized act bosses in Hell. Drop rate nerfed in 3.3.",
       "base_names": [
         "Uber Ancient Summon Material Act 1",
@@ -792,7 +792,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Colossal Jewel upgrade materials",
-      "label": "CJM",
+      "label": "",
       "note": "RotW Uber Ancient upgrade materials (named Defender's Fire, Guardian's Light, ...).",
       "base_names": [
         "Uber Ancient Upgrade Material  Fire",
@@ -817,7 +817,7 @@
       "sockets": null,
       "ethereal": null,
       "name": "Worldstone Shards",
-      "label": "Shrd",
+      "label": "",
       "note": "RotW Terror Zone drop; rate reduced in 3.3.",
       "base_names": [
         "Western Worldstone Shard",
