@@ -1,15 +1,5 @@
-//! The playstyle's settings ([`Settings`]): the agent-authored build files and farm list, the
-//! valuables tiers, the damage defaults and each character's build selection, and the stage
-//! logic over them. Where each comes from (the playstyle folder, the user's overrides, the old
-//! places in the config dir) is [`crate::files`]; the core re-exports the types here under
-//! their old paths (`crate::config::Build`, ...).
-//!
-//! Build definitions live in `builds/<slug>.toml`, one build per file, authored by the agent
-//! (not edited in the webapp); a character only *selects* one via `[bis.<name>] build =
-//! "<slug>"` (user decision, 2026-11-17), written by the `/config` page into `bis.toml`.
-//!
-//! The cross-character farm list lives in `farm.toml`, agent-authored too ([`parse_farm`]);
-//! it is hot-reloaded with the build files.
+//! The playstyle's settings ([`Settings`]) parsed from its TOML files, and the stage logic over
+//! them. Build files are agent-authored; a character only selects one (`[bis.<name>] build`).
 
 use std::collections::BTreeMap;
 
@@ -18,32 +8,26 @@ use serde::Deserialize;
 use crate::valuables::{Category, Tier};
 use d2r_core::build::Damage;
 use d2r_core::config::{CLASS_NAMES, SLOT_NAMES, class_id};
+pub use d2r_core::guidance::Bis;
 use d2r_core::item_stats::ItemStat;
 use d2r_core::names::ItemKind;
 use d2r_core::socket_bases::MercAct;
-// The skill plan format is the core skills panel's; the build files carry it.
 pub use d2r_core::web::SkillTarget;
-// The `BiS` selection is a core type: the guidance carries it to the map and the dashboard.
-pub use d2r_core::guidance::Bis;
 
 /// The playstyle's settings, as loaded from its files ([`crate::files::load`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
     /// `[valuables]`: the drop mark tiers.
     pub valuables: Valuables,
-    /// `[damages]` (`playstyle.toml`; `[builds]` in an old `config.toml`): damage types per
-    /// character and class.
+    /// `[damages]` (`playstyle.toml`; `[builds]` in an old `config.toml`).
     pub builds: Builds,
-    /// Per-character `BiS` selection and optional legacy inline gear list (`[bis.<name]`).
+    /// `[bis.<name>]`: the build selection, plus legacy inline slots.
     pub bis: BTreeMap<String, Bis>,
-    /// The agent-authored build definitions from `builds/*.toml`, keyed by lowercased build
-    /// name — the `slug` a `[bis.<name>]` `build` selection refers to (see [`parse_build`]).
+    /// `builds/*.toml`, keyed by slug (the lowercased build name).
     pub build_defs: BTreeMap<String, Build>,
-    /// The cross-character farm list from `farm.toml` (see [`parse_farm`]); empty when the
-    /// file is missing or invalid.
+    /// `farm.toml`.
     pub farm: Vec<FarmGroup>,
-    /// The leveling and farming route from `route.toml` ([`crate::route`]); empty
-    /// when the file is missing or invalid.
+    /// `route.toml`.
     pub route: crate::route::Route,
 }
 
@@ -102,16 +86,12 @@ pub struct Tables {
     /// `[damages]` (`playstyle.toml`) or `[builds]` (an old `config.toml`).
     pub damages: Option<Builds>,
     pub bis: Option<BTreeMap<String, Bis>>,
-    /// `playstyle.toml`'s `filter_name`: the `name` its `loot-filter.json` profile should have
-    /// (the in-game filter is named after the playstyle it belongs to; a mismatch is warned
-    /// about, [`crate::files::loot_filter_mismatch`]). `None` elsewhere or when left out.
+    /// `playstyle.toml`'s `filter_name`: the `name` its `loot-filter.json` profile should have.
     pub filter_name: Option<String>,
 }
 
 #[cfg(test)]
 impl Tables {
-    /// The settings these tables give on their own (defaults for the absent ones; no builds,
-    /// no farm list).
     #[must_use]
     pub fn into_settings(self) -> Settings {
         Settings {
@@ -123,8 +103,7 @@ impl Tables {
     }
 }
 
-/// `config.toml` (old places) or `bis.toml` as written: only the playstyle's tables are read;
-/// the core's (`[shrines]`, `playstyle`) are [`d2r_core::config`]'s.
+/// The playstyle's tables of an old `config.toml` or of `bis.toml`; the core reads the rest.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct RawTables {
@@ -138,7 +117,6 @@ struct RawTables {
 #[serde(deny_unknown_fields)]
 struct RawPlaystyle {
     name: String,
-    /// For people reading the folder; shown nowhere yet.
     #[serde(default, rename = "description")]
     _description: String,
     valuables: Option<Valuables>,
@@ -146,20 +124,16 @@ struct RawPlaystyle {
     filter_name: Option<String>,
 }
 
-/// `[damages]` / `[builds]` as written: character name = damage names, plus the `class` table
-/// (class id or name = damage names).
+/// `[damages]` / `[builds]`: character name = damage names, and `[class]`: class = damage names.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct RawBuilds {
     class: BTreeMap<String, Vec<String>>,
-    /// Every other key: a character name.
     #[serde(flatten)]
     names: BTreeMap<String, Vec<String>>,
 }
 
-/// `[bis.<name>]` as written: the selected build's `slug` and the per-slot pieces
-/// (`slots` for the character, `merc_slots` for the mercenary — legacy inline lists the webapp
-/// no longer edits; they win over the selected build's slots).
+/// `[bis.<name>]`: the selected build's slug; legacy inline `slots` win over the build's.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawBis {
@@ -187,7 +161,7 @@ pub fn damages(names: &[String], whose: &str, warnings: &mut Vec<String>) -> Vec
     out
 }
 
-/// Trims a piece list and drops the blanks (`" "` entries are never meaningful).
+/// Trims a piece list and drops the blanks.
 #[must_use]
 pub fn clean_pieces(pieces: &[String]) -> Vec<String> {
     pieces
@@ -197,9 +171,8 @@ pub fn clean_pieces(pieces: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Parses a `slots`/`merc_slots` piece table (`"Piece"` or `"Piece@<required level>"` per
-/// slot): blanks dropped, empty lists dropped, unknown slot names warned about and ignored.
-/// `label` names the entry in the warnings (e.g. `bis Demonmaster`).
+/// Parses a `slots`/`merc_slots` table (`"Piece@<required level>"` per slot); `label` names the
+/// entry in the warnings.
 pub fn parse_slot_tables(
     raw: BTreeMap<String, Vec<String>>,
     label: &str,
@@ -250,8 +223,6 @@ fn bis_entries(raw: BTreeMap<String, RawBis>, warnings: &mut Vec<String>) -> BTr
         let label = format!("bis {name}");
         let slots = parse_slot_tables(raw.slots, &label, warnings);
         let merc_slots = parse_slot_tables(raw.merc_slots, &label, warnings);
-        // Selection-only entries (`build` without any slots) are the webapp's normal output;
-        // an entry with neither a build nor slots does nothing and is ignored with a warning.
         let build = raw.build.trim().to_owned();
         if build.is_empty() && slots.is_empty() && merc_slots.is_empty() {
             warnings.push(format!(
@@ -271,9 +242,8 @@ fn bis_entries(raw: BTreeMap<String, RawBis>, warnings: &mut Vec<String>) -> BTr
     bis
 }
 
-/// Parses the playstyle tables of a `config.toml` (old places: `[valuables]`, `[builds]`,
-/// `[bis]`; other tables are the core's and skipped) or of `bis.toml`; also returns warnings
-/// about ignored entries (unknown damage types, classes and slots, empty `[bis]` entries).
+/// Parses the playstyle tables of an old `config.toml` or of `bis.toml`, with warnings about
+/// ignored entries.
 ///
 /// # Errors
 /// Fails on invalid TOML, unknown keys in these tables or wrongly typed values (e.g. a tier
@@ -290,8 +260,7 @@ pub fn parse_tables(text: &str) -> Result<(Tables, Vec<String>), toml::de::Error
     Ok((tables, warnings))
 }
 
-/// Parses `playstyle.toml`: its display name, `filter_name`, `[valuables]` and `[damages]` (its
-/// `description` is for people reading the folder), with warnings as [`parse_tables`].
+/// Parses `playstyle.toml` into its display name and tables, with warnings as [`parse_tables`].
 ///
 /// # Errors
 /// Fails on invalid TOML, a missing `name`, unknown keys or wrongly typed values.
@@ -310,60 +279,41 @@ pub fn parse_playstyle(text: &str) -> Result<((String, Tables), Vec<String>), to
     Ok(((raw.name, tables), warnings))
 }
 
-/// An agent-authored build definition from `builds/<slug>.toml` (see [`crate::files`]): display
-/// name, damage types, optional free-text notes and the per-slot piece lists in the same
-/// `"Piece@<required level>"` format as the old inline `[bis]` slots.
+/// A build definition from `builds/<slug>.toml`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Build {
-    /// The display name (e.g. "Blood Boil"); the map key is its lowercase form.
+    /// The display name; its lowercase form is the slug.
     pub name: String,
-    /// The build's damage types, primary first.
+    /// Primary first.
     pub damages: Vec<Damage>,
-    /// Free text (e.g. the guide the build was authored from); `None` when empty.
     pub notes: Option<String>,
-    /// Slot name → pieces, best (highest required level) first.
+    /// Slot name → pieces, best first.
     pub slots: BTreeMap<String, Vec<String>>,
-    /// The mercenary's slot name → pieces.
     pub merc_slots: BTreeMap<String, Vec<String>>,
-    /// The acts of the build's mercenaries, primary first (`merc_acts = [2, 1]`, or the single
-    /// `merc_act = 5`; `[Act 2]` when left out or invalid; empty only for a `Build` made in
-    /// code, read as Act 2): they decide which weapons its `merc_slots` take
-    /// ([`d2r_core::socket_bases::MercAct`], [`Build::merc_wearer`]), and gear any of them can
-    /// wear is kept (user, 2026-11-20: the Act 1 rogue in Normal or for the Harmony buff).
+    /// `merc_acts = [2, 1]` (or `merc_act = 5`), primary first; empty reads as Act 2.
     pub merc_acts: Vec<MercAct>,
-    /// Per-piece details by piece name (`[pieces."<name>"]`): what the dashboard shows under
-    /// each piece (kind, base, stats, why). A piece without an entry shows only its name.
+    /// `[pieces."<name>"]`: what the dashboard shows under a piece.
     pub pieces: BTreeMap<String, PieceInfo>,
-    /// Free-text goals of the build (breakpoints, attributes, mercenary), shown above the grid.
+    /// Free-text goals shown above the gear grid.
     pub targets: Vec<String>,
-    /// Items outside the equipment slots (`[extras]`: charms, jewels, runes …), group name →
-    /// pieces in the same `"Name@<required level>"` format.
+    /// `[extras]`: group name → pieces outside the equipment slots (charms, jewels, runes).
     pub extras: BTreeMap<String, Vec<String>>,
-    /// The class the build is for (`class = "druid"`, class id as in [`CLASS_NAMES`]).
     pub class: Option<u32>,
-    /// A character of [`Build::class`] without a `[bis.<name>]` selection gets this build
-    /// (user request, 2026-11-17: a new character works before it is named in the config).
+    /// The build of a character of [`Build::class`] without a `[bis.<name>]` selection.
     pub default_for_class: bool,
-    /// The slug of the guide's next stage (`next = "druid tornado"`), see [`Settings::stage`].
+    /// The slug of the next stage, see [`Settings::stage`].
     pub next: Option<String>,
-    /// The character level at which the next stage starts.
     pub switch_level: Option<u8>,
-    /// Whether the next stage starts on its own at [`Build::switch_level`]; when false the
-    /// dashboard only says when to switch on `/config`.
+    /// When false the dashboard only says when to switch on `/config`.
     pub auto_switch: bool,
-    /// The guide's advice for the switch (respec, prerequisites).
     pub switch_note: Option<String>,
-    /// What the automatic switch waits for besides the level: every group met (see
-    /// [`SwitchGroup`]; `switch_requires = ["Harmony", { label = "Cannot Be Frozen", any =
-    /// ["Raven Frost", "Nosferatu's Coil"] }]`). Empty: the level alone decides.
+    /// Every group must be met for the automatic switch; empty: the level alone decides.
     pub switch_requires: Vec<SwitchGroup>,
-    /// Cumulative hard-point targets, in the guide's order (`[[skill_plan]]`).
+    /// `[[skill_plan]]`: cumulative hard-point targets.
     pub skill_plan: Vec<SkillTarget>,
-    /// The recipes the guide uses (`[[recipes]]`: runewords, crafts, cube recipes …).
     pub recipes: Vec<Recipe>,
-    /// Leveling tips by character-level range (`[[tips]]`).
     pub tips: Vec<Tip>,
-    /// How to spend stat points, one line per level range.
+    /// One line per level range.
     pub stats_plan: Vec<String>,
 }
 
@@ -374,10 +324,8 @@ impl Build {
         self.merc_acts.first().copied().unwrap_or_default()
     }
 
-    /// The act of the mercenary that wears merc piece `entry` (`"Name@<level>"` or a name) in
-    /// body slot `slot`: for a runeword the first of [`Build::merc_acts`] that can carry it
-    /// there ([`d2r_core::socket_bases::merc_act_for`]: Insight the Act 2 merc's, Harmony the
-    /// Act 1 rogue's), else the primary one ([`Build::merc_act`]).
+    /// The act of the mercenary that wears merc piece `entry` in body `slot`: for a runeword the
+    /// first of [`Build::merc_acts`] that can carry it there, else the primary one.
     #[must_use]
     pub fn merc_wearer(&self, entry: &str, slot: Option<u8>) -> MercAct {
         d2r_core::runewords_data::lookup(d2r_core::info::piece_name(entry))
@@ -386,23 +334,19 @@ impl Build {
     }
 }
 
-/// One condition of a stage switch ([`Build::switch_requires`]): met when the account holds
-/// `count` copies of the items in `any` together (unique/set display names or runeword names;
-/// copies as counted by [`d2r_core::stash::Holdings::count`]: shared stash, the character, its
-/// mercenary's gear). A plain string in the TOML is a group of one item, one copy, labelled
-/// with its name.
+/// One condition of a stage switch: met when the account holds `count` copies of the items in
+/// `any` together (unique, set or runeword names).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SwitchGroup {
-    /// What the group stands for ("Cannot Be Frozen"), shown on the dashboard.
     pub label: String,
-    /// The alternatives, at least one.
+    /// At least one.
     pub any: Vec<String>,
-    /// The copies needed, summed over `any` (at least 1).
+    /// At least 1.
     pub count: u32,
 }
 
 impl SwitchGroup {
-    /// A group of one copy of the single item `name`, labelled with it.
+    /// One copy of `name`, labelled with it.
     #[must_use]
     pub fn item(name: &str) -> Self {
         Self {
@@ -420,37 +364,32 @@ impl SwitchGroup {
             .fold(0, |sum: u32, item| sum.saturating_add(copies(item)))
     }
 
-    /// Whether [`SwitchGroup::have`] reaches `count`.
     #[must_use]
     pub fn met(&self, copies: &dyn Fn(&str) -> u32) -> bool {
         self.have(copies) >= self.count
     }
 }
 
-/// One `[[recipes]]` entry: what the guide crafts and from what (all text, shown as a card).
+/// One `[[recipes]]` entry, shown as a card.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Recipe {
     pub name: String,
     /// One of [`RECIPE_KINDS`].
     pub kind: String,
-    /// One input per line: a rune (`"Tal"`, `"3 Tal Rune"`), a gem (`"1 Chipped Topaz"`) or
-    /// a free-text base item (`"non-magic Body Armor with 2 sockets"`).
+    /// One per line: a rune (`"3 Tal Rune"`), a gem (`"1 Chipped Topaz"`) or a free-text base.
     pub inputs: Vec<String>,
     pub result: String,
-    /// Its requirement as text (`"character level 17 (highest rune)"`).
     pub req: String,
     pub notes: String,
-    /// The quest whose reward this recipe is (`"Tools of the Trade"` for Charsi's imbue,
-    /// `"Siege on Harrogath"` for Larzuk's socket; a name from [`d2r_core::quests::QUESTS`]),
-    /// empty for none. The dashboard drops the recipe once the reward is used.
+    /// The quest whose reward this recipe is (empty: none); hidden once the reward is used.
     pub quest: String,
 }
 
 /// The recipe kinds the dashboard groups by.
 pub const RECIPE_KINDS: [&str; 5] = ["runeword", "craft", "cube", "socket", "upgrade"];
 
-/// One `[[tips]]` entry: a leveling tip shown while the character level is in `from..=to`.
+/// A leveling tip shown while the character level is in `from..=to`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Tip {
     pub from: u8,
@@ -481,70 +420,57 @@ fn tip_levels(levels: &str) -> Option<(u8, u8)> {
     (from <= to).then_some((from, to))
 }
 
-/// `[pieces."<name>"]` of a build file: the details of one piece (all optional).
+/// `[pieces."<name>"]` of a build file (all optional).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PieceInfo {
-    /// unique, set, runeword, crafted, rare, magic or base (drives the colour).
+    /// unique, set, runeword, crafted, rare, magic or base.
     pub kind: String,
-    /// The guide setup the piece belongs to: starter, standard or alternative.
+    /// starter, standard or alternative.
     pub setup: String,
-    /// Base item (a runeword's allowed bases and sockets).
     pub base: String,
-    /// The key mods with their ranges, one short line each.
+    /// The key mods with their ranges, one line each.
     pub stats: Vec<String>,
-    /// Why the build uses it (from the guide).
     pub why: String,
-    /// Caveats (unverified data, example rolls).
     pub notes: String,
 }
 
-/// One `[[farm]]` group of `farm.toml` (agent-authored, the app only reads it): the gear a
-/// planned build (`for`) needs, farmed with other characters.
+/// One `[[farm]]` group of `farm.toml`: the gear a planned build needs.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FarmGroup {
-    /// The planned build's name (`for = "Fury Druid"`; `for` is a Rust keyword).
+    /// `for = "Fury Druid"`.
     #[serde(rename = "for")]
     pub target: String,
     pub items: Vec<FarmItem>,
 }
 
-/// One farm-list entry: an item by display name (unique/set) or runeword name, or a rolled
-/// item (`kind = "rolled"`: any item of `slot` with the stats in `needs`; user, 2026-11-20:
-/// "an amulet with teleport on it").
+/// One farm-list entry: a unique, set or runeword by name, or a rolled item (`kind = "rolled"`:
+/// any item of `slot` with the stats in `needs`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FarmItem {
     pub name: String,
     pub kind: FarmKind,
-    /// How many copies the build needs (default 1; two Lawbringers for two weapon slots).
+    /// Copies needed (default 1).
     #[serde(default = "one")]
     pub count: u32,
-    /// `merc = true`: the item is for the mercenary of the group's build (the act of its
-    /// `merc_acts` that can carry it, [`Build::merc_wearer`]; Act 2 by default), so a runeword's base hint skips class-only bases, keeps that act's weapons
-    /// and ranks helm and body bases by defense.
+    /// For the mercenary of the group's build.
     #[serde(default)]
     pub merc: bool,
-    /// `slot = "helm"`: the body slot it is worn in, narrowing a runeword's base hint to bases
-    /// of that slot (Fortitude as `"body"` lists armor, not weapons). Left out: any slot.
+    /// The body slot it is worn in; narrows a runeword's base hint. Left out: any slot.
     #[serde(default)]
     pub slot: Option<FarmSlot>,
-    /// `needs = ["Teleport"]`: what a rolled entry's item must carry (skill names, given as
-    /// an oskill or as charges, [`crate::gear_score::grants_skill`]). An unknown name fails
-    /// the file. Only read for `kind = "rolled"`.
+    /// `needs = ["Teleport"]`: skills a rolled entry's item must grant.
     #[serde(default)]
     pub needs: Vec<FarmStat>,
-    /// Free text shown with the entry ("until Enigma").
     #[serde(default)]
     pub note: Option<String>,
 }
 
 impl FarmItem {
-    /// Whether an item of `code` with `stats` is a copy of this rolled entry: a base of its
-    /// `slot` (any slot when unset) carrying every one of its `needs`. Never for other kinds
-    /// (they are counted by name, [`d2r_core::stash::Holdings::copies`]) nor for a rolled
-    /// entry without needs.
+    /// Whether an item of `code` with `stats` is a copy of this rolled entry (never for a named
+    /// kind or a rolled entry without needs).
     #[must_use]
     pub fn rolled_match(&self, code: Option<&str>, stats: &[ItemStat]) -> bool {
         let slot_ok = self.slot.is_none_or(|slot| {
@@ -560,26 +486,21 @@ impl FarmItem {
                 .all(|n| crate::gear_score::grants_skill(stats, n.skill))
     }
 
-    /// Whether this entry wants Teleport, which Enigma gives (hidden once Enigma is held,
-    /// `web::farm::farm_hidden`).
+    /// Whether this entry wants Teleport, which Enigma gives.
     #[must_use]
     pub fn wants_teleport(&self) -> bool {
         self.kind == FarmKind::Rolled && self.needs.iter().any(|n| n.skill == crate::gear_score::TELEPORT)
     }
 }
 
-/// One stat a rolled [`FarmItem`] needs: today a skill (given to any class, as an oskill or
-/// charges), by its skills.txt name ("Teleport"). Parsed from the name; an unknown one fails
-/// the file with a message naming it.
+/// One stat a rolled [`FarmItem`] needs: a skill by its skills.txt name ("Teleport").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub struct FarmStat {
-    /// skills.txt row.
     pub skill: u16,
 }
 
 impl FarmStat {
-    /// Its name as in the game tables.
     #[must_use]
     pub fn name(self) -> &'static str {
         d2r_core::skills_data::name(self.skill).unwrap_or("?")
@@ -600,8 +521,7 @@ impl TryFrom<String> for FarmStat {
     }
 }
 
-/// The body slot of a [`FarmItem`], as written in `farm.toml`. An unknown name fails the
-/// file with serde's own message (unknown variant `hat`, expected one of ...), with its line.
+/// The body slot of a [`FarmItem`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FarmSlot {
@@ -609,7 +529,6 @@ pub enum FarmSlot {
     Amulet,
     Body,
     Weapon,
-    /// Also accepted as `"offhand"`, the build files' name for it.
     #[serde(alias = "offhand")]
     Shield,
     Ring,
@@ -619,7 +538,6 @@ pub enum FarmSlot {
 }
 
 impl FarmSlot {
-    /// Its `farm.toml` name.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -652,9 +570,7 @@ impl FarmSlot {
     }
 }
 
-/// What kind of item a [`FarmItem`] names: a runeword, unique or set by name (copies counted
-/// by [`d2r_core::stash::Holdings::copies`]), or a rolled item by slot and stats
-/// ([`FarmItem::rolled_match`]).
+/// What kind of item a [`FarmItem`] names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FarmKind {
@@ -687,20 +603,19 @@ impl FarmKind {
     }
 }
 
-/// serde's `default = "..."` needs a function path.
 const fn one() -> u32 {
     1
 }
 
-/// `farm.toml` as written.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawFarm {
     farm: Vec<FarmGroup>,
 }
 
-/// Parses `farm.toml`'s text, with warnings about names not in the game tables (kept: a typo
-/// shows as forever missing, the warning says why) and a `count` of 0 (read as 1).
+/// Parses `farm.toml`'s text, with warnings about names not in the game tables (kept) and a
+/// `count` of 0 (read as 1).
+///
 /// # Errors
 /// Fails on invalid TOML, unknown keys, an unknown `kind` or wrongly typed values.
 pub fn parse_farm(text: &str) -> Result<(Vec<FarmGroup>, Vec<String>), toml::de::Error> {
@@ -708,78 +623,83 @@ pub fn parse_farm(text: &str) -> Result<(Vec<FarmGroup>, Vec<String>), toml::de:
     let mut warnings = Vec::new();
     for group in &mut groups {
         for item in &mut group.items {
-            if item.count == 0 {
-                warnings.push(format!(
-                    "{}: {:?} has count 0; read as 1",
-                    group.target, item.name
-                ));
-                item.count = 1;
-            }
-            let same = |n: &str| d2r_core::names::same_name(n, &item.name);
-            // Uniques and sets by their in-game name: the table's, or its display override
-            // (`DISPLAY_NAMES` covers both kinds; this is only a warning).
-            let shown = || {
-                d2r_core::item_names_data::DISPLAY_NAMES
-                    .iter()
-                    .any(|(_, n)| same(n))
-            };
-            let known = match item.kind {
-                FarmKind::Runeword => d2r_core::runewords_data::lookup(&item.name).is_some(),
-                FarmKind::Unique => {
-                    d2r_core::item_names_data::UNIQUE_NAMES
-                        .iter()
-                        .any(|(_, n)| same(n))
-                        || shown()
-                }
-                FarmKind::Set => d2r_core::item_names_data::SET_NAMES.iter().any(|(_, n)| same(n)) || shown(),
-                // Any display name; it must say what it needs instead.
-                FarmKind::Rolled => {
-                    if item.needs.is_empty() {
-                        warnings.push(format!(
-                            "{}: rolled {:?} has no needs (kept, but it can never be found)",
-                            group.target, item.name
-                        ));
-                    }
-                    true
-                }
-            };
-            if item.kind != FarmKind::Rolled && !item.needs.is_empty() {
-                warnings.push(format!(
-                    "{}: {:?} is a {}; its needs are ignored (only rolled entries have them)",
-                    group.target,
-                    item.name,
-                    item.kind.name()
-                ));
-            }
-            if !known {
-                warnings.push(format!(
-                    "{}: unknown {} {:?} (kept, but it can never be found)",
-                    group.target,
-                    item.kind.name(),
-                    item.name
-                ));
-            }
+            check_farm_item(&group.target, item, &mut warnings);
         }
     }
     Ok((groups, warnings))
 }
 
-/// Whether `name` is a unique, set (table name or display override) or runeword name, for
-/// load-time warnings about item names that can never match.
-fn item_name_known(name: &str) -> bool {
-    let same = |n: &str| d2r_core::names::same_name(n, name);
-    d2r_core::runewords_data::lookup(name).is_some()
-        || d2r_core::item_names_data::UNIQUE_NAMES
-            .iter()
-            .any(|(_, n)| same(n))
-        || d2r_core::item_names_data::SET_NAMES.iter().any(|(_, n)| same(n))
-        || d2r_core::item_names_data::DISPLAY_NAMES
-            .iter()
-            .any(|(_, n)| same(n))
+/// Warns about a farm entry that can never be found or has ignored fields; a `count` of 0
+/// becomes 1.
+fn check_farm_item(target: &str, item: &mut FarmItem, warnings: &mut Vec<String>) {
+    if item.count == 0 {
+        warnings.push(format!("{target}: {:?} has count 0; read as 1", item.name));
+        item.count = 1;
+    }
+    let rolled = item.kind == FarmKind::Rolled;
+    if rolled && item.needs.is_empty() {
+        warnings.push(format!(
+            "{target}: rolled {:?} has no needs (kept, but it can never be found)",
+            item.name
+        ));
+    }
+    if !rolled && !item.needs.is_empty() {
+        warnings.push(format!(
+            "{target}: {:?} is a {}; its needs are ignored (only rolled entries have them)",
+            item.name,
+            item.kind.name()
+        ));
+    }
+    if !farm_name_known(item) {
+        warnings.push(format!(
+            "{target}: unknown {} {:?} (kept, but it can never be found)",
+            item.kind.name(),
+            item.name
+        ));
+    }
 }
 
-/// The copy count of callers without live data (the config page, `level` unknown): nothing
-/// is owned, so a `switch_requires` is never met.
+/// Whether a named farm entry's name is in the game tables of its kind; a rolled entry has any
+/// name.
+fn farm_name_known(item: &FarmItem) -> bool {
+    let name = item.name.as_str();
+    match item.kind {
+        FarmKind::Runeword => is_runeword_name(name),
+        FarmKind::Unique => is_unique_name(name) || is_display_name(name),
+        FarmKind::Set => is_set_name(name) || is_display_name(name),
+        FarmKind::Rolled => true,
+    }
+}
+
+fn is_runeword_name(name: &str) -> bool {
+    d2r_core::runewords_data::lookup(name).is_some()
+}
+
+fn is_unique_name(name: &str) -> bool {
+    d2r_core::item_names_data::UNIQUE_NAMES
+        .iter()
+        .any(|(_, n)| d2r_core::names::same_name(n, name))
+}
+
+fn is_set_name(name: &str) -> bool {
+    d2r_core::item_names_data::SET_NAMES
+        .iter()
+        .any(|(_, n)| d2r_core::names::same_name(n, name))
+}
+
+/// A unique's or set item's display override (the in-game name where it differs from the table's).
+fn is_display_name(name: &str) -> bool {
+    d2r_core::item_names_data::DISPLAY_NAMES
+        .iter()
+        .any(|(_, n)| d2r_core::names::same_name(n, name))
+}
+
+fn item_name_known(name: &str) -> bool {
+    is_runeword_name(name) || is_unique_name(name) || is_set_name(name) || is_display_name(name)
+}
+
+/// The copy count of callers without live data (the config page): a `switch_requires` is never
+/// met.
 #[must_use]
 pub const fn owns_nothing(_item: &str) -> u32 {
     0
@@ -791,16 +711,13 @@ pub struct Stage<'a> {
     /// The current stage's slug and build.
     pub slug: &'a str,
     pub build: &'a Build,
-    /// Whether the chain started at the class default (no `[bis.<name>]` selection).
+    /// The chain started at the class default (no `[bis.<name>]` selection).
     pub class_default: bool,
-    /// The next stage, when the current one names an existing build that isn't already part
-    /// of the chain (a cycle shows no next stage).
+    /// `None` when the current stage names no build or one already in the chain.
     pub next: Option<(&'a str, &'a Build)>,
 }
 
 impl Settings {
-    /// The build definition (with its slug) the character's `[bis]` entry selects, if it names
-    /// one that exists.
     fn selected(&self, name: &str) -> Option<(&str, &Build)> {
         let slug = self.bis.get(&name.to_lowercase())?.build.trim().to_lowercase();
         self.build_defs
@@ -819,14 +736,8 @@ impl Settings {
     }
 
     /// The character's current guide stage: the selected build (else its class's default),
-    /// followed along `next` while the stage switches automatically (`auto_switch`), the
-    /// character `level` has reached `switch_level` and every `switch_requires` group is met
-    /// (`owns` gives an item's copies held, see [`SwitchGroup`]). The groups count as met, too, for a switch into a stage the
-    /// character has `reached` before or into one leading there ([`Settings::leads_to`]): the
-    /// shared stash is unread until opened each game, and a switch is one-way. A `next` that
-    /// is already part of the chain stops it (cycle guard). `class`/`level` are `None` where
-    /// unknown (the config page, which passes [`owns_nothing`] and no `reached`): no class
-    /// default, no automatic switch.
+    /// followed along `next` while the switch is due, until the chain would repeat.
+    /// `class`/`level` are `None` where unknown: no class default, no automatic switch.
     #[must_use]
     pub fn stage(
         &self,
@@ -842,21 +753,8 @@ impl Settings {
         };
         let (mut slug, mut build) = start;
         let mut chain = vec![slug];
-        let next_of = |build: &Build| {
-            let next = build.next.as_deref()?;
-            self.build_defs
-                .get_key_value(next)
-                .map(|(slug, build)| (slug.as_str(), build))
-        };
-        while let Some((next_slug, next_build)) = next_of(build) {
-            let due = build.auto_switch
-                && build
-                    .switch_level
-                    .zip(level)
-                    .is_some_and(|(switch, level)| level >= switch)
-                && (build.switch_requires.iter().all(|group| group.met(owns))
-                    || reached.is_some_and(|reached| self.leads_to(next_slug, reached)));
-            if !due || chain.contains(&next_slug) {
+        while let Some((next_slug, next_build)) = self.next_stage(build) {
+            if !self.switch_due(build, next_slug, level, owns, reached) || chain.contains(&next_slug) {
                 break;
             }
             chain.push(next_slug);
@@ -866,13 +764,40 @@ impl Settings {
             slug,
             build,
             class_default,
-            next: next_of(build).filter(|(next, _)| !chain.contains(next)),
+            next: self.next_stage(build).filter(|(next, _)| !chain.contains(next)),
         })
     }
 
-    /// The names of build `from` (a slug) and of every stage after it along the builds' `next`
-    /// links, in order (cycles stop the walk; an unknown slug gives none): the builds one
-    /// character counts as for the farm list (it keeps its gear through a respec).
+    fn next_stage(&self, build: &Build) -> Option<(&str, &Build)> {
+        let next = build.next.as_deref()?;
+        self.build_defs
+            .get_key_value(next)
+            .map(|(slug, build)| (slug.as_str(), build))
+    }
+
+    /// Whether `build` switches on to `next_slug`: automatic, `level` reached, and every
+    /// `switch_requires` group met (`owns` gives an item's copies held).
+    /// A stage `reached` before at or after `next_slug` counts the groups as met: a switch is
+    /// one-way, and the shared stash is unread until opened each game.
+    fn switch_due(
+        &self,
+        build: &Build,
+        next_slug: &str,
+        level: Option<u8>,
+        owns: &dyn Fn(&str) -> u32,
+        reached: Option<&str>,
+    ) -> bool {
+        let level_reached = build
+            .switch_level
+            .zip(level)
+            .is_some_and(|(switch, level)| level >= switch);
+        let requirements_met = build.switch_requires.iter().all(|group| group.met(owns))
+            || reached.is_some_and(|reached| self.leads_to(next_slug, reached));
+        build.auto_switch && level_reached && requirements_met
+    }
+
+    /// The names of build `from` and of every stage after it (an unknown slug gives none): the
+    /// builds one character counts as for the farm list, as it keeps its gear through a respec.
     #[must_use]
     pub fn stage_chain(&self, from: &str) -> Vec<String> {
         let mut seen: Vec<&str> = Vec::new();
@@ -892,8 +817,7 @@ impl Settings {
         names
     }
 
-    /// Whether stage `to` is `from` or comes after it along the builds' `next` links (cycles
-    /// stop the walk).
+    /// Whether stage `to` is `from` or comes after it along the builds' `next` links.
     #[must_use]
     pub fn leads_to(&self, from: &str, to: &str) -> bool {
         let mut seen = Vec::new();
@@ -913,9 +837,7 @@ impl Settings {
         }
     }
 
-    /// The character's `BiS` resolved over the build files: its inline slots when it has any,
-    /// else the current stage's slots ([`Settings::stage`], `owns`/`reached` as there; else
-    /// none — a build file may omit slots).
+    /// The character's `BiS`: its inline slots when it has any, else the current stage's.
     #[must_use]
     pub fn resolved_bis(
         &self,
@@ -939,9 +861,7 @@ impl Settings {
     }
 
     /// The character's damage types, primary first: its own `[builds]` entry, else the current
-    /// stage's damages ([`Settings::stage`], `owns`/`reached` as there), else its class's
-    /// (`class` as charstats row id; `None` where the caller doesn't know a class, e.g. the
-    /// config page).
+    /// stage's, else its class's.
     #[must_use]
     pub fn damages_for_player(
         &self,
@@ -965,7 +885,6 @@ impl Settings {
     }
 }
 
-/// `builds/<slug>.toml` as written (agent-authored; see the module docs).
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawBuild {
@@ -992,10 +911,8 @@ struct RawBuild {
     stats_plan: Vec<String>,
 }
 
-/// A `switch_requires` entry as written: an item name, or `{ label, any = [...], count }`.
-/// Deserialized by hand rather than `#[serde(untagged)]`: untagged hides why a table failed
-/// ("did not match any variant"), while handing the table to [`RawSwitchAny`] keeps serde's
-/// own message (unknown field, missing field `any`).
+/// A `switch_requires` entry: an item name, or `{ label, any = [...], count }`. Hand-written
+/// rather than `#[serde(untagged)]`, which would hide serde's message for a bad table.
 #[derive(Debug)]
 enum RawSwitchGroup {
     Item(String),
@@ -1004,7 +921,6 @@ enum RawSwitchGroup {
 
 impl<'de> Deserialize<'de> for RawSwitchGroup {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        /// Picks the form by what the TOML holds: a string or a table.
         struct Form;
         impl<'de> serde::de::Visitor<'de> for Form {
             type Value = RawSwitchGroup;
@@ -1030,14 +946,11 @@ struct RawSwitchAny {
     #[serde(default)]
     label: String,
     any: Vec<String>,
-    /// Copies needed; 1 when left out.
     count: Option<u32>,
 }
 
-/// The [`SwitchGroup`]s of a build's `switch_requires`: names trimmed, a blank item string
-/// dropped, a group without items warned about and dropped (it could never be met), a table
-/// without a label labelled with its items, `count = 0` warned about and taken as 1; unknown
-/// item names warned about and kept.
+/// The [`SwitchGroup`]s of a build's `switch_requires`; blank names and empty groups are dropped,
+/// unknown item names warned about and kept.
 fn switch_groups(raw: Vec<RawSwitchGroup>, label: &str, warnings: &mut Vec<String>) -> Vec<SwitchGroup> {
     let mut groups = Vec::new();
     for entry in raw {
@@ -1049,44 +962,59 @@ fn switch_groups(raw: Vec<RawSwitchGroup>, label: &str, warnings: &mut Vec<Strin
                 }
                 SwitchGroup::item(name)
             }
-            RawSwitchGroup::Group(table) => {
-                let any = clean_pieces(&table.any);
-                let mut group_label = table.label.trim().to_owned();
-                if any.is_empty() {
-                    warnings.push(format!(
-                        "{label}: switch_requires group {group_label:?} lists no items (any = []); ignored"
-                    ));
-                    continue;
-                }
-                if group_label.is_empty() {
-                    group_label = any.join(" / ");
-                }
-                let count = match table.count {
-                    Some(0) => {
-                        warnings.push(format!(
-                            "{label}: switch_requires group {group_label:?} has count = 0; taken as 1"
-                        ));
-                        1
-                    }
-                    count => count.unwrap_or(1),
-                };
-                SwitchGroup {
-                    label: group_label,
-                    any,
-                    count,
-                }
-            }
+            RawSwitchGroup::Group(table) => match switch_group_of_table(&table, label, warnings) {
+                Some(group) => group,
+                None => continue,
+            },
         };
-        for item in &group.any {
-            if !item_name_known(item) {
-                warnings.push(format!(
-                    "{label}: switch_requires names unknown item {item:?} (kept, but it can never be owned)"
-                ));
-            }
-        }
+        warn_unknown_switch_items(&group, label, warnings);
         groups.push(group);
     }
     groups
+}
+
+/// The group of a `{ label, any, count }` table: `None` (warned) without items; labelled with
+/// its items when unlabelled; `count = 0` warned and taken as 1.
+fn switch_group_of_table(
+    table: &RawSwitchAny,
+    label: &str,
+    warnings: &mut Vec<String>,
+) -> Option<SwitchGroup> {
+    let any = clean_pieces(&table.any);
+    let mut group_label = table.label.trim().to_owned();
+    if any.is_empty() {
+        warnings.push(format!(
+            "{label}: switch_requires group {group_label:?} lists no items (any = []); ignored"
+        ));
+        return None;
+    }
+    if group_label.is_empty() {
+        group_label = any.join(" / ");
+    }
+    let count = match table.count {
+        Some(0) => {
+            warnings.push(format!(
+                "{label}: switch_requires group {group_label:?} has count = 0; taken as 1"
+            ));
+            1
+        }
+        count => count.unwrap_or(1),
+    };
+    Some(SwitchGroup {
+        label: group_label,
+        any,
+        count,
+    })
+}
+
+fn warn_unknown_switch_items(group: &SwitchGroup, label: &str, warnings: &mut Vec<String>) {
+    for item in &group.any {
+        if !item_name_known(item) {
+            warnings.push(format!(
+                "{label}: switch_requires names unknown item {item:?} (kept, but it can never be owned)"
+            ));
+        }
+    }
 }
 
 /// A build's mercenary acts, primary first: `merc_acts` when given, else the single
@@ -1113,8 +1041,8 @@ fn merc_acts(single: Option<u8>, list: &[u8], label: &str, warnings: &mut Vec<St
     acts
 }
 
-/// Parses one build file's text: the lowercased build name (the slug a `[bis.<name>]` `build`
-/// selection refers to), the [`Build`], and warnings about ignored entries.
+/// Parses one build file's text: its slug, the [`Build`], and warnings about ignored entries.
+///
 /// # Errors
 /// Fails on invalid TOML, unknown keys or wrongly typed values.
 pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de::Error> {
@@ -1129,7 +1057,41 @@ pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de:
     let notes = raw.notes.trim().to_owned();
     let class = class_of_build(&raw.class, &label, &mut warnings);
     check_skill_names(&raw.skill_plan, class, &label, &mut warnings);
-    for recipe in &raw.recipes {
+    check_recipes(&raw.recipes, &label, &mut warnings);
+    let tips = parse_tips(raw.tips, &label, &mut warnings);
+    let next = raw.next.trim().to_lowercase();
+    let switch_note = raw.switch_note.trim().to_owned();
+    let switch_requires = switch_groups(raw.switch_requires, &label, &mut warnings);
+    Ok((
+        name.to_lowercase(),
+        Build {
+            name,
+            damages,
+            notes: (!notes.is_empty()).then_some(notes),
+            slots,
+            merc_slots,
+            merc_acts,
+            pieces: raw.pieces,
+            targets: clean_pieces(&raw.targets),
+            extras: clean_extras(raw.extras),
+            class,
+            default_for_class: raw.default_for_class,
+            next: (!next.is_empty()).then_some(next),
+            switch_level: raw.switch_level,
+            auto_switch: raw.auto_switch,
+            switch_note: (!switch_note.is_empty()).then_some(switch_note),
+            switch_requires,
+            skill_plan: raw.skill_plan,
+            recipes: raw.recipes,
+            tips,
+            stats_plan: clean_pieces(&raw.stats_plan),
+        },
+        warnings,
+    ))
+}
+
+fn check_recipes(recipes: &[Recipe], label: &str, warnings: &mut Vec<String>) {
+    for recipe in recipes {
         if !RECIPE_KINDS.contains(&recipe.kind.as_str()) {
             warnings.push(format!(
                 "{label}: recipe {:?} has unknown kind {:?} (known: {})",
@@ -1145,8 +1107,12 @@ pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de:
             ));
         }
     }
+}
+
+/// The tips with readable `levels`; the others are warned about and dropped.
+fn parse_tips(raw: Vec<RawTip>, label: &str, warnings: &mut Vec<String>) -> Vec<Tip> {
     let mut tips = Vec::new();
-    for tip in raw.tips {
+    for tip in raw {
         match tip_levels(&tip.levels) {
             Some((from, to)) => tips.push(Tip {
                 from,
@@ -1159,45 +1125,15 @@ pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de:
             )),
         }
     }
-    let next = raw.next.trim().to_lowercase();
-    let switch_note = raw.switch_note.trim().to_owned();
-    let switch_requires = switch_groups(raw.switch_requires, &label, &mut warnings);
-    Ok((
-        name.to_lowercase(),
-        Build {
-            name,
-            damages,
-            notes: (!notes.is_empty()).then_some(notes),
-            slots,
-            merc_slots,
-            merc_acts,
-            pieces: raw.pieces,
-            targets: raw
-                .targets
-                .iter()
-                .map(|t| t.trim().to_owned())
-                .filter(|t| !t.is_empty())
-                .collect(),
-            extras: raw
-                .extras
-                .into_iter()
-                .map(|(group, pieces)| (group, clean_pieces(&pieces)))
-                .filter(|(_, pieces)| !pieces.is_empty())
-                .collect(),
-            class,
-            default_for_class: raw.default_for_class,
-            next: (!next.is_empty()).then_some(next),
-            switch_level: raw.switch_level,
-            auto_switch: raw.auto_switch,
-            switch_note: (!switch_note.is_empty()).then_some(switch_note),
-            switch_requires,
-            skill_plan: raw.skill_plan,
-            recipes: raw.recipes,
-            tips,
-            stats_plan: clean_pieces(&raw.stats_plan),
-        },
-        warnings,
-    ))
+    tips
+}
+
+/// The `[extras]` groups with their pieces cleaned; groups left empty are dropped.
+fn clean_extras(raw: BTreeMap<String, Vec<String>>) -> BTreeMap<String, Vec<String>> {
+    raw.into_iter()
+        .map(|(group, pieces)| (group, clean_pieces(&pieces)))
+        .filter(|(_, pieces)| !pieces.is_empty())
+        .collect()
 }
 
 /// The class id of a build file's `class` text (empty: none; unknown: warned and none).
@@ -1215,8 +1151,7 @@ fn class_of_build(class: &str, label: &str, warnings: &mut Vec<String>) -> Optio
     id
 }
 
-/// Warns about skill-plan skills that aren't skills of `class` (any class when unknown), so a
-/// typo doesn't silently drop the guide's target from the skills panel.
+/// Warns about skill-plan skills that aren't skills of `class` (any class when unknown).
 fn check_skill_names(plan: &[SkillTarget], class: Option<u32>, label: &str, warnings: &mut Vec<String>) {
     for target in plan {
         let known = d2r_core::skills_data::SKILLS.iter().any(|s| {
@@ -1262,8 +1197,10 @@ mod tests {
             .ok_or_else(|| anyhow!("no piece"))?;
         assert_eq!((shako.kind.as_str(), shako.base.as_str()), ("unique", "Shako"));
         assert_eq!(shako.stats, ["+2 to All Skills"]);
-        // Unknown keys in a piece are an error, like everywhere else in the build file.
-        assert!(parse_build("name = \"B\"\n[pieces.X]\ncolour = \"red\"\n").is_err());
+        assert!(
+            parse_build("name = \"B\"\n[pieces.X]\ncolour = \"red\"\n").is_err(),
+            "unknown key in a piece"
+        );
         Ok(())
     }
 
@@ -1288,7 +1225,6 @@ mod tests {
                 merc_slots: BTreeMap::new(),
             },
         );
-        // Selection-only: the build's slots and damages come through.
         let resolved = config
             .resolved_bis("DEMONmaster", None, None, &owns_nothing, None)
             .ok_or_else(|| anyhow!("unresolved"))?;
@@ -1302,8 +1238,6 @@ mod tests {
             [Damage::Physical, Damage::Fire],
             "the build's damages"
         );
-        // Inline slots win over the build's, and a character-level `[builds]` entry beats the
-        // build's damages.
         let inline = [("body".to_owned(), vec!["Stealth@17".to_owned()])].into();
         if let Some(b) = config.bis.get_mut("demonmaster") {
             b.slots = inline;
@@ -1327,7 +1261,6 @@ mod tests {
             config.damages_for_player("demonmaster", Some(7), None, &owns_nothing, None),
             [Damage::Fire]
         );
-        // No bis entry at all: no resolved BiS, only the class fallback for damages.
         assert!(
             config
                 .resolved_bis("other", None, None, &owns_nothing, None)
@@ -1338,7 +1271,6 @@ mod tests {
             config.damages_for_player("other", Some(7), None, &owns_nothing, None),
             [Damage::Lightning]
         );
-        // A selected build that doesn't exist resolves to nothing.
         config.bis.insert(
             "ghost".to_owned(),
             Bis {
@@ -1407,14 +1339,11 @@ mod tests {
             def.recipes.get(2).map(|r| r.quest.as_str()),
             Some("tools of the trade")
         );
-        // The unknown recipe kind, the unknown quest and the unreadable tip levels are
-        // warned about.
         assert_eq!(warnings.len(), 3, "{warnings:?}");
         assert!(
             warnings.iter().any(|w| w.contains("unknown quest \"Larzuk\"")),
             "{warnings:?}"
         );
-        // Unknown skills of the build's class, unknown classes and unknown keys.
         let (_, _, warnings) = parse_build(
             "name = \"B\"\nclass = \"druid\"\nskill_plan = [{ skill = \"Blizzard\", points = 1, by_level = 2 }]\n",
         )?;
@@ -1461,11 +1390,9 @@ mod tests {
     fn stage_follows_the_auto_chain_by_level() -> Result<()> {
         let config = druid_chain();
         let stage = |level| config.stage("NewDruid", Some(5), level, &owns_nothing, None);
-        // No selection: the class default; below the switch level it stays.
         let s = stage(Some(37)).ok_or_else(|| anyhow!("no stage"))?;
         assert_eq!((s.slug, s.class_default), ("leveling", true));
         assert_eq!(s.next.map(|(slug, _)| slug), Some("tornado"));
-        // At 38 the auto switch moves on; tornado's next is manual, so it stops there.
         let s = stage(Some(38)).ok_or_else(|| anyhow!("no stage"))?;
         assert_eq!(s.slug, "tornado");
         assert_eq!(
@@ -1482,7 +1409,6 @@ mod tests {
             Some("leveling"),
             "unknown level: no switch"
         );
-        // Other classes and an unknown class get no default.
         assert!(
             config
                 .stage("NewDruid", Some(1), Some(50), &owns_nothing, None)
@@ -1493,7 +1419,6 @@ mod tests {
                 .stage("NewDruid", None, Some(50), &owns_nothing, None)
                 .is_none()
         );
-        // The stage drives the BiS and the damages.
         assert_eq!(
             config
                 .resolved_bis("x", Some(5), Some(40), &owns_nothing, None)
@@ -1569,8 +1494,6 @@ mod tests {
             "{warnings:?}"
         );
         assert!(warnings.iter().any(|w| w.contains("Ravenfrsot")), "{warnings:?}");
-        // A table with an unknown key or without `any` is an error naming the problem, not
-        // silently a group.
         let error = |requires: &str| {
             parse_build(&format!("name = \"B\"\nswitch_requires = [{requires}]\n"))
                 .err()
@@ -1585,7 +1508,7 @@ mod tests {
         Ok(())
     }
 
-    /// The copies of `item` in the name `lists` (a stand-in for [`d2r_core::stash::Holdings::count`]).
+    /// A stand-in for [`d2r_core::stash::Holdings::count`].
     fn copies_in(item: &str, lists: &[&[String]]) -> u32 {
         let n = lists
             .iter()
@@ -1726,14 +1649,12 @@ mod tests {
             "tornado",
             "in the shared stash"
         );
-        // Without live data (the config page) a requirement is never met.
         assert_eq!(
             config
                 .stage("NewDruid", Some(5), Some(90), &owns_nothing, None)
                 .map(|s| s.slug),
             Some("leveling")
         );
-        // The BiS and damages follow the same stage.
         let owns = |item: &str| copies_in(item, &[&raven]);
         assert_eq!(
             config
@@ -1765,15 +1686,23 @@ mod tests {
             "tornado",
             "reached: the items count as owned"
         );
-        // A later stage reached latches every switch on the way there.
-        assert_eq!(slug(38, Some("fissure"))?, "fissure");
-        // The level is still checked.
-        assert_eq!(slug(37, Some("fissure"))?, "leveling");
-        // A remembered stage off the chain latches nothing.
-        assert_eq!(slug(38, Some("other"))?, "leveling");
+        assert_eq!(
+            slug(38, Some("fissure"))?,
+            "fissure",
+            "a later stage reached latches"
+        );
+        assert_eq!(
+            slug(37, Some("fissure"))?,
+            "leveling",
+            "the level is still checked"
+        );
+        assert_eq!(
+            slug(38, Some("other"))?,
+            "leveling",
+            "a stage off the chain latches nothing"
+        );
         assert!(config.leads_to("leveling", "fissure") && config.leads_to("tornado", "tornado"));
         assert!(!config.leads_to("fissure", "leveling"), "only forwards");
-        // A cycle ends the walk.
         if let Some(b) = config.build_defs.get_mut("fissure") {
             b.next = Some("leveling".to_owned());
         }
@@ -1784,7 +1713,6 @@ mod tests {
     #[test]
     fn stage_selection_beats_the_default_and_cycles_stop() -> Result<()> {
         let mut config = druid_chain();
-        // A selection (the user switched on /config) starts there, not at the default.
         config.bis.insert(
             "bear".to_owned(),
             Bis {
@@ -1797,8 +1725,6 @@ mod tests {
             .stage("Bear", Some(5), Some(90), &owns_nothing, None)
             .ok_or_else(|| anyhow!("no stage"))?;
         assert_eq!((s.slug, s.class_default, s.next), ("fissure", false, None));
-        // A cycle (fissure → leveling, all automatic) stops before repeating a stage and
-        // shows no next stage.
         for slug in ["tornado", "fissure"] {
             if let Some(b) = config.build_defs.get_mut(slug) {
                 b.auto_switch = true;
@@ -1816,7 +1742,6 @@ mod tests {
             "leveling → tornado → fissure, then the cycle stops"
         );
         assert_eq!(s.next, None, "the cycle's next is already in the chain");
-        // A next that names no build: no next stage.
         if let Some(b) = config.build_defs.get_mut("fissure") {
             b.next = Some("missing".to_owned());
         }
@@ -1835,7 +1760,6 @@ mod tests {
         assert_eq!(config.stage_chain("leveling"), ["Leveling", "Tornado", "Fissure"]);
         assert_eq!(config.stage_chain("tornado"), ["Tornado", "Fissure"]);
         assert_eq!(config.stage_chain("missing"), Vec::<String>::new());
-        // A cycle stops before repeating a stage.
         if let Some(b) = config.build_defs.get_mut("fissure") {
             b.next = Some("leveling".to_owned());
         }
@@ -1872,7 +1796,6 @@ mod tests {
             ],
             "count defaults to 1, 0 reads as 1"
         );
-        // The unknown name and the zero count are warned about, the entry kept.
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert!(warnings.iter().all(|w| w.contains("Nonesuch")), "{warnings:?}");
         assert_eq!(parse_farm("")?.0, vec![], "empty file: no groups");
@@ -1914,8 +1837,6 @@ mod tests {
             "offhand is the shield slot; both fields optional"
         );
         assert_eq!(FarmSlot::Body.body(), 3);
-        // A bad slot name fails the file with serde's message: what was written, what is
-        // allowed and where.
         let err = parse_farm(
             "[[farm]]\nfor = \"X\"\nitems = [\n{ name = \"Smoke\", kind = \"runeword\", slot = \"chest\" },\n]\n",
         )
@@ -1957,7 +1878,6 @@ mod tests {
         assert_eq!(amulet.needs.first().map(|n| n.name()), Some("Teleport"));
         assert_eq!(amulet.note.as_deref(), Some("until Enigma"));
         assert!(amulet.wants_teleport());
-        // An entry without needs can never be found; needs on a named entry are ignored.
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert!(
             warnings.iter().any(|w| w.contains("\"Anything\" has no needs")),
@@ -1967,7 +1887,6 @@ mod tests {
             warnings.iter().any(|w| w.contains("\"Smoke\" is a runeword")),
             "{warnings:?}"
         );
-        // Matching: an amulet with Teleport charges or the oskill, nothing else.
         let charges = ItemStat {
             id: d2r_core::item_stats::stat::CHARGED_SKILL,
             param: (crate::gear_score::TELEPORT << 6) | 3,
@@ -1980,7 +1899,6 @@ mod tests {
             "a ring is no amulet"
         );
         assert!(!amulet.rolled_match(Some("amu"), &[]));
-        // A bad stat name fails the file, saying what was written and where.
         let err = parse_farm(
             "[[farm]]\nfor = \"X\"\nitems = [\n{ name = \"T\", kind = \"rolled\", needs = [\"Telport\"] },\n]\n",
         )
@@ -1994,7 +1912,6 @@ mod tests {
         Ok(())
     }
 
-    /// The settings of an old `config.toml`'s tables ([`parse_tables`]), with its warnings.
     fn settings(text: &str) -> Result<(Settings, Vec<String>), toml::de::Error> {
         parse_tables(text).map(|(tables, warnings)| (tables.into_settings(), warnings))
     }
@@ -2117,7 +2034,6 @@ mod tests {
              unknown = [\"x\"]\n\
              [bis.Demonmaster.merc_slots]\nweapon = [\"Insight@27\"]",
         )?;
-        // Blank pieces are dropped silently; unknown slots (in both tables) warn.
         assert_eq!(
             warnings,
             vec![
@@ -2139,11 +2055,9 @@ mod tests {
             Some(&["Insight@27".to_owned()][..])
         );
         assert!(!config.bis.contains_key("other"));
-        // A selection without any slots is the webapp's normal output: valid.
         let (config, warnings) = settings("[bis.X]\nbuild = \"b\"\n")?;
         assert_eq!(config.bis.get("x").map(|b| b.build.as_str()), Some("b"));
         assert_eq!(warnings, Vec::<String>::new());
-        // Neither a build nor slots: ignored with a warning.
         let (_, warnings) = settings("[bis.X]\nbuild = \"\"\n[bis.X.slots]\nhelm = [\" \"]")?;
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         Ok(())
@@ -2175,11 +2089,9 @@ mod tests {
         assert_eq!(warnings, Vec::<String>::new());
         assert_eq!(build.merc_acts, vec![MercAct::Act2, MercAct::Act1]);
         assert_eq!(build.merc_act(), MercAct::Act2);
-        // Each merc piece goes to the act that can carry it; a non-runeword to the primary.
         assert_eq!(build.merc_wearer("Insight@27", Some(4)), MercAct::Act2);
         assert_eq!(build.merc_wearer("Harmony@39", Some(4)), MercAct::Act1);
         assert_eq!(build.merc_wearer("The Battlebranch@17", Some(4)), MercAct::Act2);
-        // Bad and repeated acts are dropped with a warning; merc_acts wins over merc_act.
         let (_, odd, warnings) = parse_build("name = \"B\"\nmerc_act = 3\nmerc_acts = [5, 4, 5]\n")?;
         assert_eq!(odd.merc_acts, vec![MercAct::Act5]);
         assert_eq!(warnings.len(), 3, "{warnings:?}");
