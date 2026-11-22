@@ -88,9 +88,11 @@ Optional configuration lives in `~/.config/d2r-map-overlay/config.toml`. See
 ### Playstyles
 
 The leveling and farming strategy (builds and their stages, farm list, which drops get a mark) is a
-**playstyle**: a folder under [`playstyles/`](playstyles/). The repo ships one as the example,
+**playstyle**: a folder under [`playstyles/`](playstyles/). The repo ships two:
 [`playstyles/summoner-fury/`](playstyles/summoner-fury/) (Summoner Druid, switching to Fury Druid from
-level 75):
+level 75) and [`playstyles/trapsin/`](playstyles/trapsin/) (Fire Wake Assassin from level 13,
+switching to the Lightning Sentry Trapsin at 38). Every folder is loaded; each character follows
+one (below). A folder holds:
 
 - `playstyle.toml`: name, description, which valuables tiers are highlighted, damage types for the
   area colouring
@@ -114,7 +116,11 @@ level 75):
   button copies it (served at `/api/loot-filter`) for import in the game. `filter_name` in
   `playstyle.toml` is the profile `name` it should have (a mismatch is warned about at load)
 
-`playstyle = "<folder>"` in `config.toml` picks one (default `summoner-fury`). The folder is read
+`playstyle = "<folder>"` in `config.toml` names the main one (default `summoner-fury`): a
+character follows the playstyle chosen for it on the `/config` page, else the one with a default
+build for its class, else the main one. The shared stash plan keeps what every one of your
+characters wants (the overlay remembers each character's level and worn gear in `played.json`)
+plus every playstyle's farm list, so playing one character never sells another's gear. The folder is read
 at run time from `playstyles/` at the root of the source tree the binary was built in, else from `playstyles/`
 next to the binary; set `D2R_PLAYSTYLES_DIR` to the folder holding the playstyle folders to use
 another place (then only that one is searched). If none is found, the overlay prints an `error:`
@@ -122,7 +128,7 @@ line on start and runs without builds, stages or farm list (unless your own or o
 them). To change a file
 without touching the repo, copy it to `~/.config/d2r-map-overlay/playstyle/` under the same relative
 path (for example `playstyle/farm.toml` or `playstyle/builds/fury-druid.toml`): a file there replaces
-the shipped one. The build chain each of your characters follows is chosen on the dashboard's
+the main playstyle's shipped one (the other playstyles have no such overrides). The playstyle and build chain each of your characters follows is chosen on the dashboard's
 `/config` page (it lists the characters the overlay has seen you play) and saved in `~/.local/share/d2r-map-overlay/bis.toml`. The page's "Money farming" switch (marks and
 stash keeps for the wands, scepters, sorceress orbs and daggers vendors pay well for) is saved in
 `~/.local/share/d2r-map-overlay/settings.toml`.
@@ -161,8 +167,8 @@ cargo fmt --all --check && cargo clippy --workspace --all-targets --all-features
 
 ### Adding a playstyle
 
-Most changes need no code: copy `playstyles/summoner-fury/` to `playstyles/<your-name>/`, edit its
-files and set `playstyle = "<your-name>"` in `config.toml`. Write code only for new logic:
+Most changes need no code: copy `playstyles/summoner-fury/` to `playstyles/<your-name>/` and edit
+its files; it is loaded beside the others (restart the overlay), and its builds show on `/config`. Write code only for new logic:
 
 1. Add a crate under `crates/` that depends on `d2r-core` and implements
    `d2r_core::playstyle::Playstyle` (`crates/playstyle-config/src/config_driven.rs` is the example:
