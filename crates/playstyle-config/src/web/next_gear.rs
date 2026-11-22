@@ -164,10 +164,13 @@ fn piece_json(
         "ready": tick.is_some() || craft.is_some(),
         "craft": craft,
     });
-    add_piece_details(&mut json, name, Some(next.build));
+    add_piece_details(&mut json, name, Some(next.build), slot);
     if let (Some(w), Some(obj)) = (word, json.as_object_mut()) {
         obj.insert("runes".to_owned(), serde_json::json!(w.runes));
-        obj.insert("bases".to_owned(), serde_json::json!(w.bases));
+        obj.insert(
+            "bases".to_owned(),
+            serde_json::json!(d2r_core::socket_bases::categories_for(w, wearer, slot)),
+        );
         if tick.is_some() {
             // The missing-rune remark is moot once the runeword is made.
             obj.remove("notes");

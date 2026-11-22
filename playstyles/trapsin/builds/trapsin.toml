@@ -337,6 +337,11 @@ why = "+1-2 to All Skills and Cleansing on the second claw."
 notes = "Cham Shael Um."
 stats = ["+1-2 to All Skills", "Level 13-17 Cleansing Aura When Equipped", "20% Chance to cast level 12 Lower Resist when struck", "25% Chance to cast level 15 Poison Nova on striking", "-23% to Enemy Poison Resistance", "+220-320% Enhanced Damage", "+0.375% Deadly Strike per Character Level", "+20% Increased Attack Speed (Shael)", "25% Chance of Open Wounds (Um)"]
 
+[pieces."Plague".slot.weapon]
+base = "Greater Talons / Greater Claws (or a sword / dagger) that dropped with 3 sockets, not magic"
+why = "+1-2 to All Skills and Cleansing on a claw."
+notes = "Cham Shael Um."
+
 [pieces."Wand of Lower Resistance"]
 kind = "magic"
 setup = "starter"
@@ -522,6 +527,11 @@ setup = "starter"
 base = "Crystal Sword or Broad Sword that dropped with 4 sockets, not magic"
 why = "The leveling guide's Spirit sword: the weapon she resets with, until the claws (level 45)."
 stats = ["+2 to All Skills", "+25-35% Faster Cast Rate", "+55% Faster Hit Recovery", "+89-112 to Mana", "+22 to Vitality", "+250 Defense vs. Missile", "+3-8 Magic Absorb"]
+
+[pieces."Spirit".slot.offhand]
+base = "Monarch (156 Str) that dropped with 4 sockets, not magic (or any 4-socket non-class shield)"
+why = "Spirit Monarch: the Magic Find setup's shield and the off-hand of the Call to Arms swap."
+notes = "magic find setup"
 
 [pieces."Rockstopper"]
 kind = "unique"

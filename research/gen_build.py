@@ -142,6 +142,11 @@ SLOTMAP = {"ring": "ring1"}
 EXTRA = {"jewel": "jewels", "rune": "runes"}
 ORDER = ["weapon", "offhand", "swap", "helm", "body", "gloves", "belt", "boots", "amulet", "ring1", "ring2"]
 MAX_POINTS = 20
+
+
+def body_group(slot):
+    """The worn slot of a build slot: the weapon and its swap are one hand."""
+    return {"swap": "weapon", "ring2": "ring1"}.get(slot, slot)
 # Known guide-text errors, fixed deterministically (build, level, skill) -> skill.
 FIXES = {
     # The leveling guide says Firestorm at 27, which would push Firestorm to 21 (over the max);
@@ -503,22 +508,32 @@ def main(argv):
             if not any(r.split("@")[0] == i["name"] for r in lst):
                 lst.append(ref(i))
     pieces = {}
+    piece_slot = {}
     for i in sorted(d["items"], key=lambda i: i.get("rank_in_slot") if i.get("rank_in_slot") is not None else 999):
-        if i["name"] in pieces:
-            continue
         notes = [n for n in [i.get("notes") or ""] if n]
         setup = short_setup(i.get("setup"))
         if setup == "alternative" and i.get("setup") not in (None, "alternative"):
             notes.insert(0, f"{i['setup'].replace('_', ' ')} setup")
         if i.get("merc_tier"):
             notes.insert(0, f"merc gear: {i['merc_tier']} game")
-        pieces[i["name"]] = dict(kind=i.get("kind") or "", setup=setup, base=i.get("base") or "",
-                                 stats=i.get("stats") or [], why=i.get("why") or "", notes="; ".join(notes))
+        details = dict(base=i.get("base") or "", why=i.get("why") or "", notes="; ".join(notes))
+        slot = SLOTMAP.get(i.get("slot") or "", i.get("slot") or "")
+        if i["name"] in pieces:
+            # The same piece in another hand or body slot with its own base (Spirit Monarch
+            # beside the Spirit sword): its details for that slot.
+            first = pieces[i["name"]]
+            if (slot in ORDER and body_group(slot) != body_group(piece_slot[i["name"]])
+                    and details["base"] != first["base"]):
+                first["slot"].setdefault(slot, details)
+            continue
+        piece_slot[i["name"]] = slot
+        pieces[i["name"]] = dict(kind=i.get("kind") or "", setup=setup, stats=i.get("stats") or [],
+                                 slot={}, **details)
 
     for i in late:
         if i["name"] not in pieces:
             pieces[i["name"]] = dict(kind=i.get("kind") or "", setup=short_setup(i.get("setup")),
-                                     base=i.get("base") or "", stats=i.get("stats") or [],
+                                     base=i.get("base") or "", stats=i.get("stats") or [], slot={},
                                      why=i.get("why") or "", notes="from the leveling guide; " + (i.get("notes") or ""))
     plan, recipes, tips, stats, switch_note = [], [], [], [], cfg.get("switch_note", "")
     # No attribute plan either (user request): `stats` stays empty.
@@ -632,6 +647,11 @@ def main(argv):
                 L.append(f"{k} = {q(p[k])}")
         if p["stats"]:
             L.append("stats = [" + ", ".join(q(x) for x in p["stats"]) + "]")
+        for slot, sd in p["slot"].items():
+            L += ["", f"[pieces.{q(n)}.slot.{slot}]"]
+            for k in ["base", "why", "notes"]:
+                if sd[k]:
+                    L.append(f"{k} = {q(sd[k])}")
     for r in recipes:
         L += ["", "[[recipes]]", f"name = {q(r['name'])}", f"kind = {q(r['kind'])}",
               "inputs = [" + ", ".join(q(x) for x in r["inputs"]) + "]"]

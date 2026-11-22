@@ -255,6 +255,11 @@ why = "+2 to every summon; runes Tal Thul Ort Amn are all in the stash. The weap
 notes = "No socket quest for Spirit: the base must drop with exactly 4 sockets. itemtypes.json: swords drop with at most 3 sockets up to item level 25, 4 up to 40, 6 above. Broad Sword (one-handed) and Claymore (47 Str, two-handed) have at most 4 sockets, so any socketed one with 4 fits at every item level; a Crystal Sword above item level 40 can also roll 5-6 (no good). Shields need item level 41 for 4 sockets, so a Spirit shield is not possible yet."
 stats = ["+2 to All Skills", "+25-35% Faster Cast Rate", "+55% Faster Hit Recovery", "+89-112 to Mana", "+22 to Vitality", "+250 Defense vs. Missile", "+3-8 Magic Absorb"]
 
+[pieces."Spirit".slot.offhand]
+base = "4-socket Monarch (156 Str, item level 41+; the only non-class shield a druid can wear with 4 sockets before Aegis/Ward)"
+why = "A second +2 to every summon; the stash has runes for two Spirits (Thul 3)."
+notes = "Option only: 156 Str costs stat points a summoner wants in Vitality (Akara's reset at 75 refunds them). Monarch is qlvl 72, so it drops in Hell. Otherwise keep Ancients' Pledge."
+
 [pieces."Ancients' Pledge"]
 kind = "runeword"
 setup = "lvl 12-24"

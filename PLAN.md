@@ -839,7 +839,15 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   ordered best→worst; optional `merc_acts = [2, 1]`, primary first (the older single
   `merc_act = N` still reads), default `[2]`, the acts of the build's mercenaries, from the
   source JSON's `merc.acts` / `merc.act` in `gen_build.py`; each merc runeword goes to the first
-  act that can carry it, `Build::merc_wearer`). Loaded by `playstyle::files` (missing dir = no builds, no error), keyed by
+  act that can carry it, `Build::merc_wearer`). `[pieces."<name>"]` holds a piece's details;
+  `[pieces."<name>".slot.<slot>]` the base / why / notes of its copy in another hand or body slot
+  that differ (the weapon and its swap are one hand; the leveling window stays the piece's: the
+  summoner's Spirit Monarch, the source's "lvl 60-75" off-hand option, still leaves with the
+  sword's 24-40 window, open point) (user 2026-11-22: the Trapsin's Spirit "is fine on the main hand but on the off hand not
+  with swords, only with a monarch shield"; `PieceInfo::in_body`, written by `gen_build.py` when
+  the source lists the same name in two slots with different bases). The grid's base categories
+  are those with a base the wearer can carry in that slot (`socket_bases::categories_for`); the
+  assassin carries a claw in the off-hand too (`in_slot`). Loaded by `playstyle::files` (missing dir = no builds, no error), keyed by
   lowercased build name — the slug a selection refers to. The webapp does NOT edit them.
 - **Selection-only config**: the webapp writes ONLY `build = "<slug>"` into `[bis."<char>"]` (toml_edit,
   comment-preserving; the tables are created if missing) — since step 7 in

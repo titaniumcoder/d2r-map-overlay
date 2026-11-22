@@ -161,10 +161,16 @@ impl WeaponRule {
 
 /// Whether a base of body slot `base_slot` goes in the wanted `slot` (`None`: any); a
 /// dual-wielding merc's off-hand takes a weapon.
-fn in_slot(wearer: Wearer, slot: Option<u8>, base_slot: u8) -> bool {
-    let dual = matches!(wearer, Wearer::Merc(act) if act.dual_wields());
+fn in_slot(wearer: Wearer, slot: Option<u8>, base_slot: u8, ty: &str) -> bool {
+    let dual = match wearer {
+        Wearer::Merc(act) => act.dual_wields(),
+        Wearer::Player(c) | Wearer::PlayerWithOffhand(c) => c == ASSASSIN && is_a(ty, "h2h", 0),
+    };
     slot.is_none_or(|s| s == base_slot || (dual && s == 5 && base_slot == 4))
 }
+
+/// The assassin's player txt row: she wears a claw in each hand.
+const ASSASSIN: u32 = 6;
 
 fn in_hand(code: &str, wearer: Wearer) -> bool {
     !wearer.one_hand_only() || !two_handed_for(code, wearer)
@@ -221,6 +227,25 @@ fn type_cap(ty: &str, ilvl: u32) -> u8 {
     })
 }
 
+/// The base categories of `word` with a base `wearer` can carry it on (in `slot` if set): a
+/// Spirit shield has no sword in the off-hand.
+#[must_use]
+pub fn categories_for(word: &Runeword, wearer: Wearer, slot: Option<u8>) -> Vec<&'static str> {
+    word.bases
+        .iter()
+        .copied()
+        .filter(|&category| {
+            let want = CATEGORY_TYPES
+                .iter()
+                .find(|(name, _)| *name == category)
+                .map(|&(_, ty)| ty);
+            SOCKETABLE.iter().any(|&(code, _, ty, _, _, _)| {
+                want.is_some_and(|want| is_a(ty, want, 0)) && fits(word, code, wearer, slot)
+            })
+        })
+        .collect()
+}
+
 /// Every base of one of `categories` that can drop with exactly `sockets` sockets by item
 /// level `max_ilvl`, usable by `wearer` (in `slot` if set). Sorted by str + dex requirement,
 /// quality level and name; merc helms and armor by defense first.
@@ -251,7 +276,7 @@ pub fn natural_bases(
                 && u32::from(qlvl) <= max_ilvl
                 && wearable(wearer, ty, base.slot, base.class)
                 && in_hand(code, wearer)
-                && in_slot(wearer, slot, base.slot))
+                && in_slot(wearer, slot, base.slot, ty))
             .then_some((
                 u32::from(qlvl),
                 name,
@@ -314,7 +339,7 @@ fn fits_type(word: &Runeword, code: &str, wearer: Wearer, slot: Option<u8>) -> b
             .find(|(name, _)| name == c)
             .is_some_and(|&(_, want)| is_a(ty, want, 0))
     });
-    category && wearable(wearer, ty, base.slot, base.class) && in_slot(wearer, slot, base.slot)
+    category && wearable(wearer, ty, base.slot, base.class) && in_slot(wearer, slot, base.slot, ty)
 }
 
 /// Whether base `code` [`fits`] `word` and can roll its socket count at the highest item level.
@@ -404,6 +429,22 @@ mod tests {
                 assert!(CATEGORY_TYPES.iter().any(|(c, _)| c == base), "{base}");
             }
         }
+    }
+
+    #[test]
+    fn the_assassin_wears_a_claw_but_no_sword_in_the_off_hand() -> Result<(), &'static str> {
+        let assassin = Wearer::Player(ASSASSIN);
+        let plague = crate::runewords_data::lookup("Plague").ok_or("Plague")?;
+        assert!(fits(plague, "9tw", assassin, Some(5)));
+        assert!(!fits(plague, "crs", assassin, Some(5)));
+        assert!(fits(plague, "crs", assassin, Some(4)));
+        // Only the assassin dual-wields claws.
+        assert!(!fits(plague, "9tw", DRUID, Some(5)));
+        let spirit = crate::runewords_data::lookup("Spirit").ok_or("Spirit")?;
+        assert_eq!(categories_for(spirit, assassin, Some(5)), vec!["shields"]);
+        assert_eq!(categories_for(spirit, assassin, Some(4)), vec!["swords"]);
+        assert_eq!(categories_for(spirit, assassin, None), vec!["swords", "shields"]);
+        Ok(())
     }
 
     #[test]

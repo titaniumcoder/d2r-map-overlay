@@ -449,6 +449,47 @@ pub struct PieceInfo {
     pub stats: Vec<String>,
     pub why: String,
     pub notes: String,
+    /// `[pieces."Spirit".slot.offhand]`: the details of the copy worn in another slot (Spirit
+    /// Monarch beside the Spirit sword).
+    pub slot: BTreeMap<String, SlotDetails>,
+}
+
+/// The details of a piece's copy in one slot that differ from its first slot's.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SlotDetails {
+    pub base: String,
+    pub why: String,
+    pub notes: String,
+}
+
+impl PieceInfo {
+    /// These details for the copy worn in `body` (an `ItemData::BODY` slot): a slot's own
+    /// details replace the general ones they set; the leveling window (`setup`) stays the
+    /// piece's.
+    #[must_use]
+    pub fn in_body(&self, body: Option<u8>) -> Self {
+        let mut info = Self {
+            slot: BTreeMap::new(),
+            ..self.clone()
+        };
+        let own = self
+            .slot
+            .iter()
+            .find(|(slot, _)| body.is_some_and(|b| crate::web::slot_bodies(slot).contains(&b)));
+        if let Some((_, own)) = own {
+            for (field, value) in [
+                (&mut info.base, &own.base),
+                (&mut info.why, &own.why),
+                (&mut info.notes, &own.notes),
+            ] {
+                if !value.is_empty() {
+                    field.clone_from(value);
+                }
+            }
+        }
+        info
+    }
 }
 
 /// One `[[farm]]` group of `farm.toml`: the gear a planned build needs.
@@ -1257,6 +1298,25 @@ fn check_skill_names(plan: &[SkillTarget], class: Option<u32>, label: &str, warn
 mod tests {
     use super::*;
     use anyhow::{Result, anyhow};
+
+    #[test]
+    fn a_pieces_slot_details_replace_the_general_ones_in_that_slot() -> Result<()> {
+        let text = "name = \"B\"\n[slots]\nweapon = [\"Spirit@25\"]\noffhand = [\"Spirit@25\"]\n\
+             [pieces.\"Spirit\"]\nkind = \"runeword\"\nsetup = \"starter\"\nbase = \"Crystal Sword\"\nwhy = \"sword\"\n\
+             [pieces.\"Spirit\".slot.offhand]\nbase = \"Monarch\"\nwhy = \"shield\"\n";
+        let (_, def, warnings) = parse_build(text)?;
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let spirit = def.pieces.get("Spirit").ok_or_else(|| anyhow!("no piece"))?;
+        let shield = spirit.in_body(Some(5));
+        assert_eq!(
+            (shield.base.as_str(), shield.why.as_str(), shield.setup.as_str()),
+            ("Monarch", "shield", "starter")
+        );
+        for body in [Some(4), None] {
+            assert_eq!(spirit.in_body(body).base, "Crystal Sword", "{body:?}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn build_piece_details_targets_and_extras() -> Result<()> {

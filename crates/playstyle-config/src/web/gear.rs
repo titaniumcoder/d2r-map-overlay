@@ -711,7 +711,7 @@ pub(super) fn charm_wishes_json(
                 "stage": later.map(|b| b.name.as_str()),
             });
             if wish.unique {
-                add_piece_details(&mut json, &wish.name, later.or(own));
+                add_piece_details(&mut json, &wish.name, later.or(own), None);
             }
             if let Some(obj) = json.as_object_mut() {
                 // A unique charm's piece is a guide alternative: here it is simply wanted.
@@ -943,7 +943,7 @@ fn grid_piece(
     if let Some(rw) = runeword {
         add_runeword_hint(&mut json, rw, (slot, wearer), info);
     }
-    add_piece_details(&mut json, name, info.build);
+    add_piece_details(&mut json, name, info.build, slot);
     if is_worn
         && runeword.is_some()
         && let Some(obj) = json.as_object_mut()
@@ -963,7 +963,10 @@ fn add_runeword_hint(
 ) {
     let Some(obj) = json.as_object_mut() else { return };
     obj.insert("runes".to_owned(), serde_json::json!(rw.runes));
-    obj.insert("bases".to_owned(), serde_json::json!(rw.bases));
+    obj.insert(
+        "bases".to_owned(),
+        serde_json::json!(d2r_core::socket_bases::categories_for(rw, wearer, slot)),
+    );
     let hint = match wearer {
         Wearer::Merc(_) => merc_base_hint(rw, info, slot, info.build),
         _ => base_hint(rw, info, slot, wearer),
@@ -997,9 +1000,15 @@ fn add_level_window(
     }
 }
 
-/// Adds the build file's `[pieces."<name>"]` details that are set to a piece's JSON.
-pub fn add_piece_details(json: &mut serde_json::Value, name: &str, build: Option<&crate::config::Build>) {
-    let Some(info) = build.and_then(|b| b.pieces.get(name)) else {
+/// Adds the build file's `[pieces."<name>"]` details that are set to a piece's JSON, those of
+/// its copy worn in `body` where they differ.
+pub fn add_piece_details(
+    json: &mut serde_json::Value,
+    name: &str,
+    build: Option<&crate::config::Build>,
+    body: Option<u8>,
+) {
+    let Some(info) = build.and_then(|b| b.pieces.get(name)).map(|p| p.in_body(body)) else {
         return;
     };
     let Some(obj) = json.as_object_mut() else { return };
