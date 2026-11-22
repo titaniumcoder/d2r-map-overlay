@@ -217,22 +217,26 @@ pub mod quest_flags {
     pub const REWARD_PENDING: u16 = 0x0002;
 }
 
-/// Candidate (2026-11-22 UI recording, PLAN.md "In-game UI marks"; not read by the live
-/// reader): a `.data` byte array of open-panel flags, d2go's layout one byte on for the stash.
-/// Opening seen for each flag below, closing only for [`INVENTORY`].
+/// A `.data` byte array of open-panel flags (0 or 1) in d2go's open-menus layout
+/// (2026-11-22 UI recordings, PLAN.md "In-game UI marks"). Its rva is known for one build.
 pub mod ui_panels {
-    /// rva of the array in build `6ad81202-279c000`.
+    /// The build (`"<TimeDateStamp>-<SizeOfImage>"`) [`RVA`] was recorded on.
+    pub const BUILD: &str = "6ad81202-279c000";
     pub const RVA: u64 = 0x01ec_e2d8;
     /// Bytes compared by the UI probe (d2go reads 0x16D).
     pub const LEN: usize = 0x170;
+    /// Bytes read for the flags below (`+0x20` is a frame counter).
+    pub const FLAGS: usize = 0x20;
     /// u8 1 while the inventory is shown (alone, beside the stash or a trade window).
     pub const INVENTORY: usize = 0x01;
     /// u8 1 while talking to an NPC (the trade window included).
     pub const NPC_INTERACT: usize = 0x08;
     /// u8 1 while a trade window is open.
     pub const NPC_SHOP: usize = 0x0B;
-    /// u8 1 while the stash window is open (d2go: 0x18; 0x18 never changed here).
-    pub const STASH: usize = 0x19;
+    /// u8 1 while the stash window is open.
+    pub const STASH: usize = 0x18;
+    /// u8 1 while the Horadric Cube is open (d2go; recording 1's +0x19 changes).
+    pub const CUBE: usize = 0x19;
 }
 
 /// `PlayerData` (unit data of a player).

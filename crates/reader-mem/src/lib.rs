@@ -8,6 +8,7 @@ pub mod offset_cache;
 pub mod process;
 #[cfg(feature = "proton")]
 mod proton;
+pub mod ui_panels;
 pub mod ui_probe;
 
 use std::fmt::Debug;

@@ -11,6 +11,7 @@ use d2r_core::game::Snapshot;
 use d2r_core::reader::{Attach, GameReader};
 use d2r_core::{items, quests};
 
+use crate::ui_panels;
 use crate::ui_probe::{self, UiProbe};
 use crate::{Platform, game, offset_cache};
 
@@ -53,16 +54,22 @@ struct Attached<M> {
     items: ItemsTable,
     quests: QuestFlags,
     probe: Probe,
+    /// The panel flags' address ([`ui_panels::address`]).
+    panels: Option<u64>,
+    /// The stash window was open at the last snapshot.
+    stash_open: bool,
 }
 
 impl<M> Attached<M> {
-    fn new(pid: u32, mem: M, table: u64) -> Self {
+    fn new(pid: u32, mem: M, table: u64, panels: Option<u64>) -> Self {
         Self {
             pid,
             mem,
             table,
             items: ItemsTable::NotSearched,
             quests: QuestFlags::new(),
+            panels,
+            stash_open: false,
             probe: if std::env::var_os(ui_probe::ENV).is_some() {
                 Probe::Wanted
             } else {
@@ -121,21 +128,30 @@ impl<P: Platform> MemoryReader<P> {
 
     /// Finds the unit table, retrying while the process lives (the structural search needs a
     /// game in progress); only the first attempt scans the code. `None` once the process is gone.
-    fn find_table(&self, pid: u32, mem: &P::Mem) -> Option<u64> {
+    /// The unit table's address and the panel flags' ([`ui_panels::address`]).
+    fn find_table(&self, pid: u32, mem: &P::Mem) -> Option<(u64, Option<u64>)> {
         let mut last_err = String::new();
         let mut failures = 0u32;
         while self.platform.is_alive(pid) {
-            let found = self
-                .platform
-                .find_image(pid, mem)
-                .and_then(|img| img.unit_table(mem, self.cache.as_deref(), failures == 0));
+            let found = self.platform.find_image(pid, mem).and_then(|img| {
+                let table = img.unit_table(mem, self.cache.as_deref(), failures == 0)?;
+                let panels = ui_panels::address(&table.build, img.alias_base);
+                Ok((table, panels))
+            });
             match found {
-                Ok(table) => {
+                Ok((table, panels)) => {
                     eprintln!(
                         "unit table at {:#x} (rva {:#x}, via {:?})",
                         table.addr, table.rva, table.source
                     );
-                    return Some(table.addr);
+                    if panels.is_none() {
+                        eprintln!(
+                            "build {} is not {}: the stash window isn't detected",
+                            table.build,
+                            d2r_core::offsets::ui_panels::BUILD
+                        );
+                    }
+                    return Some((table.addr, panels));
                 }
                 Err(e) => {
                     let msg = format!("{e:#}");
@@ -185,8 +201,8 @@ impl<P: Platform> GameReader for MemoryReader<P> {
         eprintln!("attached to D2R (pid {pid})");
         self.waiting_logged = false;
         match self.find_table(pid, &mem) {
-            Some(table) => {
-                self.attached = Some(Attached::new(pid, mem, table));
+            Some((table, panels)) => {
+                self.attached = Some(Attached::new(pid, mem, table, panels));
                 Attach::Ready { pid }
             }
             None => Attach::Exited { pid },
@@ -218,7 +234,8 @@ impl<P: Platform> GameReader for MemoryReader<P> {
                 |path| path.display().to_string(),
             ),
         );
-        self.attached = Some(Attached::new(pid, mem, table.addr));
+        let panels = ui_panels::address(&table.build, img.alias_base);
+        self.attached = Some(Attached::new(pid, mem, table.addr, panels));
         Ok(())
     }
 
@@ -236,6 +253,10 @@ impl<P: Platform> GameReader for MemoryReader<P> {
             a.items.search(&self.platform, a.pid);
         }
         a.probe.tick(&self.platform, a.pid, &a.mem, &snap);
+        a.stash_open = d2r_core::game::is_town(snap.level.id)
+            && a.panels
+                .and_then(|addr| ui_panels::stash_open(&a.mem, addr))
+                .unwrap_or(false);
         Ok(snap)
     }
 
@@ -250,6 +271,10 @@ impl<P: Platform> GameReader for MemoryReader<P> {
         if let Some(a) = &mut self.attached {
             a.quests.forget();
         }
+    }
+
+    fn stash_open(&self) -> bool {
+        self.attached.as_ref().is_some_and(|a| a.stash_open)
     }
 
     fn is_alive(&self) -> bool {

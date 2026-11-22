@@ -46,6 +46,12 @@ pub trait GameReader {
 
     fn forget_quests(&mut self);
 
+    /// Whether the stash window was open at the last snapshot (towns only); false when the
+    /// reader can't tell.
+    fn stash_open(&self) -> bool {
+        false
+    }
+
     fn is_alive(&self) -> bool;
 
     /// The game's character save directory.

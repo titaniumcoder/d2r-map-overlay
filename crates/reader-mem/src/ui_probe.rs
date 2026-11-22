@@ -326,6 +326,7 @@ fn open_panels(panels: &[u8]) -> String {
         (ui_panels::NPC_INTERACT, "npc"),
         (ui_panels::NPC_SHOP, "shop"),
         (ui_panels::STASH, "stash"),
+        (ui_panels::CUBE, "cube"),
     ]
     .into_iter()
     .filter(|&(at, _)| panels.get(at).is_some_and(|&b| b != 0))
@@ -378,9 +379,8 @@ mod tests {
         );
     }
 
-    /// The panel array around two moments of the 2026-11-22 recording, from the bytes that
-    /// changed: t 3431 (Hratli's trade window opening: the NPC flag set) and t 3496 (the
-    /// stash opened, items taken out).
+    /// The panel array at two moments of the 2026-11-22 recordings, from the bytes that
+    /// changed: Hratli's trade window opening (the NPC flag first) and the stash open.
     #[test]
     fn open_panels_from_the_recording() {
         let set = |on: &[usize]| {
@@ -390,7 +390,7 @@ mod tests {
         };
         assert_eq!(open_panels(&set(&[])), "");
         assert_eq!(open_panels(&set(&[0x08])), "npc");
-        assert_eq!(open_panels(&set(&[0x01, 0x19])), "inventory stash");
+        assert_eq!(open_panels(&set(&[0x01, 0x18])), "inventory stash");
         assert_eq!(open_panels(&[0, 1]), "inventory", "a short read sees what it has");
     }
 

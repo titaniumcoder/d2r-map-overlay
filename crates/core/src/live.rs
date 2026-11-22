@@ -176,6 +176,7 @@ fn publish_web<'a, P: Playstyle>(
     evaluation: &'a EvaluationOf<'_, P>,
     width: u32,
     quests: &[u16],
+    stash_open: bool,
 ) -> UiMarks {
     let blocks = render::text_blocks(snap, &evaluation.guidance, width, info::font());
     web::publish_gear(web::GearInfo {
@@ -185,7 +186,7 @@ fn publish_web<'a, P: Playstyle>(
         equipped: snap.equipped.clone(),
         merc_equipped: snap.merc_equipped.clone(),
     });
-    publish_dashboard(snap, playstyle, evaluation, &blocks, quests)
+    publish_dashboard(snap, playstyle, evaluation, &blocks, quests, stash_open)
 }
 
 fn publish_dashboard<'a, P: Playstyle>(
@@ -194,6 +195,7 @@ fn publish_dashboard<'a, P: Playstyle>(
     evaluation: &'a EvaluationOf<'_, P>,
     blocks: &render::TextBlocks,
     quests: &[u16],
+    stash_open: bool,
 ) -> UiMarks {
     let info = web::LiveInfo {
         player_name: &snap.player.name,
@@ -222,18 +224,39 @@ fn publish_dashboard<'a, P: Playstyle>(
         updated_at: now_secs(),
     };
     let panels = playstyle.panels(evaluation, &info);
-    // The shown store tab and whether the stash window is open aren't read yet: no store-grid
-    // frames and no stash window marks.
-    let marks = snap.shop.as_ref().map_or_else(UiMarks::default, |shop| {
-        let mut marks = ui_marks::vendor(shop, &panels.shop, None);
-        marks.frames.extend(ui_marks::item_frames(
-            &evaluation.guidance.items,
-            ui_marks::Window::Vendor,
-        ));
-        marks
-    });
+    let marks = window_marks(
+        snap.shop.as_ref(),
+        &panels.shop,
+        &evaluation.guidance.items,
+        stash_open,
+    );
     web::publish_live(web::live_json(&info, panels));
     marks
+}
+
+/// The marks for the open game window: a trade window's box and the inventory's sell frames,
+/// else the stash window's inventory frames. The shown store and stash tabs aren't read: no
+/// store-grid or stash-grid frames.
+fn window_marks(
+    shop: Option<&crate::shop::Shop>,
+    notes: &[web::ShopNote],
+    items: &[crate::guidance::Advice],
+    stash_open: bool,
+) -> UiMarks {
+    if let Some(shop) = shop {
+        let mut marks = ui_marks::vendor(shop, notes, None);
+        marks
+            .frames
+            .extend(ui_marks::item_frames(items, ui_marks::Window::Vendor));
+        return marks;
+    }
+    if stash_open {
+        return UiMarks {
+            frames: ui_marks::item_frames(items, ui_marks::Window::Stash(None)),
+            lines: Vec::new(),
+        };
+    }
+    UiMarks::default()
 }
 
 /// Snapshots at [`TICK`] until the process exits; `Err` if the UI is gone.
@@ -291,6 +314,7 @@ fn follow_game<P: Playstyle>(
                 );
                 let update = session.apply(&mut snap);
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
+                let stash_open = reader.stash_open();
                 let quests = reader.quest_flags(update.new_game);
                 let mut evaluation = playstyle.evaluate(&snap, last_played.reached(&snap.player.name));
                 if let Some(slug) = evaluation.reached {
@@ -306,7 +330,7 @@ fn follow_game<P: Playstyle>(
                 cow_stats.record(&update, session.cow_kills());
                 saver.tick(&mut session, Instant::now());
                 // The panels judge the trade window's items by the wants too.
-                let marks = publish_web(&snap, &*playstyle, &evaluation, w, quests);
+                let marks = publish_web(&snap, &*playstyle, &evaluation, w, quests, stash_open);
                 if let Some(msg) = marks_msg(&mut shown_marks, marks) {
                     send(tx, msg)?;
                 }
@@ -444,6 +468,38 @@ mod tests {
             res_lightning: 10,
             res_poison: 75,
         }
+    }
+
+    #[test]
+    fn the_open_window_picks_the_frames() {
+        use crate::game::CellRect;
+        use crate::guidance::{Action, Advice, Side, Spot};
+        let at = |action, x| Advice {
+            name: String::new(),
+            spot: Spot::Inventory,
+            action,
+            reason: None,
+            count: 1,
+            cells: vec![CellRect { x, y: 0, w: 1, h: 1 }],
+        };
+        let items = [at(Action::Sell, 0), at(Action::Move(Side::Own), 1)];
+        let colours = |marks: &UiMarks| marks.frames.iter().map(|f| f.1).collect::<Vec<_>>();
+        let shop = crate::shop::Shop {
+            npc_txt: 0,
+            npc: None,
+            items: Vec::new(),
+        };
+        assert_eq!(
+            colours(&window_marks(Some(&shop), &[], &items, true)),
+            [ui_marks::SELL],
+            "a trade window wins: the sell item only"
+        );
+        assert_eq!(
+            colours(&window_marks(None, &[], &items, true)),
+            [ui_marks::MOVE],
+            "the stash: the item to put away only"
+        );
+        assert!(window_marks(None, &[], &items, false).is_empty(), "no window");
     }
 
     #[test]
