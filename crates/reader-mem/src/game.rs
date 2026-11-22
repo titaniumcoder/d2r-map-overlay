@@ -286,6 +286,19 @@ fn stored_kept(item: &ItemDrop) -> bool {
                 .is_some_and(d2r_core::socket_bases::socketable))
 }
 
+/// Whether a ground drop's stats are read: magic or better, or a white scepter (it rolls up to
+/// +3 Paladin skills innately; the playstyle sells those). Other white drops have no stats a
+/// playstyle scores, so they skip the read.
+fn drop_stats_read(drop: &ItemDrop) -> bool {
+    magic_or_better(drop.quality)
+        || (maybe_white_base(drop.quality, drop.flags)
+            && drop
+                .code
+                .as_deref()
+                .and_then(d2r_core::bases_data::base)
+                .is_some_and(|b| b.kind == "scep"))
+}
+
 /// Where a stored item on `page` with `owner` is, for the player with unit id `player`; `None`
 /// if it isn't the player's. Stale tab units of other characters own stash items too, so only
 /// the player's own `shared_tabs` count.
@@ -1876,14 +1889,14 @@ impl<'a, M: ReadMem> Reader<'a, M> {
         Ok(item)
     }
 
-    /// The ground item `head` (unit at `addr`) as a drop, with its stats when it is magic or
-    /// better, or `None` for a base without a known code, which no playstyle rule can judge.
+    /// The ground item `head` (unit at `addr`) as a drop, with its stats when [`drop_stats_read`],
+    /// or `None` for a base without a known code, which no playstyle rule can judge.
     fn item_drop(&self, addr: u64, head: &UnitHead, items_table: Option<u64>) -> Result<Option<ItemDrop>> {
         let mut drop = self.item_fields(addr, head, items_table)?;
         if drop.kind == DropKind::Base && drop.code.is_none() {
             return Ok(None);
         }
-        if magic_or_better(drop.quality) {
+        if drop_stats_read(&drop) {
             drop.stats = self.item_stats(addr, head.id);
         }
         let path = head.path.context("ground item has no path")?;
@@ -3679,6 +3692,26 @@ mod tests {
             x,
             y,
         }
+    }
+
+    #[test]
+    fn ground_stats_are_read_for_magic_and_white_scepters_only() {
+        let with = |code: &str, quality: u32| ItemDrop {
+            quality,
+            ..drop_of(0, Some(code), DropKind::Base, (0, 0))
+        };
+        for (code, quality, want, what) in [
+            ("7ws", item_data::QUALITY_NORMAL, true, "white Caduceus"),
+            ("scp", item_data::QUALITY_SUPERIOR, true, "superior Scepter"),
+            ("lsd", item_data::QUALITY_MAGIC, true, "magic sword"),
+            ("lsd", item_data::QUALITY_NORMAL, false, "white sword"),
+            ("6bs", item_data::QUALITY_NORMAL, false, "white staff: no staves"),
+        ] {
+            assert_eq!(drop_stats_read(&with(code, quality)), want, "{what}");
+        }
+        let mut runeword = with("7ws", item_data::QUALITY_NORMAL);
+        runeword.flags = item_data::FLAG_RUNEWORD;
+        assert!(!drop_stats_read(&runeword), "a runeword scepter");
     }
 
     /// [`item`] on the ground plus `ItemData` flags and file index, and a stat list with `stats`

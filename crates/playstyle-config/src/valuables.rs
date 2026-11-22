@@ -611,6 +611,42 @@ mod tests {
         ]
     }
 
+    /// White scepters (their skills roll innately, so readable on the ground) and magic ones.
+    fn scepter_cases() -> Vec<SkillCase> {
+        const WHITE: u32 = item_data::QUALITY_NORMAL;
+        const WHITE_RULE: Option<(Tier, &str)> = Some((Tier::A, "+3 skill white scepters"));
+        let foh = |quality: u32, value: i32| {
+            rolled(
+                "7ws",
+                quality,
+                &[(stat::SINGLE_SKILL, skill("Fist of the Heavens"), value)],
+            )
+        };
+        vec![
+            (foh(WHITE, 3), WHITE_RULE, "white +3 FoH Caduceus"),
+            (
+                rolled(
+                    "scp",
+                    item_data::QUALITY_SUPERIOR,
+                    &[(stat::SINGLE_SKILL, skill("Zeal"), 3)],
+                ),
+                WHITE_RULE,
+                "superior +3 Zeal Scepter: any skill",
+            ),
+            (foh(WHITE, 2), None, "white +2 FoH"),
+            (
+                foh(MAGIC, 3),
+                Some((Tier::A, "+3 Fist of the Heavens / Blessed Hammer scepters")),
+                "magic +3 FoH: the rolled rule",
+            ),
+            (
+                rolled("7ws", MAGIC, &[(stat::SINGLE_SKILL, skill("Zeal"), 3)]),
+                None,
+                "magic +3 Zeal: not a money skill",
+            ),
+        ]
+    }
+
     /// Javelins, helms, pelts, circlets, amulets and a white wand.
     fn other_cases() -> Vec<SkillCase> {
         vec![
@@ -690,7 +726,11 @@ mod tests {
 
     #[test]
     fn skill_items_match_on_their_stats() {
-        for (d, want, what) in caster_cases().into_iter().chain(other_cases()) {
+        for (d, want, what) in caster_cases()
+            .into_iter()
+            .chain(scepter_cases())
+            .chain(other_cases())
+        {
             let got = best(&d, &keep_tiers());
             assert_eq!(got.as_ref().map(|h| (h.tier, h.rule.as_str())), want, "{what}");
             if let Some(h) = got {

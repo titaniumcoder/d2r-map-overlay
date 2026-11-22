@@ -416,7 +416,7 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
   `single_skill` (107, `skills` = skills.txt names, any of them), `fcr` (105), `ias` (93), each with a
   `min`; quality `rolled` = magic, rare or crafted. Checked at load (`valuables::validate`: known skill
   names, `skills` only on `single_skill`, `min` > 0, labels ≤ 4 characters; a bad file = no
-  highlights). A stats rule never matches an item without read stats, so its match is certain. 19
+  highlights). A stats rule never matches an item without read stats, so its match is certain. 20
   rules, all trade with `label` "" (affix ranges from d2data magicprefix/magicsuffix: +3 tab is a
   magic-only level-60 prefix, rares top out at +2 tab; 20 FCR "of the Magus" only on wands / staves /
   scepters / orbs / circlets, amulets reach 10 FCR magic or rare):
@@ -432,6 +432,14 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
     Lightning Fury / Charged Strike, scepters Fist of the Heavens / Blessed Hammer, pelts Fury /
     Tornado / Summon Grizzly, barbarian helms Battle Orders, claws Venom / Fade / Lightning / Death
     Sentry.
+  - White scepters (user decision 2026-11-22: "Scepters: actually white ones with +3 because they
+    are easy. staves no, not for selling, too big in inventory"). The A trade rule "+3 skill white
+    scepters" (label "", quality `normal` = normal or superior, `single_skill` min 3, any skill) on
+    all 9 scepter bases (bases_data kind `scep`: scp gsc wsp 9sc 9qs 9ws 7sc 7qs 7ws). White
+    scepters roll their Paladin skills innately and white items are identified, so the stats read
+    on the ground: a certain match (solid ring and coin). The reader reads the stats of white
+    ground drops for scepter bases only (`drop_stats_read`), not every white item each tick.
+    Staves get no rule (too big to carry for gold).
   - Unidentified drops: the online client gets no affixes before identify. Journal evidence
     (2026-11-14..22): all 197 unidentified magic ground drops (charms) had affix ids 0 at ItemData
     (rare `+0x42/+0x44`, magic `+0x48..+0x4E`), all 12 identified ones had one. The reader reads the stats of every magic /

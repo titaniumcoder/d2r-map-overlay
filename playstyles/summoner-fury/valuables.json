@@ -2540,6 +2540,44 @@
       "tier": "A",
       "category": "trade",
       "item_codes": [
+        "7qs",
+        "7sc",
+        "7ws",
+        "9qs",
+        "9sc",
+        "9ws",
+        "gsc",
+        "scp",
+        "wsp"
+      ],
+      "quality": "normal",
+      "sockets": null,
+      "ethereal": null,
+      "name": "+3 skill white scepters",
+      "note": "White scepters roll up to three Paladin skills (+1..+3) innately; white items are identified, so the stats read on the ground. +3 to one sells. User 2026-11-22: white scepters with +3, no staves.",
+      "stats": [
+        {
+          "stat": "single_skill",
+          "min": 3
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Seraph Rod",
+        "Mighty Scepter",
+        "Caduceus",
+        "Holy Water Sprinkler",
+        "Rune Scepter",
+        "Divine Scepter",
+        "Grand Scepter",
+        "Scepter",
+        "War Scepter"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
         "dr1",
         "dr2",
         "dr3",
