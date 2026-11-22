@@ -75,6 +75,7 @@ enum Pick {
 /// identical lines once.
 #[must_use]
 pub fn vendor(shop: &Shop, notes: &[ShopNote]) -> UiMarks {
+    debug_assert_eq!(shop.items.len(), notes.len(), "one note per store item");
     let mut picks: Vec<(Pick, String)> = Vec::new();
     for (item, note) in shop.items.iter().zip(notes) {
         let Some(pick) = pick(note) else {

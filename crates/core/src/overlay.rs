@@ -80,6 +80,7 @@ pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
         marks,
         ui_marks: UiMarks::default(),
         vis: Visibility::default(),
+        scale_warned: false,
         closed: false,
         error: None,
     };
@@ -210,6 +211,13 @@ const fn drawable(has_frame: bool, surface: Surface) -> bool {
     has_frame || matches!(surface, Surface::Unmapped | Surface::AwaitingConfigure)
 }
 
+/// A wanted surface that was configured but got no frame (a 0×0 configure, or nothing drawn)
+/// would wait in [`Surface::Configured`] forever: it goes back to [`Surface::Unmapped`] so the
+/// next sync asks for a configure again.
+const fn stalled(wanted: bool, has_frame: bool, surface: Surface) -> bool {
+    wanted && !has_frame && matches!(surface, Surface::Configured)
+}
+
 /// Where the layer surface is in the layer-shell map/unmap cycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Surface {
@@ -263,6 +271,8 @@ struct Panel {
     surface: Surface,
     /// The buffer on screen; kept alive while the compositor may read it.
     buffer: Option<Buffer>,
+    /// "configured without a frame" was logged (once per run).
+    stall_logged: bool,
 }
 
 impl Panel {
@@ -275,7 +285,20 @@ impl Panel {
             dirty: false,
             surface: Surface::Unmapped,
             buffer: None,
+            stall_logged: false,
         }
+    }
+
+    /// See [`stalled`].
+    fn restart(&mut self) {
+        if !self.stall_logged {
+            eprintln!(
+                "overlay surface configured {:?} without a frame; asking for a configure again",
+                self.size
+            );
+            self.stall_logged = true;
+        }
+        self.surface = Surface::Unmapped;
     }
 
     fn show(&mut self, frame: Option<Pixmap>) {
@@ -392,6 +415,8 @@ struct Overlay {
     /// What `marks` shows, drawn again when the screen size arrives.
     ui_marks: UiMarks,
     vis: Visibility,
+    /// "output scale is not 1" was logged.
+    scale_warned: bool,
     closed: bool,
     error: Option<anyhow::Error>,
 }
@@ -439,8 +464,11 @@ impl Overlay {
     /// Stops the loop on failure.
     fn sync(&mut self) {
         let map = self.map.sync(self.vis.visible(), &mut self.pool);
-        let marks_visible = self.vis.marks_visible(!self.ui_marks.is_empty())
-            && drawable(self.marks.frame.is_some(), self.marks.surface);
+        let wanted = self.vis.marks_visible(!self.ui_marks.is_empty());
+        if stalled(wanted, self.marks.frame.is_some(), self.marks.surface) {
+            self.marks.restart();
+        }
+        let marks_visible = wanted && drawable(self.marks.frame.is_some(), self.marks.surface);
         let marks = self.marks.sync(marks_visible, &mut self.pool);
         if let Err(e) = map
             .and(marks)
@@ -482,13 +510,21 @@ impl LayerShellHandler for Overlay {
 }
 
 impl CompositorHandler for Overlay {
+    /// The UI marks are drawn at the logical size the compositor configures, one buffer px per
+    /// screen px only at scale 1 (the user's output); no scaled buffers are drawn.
     fn scale_factor_changed(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: i32,
+        surface: &wl_surface::WlSurface,
+        factor: i32,
     ) {
+        if factor != 1 && surface == self.marks.layer.wl_surface() && !self.scale_warned {
+            eprintln!(
+                "warning: output scale {factor}, not 1: the UI-mark frames may sit off the game's grids"
+            );
+            self.scale_warned = true;
+        }
     }
 
     fn transform_changed(
@@ -626,6 +662,22 @@ mod tests {
         );
         assert!(!drawable(false, S::Mapped), "the frame failed to draw: unmap");
         assert!(drawable(true, S::Configured));
+    }
+
+    #[test]
+    fn a_wanted_surface_configured_without_a_frame_starts_over() {
+        use Surface as S;
+        assert!(
+            stalled(true, false, S::Configured),
+            "0×0 configure or nothing drawn"
+        );
+        assert!(
+            !stalled(false, false, S::Configured),
+            "not wanted: a frame may come later"
+        );
+        assert!(!stalled(true, true, S::Configured), "about to be presented");
+        assert!(!stalled(true, false, S::AwaitingConfigure));
+        assert!(!stalled(true, false, S::Mapped));
     }
 
     #[test]
