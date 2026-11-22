@@ -135,6 +135,9 @@ struct Rule {
     /// matches none.
     #[serde(default)]
     stats: Vec<StatNeed>,
+    /// `None` ignores it; `Some(false)` matches only unidentified items.
+    #[serde(default)]
+    identified: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,11 +172,18 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
 });
 
 /// The checks serde can't make: labels of at most 4 characters, `stats` conditions with a
-/// positive `min`, `skills` only on `single_skill` and every skill name known.
+/// positive `min`, `skills` only on `single_skill` and every skill name known, and no `stats`
+/// or `item_names` on an unidentified-only rule (such an item has neither).
 fn validate(rules: &[Rule]) -> Result<(), String> {
     for r in rules {
         if let Some(l) = r.label.as_ref().filter(|l| l.chars().count() > 4) {
             return Err(format!("{}: label {l:?} is longer than 4 characters", r.name));
+        }
+        if r.identified == Some(false) && !(r.stats.is_empty() && r.item_names.is_empty()) {
+            return Err(format!(
+                "{}: an unidentified item has no stats or name to check",
+                r.name
+            ));
         }
         for need in &r.stats {
             if need.min <= 0 {
@@ -226,6 +236,9 @@ fn check(rule: &Rule, drop: &ItemDrop, name: Option<&str>) -> Option<bool> {
             .sockets
             .is_none_or(|[lo, hi]| (lo..=hi).contains(&drop.sockets))
         && rule.ethereal.is_none_or(|e| e == drop.ethereal)
+        && rule
+            .identified
+            .is_none_or(|i| i == (drop.flags & item_data::FLAG_IDENTIFIED != 0))
         && rule.stats.iter().all(|need| need.holds(&drop.stats));
     if !fits {
         return None;
@@ -305,13 +318,22 @@ pub fn keep_tiers() -> config::Valuables {
 }
 
 /// The `label` of the best rule of any tier matching `drop` as `name`, if that match is
-/// certain: an unidentified ring must not be tagged `SoJ`.
+/// certain or the label is empty: an unidentified ring must not be tagged `SoJ`, but "no tag"
+/// names nothing.
 #[must_use]
 pub fn rule_label(drop: &ItemDrop, name: Option<&str>) -> Option<&'static str> {
     match best_rule(&RULES, drop, name, &EVERYTHING)? {
         (rule, false) => rule.label.as_deref(),
-        (_, true) => None,
+        (rule, true) => rule.label.as_deref().filter(|l| l.is_empty()),
     }
+}
+
+/// Whether `item` matches an unidentified-only rule: identify it before judging it.
+#[must_use]
+pub fn worth_identifying(item: &ItemDrop) -> bool {
+    RULES
+        .iter()
+        .any(|r| r.identified == Some(false) && check(r, item, None).is_some())
 }
 
 /// What to call `item` in the lists: its unique/set name if known; else "eth", the base name
@@ -483,6 +505,14 @@ mod tests {
             ),
             (r#", "stats": [{"stat": "fcr", "min": 0}]"#, "min 0"),
             (r#", "label": "+3wnd""#, "5-character label"),
+            (
+                r#", "identified": false, "stats": [{"stat": "fcr", "min": 3}]"#,
+                "stats on an unidentified-only rule",
+            ),
+            (
+                r#", "identified": false, "item_names": ["Arm of King Leoric"]"#,
+                "a name on an unidentified-only rule",
+            ),
         ] {
             assert!(validate(&rules_of(&rule(extra))?).is_err(), "{what}");
         }
@@ -670,20 +700,73 @@ mod tests {
         }
     }
 
+    const CANDIDATES: &str = "Unidentified magic class items";
+
     #[test]
-    fn unidentified_skill_items_without_stats_get_no_skill_rule() {
-        let mut unid = rolled("obf", item_data::QUALITY_MAGIC, &[]);
-        unid.flags = 0;
+    fn the_candidate_rule_holds_every_class_only_base_and_the_wands() {
+        let rule = RULES.iter().find(|r| r.name == CANDIDATES);
+        let mut codes: Vec<&str> = rule
+            .iter()
+            .flat_map(|r| r.item_codes.iter().map(String::as_str))
+            .collect();
+        codes.sort_unstable();
+        let want: Vec<&str> = d2r_core::bases_data::BASES
+            .iter()
+            .filter(|&&(_, _, kind, class, _, _)| class.is_some() || kind == "wand")
+            .map(|row| row.0)
+            .collect();
+        assert_eq!(codes, want);
+        assert_eq!(want.len(), 138, "126 class-only bases and 12 wands");
+        assert!(rule.is_some_and(|r| r.identified == Some(false)
+            && r.needs_stats
+            && r.quality == Quality::Magic
+            && (r.tier, r.category) == (Tier::A, Category::Trade)
+            && r.label.as_deref() == Some("")));
+    }
+
+    #[test]
+    fn unidentified_magic_class_items_are_candidates_until_identified() {
+        const MAGIC: u32 = item_data::QUALITY_MAGIC;
+        let unid = |code: &str, quality: u32| {
+            let mut d = rolled(code, quality, &[]);
+            d.flags = 0;
+            d
+        };
+        let mark = |d: &ItemDrop| {
+            best(d, &config::Valuables::default()).map(|h| (h.tier, h.category, h.rule, h.uncertain))
+        };
+        let candidate = Some((Tier::A, Category::Trade, CANDIDATES.to_owned(), true));
+        for code in [
+            "wnd", "obf", "dr8", "pa9", "ne1", "ba5", "am7", "7wb", "ktr", "wa1",
+        ] {
+            let d = unid(code, MAGIC);
+            assert_eq!(mark(&d), candidate, "{code}: coin, dashed ring");
+            assert_eq!(rule_label(&d, None), Some(""), "{code}: no tag");
+            assert!(worth_identifying(&d), "{code}");
+        }
         assert_eq!(
-            best(&unid, &all()).map(|h| (h.tier, h.rule, h.uncertain)),
-            Some((Tier::B, "Class-specific magic items".to_owned(), true)),
-            "only the B check-me rule"
-        );
-        assert_eq!(
-            best(&unid, &config::Valuables::default()),
+            mark(&unid("obf", item_data::QUALITY_RARE)),
             None,
-            "B is off by default"
+            "a rare rolls no +3 tab"
         );
+        assert_eq!(mark(&unid("lsd", MAGIC)), None, "a sword is no class item");
+
+        let junk = rolled("wnd", MAGIC, &[(stat::FCR, 0, 10)]);
+        assert_eq!(mark(&junk), None, "identified junk wand: no mark");
+        assert!(!worth_identifying(&junk));
+        let plus3 = rolled("wnd", MAGIC, &[(stat::SKILL_TAB, tab(2, 1), 3)]);
+        assert_eq!(
+            mark(&plus3),
+            Some((
+                Tier::A,
+                Category::Trade,
+                "+3 skill tab class items".to_owned(),
+                false
+            )),
+            "identified +3 wand: solid ring and coin"
+        );
+        let grimoire = rolled("waf", MAGIC, &[(stat::SKILL_TAB, tab(7, 0), 3)]);
+        assert_eq!(mark(&grimoire).map(|h| h.3), Some(false), "a +3 grimoire too");
     }
 
     /// (item, expected (tier, category, uncertain), what).

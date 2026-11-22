@@ -425,7 +425,7 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
     Battle Orders barbarian helms; +3 tab + +3 Fury / Tornado / Summon Grizzly pelts; +3 tab + +3
     Lightning / Death Sentry claws.
   - A: +3 tab on any class item (wands, necro heads, orbs, paladin shields, scepters, pelts, barbarian
-    helms, amazon bows / javelins / spears, claws); +3 tab amulets / circlets; +2 tab + 10 FCR and +2
+    helms, warlock grimoires, amazon bows / javelins / spears, claws); +3 tab amulets / circlets; +2 tab + 10 FCR and +2
     class skills + 10 FCR amulets / circlets; +2 class skills or +2 tab with 20 FCR on wands, orbs,
     scepters (the rare caster items); +3 single skills: orbs Fire Ball / Meteor / Lightning / Chain
     Lightning / Blizzard / Frozen Orb, wands and heads Bone Spear / Corpse Explosion, javelins
@@ -438,9 +438,20 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
     rare / crafted ground drop (`Reader::item_drop`; before, only the player's own items), so the
     rules fire for an identified drop and would fire for an unidentified one if its stats ever
     show up; whether an unidentified item's stat array is empty or holds only base stats is not yet
-    seen live. An unidentified class item shows only the old B "Class-specific magic items" check-me
-    rule (dashed, off by default); once identified in the inventory, the keep list and the stash
-    plan (Keep · trade) see the rule. The rules are hand-added to the JSON like the labels;
+    seen live.
+  - Unidentified candidates (user decision 2026-11-22: "every magic class-only item gets the coin
+    (you pick them up and identify in town; more marks on the map)"). The A trade rule
+    "Unidentified magic class items" (label "", `needs_stats`, so a dashed ring with the coin) holds
+    every class-only base (bases_data `class`, from itemtypes `Class`: amazon 15, assassin 21,
+    barbarian 15, druid 15, necromancer 15, paladin 15, sorceress 15, warlock 15) and the 12 wands,
+    138 codes, quality magic only (rares roll at most +2 tab). A rule's `identified` (`false` = only
+    unidentified items; validated: no `stats` or `item_names` with it) ends the match once the item
+    is identified: then only the +3 stat rules decide (solid ring and coin, or nothing for junk).
+    An empty label holds for an uncertain match too (`rule_label`), so the candidates carry no tag.
+    The stash plan gives an unidentified candidate no line (`valuables::worth_identifying`), neither
+    "Keep · trade" nor the own-use "not a build weapon" sale; identified, the stat rules make it a
+    trade keep or the own-use scoring judges it. Replaces the B "Class-specific magic items" rule.
+    Scepters and staves (+3 paladin / sorceress tabs) are not candidates. The rules are hand-added to the JSON like the labels;
     `research/gen_valuables.py` has neither yet.
 
 ## Shrines and wells (2026-11-15)

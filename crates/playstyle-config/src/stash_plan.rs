@@ -1008,7 +1008,7 @@ fn assign_bases(
     kept
 }
 
-/// The action for an item that is no build piece or kept base.
+/// The action for an item that is no build piece or kept base; none for one to identify first.
 fn decide_rest(
     h: &Held,
     needs: &Needs,
@@ -1017,6 +1017,9 @@ fn decide_rest(
 ) -> Option<Decided> {
     if let Some(tab) = stow(h) {
         return Some((Action::Stow(tab), None));
+    }
+    if valuables::worth_identifying(&h.item) {
+        return None;
     }
     if trade_worthy(&h.item) && !keeps_teleport(&h.item, scoring) {
         let action = match valuables::keep_one_name(&h.item) {
@@ -1726,6 +1729,43 @@ mod tests {
                 Action::Sell,
                 Some("worse than worn")
             )]
+        );
+    }
+
+    #[test]
+    fn unidentified_magic_class_items_get_no_advice_until_identified() {
+        let unid = |code: &str| {
+            let mut d = rolled(code, QUALITY_MAGIC, &[]);
+            d.flags = 0;
+            at(d, Spot::Inventory)
+        };
+        let junk = rolled("wnd", QUALITY_MAGIC, &[(LIGHT_RADIUS, 0, 1)]);
+        let plus3 = rolled("wnd", QUALITY_MAGIC, &[(stat::SKILL_TAB, 2 * 8, 3)]);
+        assert_eq!(
+            judged(
+                &[
+                    unid("wnd"),
+                    unid("dr8"),
+                    at(junk, Spot::Inventory),
+                    at(plus3, Spot::Page(1))
+                ],
+                &druid()
+            ),
+            vec![
+                (
+                    "Magic Wand".to_owned(),
+                    Spot::Inventory,
+                    Action::Sell,
+                    Some("no build stats")
+                ),
+                (
+                    "Magic Wand".to_owned(),
+                    Spot::Page(1),
+                    Action::Move(Side::Trade),
+                    None
+                ),
+            ],
+            "the unidentified wand and pelt: no advice; identified, the +3 rules decide"
         );
     }
 
