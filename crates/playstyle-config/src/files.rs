@@ -337,13 +337,21 @@ pub fn reload(settings: &mut Settings, files: &Files) {
     replace(files, &mut settings.builds, loaded.damages, "damages");
     replace(files, &mut settings.bis, loaded.bis, "build selections");
     let farm_groups = loaded.farm.as_ref().map(Vec::len);
-    replace(files, &mut settings.farm, loaded.farm, "farm list");
+    let builds_whole = !loaded.builds_broken;
+    replace(
+        files,
+        &mut settings.farm,
+        loaded.farm.filter(|_| builds_whole),
+        "farm list",
+    );
     replace(files, &mut settings.route, loaded.route, "route");
-    settings.not_needed = loaded.marks;
+    if builds_whole {
+        settings.not_needed = loaded.marks;
+    }
     replace(
         files,
         &mut settings.build_defs,
-        (!loaded.builds_broken).then_some(loaded.build_defs),
+        builds_whole.then_some(loaded.build_defs),
         "builds",
     );
     files.say(format_args!(
