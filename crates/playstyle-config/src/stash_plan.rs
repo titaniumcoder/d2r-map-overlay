@@ -810,6 +810,31 @@ fn left_alone(h: &Held) -> bool {
     }
 }
 
+/// Flawless, the gem grade a gem shrine upgrades to Perfect.
+const FLAWLESS: u8 = 3;
+
+/// The indices of the first flawless gem of each colour in the inventory: carried for gem
+/// shrines (user rule, 2026-11-22), so they stay out of the gems tab.
+fn shrine_gems(items: &[Held]) -> Vec<usize> {
+    let mut colours = Vec::new();
+    let mut kept = Vec::new();
+    for (i, h) in items.iter().enumerate() {
+        let gem = h
+            .item
+            .code
+            .as_deref()
+            .and_then(d2r_core::items::code_bytes)
+            .and_then(d2r_core::items::gem);
+        if let (Spot::Inventory, Some((colour, FLAWLESS))) = (h.spot, gem)
+            && !colours.contains(&colour)
+        {
+            colours.push(colour);
+            kept.push(i);
+        }
+    }
+    kept
+}
+
 /// Keep for `side` where the item is, or move it there. Own items belong on pages 1–2 or in
 /// the personal stash.
 const fn keep_or_move(side: Side, spot: Spot) -> Action {
@@ -1112,7 +1137,7 @@ fn decide_rest(
     }
     if let Some(entry) = farm_entry(&h.item, scoring) {
         let reason = entry.needs.first().map(|n| n.name());
-        return Some((keep_or_move(Side::Own, h.spot), reason));
+        return Some((carried_or_kept(h.spot), reason));
     }
     if trade_worthy(&h.item, scoring.money) {
         let action = match valuables::keep_one_name(&h.item) {
@@ -1135,6 +1160,15 @@ fn decide_rest(
         Verdict::GiveAway => Action::GiveAway,
     };
     Some((action, None))
+}
+
+/// A rolled farm copy (a charge item: Teleport, Lower Resist) is used from the inventory or
+/// swapped in now and then, so a carried one stays carried.
+const fn carried_or_kept(spot: Spot) -> Action {
+    match spot {
+        Spot::Inventory => Action::Keep(Side::Own),
+        _ => keep_or_move(Side::Own, spot),
+    }
 }
 
 /// The farm list's rolled entry `item` is a copy of ([`FarmItem::rolled_match`]).
@@ -1243,11 +1277,12 @@ pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> (Vec<Advice>, W
     let (wanted, mut kept_one) = keep_build_pieces(items, needs, &own_order, &mut actions);
     let kept = assign_bases(items, needs, &own_order, &mut actions, scoring.money);
     let wants = Wants::left(items, needs, kept, &wanted);
+    let shrine = shrine_gems(items);
     for i in by_preference(items, Side::Trade) {
         let (Some(h), Some(slot)) = (items.get(i), actions.get_mut(i)) else {
             continue;
         };
-        if slot.is_none() && !left_alone(h) {
+        if slot.is_none() && !left_alone(h) && !shrine.contains(&i) {
             *slot = decide_rest(h, needs, scoring, &mut kept_one);
         }
     }
@@ -1863,7 +1898,7 @@ mod tests {
     }
 
     #[test]
-    fn the_farm_lists_teleport_amulet_is_kept_own() {
+    fn the_farm_lists_teleport_amulet_is_kept_own_and_stays_carried() {
         let scoring = druid_without_enigma();
         assert!(
             scoring.rolled.iter().any(|i| i.name == "Teleport Amulet"),
@@ -1887,15 +1922,15 @@ mod tests {
             judged(&items, &scoring),
             vec![
                 (
-                    "Magic Amulet".to_owned(),
-                    Spot::Inventory,
+                    "Rare Amulet".to_owned(),
+                    Spot::Page(3),
                     Action::Move(Side::Own),
                     Some("Teleport")
                 ),
                 (
-                    "Rare Amulet".to_owned(),
-                    Spot::Page(3),
-                    Action::Move(Side::Own),
+                    "Magic Amulet".to_owned(),
+                    Spot::Inventory,
+                    Action::Keep(Side::Own),
                     Some("Teleport")
                 ),
                 (
@@ -2308,6 +2343,31 @@ mod tests {
             at(spirit, Spot::Page(4)),
         ];
         assert_eq!(rows(&items, &harmony_needs()), vec![]);
+    }
+
+    #[test]
+    fn one_flawless_gem_of_each_colour_stays_in_the_inventory() {
+        use d2r_core::items::GemColour::{Amethyst, Ruby};
+        let gem = |code: &str, colour| {
+            let mut g = base(code, 0);
+            g.kind = DropKind::Gem(colour);
+            g
+        };
+        let items = [
+            at(gem("gzv", Amethyst), Spot::Inventory),
+            at(gem("gzv", Amethyst), Spot::Inventory),
+            at(gem("glr", Ruby), Spot::Inventory),
+            at(gem("gzv", Amethyst), Spot::Page(1)),
+            at(gem("gpv", Amethyst), Spot::Inventory),
+        ];
+        assert_eq!(
+            rows(&items, &harmony_needs()),
+            vec![
+                row("Flawless Amethyst", Spot::Inventory, Action::Stow(Tab::Gems), 1),
+                row("Flawless Amethyst", Spot::Page(1), Action::Stow(Tab::Gems), 1),
+                row("Perfect Amethyst", Spot::Inventory, Action::Stow(Tab::Gems), 1),
+            ]
+        );
     }
 
     #[test]

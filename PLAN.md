@@ -1334,8 +1334,10 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   rvl; the screenshot's Materials tab holds two stacks). Such an item in the inventory, personal
   stash or on pages 1–4 gets `Action::Stow(Tab)` ("Key of Terror (inv → mats)", in the Move list,
   target `gems` / `mats` / `runes`) before any other rule: never a page move, never sold. Exceptions
-  (no advice at all, never judged by other rules): anything in the cube (a recipe in progress)
-  and rejuvenation potions in the inventory (drunk from there). The tab's own stacks are not judged (no
+  (no advice at all, never judged by other rules): anything in the cube (a recipe in progress),
+  rejuvenation potions in the inventory (drunk from there), and the first flawless gem of each
+  colour in the inventory (user, 2026-11-22: "one flawless gem of each category in inv is fine, I
+  keep them around for gem shrines"; `stash_plan::shrine_gems`). The tab's own stacks are not judged (no
   action) but count as held; page 5 stays ignored.
 - **Page 5 is the "ignore page"** (user, 2026-11-20: "things i keep around for stupidity"): its
   items get no verdict and appear in no list, and nothing is ever moved there. They still count
@@ -1414,7 +1416,9 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
 - **Magic / rare / crafted** (user decision 2026-11-22, confirmed "Yes, like this": "I can still
   decide to wear it myself, my decision"): no own-use judgement any more. Kept only as a copy of
   a farm-list `kind = "rolled"` entry (Keep · own, the entry's first need as the reason:
-  "Teleport"; `stash_plan::farm_entry`, a Teleport entry only while no Enigma is held) or by a
+  "Teleport"; `stash_plan::farm_entry`, a Teleport entry only while no Enigma is held; one in
+  the inventory stays there, a charge item is used from there or swapped in now and then: user
+  report 2026-11-22, the Trapsin's Lower Resist wand "needed sometimes") or by a
   valuables trade rule (Keep · trade); charms keep their own rules (`charm_action`, the charm
   wishlist). Everything else identified is sold "not on the farm list"; an unidentified item or
   one whose stats are unread gets no line (identify first). Build pieces (named uniques, sets,
