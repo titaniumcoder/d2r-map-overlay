@@ -30,15 +30,18 @@ pub fn apply(drops: &mut Vec<ItemDrop>, enabled: &config::Valuables, wants: &Wan
     marks
 }
 
-/// The mark each item of the open trade window would get as a ground drop, in window order:
-/// a runeword base the builds want, or a valuables match. Store items are identified, so the
-/// stat rules decide (a +3 wand). The window sells no uniques or sets, so no piece marks.
+/// The keep / farm mark each item of the open trade window would get as a ground drop, in
+/// window order: a runeword base or a magic piece the builds want. No trade marks: buying to
+/// resell makes no sense.
 #[must_use]
-pub fn shop_marks(shop: &Shop, enabled: &config::Valuables, wants: &Wants) -> Vec<Option<Mark>> {
-    let for_bases = tiers_for_white_bases(enabled);
+pub fn shop_marks(shop: &Shop, wants: &Wants) -> Vec<Option<Mark>> {
+    let no_trade = config::Valuables {
+        trade: Vec::new(),
+        twink: Vec::new(),
+    };
     shop.items
         .iter()
-        .map(|item| mark(&as_drop(item), (enabled, &for_bases), wants))
+        .map(|item| mark(&as_drop(item), (&no_trade, &no_trade), wants))
         .collect()
 }
 
@@ -158,36 +161,29 @@ mod tests {
     }
 
     #[test]
-    fn store_items_are_judged_by_their_read_stats() {
-        use d2r_core::guidance::Tier;
+    fn store_items_get_no_trade_marks() {
         use d2r_core::item_stats::ItemStat;
-        let wand = |stats: Vec<ItemStat>| {
-            let mut item = d2r_core::shop::shop_item(Some("wnd"), item_data::QUALITY_MAGIC, 1, 0, 0);
-            item.stats = stats;
-            item
-        };
-        // +3 to the necromancer's Poison and Bone tab (class 2, tab 1).
+        // +3 to the necromancer's Poison and Bone tab (class 2, tab 1): an A trade good found
+        // on the ground, nothing to buy from a vendor.
         let plus3 = ItemStat {
             id: stat::SKILL_TAB,
             param: 2 * 8 + 1,
             value: 3,
             base: false,
         };
+        let mut wand = d2r_core::shop::shop_item(Some("wnd"), item_data::QUALITY_MAGIC, 1, 0, 0);
+        wand.stats = vec![plus3];
+        let mut drop = as_drop(&wand);
+        drop.id = 1;
+        let mut drops = vec![drop];
+        let ground = apply(&mut drops, &config::Valuables::default(), &Wants::default());
+        assert_eq!(ground.get(&1).map(|m| m.kind), Some(MarkKind::Trade));
         let shop = Shop {
             npc_txt: 0,
             npc: None,
-            items: vec![wand(vec![plus3]), wand(Vec::new())],
+            items: vec![wand],
         };
-        let marks = shop_marks(&shop, &config::Valuables::default(), &Wants::default());
-        let seen: Vec<Option<(MarkKind, Option<Tier>)>> = marks
-            .iter()
-            .map(|m| m.as_ref().map(|m| (m.kind, m.trade.map(|(t, _)| t))))
-            .collect();
-        assert_eq!(
-            seen,
-            [Some((MarkKind::Trade, Some(Tier::A))), None],
-            "a +3 wand sells well, an identified plain one doesn't"
-        );
+        assert_eq!(shop_marks(&shop, &Wants::default()), [None]);
     }
 
     #[test]

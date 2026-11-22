@@ -1564,6 +1564,96 @@ fn shop_marks_items_better_than_the_worn_ones() {
     assert!(upgrades_json(&info).is_empty(), "better items don't chime");
 }
 
+/// The user's cases (2026-11-22): a summoner druid at 20 FCR, weapon pieces all uniques and
+/// runewords. A magic wand, an armor without the FCR breakpoint's FCR and a second Teleport
+/// staff aren't worth buying; a staff with more Teleport than the worn swap one is.
+#[test]
+fn shop_marks_only_what_the_summoner_build_can_use() {
+    use crate::gear_score::TELEPORT;
+    use d2r_core::item_stats::{ItemStat, stat};
+    use d2r_core::shop::shop_item;
+    let affix = |id, param, value| ItemStat {
+        id,
+        param,
+        value,
+        base: false,
+    };
+    let worn_item =
+        |body: u8, code: &str, name: Option<&str>, stats: Vec<ItemStat>| d2r_core::game::Equipped {
+            body,
+            quality: if name.is_some() { 7 } else { 4 },
+            code: Some(code.to_owned()),
+            name: name.map(str::to_owned),
+            file_index: None,
+            runeword: false,
+            stats,
+        };
+    let teleport = |level: u16| affix(stat::CHARGED_SKILL, (TELEPORT << 6) | level, 20);
+    let equipped_items = [
+        worn_item(4, "spc", Some("Stoutnail"), vec![affix(stat::VITALITY, 0, 7)]),
+        worn_item(3, "qui", None, vec![affix(stat::FCR, 0, 20)]),
+        worn_item(11, "bst", None, vec![teleport(1)]),
+    ];
+    let with = |mut item: d2r_core::shop::ShopItem, stats: Vec<ItemStat>| {
+        item.stats = stats;
+        item
+    };
+    let shop = d2r_core::shop::Shop {
+        npc_txt: 148,
+        npc: Some("Akara".to_owned()),
+        items: vec![
+            with(
+                shop_item(Some("wnd"), 4, 1, 0, 0),
+                vec![affix(stat::MAX_MANA, 0, 40), affix(stat::FCR, 0, 10)],
+            ),
+            with(
+                shop_item(Some("lea"), 4, 0, 0, 0),
+                vec![affix(stat::MAX_LIFE, 0, 60)],
+            ),
+            with(shop_item(Some("bst"), 4, 1, 0, 0), vec![teleport(3)]),
+            with(shop_item(Some("bst"), 4, 1, 0, 0), vec![teleport(1)]),
+        ],
+    };
+    let bis = crate::config::Bis {
+        build: "summoner".to_owned(),
+        slots: BTreeMap::from([
+            (
+                "weapon".to_owned(),
+                vec![
+                    "Spirit@25".to_owned(),
+                    "Stoutnail@5".to_owned(),
+                    "Suicide Branch@33".to_owned(),
+                ],
+            ),
+            ("offhand".to_owned(), vec!["Ancients' Pledge@21".to_owned()]),
+        ]),
+        merc_slots: BTreeMap::new(),
+    };
+    let blocks = d2r_core::render::TextBlocks::default();
+    let info = PanelInfo {
+        live: LiveInfo {
+            char_level: Some(20),
+            difficulty: Some(0),
+            area: "Rogue Encampment",
+            equipped_items: &equipped_items,
+            shop: Some(&shop),
+            ..d2r_core::web::fixtures::live_info(5, &blocks, &[], &[], &[])
+        },
+        bis: Some(&bis),
+        ..live_info(5, &blocks, &[], &[], &[])
+    };
+    let rows = shop_better_rows(&shop_json(&info));
+    assert_eq!(
+        rows,
+        [
+            r#""Wand"|false|null"#,
+            r#""Leather Armor"|false|null"#,
+            r#""Battle Staff"|true|"Teleport 3 (worn 1)""#,
+            r#""Battle Staff"|false|null"#,
+        ]
+    );
+}
+
 #[test]
 fn score_profile_takes_the_weapon_kind_from_gear_or_build() {
     static CODELESS: [d2r_core::game::Equipped; 1] = [d2r_core::game::Equipped {

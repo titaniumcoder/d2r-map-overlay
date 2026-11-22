@@ -164,6 +164,21 @@ const fn penalty_label(difficulty: Option<u8>) -> &'static str {
     }
 }
 
+/// The cast frames of `class` at `fcr` (a negative total counts as 0); `None` for an unknown
+/// class.
+#[must_use]
+pub fn cast_frames_at(class: u32, fcr: i32) -> Option<u32> {
+    let (base, speed) = class_data(&CAST, class)?;
+    Some(cast_frames(base, speed, u32::try_from(fcr).unwrap_or(0)))
+}
+
+/// The hit recovery frames of `class` at `fhr`, like [`cast_frames_at`].
+#[must_use]
+pub fn hit_frames_at(class: u32, fhr: i32) -> Option<u32> {
+    let (base, speed) = class_data(&HIT, class)?;
+    Some(hit_frames(base, speed, u32::try_from(fhr).unwrap_or(0)))
+}
+
 fn class_data(data: &[(u32, u32)], class: u32) -> Option<(u32, u32)> {
     data.get(usize::try_from(class).ok()?).copied()
 }

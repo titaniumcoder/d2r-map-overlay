@@ -1334,7 +1334,7 @@ mod tests {
             npc: None,
             items: vec![socketed(4), socketed(3)],
         };
-        let marks = crate::marks::shop_marks(&shop, &crate::config::Valuables::default(), &wants);
+        let marks = crate::marks::shop_marks(&shop, &wants);
         let rules: Vec<Option<(MarkKind, String)>> =
             marks.into_iter().map(|m| m.map(|m| (m.kind, m.rule))).collect();
         assert_eq!(

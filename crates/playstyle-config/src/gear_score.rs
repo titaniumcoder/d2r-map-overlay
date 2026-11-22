@@ -52,6 +52,8 @@ pub struct Weights {
     pub replenish_life: f64,
     /// Teleport while [`Profile::teleport`]; else it counts as any other skill.
     pub teleport: f64,
+    /// Per FCR or FHR breakpoint reached (one frame less).
+    pub breakpoint: f64,
 }
 
 pub const WEIGHTS: Weights = Weights {
@@ -83,11 +85,16 @@ pub const WEIGHTS: Weights = Weights {
     magic_find: 0.2,
     replenish_life: 1.0,
     teleport: 40.0,
+    breakpoint: 20.0,
 };
 
 /// The smallest score gain marked "better": 8 points = +4 average damage, +8 resistance,
 /// +80 defense, or any planned +skill.
 pub const MIN_GAIN: f64 = 8.0;
+
+/// A store item replaces a worn unique, set or runeword piece of the build only with this many
+/// times [`MIN_GAIN`].
+pub const BUILD_PIECE_GAIN: f64 = 3.0;
 
 /// What the character values, from its class, guide stage and gear.
 #[derive(Debug, Clone, Default)]
@@ -120,6 +127,28 @@ impl Profile {
     }
 }
 
+/// What the stage's build says about store items, for [`verdict`].
+#[derive(Debug, Clone, Default)]
+pub struct Plan {
+    /// The kinds a store weapon may be: those of the stage's plain, magic, rare or crafted
+    /// weapon pieces (a unique, set or runeword piece is worth its own stats, not its kind).
+    pub weapon_kinds: Vec<&'static str>,
+    /// Whether the stage has off-hand pieces; a store shield is compared only then.
+    pub offhand: bool,
+    /// Body slots whose worn item is one of the stage's unique, set or runeword pieces.
+    pub build_pieces: Vec<u8>,
+}
+
+impl Plan {
+    fn uses(&self, base: Base) -> bool {
+        match base.slot {
+            4 => self.weapon_kinds.contains(&base.kind),
+            5 => self.offhand,
+            _ => true,
+        }
+    }
+}
+
 /// skills.txt row of Teleport.
 pub const TELEPORT: u16 = 54;
 
@@ -132,6 +161,19 @@ pub fn grants_skill(stats: &[ItemStat], skill: u16) -> bool {
         stat::CHARGED_SKILL => s.param >> 6 == skill,
         _ => false,
     })
+}
+
+/// The highest Teleport level `stats` give: an oskill's points, charges' level.
+fn teleport_level(stats: &[ItemStat]) -> i32 {
+    stats
+        .iter()
+        .filter_map(|s| match s.id {
+            stat::NONCLASS_SKILL if s.param == TELEPORT => Some(s.value),
+            stat::CHARGED_SKILL if s.param >> 6 == TELEPORT => Some(i32::from(s.param & 63)),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// Whether Teleport on gear is still wanted: no Enigma owned, nor on the own shared pages 1–2
@@ -199,6 +241,9 @@ enum Part {
     ReplenishLife,
     /// Counted once however many stats grant it.
     Teleport,
+    /// Cast / hit recovery frames saved at the worn gear's FCR / FHR.
+    CastFrames,
+    HitFrames,
 }
 
 impl Part {
@@ -234,6 +279,7 @@ impl Part {
             Self::Defense => w.defense,
             Self::MagicFind => w.magic_find,
             Self::ReplenishLife => w.replenish_life,
+            Self::CastFrames | Self::HitFrames => w.breakpoint,
         }
     }
 
@@ -275,6 +321,8 @@ impl Part {
             Self::ReplenishLife => format!("{n} replenish life"),
             Self::Teleport if amount < 0.0 => "no Teleport".to_owned(),
             Self::Teleport => "Teleport".to_owned(),
+            Self::CastFrames => format!("{n} FCR breakpoint"),
+            Self::HitFrames => format!("{n} FHR breakpoint"),
         }
     }
 }
@@ -429,30 +477,27 @@ fn usable(base: Base, stats: &[ItemStat], who: &Profile) -> bool {
     class_ok && meets(base.str, who.strength) && meets(base.dex, who.dexterity)
 }
 
-/// The scored parts of what equipment `item` would replace among the worn `(body slot, piece)`
-/// items: the worse ring, a two-hander's weapon and off-hand, else the item in its slot (an
-/// empty slot scores 0). `None` for non-equipment, an item `who` can't use and a shield beside
-/// a worn two-hander.
-fn replaced(item: Piece<'_>, worn: &[(u8, Piece<'_>)], who: &Profile) -> Option<Vec<BTreeMap<Part, f64>>> {
+/// The worn `(body slot, piece)` items equipment `item` would replace: the worse ring (none
+/// while a ring slot is empty), a two-hander's weapon and off-hand, else the item in its slot.
+/// `None` for non-equipment, an item `who` can't use and a shield beside a worn two-hander.
+fn replaced<'a>(item: Piece<'_>, worn: &[(u8, Piece<'a>)], who: &Profile) -> Option<Vec<(u8, Piece<'a>)>> {
     let base = bases_data::base(item.code?)?;
     if !usable(base, item.stats, who) {
         return None;
     }
-    let in_slot = |slot: u8| worn.iter().find(|(s, _)| *s == slot).map(|(_, p)| parts(*p, who));
+    let in_slot = |slot: u8| worn.iter().find(|(s, _)| *s == slot).copied();
     let weapon_2h = |p: &Piece<'_>| {
         p.code
             .and_then(d2r_core::weapons_data::two_handed)
             .unwrap_or(false)
     };
     let worn_2h = worn.iter().any(|(s, p)| *s == 4 && weapon_2h(p));
+    let points = |p: &Piece<'_>| score(&parts(*p, who), who);
     Some(match base.slot {
-        6 => {
-            let rings = [in_slot(6), in_slot(7)].map(Option::unwrap_or_default);
-            let worse = rings
-                .into_iter()
-                .min_by(|a, b| score(a, who).total_cmp(&score(b, who)));
-            worse.into_iter().collect()
-        }
+        6 => match (in_slot(6), in_slot(7)) {
+            (Some(a), Some(b)) => vec![if points(&b.1) < points(&a.1) { b } else { a }],
+            _ => Vec::new(),
+        },
         4 if weapon_2h(&item) => [in_slot(4), in_slot(5)].into_iter().flatten().collect(),
         5 if worn_2h => return None,
         slot => in_slot(slot).into_iter().collect(),
@@ -476,28 +521,109 @@ pub fn scores(piece: Piece<'_>, who: &Profile) -> (f64, f64) {
 /// can't be compared.
 #[must_use]
 pub fn replaced_score(item: Piece<'_>, worn: &[(u8, Piece<'_>)], who: &Profile) -> Option<f64> {
-    Some(replaced(item, worn, who)?.iter().map(|p| score(p, who)).sum())
+    Some(
+        replaced(item, worn, who)?
+            .iter()
+            .map(|(_, p)| score(&parts(*p, who), who))
+            .sum(),
+    )
+}
+
+/// The sum of stat `id` over `stats`.
+fn stat_total(stats: &[ItemStat], id: u16) -> i64 {
+    stats
+        .iter()
+        .filter(|s| s.id == id)
+        .map(|s| i64::from(s.value))
+        .sum()
+}
+
+/// The cast and hit recovery frames `item` saves (negative: costs) in place of `old`, at the
+/// FCR and FHR of the active worn gear (body slots 1–10, not the weapon swap).
+fn frames_saved(item: Piece<'_>, old: &[(u8, Piece<'_>)], worn: &[(u8, Piece<'_>)], class: u32) -> [i64; 2] {
+    let saved = |id: u16, frames: fn(u32, i32) -> Option<u32>| {
+        let sum = |pieces: &[(u8, Piece<'_>)]| -> i64 {
+            pieces
+                .iter()
+                .filter(|(body, _)| (1..=10).contains(body))
+                .map(|(_, p)| stat_total(p.stats, id))
+                .sum()
+        };
+        let now = sum(worn);
+        let after = now - sum(old) + stat_total(item.stats, id);
+        let at = |total: i64| {
+            let total = i32::try_from(total.clamp(0, i64::from(i32::MAX))).unwrap_or(0);
+            frames(class, total).map_or(0, i64::from)
+        };
+        at(now) - at(after)
+    };
+    [
+        saved(stat::FCR, d2r_core::breakpoints::cast_frames_at),
+        saved(stat::FHR, d2r_core::breakpoints::hit_frames_at),
+    ]
 }
 
 /// The `why` text ("+24 avg dmg, +2 Bow and Crossbow skills, +15 fire res") when the store
-/// item `item` beats what it would replace among the worn `(body slot, piece)` items by at
-/// least [`MIN_GAIN`]; never for an item `who` can't use.
+/// item `item` is worth buying over what it would replace among the worn `(body slot, piece)`
+/// items; never for an item `who` can't use. Worth it is:
+/// - more Teleport (levels) than any worn item gives while Teleport is wanted, whatever the
+///   item's kind ("Teleport 3 (worn 1)");
+/// - else, with a `plan`, only a weapon of the plan's kinds and a shield when it has an
+///   off-hand; no FCR or FHR breakpoint lost (each one reached counts [`Weights::breakpoint`]);
+///   a score gain of [`MIN_GAIN`], or [`BUILD_PIECE_GAIN`] × it over a worn build piece.
 #[must_use]
 pub fn verdict(
     item: Piece<'_>,
     req_level: Option<u32>,
     worn: &[(u8, Piece<'_>)],
     who: &Profile,
+    plan: Option<&Plan>,
 ) -> Option<String> {
     if req_level.zip(who.level).is_some_and(|(req, lvl)| req > lvl) {
         return None;
     }
     let old = replaced(item, worn, who)?;
-    let mut delta = parts(item, who);
-    for (part, v) in old.iter().flatten() {
-        *delta.entry(*part).or_insert(0.0) -= v;
+    let worn_teleport = worn
+        .iter()
+        .map(|(_, p)| teleport_level(p.stats))
+        .max()
+        .unwrap_or(0);
+    let teleport = teleport_level(item.stats);
+    if who.teleport && teleport > worn_teleport {
+        return Some(if worn_teleport > 0 {
+            format!("Teleport {teleport} (worn {worn_teleport})")
+        } else {
+            format!("Teleport {teleport}")
+        });
     }
-    if score(&delta, who) < MIN_GAIN {
+    let base = bases_data::base(item.code?)?;
+    if plan.is_some_and(|p| !p.uses(base)) {
+        return None;
+    }
+    let mut delta = parts(item, who);
+    for (part, v) in old.iter().flat_map(|(_, p)| parts(*p, who)) {
+        *delta.entry(part).or_insert(0.0) -= v;
+    }
+    if worn_teleport > 0 && delta.get(&Part::Teleport).is_some_and(|&t| t > 0.0) {
+        // Teleport the character has elsewhere already.
+        delta.remove(&Part::Teleport);
+    }
+    let [cast, hit] = frames_saved(item, &old, worn, who.class);
+    if cast < 0 || hit < 0 {
+        return None;
+    }
+    for (part, frames) in [(Part::CastFrames, cast), (Part::HitFrames, hit)] {
+        if frames > 0 {
+            delta.insert(part, i32::try_from(frames).map_or(0.0, f64::from));
+        }
+    }
+    let over_build_piece = plan.is_some_and(|p| old.iter().any(|(body, _)| p.build_pieces.contains(body)));
+    let bar = if over_build_piece {
+        BUILD_PIECE_GAIN * MIN_GAIN
+    } else {
+        MIN_GAIN
+    };
+    if score(&delta, who) < bar {
         return None;
     }
     Some(largest_gains(delta, who))
@@ -692,9 +818,12 @@ mod tests {
             st(stat::RES_LIGHTNING, 25),
         ];
         let worn_chain = [(5, piece("kit", &chain))];
-        assert!(verdict(piece("kit", &store), Some(0), &worn_chain, &who).is_some());
+        assert!(verdict(piece("kit", &store), Some(0), &worn_chain, &who, None).is_some());
         let worn_full = [(5, piece("kit", &pledge))];
-        assert_eq!(verdict(piece("kit", &store), Some(0), &worn_full, &who), None);
+        assert_eq!(
+            verdict(piece("kit", &store), Some(0), &worn_full, &who, None),
+            None
+        );
     }
 
     #[test]
@@ -707,12 +836,12 @@ mod tests {
             st(stat::RES_FIRE, 15),
         ];
         assert_eq!(
-            verdict(piece("lbw", &long), Some(0), &worn, &bowazon()).as_deref(),
+            verdict(piece("lbw", &long), Some(0), &worn, &bowazon(), None).as_deref(),
             Some("+15 fire res, +4 avg dmg")
         );
         let jav = [base(stat::THROW_MIN, 6), base(stat::THROW_MAX, 14)];
         assert_eq!(
-            verdict(piece("jav", &jav), Some(0), &worn, &bowazon()),
+            verdict(piece("jav", &jav), Some(0), &worn, &bowazon(), None),
             None,
             "not the bow user's weapon kind"
         );
@@ -722,17 +851,17 @@ mod tests {
     fn planned_skill_tabs_weigh_most() {
         let worn = [];
         let bow_tab = [param(stat::SKILL_TAB, 0, 2)];
-        let why = verdict(piece("amu", &bow_tab), Some(0), &worn, &bowazon());
+        let why = verdict(piece("amu", &bow_tab), Some(0), &worn, &bowazon(), None);
         assert_eq!(why.as_deref(), Some("+2 Bow and Crossbow skills"));
         let jav_tab = [param(stat::SKILL_TAB, 2, 1)];
         assert_eq!(
-            verdict(piece("amu", &jav_tab), Some(0), &worn, &bowazon()),
+            verdict(piece("amu", &jav_tab), Some(0), &worn, &bowazon(), None),
             None,
             "unplanned tab"
         );
         let fire_tab = [param(stat::SKILL_TAB, 8, 3)];
         assert_eq!(
-            verdict(piece("amu", &fire_tab), Some(0), &worn, &bowazon()),
+            verdict(piece("amu", &fire_tab), Some(0), &worn, &bowazon(), None),
             None,
             "another class's tab"
         );
@@ -792,14 +921,14 @@ mod tests {
         let mut who = druid();
         who.teleport = true;
         assert_eq!(
-            verdict(piece("amu", &charges), None, &[], &who).as_deref(),
-            Some("Teleport")
+            verdict(piece("amu", &charges), None, &[], &who, None).as_deref(),
+            Some("Teleport 1")
         );
         let (total, affixes) = scores(piece("amu", &oskill), &who);
         assert!((total - WEIGHTS.teleport).abs() < 1e-9 && (affixes - total).abs() < 1e-9);
         who.teleport = false;
         assert_eq!(
-            verdict(piece("amu", &charges), None, &[], &who),
+            verdict(piece("amu", &charges), None, &[], &who, None),
             None,
             "Enigma held"
         );
@@ -811,12 +940,12 @@ mod tests {
         let worn = [(1, piece("cap", &cap))];
         let better_cap = [base(stat::DEFENSE, 6)];
         assert_eq!(
-            verdict(piece("cap", &better_cap), Some(0), &worn, &bowazon()),
+            verdict(piece("cap", &better_cap), Some(0), &worn, &bowazon(), None),
             None
         );
         let helm = [base(stat::DEFENSE, 20), st(stat::DEFENSE_PERCENT, 50)];
         assert_eq!(
-            verdict(piece("hlm", &helm), Some(0), &[], &bowazon()),
+            verdict(piece("hlm", &helm), Some(0), &[], &bowazon(), None),
             None,
             "30 def into an empty slot is 3 points"
         );
@@ -826,8 +955,9 @@ mod tests {
     fn unusable_items_are_never_better() {
         let worn = [];
         let res = [st(stat::RES_FIRE, 30)];
-        let verdict_of =
-            |code, stats: &[ItemStat], level| verdict(piece(code, stats), Some(level), &worn, &bowazon());
+        let verdict_of = |code, stats: &[ItemStat], level| {
+            verdict(piece(code, stats), Some(level), &worn, &bowazon(), None)
+        };
         assert_eq!(verdict_of("rin", &res, 13), None, "level 13 > clvl 12");
         assert!(verdict_of("rin", &res, 12).is_some());
         assert_eq!(verdict_of("pa1", &res, 0), None, "paladin shield");
@@ -844,12 +974,12 @@ mod tests {
         let worn = [(6, piece("rin", &good)), (7, piece("rin", &poor))];
         let mid = [st(stat::RES_FIRE, 20)];
         assert_eq!(
-            verdict(piece("rin", &mid), Some(0), &worn, &bowazon()).as_deref(),
+            verdict(piece("rin", &mid), Some(0), &worn, &bowazon(), None).as_deref(),
             Some("+15 fire res")
         );
         let worn_one = [(6, piece("rin", &good))];
         assert_eq!(
-            verdict(piece("rin", &poor), Some(0), &worn_one, &bowazon()),
+            verdict(piece("rin", &poor), Some(0), &worn_one, &bowazon(), None),
             None,
             "5 res < the bar even against the empty finger"
         );
@@ -868,20 +998,20 @@ mod tests {
         };
         let two_hander = [base(stat::MIN_DAMAGE_2H, 8), base(stat::MAX_DAMAGE_2H, 17)];
         assert_eq!(
-            verdict(piece("2hs", &two_hander), Some(0), &worn, &melee),
+            verdict(piece("2hs", &two_hander), Some(0), &worn, &melee, None),
             None,
             "+8 avg dmg (16 points) minus the shield's 21"
         );
         let worn_no_shield = [(4, piece("ssd", &sword))];
         assert_eq!(
-            verdict(piece("2hs", &two_hander), Some(0), &worn_no_shield, &melee).as_deref(),
+            verdict(piece("2hs", &two_hander), Some(0), &worn_no_shield, &melee, None).as_deref(),
             Some("+8 avg dmg")
         );
         let bow = short_bow();
         let worn_bow = [(4, piece("sbw", &bow))];
         let big_shield = [base(stat::DEFENSE, 10), st(stat::RES_FIRE, 40)];
         assert_eq!(
-            verdict(piece("buc", &big_shield), Some(0), &worn_bow, &bowazon()),
+            verdict(piece("buc", &big_shield), Some(0), &worn_bow, &bowazon(), None),
             None,
             "a shield beside a two-hander"
         );
@@ -897,7 +1027,7 @@ mod tests {
             ..Profile::default()
         };
         let staff = [base(stat::MIN_DAMAGE_2H, 10), base(stat::MAX_DAMAGE_2H, 30)];
-        assert_eq!(verdict(piece("bst", &staff), Some(0), &[], &sorc), None);
+        assert_eq!(verdict(piece("bst", &staff), Some(0), &[], &sorc, None), None);
         assert!(is_caster(1, None));
         assert!(!is_caster(0, None));
         assert!(is_caster(5, Some("staf")));
@@ -910,5 +1040,137 @@ mod tests {
         assert_eq!(piece_kind("Gemmed Hunter's Bow (Chipped Rubies)"), Some("bow"));
         assert_eq!(piece_kind("Short Battle Bow"), Some("bow"));
         assert_eq!(piece_kind("Titan's Revenge"), None);
+    }
+
+    /// A summoner druid at 20 FCR (the 19 breakpoint: 15 frames) with a plain club, a magic
+    /// armor with 20 FCR and an empty helm slot.
+    fn summoner_worn<'a>(club: &'a [ItemStat], armor: &'a [ItemStat]) -> [(u8, Piece<'a>); 2] {
+        [(4, piece("clb", club)), (3, piece("qui", armor))]
+    }
+
+    /// The summoner's plan: no plain or magic weapon piece, a shield in the off-hand.
+    fn summoner_plan() -> Plan {
+        Plan {
+            weapon_kinds: Vec::new(),
+            offhand: true,
+            build_pieces: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_magic_wand_is_no_weapon_of_the_druids_build() {
+        let club = [base(stat::MIN_DAMAGE, 1), base(stat::MAX_DAMAGE, 6)];
+        let armor = [base(stat::DEFENSE, 8), st(stat::FCR, 20)];
+        let worn = summoner_worn(&club, &armor);
+        let wand = [st(stat::MAX_MANA, 40), st(stat::FCR, 10)];
+        let who = druid();
+        assert!(
+            verdict(piece("wnd", &wand), Some(0), &worn, &who, None).is_some(),
+            "without a build any kind counts"
+        );
+        let plan = summoner_plan();
+        assert_eq!(
+            verdict(piece("wnd", &wand), Some(0), &worn, &who, Some(&plan)),
+            None
+        );
+        let magic_staff = Plan {
+            weapon_kinds: vec!["staf"],
+            ..summoner_plan()
+        };
+        assert_eq!(
+            verdict(piece("bst", &wand), Some(0), &worn, &who, Some(&magic_staff)).as_deref(),
+            Some("+40 mana, +1 FCR breakpoint, +10% FCR"),
+            "a kind the build names; 30 FCR reaches the next breakpoint"
+        );
+        let no_offhand = Plan {
+            offhand: false,
+            ..summoner_plan()
+        };
+        let shield = [st(stat::RES_FIRE, 30)];
+        assert!(verdict(piece("buc", &shield), Some(0), &worn, &who, Some(&plan)).is_some());
+        assert_eq!(
+            verdict(piece("buc", &shield), Some(0), &worn, &who, Some(&no_offhand)),
+            None,
+            "two-handed only, no shield"
+        );
+    }
+
+    #[test]
+    fn an_armor_that_costs_an_fcr_breakpoint_is_not_better() {
+        let club = [base(stat::MIN_DAMAGE, 1), base(stat::MAX_DAMAGE, 6)];
+        let armor = [base(stat::DEFENSE, 8), st(stat::FCR, 20)];
+        let worn = summoner_worn(&club, &armor);
+        let who = druid();
+        let plan = summoner_plan();
+        let life = [base(stat::DEFENSE, 20), st(stat::MAX_LIFE, 60)];
+        assert_eq!(
+            verdict(piece("lea", &life), Some(0), &worn, &who, Some(&plan)),
+            None,
+            "0 FCR drops below the 19 breakpoint"
+        );
+        let life_and_fcr = [base(stat::DEFENSE, 20), st(stat::MAX_LIFE, 40), st(stat::FCR, 20)];
+        assert_eq!(
+            verdict(piece("lea", &life_and_fcr), Some(0), &worn, &who, Some(&plan)).as_deref(),
+            Some("+40 life, +12 def")
+        );
+    }
+
+    #[test]
+    fn a_worn_build_piece_yields_only_to_a_large_gain() {
+        let stealth = [base(stat::DEFENSE, 8), st(stat::FCR, 20), st(stat::FHR, 25)];
+        let worn = [(3, piece("qui", &stealth))];
+        let who = druid();
+        let plan = Plan {
+            build_pieces: vec![3],
+            ..summoner_plan()
+        };
+        let res = [st(stat::FCR, 20), st(stat::FHR, 25), st(stat::RES_FIRE, 20)];
+        assert!(verdict(piece("qui", &res), Some(0), &worn, &who, None).is_some());
+        assert_eq!(
+            verdict(piece("qui", &res), Some(0), &worn, &who, Some(&plan)),
+            None,
+            "20 points < 3 × 8 over Stealth"
+        );
+        let more = [st(stat::FCR, 20), st(stat::FHR, 25), st(stat::RES_FIRE, 30)];
+        assert!(verdict(piece("qui", &more), Some(0), &worn, &who, Some(&plan)).is_some());
+        let fewer_fhr = [st(stat::FCR, 20), st(stat::FHR, 5), st(stat::MAX_LIFE, 100)];
+        assert_eq!(
+            verdict(piece("qui", &fewer_fhr), Some(0), &worn, &who, Some(&plan)),
+            None,
+            "25 → 5 FHR loses hit recovery breakpoints"
+        );
+    }
+
+    #[test]
+    fn only_more_teleport_than_worn_is_better() {
+        let charges = |level: u16| [param(stat::CHARGED_SKILL, (TELEPORT << 6) | level, 20)];
+        let worn_staff = charges(1);
+        // The teleport staff on the weapon swap (body 11).
+        let worn = [(11, piece("bst", &worn_staff))];
+        let mut who = druid();
+        who.teleport = true;
+        let plan = summoner_plan();
+        let level_3 = charges(3);
+        assert_eq!(
+            verdict(piece("bst", &level_3), Some(0), &worn, &who, Some(&plan)).as_deref(),
+            Some("Teleport 3 (worn 1)"),
+            "whatever the build's weapon kinds"
+        );
+        let level_1 = charges(1);
+        assert_eq!(
+            verdict(piece("bst", &level_1), Some(0), &worn, &who, Some(&plan)),
+            None
+        );
+        assert_eq!(
+            verdict(piece("bst", &level_1), Some(0), &worn, &who, None),
+            None,
+            "no gain over the worn Teleport"
+        );
+        who.teleport = false;
+        assert_eq!(
+            verdict(piece("bst", &level_3), Some(0), &worn, &who, None),
+            None,
+            "Enigma held"
+        );
     }
 }

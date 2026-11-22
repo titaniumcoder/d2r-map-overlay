@@ -657,6 +657,20 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   is EMPTY (count 0) with its affixes in the next list (the reader must not stop at an empty list).
 - [x] Stat comparison ("▲ better" in the Vendor panel): implemented 2026-11-18; NOT yet verified live
   (store items' stat chains, player str/dex stats).
+- **Vendor criteria** (user feedback 2026-11-22: "a wand, why would I buy a wand", armors that "would
+  have removed fcr"). Listed (Vendor panel and in-game box): build pieces, runeword bases the builds
+  want, and "better" items; never valuables/trade matches (`marks::shop_marks` gives keep/farm marks
+  only: buying to resell makes no sense). `gear_score::verdict` with the stage's `Plan`
+  (`web::gear::shop_plan`; no build = the old rules):
+  - more Teleport levels (oskill points, charge level) than any worn item, the swap included, while
+    Teleport is wanted: always listed ("Teleport 3 (worn 1)"), whatever the kind;
+  - a weapon only of the kinds of the stage's plain/magic/rare/crafted weapon pieces (a unique, set
+    or runeword piece is worth its own stats, not its base kind: the druid builds have none, so no
+    store weapon is "better"); a shield only when the stage has off-hand pieces;
+  - no FCR or FHR breakpoint lost (`breakpoints::cast_frames_at`/`hit_frames_at`, human form, at the
+    summed FCR/FHR of the worn gear in body slots 1–10); each breakpoint reached adds 20 points
+    (`Weights::breakpoint`, = a planned +skill). No werewolf IAS frames yet;
+  - a gain of `MIN_GAIN` (8), or 3× that over a worn unique/set/runeword piece of the stage.
 - In game: the worthwhile store items in the UI-marks box (see "In-game UI marks").
 - [x] Vendor panel: implemented 2026-11-18; verified live the same day on Fara (A2): ~65 store items decoded to sensible magic names ("Bronze Double Axe of Maiming", "Helm of the Jackal", "Shimmering Large Shield of Deflecting"), store affix words sit at the same offsets as owned items.
 
@@ -956,7 +970,7 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   (inventory, cube, personal stash), `StashItem.cell` (shared pages), `ShopItem.cell`; the stash
   plan's `Advice.cells` keeps every merged item's. A cell outside the grid draws nothing.
   **Not yet seen live.**
-- Frames: store items as the box picks them (green build / gold money) on the shown store tab
+- Frames: store items as the box picks them (green build; no gold money: see "Vendor criteria") on the shown store tab
   only (`ui_marks::vendor(…, tab)`); the player's items by the stash plan's action
   (`ui_marks::item_frames`: sell red, move / stow orange, keep trade gold, keep own green,
   give-away none): inventory always, the stash grid only for the shown tab (`Spot::Stash` or

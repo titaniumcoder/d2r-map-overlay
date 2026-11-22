@@ -83,7 +83,7 @@ impl Playstyle for ConfigDriven {
             not_needed: &self.config.not_needed,
         });
         if let Some(shop) = info.shop {
-            let marks = marks::shop_marks(shop, &self.config.valuables, &evaluation.wants);
+            let marks = marks::shop_marks(shop, &evaluation.wants);
             for (note, mark) in panels.shop.iter_mut().zip(marks) {
                 note.mark = mark;
             }

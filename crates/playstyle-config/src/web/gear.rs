@@ -69,6 +69,7 @@ pub fn shop_notes(info: &PanelInfo) -> Vec<ShopNote> {
         return Vec::new();
     };
     let profile = score_profile(info);
+    let plan = shop_plan(info);
     let worn: Vec<(u8, Piece<'_>)> = info
         .live
         .equipped_items
@@ -90,11 +91,71 @@ pub fn shop_notes(info: &PanelInfo) -> Vec<ShopNote> {
             };
             ShopNote {
                 slot: shop_match(item, info).map(|(slot, _)| slot),
-                why: verdict(piece, item.req_level, &worn, &profile),
+                why: verdict(piece, item.req_level, &worn, &profile, plan.as_ref()),
                 mark: None,
             }
         })
         .collect()
+}
+
+/// What the stage's pieces allow a store item to replace; `None` without a build.
+fn shop_plan(info: &PanelInfo) -> Option<crate::gear_score::Plan> {
+    use crate::gear_score::piece_kind;
+    let bis = info.bis?;
+    let current = |slot: &str| -> Vec<&str> {
+        bis.slots
+            .get(slot)
+            .into_iter()
+            .flatten()
+            .filter(|p| !outgrown(p, info))
+            .map(|p| d2r_core::info::piece_name(p))
+            .collect()
+    };
+    let entry = |name: &str| info.build.and_then(|b| b.pieces.get(name));
+    // A piece without a `[pieces]` entry is generic unless it names a unique, set or runeword.
+    let generic = |name: &str| {
+        entry(name).map_or_else(
+            || !is_fixed_name(name),
+            |e| matches!(e.kind.as_str(), "magic" | "rare" | "crafted" | "base"),
+        )
+    };
+    let weapon_kinds = current("weapon")
+        .into_iter()
+        .filter(|n| generic(n))
+        .filter_map(|n| piece_kind(n).or_else(|| piece_kind(&entry(n)?.base)))
+        .collect();
+    let pieces: Vec<&str> = bis
+        .slots
+        .values()
+        .flatten()
+        .map(|p| d2r_core::info::piece_name(p))
+        .filter(|n| !generic(n))
+        .collect();
+    let build_pieces = info
+        .live
+        .equipped_items
+        .iter()
+        .filter(|e| {
+            e.name
+                .as_deref()
+                .is_some_and(|n| pieces.iter().any(|p| d2r_core::names::same_name(n, p)))
+        })
+        .map(|e| e.body)
+        .collect();
+    Some(crate::gear_score::Plan {
+        weapon_kinds,
+        offhand: !current("offhand").is_empty(),
+        build_pieces,
+    })
+}
+
+/// Whether `name` is a unique, set or runeword.
+fn is_fixed_name(name: &str) -> bool {
+    use d2r_core::item_names_data::{SET_NAMES, UNIQUE_NAMES};
+    let same = |n: &str| d2r_core::names::same_name(n, name);
+    d2r_core::runewords_data::lookup(name).is_some()
+        || UNIQUE_NAMES.iter().any(|&(_, n)| same(n))
+        || SET_NAMES.iter().any(|&(_, n)| same(n))
 }
 
 /// What the vendor panel's stat comparison values for this character.
