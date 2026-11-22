@@ -267,6 +267,13 @@ fn card_json(
     card
 }
 
+fn why_runes(why: &Why) -> Vec<&'static str> {
+    match why {
+        Why::Drops => Vec::new(),
+        Why::Runes(runes) => runes.clone(),
+    }
+}
+
 /// The "General drops" card: the entries of `general` ([`crate::worth::area_85`]) and the
 /// rolled entries.
 fn general_card<'a>(
@@ -280,14 +287,12 @@ fn general_card<'a>(
             let runes = if n.item.kind == crate::config::FarmKind::Rolled {
                 Vec::new()
             } else {
-                match &general
-                    .iter()
-                    .find(|(name, _)| d2r_core::names::same_name(name, &n.item.name))?
-                    .1
-                {
-                    Why::Drops => Vec::new(),
-                    Why::Runes(runes) => runes.clone(),
-                }
+                why_runes(
+                    &general
+                        .iter()
+                        .find(|(name, _)| d2r_core::names::same_name(name, &n.item.name))?
+                        .1,
+                )
             };
             placed.push(&n.item.name);
             Some(card_item_json(n, &runes))
@@ -296,24 +301,19 @@ fn general_card<'a>(
     (!items.is_empty()).then(|| card_json("general", "General drops", "any level-85 area", items, Vec::new()))
 }
 
-/// The uniques and sets boss `boss` drops in `difficulty` that no level-85 area (`general`)
-/// can.
+/// The needed entries boss `boss` drops in `difficulty` that no level-85 area (`general`) can;
+/// runewords only for bosses other than the Countess (her runes have their own lines).
 fn boss_special(
     boss: &str,
     difficulty: u8,
     info: &PanelInfo,
     general: &[(String, Why)],
     materials: &[(String, u32)],
-) -> Vec<String> {
+) -> Vec<(String, Why)> {
     crate::worth::worth(boss, difficulty, info.farm, &info.live.holdings(), materials)
         .into_iter()
-        .filter(|(name, why)| {
-            *why == Why::Drops
-                && !general
-                    .iter()
-                    .any(|(g, w)| *w == Why::Drops && d2r_core::names::same_name(g, name))
-        })
-        .map(|(name, _)| name)
+        .filter(|(_, why)| *why == Why::Drops || !crate::worth::is_countess(boss))
+        .filter(|(name, _)| !general.iter().any(|(g, _)| d2r_core::names::same_name(g, name)))
         .collect()
 }
 
@@ -323,7 +323,7 @@ fn boss_card<'a>(
     boss: &str,
     difficulty: u8,
     needed: &'a [Needed],
-    special: &[String],
+    special: &[(String, Why)],
     materials: &[(String, u32)],
     wanted: &RuneNeeds,
     placed: &mut Vec<&'a str>,
@@ -331,14 +331,12 @@ fn boss_card<'a>(
     let (level, _) = crate::worth::boss_drops(boss, difficulty)?;
     let items: Vec<serde_json::Value> = needed
         .iter()
-        .filter(|n| {
-            special
+        .filter_map(|n| {
+            let (_, why) = special
                 .iter()
-                .any(|s| d2r_core::names::same_name(s, &n.item.name))
-        })
-        .map(|n| {
+                .find(|(s, _)| d2r_core::names::same_name(s, &n.item.name))?;
             placed.push(&n.item.name);
-            card_item_json(n, &[])
+            Some(card_item_json(n, &why_runes(why)))
         })
         .collect();
     let runes = if crate::worth::is_countess(boss) {
@@ -403,8 +401,8 @@ fn elsewhere_card(needed: &[Needed], placed: &[&str], difficulty: Option<u8>) ->
         })
         .collect();
     let sub = difficulty.and_then(d2r_core::info::difficulty_name).map_or_else(
-        || "no level-85 area drops these; the bosses show in a game".to_owned(),
-        |name| format!("no level-85 area or route boss in {name} drops these"),
+        || "the bosses show in a game".to_owned(),
+        |name| format!("not on a card above in {name}"),
     );
     (!items.is_empty()).then(|| card_json("other", "Elsewhere", &sub, items, Vec::new()))
 }

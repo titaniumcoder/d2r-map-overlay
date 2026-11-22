@@ -54,6 +54,9 @@ pub fn worth(
     worth_in(ilvl, drops, &counts, farm, holdings, materials)
 }
 
+/// `AREA_85` is Hell data: level-85 areas exist only in Hell.
+const HELL: u8 = 2;
+
 /// The still-missing farm entries any monster of a Hell area of level 85 can drop
 /// ([`d2r_core::drops_data::AREA_85`]), as [`worth`] gives them; the runes the Countess drops
 /// reliably in `difficulty` are left to her (none without a difficulty).
@@ -64,6 +67,9 @@ pub fn area_85(
     holdings: &Holdings,
     materials: &[(String, u32)],
 ) -> Vec<(String, Why)> {
+    if difficulty.is_some_and(|d| d != HELL) {
+        return Vec::new();
+    }
     let (ilvl, drops) = d2r_core::drops_data::AREA_85;
     let counts = |rune: &str| difficulty.is_none_or(|d| countess_rune_chance(rune, d).is_none());
     worth_in(ilvl, drops, &counts, farm, holdings, materials)
@@ -596,6 +602,11 @@ mod tests {
                 "Heart of the Oak (Ko, Vex, Pul)",
                 "Duress (Um)"
             ]
+        );
+        assert_eq!(
+            shown(Some(NIGHTMARE)),
+            Vec::<String>::new(),
+            "level-85 areas are Hell only"
         );
         Ok(())
     }

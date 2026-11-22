@@ -2060,23 +2060,23 @@ fn farm_cards_split_general_boss_and_elsewhere_and_merge_build_tags() -> Result<
         json.pointer("/farm/cards/2/sub"),
         Some(&serde_json::json!("Hell · level 87"))
     );
-    // Nightmare: no boss reaches qlvl 87 and the Countess drops Lem / Ko only rarely.
+    // Nightmare has no level-85 areas: the bosses carry it; no boss reaches qlvl 87.
     info.live.difficulty = Some(1);
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(
         farm_cards(&json),
         [
-            card(
-                "General drops",
-                &["Teleport Amulet", "Highlord's Wrath", "Lawbringer"]
-            ),
+            card("General drops", &["Teleport Amulet"]),
             card("The Countess", &[]),
+            card("Mephisto", &["Lawbringer"]),
+            card("Baal", &["Highlord's Wrath", "Lawbringer"]),
             card("Elsewhere", &["Arachnid Mesh"]),
         ]
     );
     assert_eq!(
         farm_item(&json, "Lawbringer").and_then(|i| i.get("runes")),
-        Some(&serde_json::json!([{ "rune": "Lem", "short": 2 }, { "rune": "Ko", "short": 2 }]))
+        Some(&serde_json::json!([{ "rune": "Lem", "short": 2 }])),
+        "Mephisto's card: only the runes above the Countess's"
     );
     // Out of a game: every rune is a general drop and the bosses wait.
     info.live.difficulty = None;
