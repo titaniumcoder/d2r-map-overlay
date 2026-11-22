@@ -342,6 +342,7 @@ pub fn load(files: &Files) -> Settings {
     note_old_places(files, &loaded.old);
     warn_loot_filter(files, loaded.filter_name.as_deref());
     Settings {
+        name: loaded.name.unwrap_or_default(),
         valuables: Valuables {
             money: loaded.money.unwrap_or(true),
             ..loaded.valuables.unwrap_or_default()
@@ -362,6 +363,9 @@ pub fn reload(settings: &mut Settings, files: &Files) {
     let loaded = read_all(files);
     note_old_places(files, &loaded.old);
     warn_loot_filter(files, loaded.filter_name.as_deref());
+    if let Some(name) = loaded.name {
+        settings.name = name;
+    }
     let money = loaded.money.unwrap_or(settings.valuables.money);
     if loaded.money.is_none() {
         files.say(format_args!(
@@ -657,6 +661,7 @@ mod tests {
             legacy: Some(dir.join("config")),
             state: Some(dir.join("data")),
             quiet: false,
+            others: Vec::new(),
         };
         let build = |name: &str, notes: &str| format!("name = \"{name}\"\nnotes = \"{notes}\"\n");
         write(

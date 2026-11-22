@@ -19,8 +19,9 @@ button { padding: 4px 10px; }
 <h1>d2r-map-overlay config &nbsp; <a style="font-size:0.6em" href="/">live dashboard →</a></h1>
 <h2>Characters</h2>
 <p class="hint">Your own characters: the ones the overlay has seen as the player, or found in
-D2R's save files (other players of a game are never listed). Pick the build chain each one follows
-(saved at once). Delete forgets a character here (its build selection and
+D2R's save files (other players of a game are never listed). Pick the playstyle and build chain
+each one follows (saved at once; "class default": the playstyle with a default build for its
+class). The shared stash keeps what every character wants. Delete forgets a character here (its build selection and
 last-played time; D2R's save files are not touched; playing it again brings it back).</p>
 <div id="err" style="color:#f77"></div>
 <div id="chars"></div>
@@ -36,9 +37,8 @@ marked for, also when the build or the name matches nothing any more
 (<code>~/.local/share/d2r-map-overlay/not-needed.toml</code>). Bring back makes it wanted again.</p>
 <div id="notneeded"></div>
 <h2>Loot filter</h2>
-<p class="hint">The playstyle's D2R loot filter profile (<code>loot-filter.json</code>; a copy in
-<code>~/.config/d2r-map-overlay/playstyle/</code> overrides it). Copy it, then import it in the game.</p>
-<div><span id="filtername">loading…</span>
-<button id="copyfilter" type="button" hidden onclick="copyFilter()">Copy filter JSON</button>
-<span id="filterstatus" class="hint"></span></div>
+<p class="hint">Each playstyle's D2R loot filter profile (<code>loot-filter.json</code>; for the
+selected playstyle a copy in <code>~/.config/d2r-map-overlay/playstyle/</code> overrides it). Copy
+it, then import it in the game.</p>
+<div id="filters">loading…</div>
 <textarea id="filterbox" readonly hidden rows="12" cols="80"></textarea>

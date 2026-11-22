@@ -133,6 +133,8 @@ fn played_entry(name: &str, t: u64, class: Option<u32>) -> (String, d2r_core::pl
             t,
             class,
             stage: None,
+            level: None,
+            worn: Vec::new(),
         },
     )
 }
@@ -157,7 +159,7 @@ fn config_json_lists_only_the_played_characters_recently_played_first() {
         played_entry("Elemental", 20, None),
         played_entry("Other", 99, None),
     ]);
-    let json = config_json(&config, &played);
+    let json = config_json(&[("mine", &config)], &played);
     assert_eq!(
         names_of(&json),
         ["Other", "Fulmina", "Elemental"],
@@ -203,7 +205,7 @@ fn config_json_names_the_stage_reached_on_the_selected_chain() {
         (key, entry)
     };
     let played = d2r_core::played::Played::from([reached("Wolf", 2), reached("Vex", 1)]);
-    let json = config_json(&config, &played);
+    let json = config_json(&[("mine", &config)], &played);
     assert_eq!(
         json.pointer("/characters/0/build_name"),
         Some(&serde_json::json!("Fury Druid")),
@@ -211,7 +213,8 @@ fn config_json_names_the_stage_reached_on_the_selected_chain() {
     );
     assert_eq!(
         json.pointer("/characters/0/build"),
-        Some(&serde_json::json!("summoner druid"))
+        Some(&serde_json::json!("mine/summoner druid")),
+        "the build list's value"
     );
     assert_eq!(
         json.pointer("/characters/1/build_name"),
@@ -246,7 +249,7 @@ fn config_json_lists_every_not_needed_mark_by_build_the_stale_ones_too() {
         &mut [],
     );
     assert!(config.not_needed.contains_key("fury druid"), "inherited there");
-    let json = config_json(&config, &d2r_core::played::Played::new());
+    let json = config_json(&[("mine", &config)], &d2r_core::played::Played::new());
     assert_eq!(
         json.get("not_needed"),
         Some(&serde_json::json!([
@@ -257,11 +260,11 @@ fn config_json_lists_every_not_needed_mark_by_build_the_stale_ones_too() {
         "own marks only, a character key and an unknown build included"
     );
     config.not_needed.clear();
-    let json = config_json(&config, &d2r_core::played::Played::new());
+    let json = config_json(&[("mine", &config)], &d2r_core::played::Played::new());
     assert_eq!(json.get("not_needed"), Some(&serde_json::json!([])));
     assert_eq!(json.get("money_farming"), Some(&serde_json::json!(true)));
     config.valuables.money = false;
-    let json = config_json(&config, &d2r_core::played::Played::new());
+    let json = config_json(&[("mine", &config)], &d2r_core::played::Played::new());
     assert_eq!(
         json.get("money_farming"),
         Some(&serde_json::json!(false)),
@@ -281,7 +284,7 @@ fn config_json_shows_the_class_default_of_a_played_class() {
         played_entry("Amy", 5, Some(0)),
         played_entry("Demonmaster", 1, Some(7)),
     ]);
-    let json = config_json(&config, &played);
+    let json = config_json(&[("mine", &config)], &played);
     assert_eq!(names_of(&json), ["Warly", "Amy", "Demonmaster"]);
     let field = |i: usize, key: &str| {
         json.pointer(&format!("/characters/{i}/{key}"))
@@ -294,7 +297,7 @@ fn config_json_shows_the_class_default_of_a_played_class() {
     assert_eq!(field(0, "class_default"), serde_json::json!(true));
     assert_eq!(field(1, "class"), serde_json::json!("amazon"));
     assert_eq!(field(1, "build_name"), serde_json::Value::Null);
-    assert_eq!(field(2, "build"), serde_json::json!("blood boil"));
+    assert_eq!(field(2, "build"), serde_json::json!("mine/blood boil"));
     assert_eq!(field(2, "class_default"), serde_json::json!(false), "a selection");
 }
 
@@ -349,15 +352,131 @@ fn set_bis_selection_writes_every_spelling() -> Result<()> {
 }
 
 #[test]
+fn each_character_follows_its_own_playstyle() {
+    use crate::config::{Build, Settings, playstyle_of, split_selection};
+    let playstyle = |name: &str, builds: &[(&str, u32, bool)]| {
+        let mut config = Settings {
+            name: name.to_owned(),
+            ..Settings::default()
+        };
+        for &(build, class, default_for_class) in builds {
+            config.build_defs.insert(
+                build.to_lowercase(),
+                Build {
+                    name: build.to_owned(),
+                    class: Some(class),
+                    default_for_class,
+                    ..Build::default()
+                },
+            );
+        }
+        config
+    };
+    let mut druid = playstyle("Druids", &[("Summoner Druid", 5, true), ("Shared", 6, false)]);
+    let mut trap = playstyle("Traps", &[("Fire Wake", 6, true), ("Shared", 6, false)]);
+    let select = |build: &str| crate::config::Bis {
+        build: build.to_owned(),
+        slots: BTreeMap::new(),
+        merc_slots: BTreeMap::new(),
+    };
+    for config in [&mut druid, &mut trap] {
+        config.bis.insert("qualified".to_owned(), select("traps/shared"));
+        config.bis.insert("plain".to_owned(), select("Shared"));
+        config.bis.insert("gone".to_owned(), select("nowhere/missing"));
+    }
+    let folders = [("druids", &druid), ("traps", &trap)];
+    let of = |name: &str, class| playstyle_of(&folders, name, class).map(|(key, _)| key);
+    assert_eq!(
+        of("qualified", Some(5)),
+        Some("traps"),
+        "the selection's playstyle"
+    );
+    assert_eq!(
+        of("plain", Some(5)),
+        Some("druids"),
+        "the first holding the build"
+    );
+    assert_eq!(of("gone", Some(6)), Some("traps"), "else the class default's");
+    assert_eq!(of("newbie", Some(6)), Some("traps"));
+    assert_eq!(of("newbie", Some(5)), Some("druids"));
+    assert_eq!(of("newbie", Some(1)), Some("druids"), "else the selected one");
+    assert_eq!(of("newbie", None), Some("druids"));
+    assert_eq!(playstyle_of(&[], "x", None), None);
+    assert_eq!(
+        split_selection(" traps/Fire Wake "),
+        (Some("traps"), "fire wake".to_owned())
+    );
+    assert_eq!(split_selection("Fire Wake"), (None, "fire wake".to_owned()));
+    assert_eq!(
+        split_selection("a b/c"),
+        (None, "a b/c".to_owned()),
+        "no folder name"
+    );
+    // The stage logic reads the slug of a qualified selection.
+    let stage = trap.stage("qualified", Some(6), None, &crate::config::owns_nothing, None);
+    assert_eq!(stage.map(|s| s.slug), Some("shared"));
+    config_json_and_builds_json_cover_every_playstyle(&folders);
+}
+
+fn config_json_and_builds_json_cover_every_playstyle(folders: &[(&str, &crate::config::Settings)]) {
+    let played = d2r_core::played::Played::from([
+        played_entry("Qualified", 3, Some(6)),
+        played_entry("Newbie", 2, Some(6)),
+        played_entry("Plain", 1, Some(5)),
+    ]);
+    let json = config_json(folders, &played);
+    let field = |i: usize, key: &str| json.pointer(&format!("/characters/{i}/{key}")).cloned();
+    assert_eq!(field(0, "playstyle"), Some(serde_json::json!("Traps")));
+    assert_eq!(field(0, "build"), Some(serde_json::json!("traps/shared")));
+    assert_eq!(field(1, "playstyle"), Some(serde_json::json!("Traps")));
+    assert_eq!(
+        field(1, "build_name"),
+        Some(serde_json::json!("Fire Wake")),
+        "class default"
+    );
+    assert_eq!(field(2, "playstyle"), Some(serde_json::json!("Druids")));
+    assert_eq!(
+        field(2, "build"),
+        Some(serde_json::json!("druids/shared")),
+        "a plain selection shown as the build list's value"
+    );
+    assert_eq!(
+        json.get("playstyles"),
+        Some(&serde_json::json!([
+            { "key": "druids", "name": "Druids" },
+            { "key": "traps", "name": "Traps" },
+        ]))
+    );
+    let builds = builds_json(folders);
+    let values: Vec<_> = builds
+        .get("builds")
+        .and_then(|b| b.as_array())
+        .map_or_else(Vec::new, |builds| {
+            builds.iter().filter_map(|b| b.get("value")?.as_str()).collect()
+        });
+    assert_eq!(
+        values,
+        [
+            "druids/shared",
+            "druids/summoner druid",
+            "traps/fire wake",
+            "traps/shared"
+        ],
+        "per playstyle, the selected one first"
+    );
+}
+
+#[test]
 fn config_json_shows_the_selected_build() {
     let played = d2r_core::played::Played::from([played_entry("DemonMaster", 5, None)]);
-    let json = config_json(&resolved_config(), &played);
+    let json = config_json(&[("mine", &resolved_config())], &played);
     assert_eq!(
         json.get("characters"),
         Some(&serde_json::json!([{
             "name": "DemonMaster",
             "class": null,
-            "build": "blood boil",
+            "playstyle": "",
+            "build": "mine/blood boil",
             "build_name": "Blood Boil",
             "class_default": false,
             "last_played": 5,
@@ -608,15 +727,31 @@ fn builds_json_lists_slug_name_class_and_stage_chain() {
         .build_defs
         .insert("fury druid".to_owned(), build("Fury Druid", None));
     assert_eq!(
-        builds_json(&config),
+        builds_json(&[("mine", &config)]),
         serde_json::json!({ "builds": [
-            { "slug": "blood boil", "name": "Blood Boil", "class": null, "chain": ["Blood Boil"] },
-            { "slug": "fury druid", "name": "Fury Druid", "class": "druid", "chain": ["Fury Druid"] },
+            {
+                "slug": "blood boil",
+                "value": "mine/blood boil",
+                "name": "Blood Boil",
+                "class": null,
+                "chain": ["Blood Boil"],
+                "playstyle": { "key": "mine", "name": "" },
+            },
+            {
+                "slug": "fury druid",
+                "value": "mine/fury druid",
+                "name": "Fury Druid",
+                "class": "druid",
+                "chain": ["Fury Druid"],
+                "playstyle": { "key": "mine", "name": "" },
+            },
             {
                 "slug": "summoner druid",
+                "value": "mine/summoner druid",
                 "name": "Summoner Druid",
                 "class": "druid",
                 "chain": ["Summoner Druid", "Fury Druid"],
+                "playstyle": { "key": "mine", "name": "" },
             },
         ]})
     );

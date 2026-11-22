@@ -41,6 +41,13 @@ pub struct Entry {
     /// `None` before one was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
+    /// The character level when last seen live ([`Tracker::gear`]); `None` before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<u8>,
+    /// The uniques, sets and runewords it and its mercenary wore when last seen live (the
+    /// mercenary's only in a game without other players); empty before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worn: Vec<String>,
 }
 
 /// Lowercased character name → last sighting.
@@ -133,6 +140,8 @@ pub fn seed_from_saves(dir: &Path) -> Played {
             t,
             class: None,
             stage: None,
+            level: None,
+            worn: Vec::new(),
         });
         slot.t = slot.t.max(t);
     }
@@ -197,6 +206,8 @@ pub struct Tracker {
     failed: bool,
     /// The [`OUTSIDE_EDITS`] count the current entry's stage was read at.
     synced: u64,
+    /// [`Tracker::gear`] noted the current character's gear: its `worn` (empty too) is news.
+    geared: bool,
 }
 
 impl Tracker {
@@ -209,6 +220,7 @@ impl Tracker {
             last_write: None,
             failed: false,
             synced: 0,
+            geared: false,
         };
         let Some(path) = tracker.path.as_deref() else {
             return tracker;
@@ -237,6 +249,9 @@ impl Tracker {
         if self.current.as_ref().is_some_and(|(k, _)| *k != key) {
             self.save();
         }
+        let same = self.current.as_ref().filter(|(k, _)| *k == key);
+        let (level, worn) = same.map_or_else(|| (None, Vec::new()), |(_, e)| (e.level, e.worn.clone()));
+        self.geared &= same.is_some();
         let stage = self.take_stage(&key);
         self.current = Some((
             key.clone(),
@@ -245,6 +260,8 @@ impl Tracker {
                 t,
                 class,
                 stage,
+                level,
+                worn,
             },
         ));
         if self.wrote_recently(&key, now) {
@@ -280,6 +297,19 @@ impl Tracker {
             .as_ref()
             .filter(|(key, _)| *key == name.to_lowercase())
             .and_then(|(_, entry)| entry.stage.as_deref())
+    }
+
+    /// Notes the current character `name`'s `level` and `worn` names (its own and its
+    /// mercenary's uniques, sets and runewords), saved with its next write. Ignored unless
+    /// `name` is the character last [`Tracker::record`]ed.
+    pub fn gear(&mut self, name: &str, level: Option<u8>, worn: Vec<String>) {
+        if let Some((key, entry)) = self.current.as_mut()
+            && *key == name.to_lowercase()
+        {
+            entry.level = level.or(entry.level);
+            entry.worn = worn;
+            self.geared = true;
+        }
     }
 
     /// Records that the current character `name` reached stage `slug` and saves at once when
@@ -319,6 +349,13 @@ impl Tracker {
             let mut played = read(path).unwrap_or_default();
             let old = played.get(key);
             let class = entry.class.or_else(|| old.and_then(|old| old.class));
+            // Not seen yet this tick: the file's level and gear stay.
+            let level = entry.level.or_else(|| old.and_then(|old| old.level));
+            let worn = if self.geared {
+                entry.worn.clone()
+            } else {
+                old.map_or_else(Vec::new, |old| old.worn.clone())
+            };
             entry.stage = reached
                 .map(str::to_owned)
                 .or_else(|| old.and_then(|old| old.stage.clone()));
@@ -326,6 +363,8 @@ impl Tracker {
                 key.clone(),
                 Entry {
                     class,
+                    level,
+                    worn,
                     ..entry.clone()
                 },
             );
@@ -405,6 +444,8 @@ mod tests {
                     t: 5,
                     class: None,
                     stage: None,
+                    level: None,
+                    worn: Vec::new(),
                 },
             )])
         };
@@ -420,6 +461,8 @@ mod tests {
                 t: 9,
                 class: Some(1),
                 stage: None,
+                level: None,
+                worn: Vec::new(),
             })
         );
         // A second open reads the file, not the seed.
@@ -431,6 +474,8 @@ mod tests {
                     t: 1,
                     class: None,
                     stage: None,
+                    level: None,
+                    worn: Vec::new(),
                 },
             )])
         });
@@ -471,6 +516,36 @@ mod tests {
         // An older file without the field still loads.
         fs::write(&path, r#"{"vex":{"name":"Vex","t":1}}"#)?;
         assert_eq!(load(&path).get("vex").map(|e| e.stage.clone()), Some(None));
+        Ok(())
+    }
+
+    #[test]
+    fn level_and_worn_gear_are_saved_with_the_next_write() -> Result<()> {
+        let dir = temp_dir("played-gear")?;
+        let path = dir.join("played.json");
+        let t0 = Instant::now();
+        let mut tracker = Tracker::open(Some(path.clone()), Played::new);
+        tracker.record("Vex", Some(5), 1, t0);
+        tracker.gear("Fulmina", Some(9), vec!["Spirit".to_owned()]);
+        tracker.gear("Vex", Some(80), vec!["Enigma".to_owned(), "Insight".to_owned()]);
+        let gear = |path: &Path| load(path).get("vex").map(|e| (e.level, e.worn.clone()));
+        assert_eq!(gear(&path), Some((None, vec![])), "the first write came before");
+        // The next sighting keeps them; a change of character saves them.
+        tracker.record("Vex", Some(5), 2, t0);
+        tracker.record("Fulmina", Some(6), 3, t0);
+        let worn = vec!["Enigma".to_owned(), "Insight".to_owned()];
+        assert_eq!(gear(&path), Some((Some(80), worn.clone())));
+        // Back to Vex: a write before the gear is read again keeps the file's.
+        tracker.record("Vex", Some(5), 4, t0 + WRITE_INTERVAL);
+        assert_eq!(gear(&path), Some((Some(80), worn)));
+        // Everything taken off is news, not "unread".
+        tracker.gear("Vex", Some(80), Vec::new());
+        tracker.record("Fulmina", Some(6), 5, t0 + WRITE_INTERVAL);
+        assert_eq!(gear(&path), Some((Some(80), vec![])));
+        // Old files without the fields still load.
+        fs::write(&path, r#"{"vex":{"name":"Vex","t":1}}"#)?;
+        assert_eq!(gear(&path), Some((None, vec![])));
+        std::fs::remove_dir_all(&dir)?;
         Ok(())
     }
 
@@ -581,6 +656,8 @@ mod tests {
                     t: 1,
                     class: None,
                     stage: None,
+                    level: None,
+                    worn: Vec::new(),
                 },
             )])
         });

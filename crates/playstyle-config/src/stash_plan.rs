@@ -113,6 +113,8 @@ pub struct Scoring {
     pub rolled: Vec<FarmItem>,
     /// The charm wishlists of the chain's builds: a matching charm is kept for own use.
     pub charms: Vec<CharmWish>,
+    /// The other own characters' charm wishes ([`Others`]), each with the class it is for.
+    pub other_charms: Vec<(CharmWish, u32)>,
     /// The money farming switch ([`crate::config::Valuables::money`]): off, the money rules
     /// keep nothing and such items are judged like any other.
     pub money: bool,
@@ -124,6 +126,7 @@ impl Default for Scoring {
             profile: Profile::default(),
             rolled: Vec::new(),
             charms: Vec::new(),
+            other_charms: Vec::new(),
             money: true,
         }
     }
@@ -162,8 +165,66 @@ impl Scoring {
                 .cloned()
                 .collect(),
             charms: builds.iter().flat_map(|b| b.charms.iter().cloned()).collect(),
+            other_charms: Vec::new(),
             money: config.valuables.money,
         }
+    }
+
+    /// Adds what `others` keep by stats: the other playstyles' rolled farm entries and the
+    /// other characters' charm wishes.
+    fn add_others(&mut self, own: &Settings, others: &Others<'_>) {
+        let teleport = self.profile.teleport;
+        for (config, _) in &others.playstyles {
+            let mut rolled: Vec<FarmItem> = config
+                .farm
+                .iter()
+                .flat_map(|g| &g.items)
+                .filter(|i| i.kind == FarmKind::Rolled && (teleport || !i.wants_teleport()))
+                .cloned()
+                .collect();
+            rolled.retain(|r| !self.rolled.contains(r));
+            self.rolled.extend(rolled);
+        }
+        for (config, other) in others.characters(own) {
+            for build in chain_builds(config, &other.chain) {
+                let wishes = build.charms.iter().map(|w| (w.clone(), other.class));
+                self.other_charms.extend(wishes);
+            }
+        }
+    }
+}
+
+/// Another own character as `played.json` last saw it ([`d2r_core::played::Entry`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Other {
+    /// Its stage chain from the stage it reached on ([`Settings::stage_chain`]).
+    pub chain: Vec<String>,
+    pub class: u32,
+    /// `None` (never seen live): no piece of its chain is outgrown.
+    pub level: Option<u8>,
+    /// The uniques, sets and runewords it and its mercenary wore.
+    pub worn: Vec<String>,
+}
+
+/// What the shared stash keeps beside the playing character's own needs: the player's other
+/// characters and playstyles ([`for_snapshot`]).
+#[derive(Debug, Clone, Default)]
+pub struct Others<'a> {
+    /// The other own characters following the playing character's playstyle.
+    pub alongside: Vec<Other>,
+    /// Every other playstyle (its farm list counts) with the own characters following it.
+    pub playstyles: Vec<(&'a Settings, Vec<Other>)>,
+}
+
+impl Others<'_> {
+    /// Every other character with the playstyle it follows (`own`: the playing character's).
+    fn characters<'s>(&'s self, own: &'s Settings) -> impl Iterator<Item = (&'s Settings, &'s Other)> {
+        let alongside = self.alongside.iter().map(move |o| (own, o));
+        let elsewhere = self
+            .playstyles
+            .iter()
+            .flat_map(|(config, others)| others.iter().map(move |o| (*config, o)));
+        alongside.chain(elsewhere)
     }
 }
 
@@ -471,6 +532,48 @@ impl Needs {
         needs
     }
 
+    /// Adds what the other own characters `members` following `config`'s playstyle want, and
+    /// `config`'s farm list when `farm`: another character's copy, so piece counts add up
+    /// (within the party the larger count wins, as for one character). A copy a member wears
+    /// needs no stash copy; a runeword copy a member wears or the shared stash holds
+    /// (`stashed`) drops one of the party's base needs. A farm entry is for `class` unless
+    /// its build names one.
+    fn add_party(
+        &mut self,
+        config: &Settings,
+        members: &[&Other],
+        (farm, class): (bool, u32),
+        stashed: &dyn Fn(&str) -> u32,
+    ) {
+        let mut party = Self::default();
+        let mut spare = Vec::new();
+        let mut worn: Vec<String> = Vec::new();
+        for member in members {
+            let owns = |name: &str| worn_copies(&member.worn, name).saturating_add(stashed(name));
+            for build in chain_builds(config, &member.chain) {
+                party.build(build, member.class, member.level, &mut spare);
+                party.switch_gear(config, build, member.class, &member.worn, &owns);
+            }
+            worn.extend(member.worn.iter().cloned());
+        }
+        if farm {
+            for group in &config.farm {
+                party.farm_group(group, build_def(config, &group.target), class, &mut spare);
+            }
+        }
+        party.share(spare);
+        party.drop_slotless_placed();
+        party.subtract_worn(&worn);
+        party.drop_made_bases(&|name: &str| worn_copies(&worn, name).saturating_add(stashed(name)));
+        for (name, count) in party.pieces {
+            match self.pieces.iter_mut().find(|(n, _)| same_name(n, &name)) {
+                Some((_, c)) => *c = c.saturating_add(count),
+                None => self.pieces.push((name, count)),
+            }
+        }
+        self.bases.extend(party.bases);
+    }
+
     /// The slots (those the character at `level` hasn't outgrown), extras and unique charm
     /// wishes of `build`.
     fn build(&mut self, build: &Build, class: u32, level: Option<u8>, spare: &mut Vec<BaseNeed>) {
@@ -625,6 +728,12 @@ impl Needs {
     }
 }
 
+/// How many of `worn` are `name`.
+fn worn_copies(worn: &[String], name: &str) -> u32 {
+    let on = worn.iter().filter(|w| same_name(w, name)).count();
+    u32::try_from(on).unwrap_or(u32::MAX)
+}
+
 /// A white (low, normal or superior) item without a runeword whose code is a socketable
 /// weapon or armor base.
 pub fn plain_base(item: &ItemDrop) -> bool {
@@ -737,6 +846,7 @@ pub fn for_snapshot(
     config: &Settings,
     chain: &[String],
     bis: Option<&Bis>,
+    others: &Others<'_>,
 ) -> (Vec<Advice>, Wants) {
     let worn: Vec<String> = d2r_core::game::worn_names(&snap.equipped_items)
         .into_iter()
@@ -744,7 +854,7 @@ pub fn for_snapshot(
         .collect();
     let holdings = snap.holdings();
     let owns = |name: &str| holdings.count(name);
-    let needs = Needs::from_config(
+    let mut needs = Needs::from_config(
         config,
         chain,
         bis,
@@ -753,9 +863,30 @@ pub fn for_snapshot(
         &worn,
         &owns,
     );
-    let (advice, mut wants) = plan(&held(snap), &needs, &Scoring::new(snap, config, chain));
+    // Each other character is a party of its own (its copies add up); another playstyle's
+    // farm list goes with its first character (as the own farm list goes with the player),
+    // or stands alone.
+    let stashed = |name: &str| holdings.copies(name, None).0;
+    for other in &others.alongside {
+        needs.add_party(config, &[other], (false, other.class), &stashed);
+    }
+    for (other, members) in &others.playstyles {
+        let class = members.first().map_or(snap.player.class, |m| m.class);
+        let first: Vec<&Other> = members.first().into_iter().collect();
+        needs.add_party(other, &first, (true, class), &stashed);
+        for member in members.iter().skip(1) {
+            needs.add_party(other, &[member], (false, member.class), &stashed);
+        }
+    }
+    let mut scoring = Scoring::new(snap, config, chain);
+    scoring.add_others(config, others);
+    let (advice, mut wants) = plan(&held(snap), &needs, &scoring);
+    let farm_lists = std::iter::once(config).chain(others.playstyles.iter().map(|(c, _)| *c));
+    let farm_lists: Vec<&Settings> = farm_lists.collect();
     for piece in &mut wants.pieces {
-        piece.farm = farm_missing(config, &holdings, &piece.name);
+        piece.farm = farm_lists
+            .iter()
+            .any(|config| farm_missing(config, &holdings, &piece.name));
     }
     (advice, wants)
 }
@@ -1037,7 +1168,11 @@ fn charm_action(h: &Held, scoring: &Scoring) -> Option<Decided> {
     let wished = scoring
         .charms
         .iter()
-        .any(|wish| wish.matches(&h.item, Some(scoring.profile.class)));
+        .any(|wish| wish.matches(&h.item, Some(scoring.profile.class)))
+        || scoring
+            .other_charms
+            .iter()
+            .any(|(wish, class)| wish.matches(&h.item, Some(*class)));
     Some(if wished || own_charm(&h.item, &scoring.profile) {
         (keep_or_move(Side::Own, h.spot), None)
     } else if trade_worthy(&h.item, scoring.money) {
@@ -2340,6 +2475,157 @@ mod tests {
             ],
             "no base for Wisdom, one alternative of several; the druid class from the build"
         );
+    }
+
+    #[test]
+    fn other_characters_and_playstyles_add_their_wants() {
+        use crate::config::{Build, FarmGroup, FarmItem, PieceInfo};
+        let slots = |pairs: &[(&str, &[&str])]| -> BTreeMap<String, Vec<String>> {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.iter().map(|&s| s.to_owned()).collect()))
+                .collect()
+        };
+        let mut druids = Settings::default();
+        druids.build_defs.insert(
+            "fury".to_owned(),
+            Build {
+                name: "Fury".to_owned(),
+                class: Some(5),
+                slots: slots(&[
+                    ("helm", &["Jalal's Mane@42"]),
+                    ("amulet", &["Mara's Kaleidoscope@67"]),
+                    ("swap", &["Harmony@39"]),
+                ]),
+                ..Build::default()
+            },
+        );
+        let mut assassins = Settings::default();
+        assassins.build_defs.insert(
+            "trap".to_owned(),
+            Build {
+                name: "Trap".to_owned(),
+                class: Some(6),
+                slots: slots(&[
+                    ("helm", &["Harlequin Crest@62"]),
+                    ("amulet", &["Mara's Kaleidoscope@67"]),
+                    ("weapon", &["Spirit@25"]),
+                    ("body", &["Stealth@17"]),
+                ]),
+                pieces: [(
+                    "Stealth".to_owned(),
+                    PieceInfo {
+                        setup: "lvl 17-30".to_owned(),
+                        ..PieceInfo::default()
+                    },
+                )]
+                .into(),
+                ..Build::default()
+            },
+        );
+        assassins.farm = vec![FarmGroup {
+            target: "Trap".to_owned(),
+            items: vec![FarmItem {
+                name: "Stone of Jordan".to_owned(),
+                kind: FarmKind::Unique,
+                count: 1,
+                merc: false,
+                slot: None,
+                needs: Vec::new(),
+                note: None,
+            }],
+        }];
+        let chain = |name: &str| vec![name.to_owned()];
+        let assassin = Other {
+            chain: chain("Trap"),
+            class: 6,
+            level: Some(50),
+            worn: vec!["Harlequin Crest".to_owned()],
+        };
+        let second_druid = Other {
+            chain: chain("Fury"),
+            class: 5,
+            level: Some(80),
+            worn: vec!["Jalal's Mane".to_owned()],
+        };
+        let mut needs = Needs::from_config(&druids, &chain("Fury"), None, 5, Some(90), &[], &|_| 0);
+        needs.add_party(&druids, &[&second_druid], (false, 5), &|_| 0);
+        needs.add_party(&assassins, &[&assassin], (true, 5), &|_| 0);
+        let mut pieces: Vec<_> = needs.pieces.iter().map(|(n, c)| (n.as_str(), *c)).collect();
+        pieces.sort_unstable();
+        assert_eq!(
+            pieces,
+            vec![
+                ("Harlequin Crest", 0),
+                ("Harmony", 2),
+                ("Jalal's Mane", 1),
+                ("Mara's Kaleidoscope", 3),
+                ("Spirit", 1),
+                ("Stone of Jordan", 1),
+            ],
+            "a copy per character; the worn Shako and Jalal's need none; Stealth outgrown at 50"
+        );
+        let bases: Vec<_> = needs.bases.iter().map(|b| (b.word.name, b.wearer)).collect();
+        assert_eq!(
+            bases,
+            vec![
+                ("Harmony", DRUID),
+                ("Harmony", DRUID),
+                ("Spirit", Wearer::Player(6)),
+            ],
+            "the assassin's Spirit base is an assassin's weapon"
+        );
+    }
+
+    #[test]
+    fn another_characters_charm_wish_is_kept_for_it() -> anyhow::Result<()> {
+        use crate::config::Build;
+        let wish: CharmWish = toml::from_str(
+            "name = \"Traps skiller\"\nsize = \"grand\"\nstats = [{ stat = \"skill_tab\", tab = \"Traps\", min = 1 }]",
+        )?;
+        let mut assassins = Settings::default();
+        assassins.build_defs.insert(
+            "trap".to_owned(),
+            Build {
+                name: "Trap".to_owned(),
+                class: Some(6),
+                charms: vec![wish],
+                ..Build::default()
+            },
+        );
+        let assassin = Other {
+            chain: vec!["Trap".to_owned()],
+            class: 6,
+            ..Other::default()
+        };
+        // The druid's stash plan keeps the assassin's Traps skiller for her.
+        let others = Others {
+            alongside: Vec::new(),
+            playstyles: vec![(&assassins, vec![assassin])],
+        };
+        let mut scoring = druid();
+        let traps = || at(charm("cm3", &[(stat::SKILL_TAB, 6 * 8, 1)]), Spot::Page(1));
+        assert_eq!(
+            judged(&[traps()], &scoring),
+            [(
+                "Magic Grand Charm".to_owned(),
+                Spot::Page(1),
+                Action::Move(Side::Trade),
+                None
+            )],
+            "an assassin tab is no druid's: a trade good"
+        );
+        scoring.add_others(&Settings::default(), &others);
+        assert_eq!(
+            judged(&[traps()], &scoring),
+            [(
+                "Magic Grand Charm".to_owned(),
+                Spot::Page(1),
+                Action::Keep(Side::Own),
+                None
+            )]
+        );
+        Ok(())
     }
 
     #[test]

@@ -12,7 +12,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use d2r_core::overlay::Msg;
 use d2r_core::playstyle::{Files, Playstyle};
 use d2r_core::reader::GameReader;
-use d2r_core::{config, game, guidance, hypr, journal, live, overlay, render, session};
+use d2r_core::{config, game, guidance, hypr, journal, live, overlay, played, render, session};
 use smithay_client_toolkit::reexports::calloop::channel;
 
 type TheReader = d2r_reader_mem::ProtonReader;
@@ -148,7 +148,8 @@ fn dump(player: Option<&str>, files: &Files) -> Result<()> {
     eprintln!("quest flags: {:04x?}", reader.quest_flags(true));
     let mut snap = reader.snapshot(player, None)?;
     let playstyle = ThePlaystyle::load(files);
-    let wants = playstyle.evaluate(&snap, None).wants;
+    let characters = played::default_path().map_or_else(played::Played::new, |p| played::load(&p));
+    let wants = playstyle.evaluate(&snap, None, &characters).wants;
     let marks = playstyle.mark_drops(&mut snap.drops, &wants);
     if !marks.is_empty() {
         eprintln!("marks: {marks:?}");
@@ -184,7 +185,8 @@ fn load_for_drawing(
     let playstyle = ThePlaystyle::load(files);
     session::Session::default().apply(&mut snap);
     config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
-    let evaluation = playstyle.evaluate(&snap, None);
+    // No other characters: a drawing depends on the snapshot alone.
+    let evaluation = playstyle.evaluate(&snap, None, &played::Played::new());
     let marks = playstyle.mark_drops(&mut snap.drops, &evaluation.wants);
     let mut guidance = evaluation.guidance;
     guidance.marks = marks;

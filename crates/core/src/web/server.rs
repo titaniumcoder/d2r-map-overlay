@@ -157,7 +157,12 @@ fn handle<P: Playstyle>(stream: TcpStream, files: &Files) {
             ("GET", "/favicon.ico") => respond("200 OK", "image/svg+xml", FAVICON_SVG),
             ("GET", "/api/config") => api_config::<P>(files),
             ("GET", "/api/builds") => api_builds::<P>(files),
-            ("GET", "/api/loot-filter") => loot_filter_response(P::loot_filter(&files.quiet())),
+            ("GET", filter) if filter.split('?').next() == Some("/api/loot-filter") => {
+                let playstyle = filter
+                    .split_once("?playstyle=")
+                    .and_then(|(_, rest)| rest.split('&').next());
+                loot_filter_response(P::loot_filter(&files.quiet(), playstyle))
+            }
             ("GET", "/api/live") => api_live(),
             ("GET", "/api/live-stream") => {
                 api_live_stream(stream);
@@ -648,6 +653,7 @@ mod tests {
             &self,
             _: &crate::game::Snapshot,
             _: Option<&str>,
+            _: &crate::played::Played,
         ) -> crate::playstyle::EvaluationOf<'_, Self> {
             crate::playstyle::Evaluation {
                 guidance: crate::guidance::Guidance::default(),
@@ -693,8 +699,12 @@ mod tests {
             Ok(())
         }
 
-        fn loot_filter(files: &Files) -> Option<Vec<u8>> {
-            std::fs::read(files.shipped.as_ref()?.join("loot-filter.json")).ok()
+        fn loot_filter(files: &Files, playstyle: Option<&str>) -> Option<Vec<u8>> {
+            let dir = match playstyle {
+                Some(key) => &files.others.iter().find(|(name, _)| name == key)?.1,
+                None => files.shipped.as_ref()?,
+            };
+            std::fs::read(dir.join("loot-filter.json")).ok()
         }
 
         fn remove_character(_: &Files, _: &str) -> Result<()> {
@@ -776,6 +786,14 @@ mod tests {
             text.contains(&format!("Content-Length: {}\r\n", file.len())),
             "{text}"
         );
+        let other = Files {
+            others: vec![("other".to_owned(), dir.clone())],
+            ..Files::default()
+        };
+        let answer = get("/api/loot-filter?playstyle=other&v=2", other.clone())?;
+        assert!(answer.ends_with(file.as_bytes()), "another playstyle's filter");
+        let missing = String::from_utf8(get("/api/loot-filter?playstyle=nope", other)?)?;
+        assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
         std::fs::remove_dir_all(&dir)?;
         let none = String::from_utf8(get("/api/loot-filter", Files::default())?)?;
         assert!(none.starts_with("HTTP/1.1 404"), "{none}");
@@ -951,7 +969,7 @@ mod tests {
         );
         assert_eq!(
             (config.len(), format!("{:#018x}", fnv1a(config.as_bytes()))),
-            (10_422, "0xa442aba7884d5bf3".to_owned()),
+            (11_691, "0xd9830e27d51c8ba5".to_owned()),
             "config page"
         );
     }

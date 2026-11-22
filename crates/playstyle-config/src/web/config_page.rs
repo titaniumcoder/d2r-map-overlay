@@ -3,6 +3,8 @@
 
 use toml_edit::DocumentMut;
 
+use crate::config::{Settings, playstyle_of, split_selection};
+
 /// Sets (`Some(slug)`) or clears (`None`) the `[bis.<name>]` build selection in `text`, under
 /// every case spelling of `name`; clearing drops an entry left empty. `None` when `text` is not
 /// valid TOML or an entry is not a table, so the caller can report the failed save.
@@ -67,27 +69,39 @@ pub fn remove_character(text: &str, name: &str) -> Option<String> {
 
 /// The config page's JSON: the player's own characters (those in `played`, recorded only for
 /// the local player and seeded from the save files; not the other players of a game), most
-/// recently played first; every "not needed" mark; and the money farming switch.
+/// recently played first, each with the playstyle it follows among `folders` (folder name and
+/// settings, the selected playstyle first, see [`playstyle_of`]); the playstyles (for their
+/// loot filters); every "not needed" mark; and the money farming switch.
 #[must_use]
-pub fn config_json(config: &crate::config::Settings, played: &d2r_core::played::Played) -> serde_json::Value {
+pub fn config_json(folders: &[(&str, &Settings)], played: &d2r_core::played::Played) -> serde_json::Value {
     let mut seen: Vec<_> = played.iter().collect();
     seen.sort_by_key(|&(_, entry)| std::cmp::Reverse(entry.t));
     let characters: Vec<_> = seen
         .into_iter()
-        .map(|(key, entry)| character_json(config, key, entry))
+        .filter_map(|(key, entry)| {
+            let (folder, config) = playstyle_of(folders, key, entry.class)?;
+            Some(character_json(folder, config, key, entry))
+        })
         .collect();
+    let playstyles: Vec<_> = folders
+        .iter()
+        .map(|(key, config)| serde_json::json!({ "key": key, "name": config.name }))
+        .collect();
+    let selected = folders.first().map(|(_, config)| *config);
     serde_json::json!({
         "characters": characters,
-        "not_needed": not_needed_json(config),
-        "money_farming": config.valuables.money,
+        "playstyles": playstyles,
+        "not_needed": selected.map_or_else(|| serde_json::json!([]), |config| not_needed_json(config, folders)),
+        "money_farming": selected.is_none_or(|config| config.valuables.money),
     })
 }
 
-/// Every mark of `not-needed.toml` by the build (or character) it was made for, in key order:
-/// `[{build, known, names}]`. A build or name that matches nothing any more is listed too
-/// (`known: false` for a build that is neither a build nor a character), so it can be brought
-/// back. The inherited marks of later stages are left out: they undo with their own build.
-fn not_needed_json(config: &crate::config::Settings) -> serde_json::Value {
+/// Every mark of `not-needed.toml` (as `config` read it) by the build (or character) it was
+/// made for, in key order: `[{build, known, names}]`. A build or name that matches nothing in
+/// any of `folders` any more is listed too (`known: false` for a build that is neither a
+/// build nor a character), so it can be brought back. The inherited marks of later stages are
+/// left out: they undo with their own build.
+fn not_needed_json(config: &Settings, folders: &[(&str, &Settings)]) -> serde_json::Value {
     let groups: Vec<_> = config
         .not_needed
         .iter()
@@ -97,8 +111,8 @@ fn not_needed_json(config: &crate::config::Settings) -> serde_json::Value {
                 .filter(|m| m.build.eq_ignore_ascii_case(key))
                 .collect();
             let build = &own.first()?.build;
-            let known =
-                config.build_defs.contains_key(key) || config.bis.keys().any(|k| k.eq_ignore_ascii_case(key));
+            let known = folders.iter().any(|(_, c)| c.build_defs.contains_key(key))
+                || config.bis.keys().any(|k| k.eq_ignore_ascii_case(key));
             let names: Vec<_> = own.iter().map(|m| m.name.as_str()).collect();
             Some(serde_json::json!({ "build": build, "known": known, "names": names }))
         })
@@ -106,10 +120,13 @@ fn not_needed_json(config: &crate::config::Settings) -> serde_json::Value {
     serde_json::json!(groups)
 }
 
-/// One character's build selection and its current stage: the stage it last reached live
-/// (`played.json`) when that lies on the selected chain, else the chain's start.
+/// One character's playstyle (`folder`, `config`), build selection and current stage: the
+/// stage it last reached live (`played.json`) when that lies on the selected chain, else the
+/// chain's start. `build` is the selection as the build list's `value` names it
+/// (`"<folder>/<slug>"`, [`builds_json`]) when the build is in its playstyle, else as saved.
 fn character_json(
-    config: &crate::config::Settings,
+    folder: &str,
+    config: &Settings,
     key: &str,
     seen: &d2r_core::played::Entry,
 ) -> serde_json::Value {
@@ -123,33 +140,46 @@ fn character_json(
         .class
         .and_then(|c| usize::try_from(c).ok())
         .and_then(|c| d2r_core::config::CLASS_NAMES.get(c));
+    let saved = config.bis.get(key).map_or("", |b| b.build.as_str());
+    let (_, slug) = split_selection(saved);
+    let build = if config.build_defs.contains_key(&slug) {
+        format!("{folder}/{slug}")
+    } else {
+        saved.to_owned()
+    };
     serde_json::json!({
         "name": seen.name,
         "class": class_name,
-        "build": config.bis.get(key).map_or("", |b| b.build.as_str()),
+        "playstyle": config.name,
+        "build": build,
         "build_name": reached.or_else(|| stage.map(|s| s.build)).map(|b| b.name.as_str()),
         "class_default": stage.is_some_and(|s| s.class_default),
         "last_played": seen.t,
     })
 }
 
-/// The `/api/builds` JSON: every build a character can follow, by slug, with its class name
-/// (`null`: any class) and its stage chain's names (`["Summoner Druid", "Fury Druid"]`).
+/// The `/api/builds` JSON: every build a character can follow, per playstyle of `folders`
+/// in order, by slug, with the `value` a selection saves (`"<folder>/<slug>"`), its class name
+/// (`null`: any class), its stage chain's names (`["Summoner Druid", "Fury Druid"]`) and its
+/// playstyle (`{key, name}`).
 #[must_use]
-pub fn builds_json(config: &crate::config::Settings) -> serde_json::Value {
-    let builds: Vec<_> = config
-        .build_defs
+pub fn builds_json(folders: &[(&str, &Settings)]) -> serde_json::Value {
+    let builds: Vec<_> = folders
         .iter()
-        .map(|(slug, def)| {
-            let class = def
-                .class
-                .and_then(|c| usize::try_from(c).ok())
-                .and_then(|c| d2r_core::config::CLASS_NAMES.get(c));
-            serde_json::json!({
-                "slug": slug,
-                "name": def.name,
-                "class": class,
-                "chain": config.stage_chain(slug),
+        .flat_map(|&(folder, config)| {
+            config.build_defs.iter().map(move |(slug, def)| {
+                let class = def
+                    .class
+                    .and_then(|c| usize::try_from(c).ok())
+                    .and_then(|c| d2r_core::config::CLASS_NAMES.get(c));
+                serde_json::json!({
+                    "slug": slug,
+                    "value": format!("{folder}/{slug}"),
+                    "name": def.name,
+                    "class": class,
+                    "chain": config.stage_chain(slug),
+                    "playstyle": { "key": folder, "name": config.name },
+                })
             })
         })
         .collect();

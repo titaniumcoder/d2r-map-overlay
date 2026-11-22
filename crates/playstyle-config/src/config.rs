@@ -17,6 +17,8 @@ pub use d2r_core::web::SkillTarget;
 /// The playstyle's settings, as loaded from its files ([`crate::files::load`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
+    /// `playstyle.toml`'s `name` ("Summoner Druid → Fury Druid"); empty without one.
+    pub name: String,
     /// `[valuables]`: the drop mark tiers.
     pub valuables: Valuables,
     /// `[damages]` (`playstyle.toml`; `[builds]` in an old `config.toml`).
@@ -731,9 +733,53 @@ pub struct Stage<'a> {
     pub next: Option<(&'a str, &'a Build)>,
 }
 
+/// A build selection's playstyle folder and build slug: `"<folder>/<slug>"` (what the
+/// `/config` page saves, the folder being a plain name), else the whole value is the slug of
+/// a build in any playstyle.
+#[must_use]
+pub fn split_selection(value: &str) -> (Option<&str>, String) {
+    let value = value.trim();
+    match value.split_once('/') {
+        Some((folder, slug))
+            if !folder.is_empty()
+                && folder
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') =>
+        {
+            (Some(folder), slug.trim().to_lowercase())
+        }
+        _ => (None, value.to_lowercase()),
+    }
+}
+
+/// The playstyle character `name` (of class id `class`, when known) follows among `folders`
+/// (folder name and settings, the selected playstyle first): the one its selection names,
+/// else the first holding the selected build, else the first with a default build for its
+/// class, else the selected playstyle. `None` only without folders.
+#[must_use]
+pub fn playstyle_of<'a>(
+    folders: &[(&'a str, &'a Settings)],
+    name: &str,
+    class: Option<u32>,
+) -> Option<(&'a str, &'a Settings)> {
+    let (_, first) = folders.first()?;
+    if let Some(bis) = first.bis.get(&name.to_lowercase()) {
+        let (folder, slug) = split_selection(&bis.build);
+        let named = folder.and_then(|key| folders.iter().find(|(k, _)| *k == key));
+        let holding = || folders.iter().find(|(_, c)| c.build_defs.contains_key(&slug));
+        if let Some(found) = named.or_else(holding) {
+            return Some(*found);
+        }
+    }
+    class
+        .and_then(|class| folders.iter().find(|(_, c)| c.class_default(class).is_some()))
+        .or_else(|| folders.first())
+        .copied()
+}
+
 impl Settings {
     fn selected(&self, name: &str) -> Option<(&str, &Build)> {
-        let slug = self.bis.get(&name.to_lowercase())?.build.trim().to_lowercase();
+        let (_, slug) = split_selection(&self.bis.get(&name.to_lowercase())?.build);
         self.build_defs
             .get_key_value(&slug)
             .map(|(slug, build)| (slug.as_str(), build))

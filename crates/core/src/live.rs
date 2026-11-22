@@ -35,6 +35,36 @@ fn send(tx: &Sender<Msg>, msg: Msg) -> Result<(), UiGone> {
     tx.send(msg).map_err(|_| UiGone)
 }
 
+/// Notes the snapshot's player in `played.json`: seen now, with its level and the names its
+/// mercenary and it wear (the other characters' wants of the shared stash).
+fn record_player(tracker: &mut played::Tracker, snap: &Snapshot) {
+    let name = &snap.player.name;
+    tracker.record(name, Some(snap.player.class), now_secs(), Instant::now());
+    let worn = game::worn_names(&snap.equipped_items)
+        .into_iter()
+        .chain(snap.merc_worn.iter().cloned())
+        .collect();
+    tracker.gear(name, snap.player.char_level, worn);
+}
+
+/// The own characters (`played.json`) the evaluation gets, read again when the player changes
+/// (the tracker has just saved the one before) and after a reload (a fresh roster).
+#[derive(Debug, Default)]
+struct Roster(Option<(String, played::Played)>);
+
+impl Roster {
+    fn of(&mut self, player: &str) -> &played::Played {
+        if self.0.as_ref().is_some_and(|(name, _)| name != player) {
+            self.0 = None;
+        }
+        let (_, characters) = self.0.get_or_insert_with(|| {
+            let characters = played::default_path().map_or_else(played::Played::new, |p| played::load(&p));
+            (player.to_owned(), characters)
+        });
+        characters
+    }
+}
+
 /// Runs until the UI is gone. `player` picks among several player units; `files` are the
 /// playstyle's, hot-reloaded when they change on disk.
 #[allow(
@@ -305,10 +335,12 @@ fn follow_game<P: Playstyle>(
     // The previous tick's wants, by player unit id: the drop marks are needed before the
     // session merge that the evaluation needs, so keep marks run one tick late.
     let mut wants = (None, P::Wants::default());
+    let mut roster = Roster::default();
     loop {
         let start = Instant::now();
         if check_reload(config, config_path, files, &mut watched) {
             playstyle.reload(files);
+            roster = Roster::default();
         }
         match reader.snapshot(player, session.player_id()) {
             Ok(mut snap) => {
@@ -318,17 +350,14 @@ fn follow_game<P: Playstyle>(
                 let marks = playstyle.mark_drops(&mut snap.drops, &wants.1);
                 // Before `apply` and the shrine filter, which drop what the journal records.
                 journal.observe(&snap, &marks);
-                last_played.record(
-                    &snap.player.name,
-                    Some(snap.player.class),
-                    now_secs(),
-                    Instant::now(),
-                );
+                record_player(&mut last_played, &snap);
                 let update = session.apply(&mut snap);
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
                 let stash_open = reader.stash_open();
                 let quests = reader.quest_flags(update.new_game);
-                let mut evaluation = playstyle.evaluate(&snap, last_played.reached(&snap.player.name));
+                let characters = roster.of(&snap.player.name);
+                let mut evaluation =
+                    playstyle.evaluate(&snap, last_played.reached(&snap.player.name), characters);
                 if let Some(slug) = evaluation.reached {
                     last_played.reach(&snap.player.name, slug);
                 }

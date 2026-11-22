@@ -44,8 +44,10 @@ pub trait Playstyle {
     /// Runs before [`Playstyle::evaluate`], so `wants` are an earlier evaluation's.
     fn mark_drops(&self, drops: &mut Vec<ItemDrop>, wants: &Self::Wants) -> Marks;
 
-    /// `reached` is an earlier [`Evaluation::reached`].
-    fn evaluate(&self, snap: &Snapshot, reached: Option<&str>) -> EvaluationOf<'_, Self>;
+    /// `reached` is an earlier [`Evaluation::reached`]. `played` holds the player's own
+    /// characters (`played.json`), the current one included: the shared stash keeps what the
+    /// others want too.
+    fn evaluate(&self, snap: &Snapshot, reached: Option<&str>, played: &Played) -> EvaluationOf<'_, Self>;
 
     /// The playstyle's part of one tick's dashboard.
     fn panels<'a>(&'a self, evaluation: &'a EvaluationOf<'_, Self>, info: &LiveInfo<'a>) -> Panels<'a>;
@@ -82,8 +84,9 @@ pub trait Playstyle {
     where
         Self: Sized;
 
-    /// The exact bytes of the in-game loot filter profile the player imports.
-    fn loot_filter(files: &Files) -> Option<Vec<u8>>
+    /// The exact bytes of the in-game loot filter profile the player imports: of the
+    /// playstyle named `playstyle` (as the `/config` JSON names it), else the selected one.
+    fn loot_filter(files: &Files, playstyle: Option<&str>) -> Option<Vec<u8>>
     where
         Self: Sized;
 

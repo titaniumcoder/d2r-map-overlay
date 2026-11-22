@@ -17,6 +17,9 @@ pub struct Files {
     pub state: Option<PathBuf>,
     /// No load messages: the web server loads per request, the start already reported them.
     pub quiet: bool,
+    /// The other playstyle folders beside `shipped` (folder name, path), by name: each is
+    /// loaded too, from its own files only ([`Files::only`]), for the characters that follow it.
+    pub others: Vec<(String, PathBuf)>,
 }
 
 impl Files {
@@ -29,6 +32,22 @@ impl Files {
             legacy: config_dir,
             state: crate::journal::data_dir(),
             quiet: false,
+            others: other_folders(name, &playstyle_roots()),
+        }
+    }
+
+    /// The files of another playstyle folder `dir`: its shipped files and the shared state
+    /// (selections, not-needed marks, switches); no user or old-place overrides, which belong
+    /// to the selected playstyle.
+    #[must_use]
+    pub fn only(&self, dir: &Path) -> Self {
+        Self {
+            shipped: Some(dir.to_path_buf()),
+            user: None,
+            legacy: None,
+            state: self.state.clone(),
+            quiet: self.quiet,
+            others: Vec::new(),
         }
     }
 
@@ -92,7 +111,12 @@ impl Files {
     /// The fixed files of each place plus its `builds/*.toml`, so added and removed builds show.
     fn watched_paths(&self) -> Vec<PathBuf> {
         let mut paths = Vec::new();
-        for dir in [&self.user, &self.legacy, &self.shipped].into_iter().flatten() {
+        let others = self.others.iter().map(|(_, dir)| dir);
+        for dir in [&self.user, &self.legacy, &self.shipped]
+            .into_iter()
+            .flatten()
+            .chain(others)
+        {
             paths.extend(["playstyle.toml", "farm.toml", "route.toml", "config.toml"].map(|f| dir.join(f)));
             if let Ok(entries) = std::fs::read_dir(dir.join("builds")) {
                 paths.extend(
@@ -169,6 +193,32 @@ fn find_shipped(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
     roots.iter().map(|root| root.join(name)).find(|dir| dir.is_dir())
 }
 
+/// Every playstyle folder (a plain name holding a `playstyle.toml`) of `roots` but `selected`,
+/// by name; the first root that has a name wins.
+fn other_folders(selected: &str, roots: &[PathBuf]) -> Vec<(String, PathBuf)> {
+    let mut found: Vec<(String, PathBuf)> = Vec::new();
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            if name == selected || found.iter().any(|(n, _)| *n == name) {
+                continue;
+            }
+            if let Some(dir) = find_shipped(&name, std::slice::from_ref(root))
+                && dir.join("playstyle.toml").is_file()
+            {
+                found.push((name, dir));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +261,44 @@ mod tests {
         assert_eq!(
             find_shipped("summoner-fury", &repo),
             Some(source_playstyles().join("summoner-fury"))
+        );
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn the_other_folders_are_the_playstyle_folders_but_the_selected_one() -> Result<()> {
+        let dir = temp_dir("playstyle-others")?;
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        for folder in [a.join("mine"), a.join("zeta"), b.join("zeta"), b.join("alpha")] {
+            write(&folder.join("playstyle.toml"), "name = \"X\"\n")?;
+        }
+        std::fs::create_dir_all(a.join("empty"))?;
+        std::fs::create_dir_all(a.join("bad name"))?;
+        write(&a.join("bad name/playstyle.toml"), "")?;
+        write(&a.join("file"), "")?;
+        let others = other_folders("mine", &[a.clone(), b.clone()]);
+        assert_eq!(
+            others,
+            vec![
+                ("alpha".to_owned(), b.join("alpha")),
+                ("zeta".to_owned(), a.join("zeta")),
+            ],
+            "sorted, the first root wins, no playstyle.toml or a bad name: none"
+        );
+        let files = Files {
+            shipped: Some(a.join("mine")),
+            state: Some(dir.join("data")),
+            others,
+            ..Files::default()
+        };
+        let before = files.fingerprint();
+        write(&b.join("alpha/builds/x.toml"), "name = \"X\"\n")?;
+        assert_ne!(before, files.fingerprint(), "another folder's build is watched");
+        let only = files.only(&b.join("alpha"));
+        assert_eq!(
+            (only.shipped, only.user, only.legacy, only.state, only.others),
+            (Some(b.join("alpha")), None, None, Some(dir.join("data")), vec![])
         );
         std::fs::remove_dir_all(&dir)?;
         Ok(())

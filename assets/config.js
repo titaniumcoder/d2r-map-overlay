@@ -13,11 +13,19 @@ function playedAgo(t) {
 }
 function capitalize(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 // The build options for a character of class `cls` (null: unknown): the builds of its class or
-// of any class, labelled with their stage chain; the selected one always stays in the list.
+// of any class, grouped by playstyle and labelled with their stage chain; the selected one
+// (`value`: "<playstyle>/<slug>") always stays in the list.
 function buildOptions(builds, cls, selected) {
-  return ['<option value="">none</option>']
-    .concat(builds.filter(b => b.slug === selected || !cls || !b.class || b.class === cls)
-      .map(b => `<option value="${esc(b.slug)}">${esc((b.chain || [b.name]).join(" \u2192 "))}</option>`))
+  const groups = new Map();
+  builds.filter(b => b.value === selected || !cls || !b.class || b.class === cls).forEach(b => {
+    const key = b.playstyle ? b.playstyle.key : "";
+    if (!groups.has(key)) groups.set(key, {name: b.playstyle ? b.playstyle.name || key : "", builds: []});
+    groups.get(key).builds.push(b);
+  });
+  const options = g => g.builds.map(b =>
+    `<option value="${esc(b.value || b.slug)}">${esc((b.chain || [b.name]).join(" \u2192 "))}</option>`).join("");
+  return ['<option value="">class default</option>']
+    .concat([...groups.values()].map(g => `<optgroup label="${esc(g.name)}">${options(g)}</optgroup>`))
     .join("");
 }
 async function load() {
@@ -32,7 +40,7 @@ async function load() {
     const shown = c.build_name
       ? (c.class_default ? `class default: ${esc(c.build_name)}` : `now: ${esc(c.build_name)}`)
       : "no build selected";
-    const meta = [c.class ? esc(capitalize(c.class)) : "", shown, playedAgo(c.last_played)]
+    const meta = [c.class ? esc(capitalize(c.class)) : "", esc(c.playstyle || ""), shown, playedAgo(c.last_played)]
       .filter(Boolean).join(" · ");
     div.innerHTML = `<span class="cname">${esc(c.name)}</span>`
       + `<select class="build-select">${buildOptions(builds, c.class, c.build)}</select>`
@@ -57,6 +65,7 @@ async function load() {
     root.appendChild(div);
   });
   renderNotNeeded(cfg.not_needed || []);
+  renderFilters(cfg.playstyles || []);
   const money = document.getElementById("money");
   money.checked = cfg.money_farming !== false;
   money.disabled = false;
@@ -104,23 +113,40 @@ async function saveBuild(name, build) {
   document.getElementById("err").textContent = r.ok ? "" : `build not saved: ${await r.text()}`;
   load();
 }
-// The playstyle's loot filter (GET /api/loot-filter): its profile name and a copy button. The
-// copied text is the response body as served (the exact file), never re-serialised.
-let filterText = null;
-async function loadFilter() {
-  const name = document.getElementById("filtername");
-  const button = document.getElementById("copyfilter");
+// One line per playstyle (cfg.playstyles): its loot filter's profile name (GET
+// /api/loot-filter?playstyle=<key>) and a copy button. The copied text is the response body as
+// served (the exact file), never re-serialised. Drawn once: a reload of the lists keeps them.
+let filtersDrawn = false;
+function renderFilters(playstyles) {
+  if (filtersDrawn) return;
+  filtersDrawn = true;
+  const root = document.getElementById("filters");
+  root.innerHTML = playstyles.length ? "" : '<div class="hint">no playstyle loaded</div>';
+  playstyles.forEach(p => {
+    const row = document.createElement("div");
+    row.innerHTML = '<span class="fname">loading\u2026</span> '
+      + '<button type="button" hidden>Copy filter JSON</button> <span class="hint"></span>';
+    root.appendChild(row);
+    loadFilter(p, row);
+  });
+}
+async function loadFilter(p, row) {
+  const name = row.querySelector(".fname");
+  const button = row.querySelector("button");
+  const status = row.querySelector(".hint");
+  const label = p.name || p.key;
   try {
-    const r = await fetch("/api/loot-filter");
+    const r = await fetch(`/api/loot-filter?playstyle=${encodeURIComponent(p.key)}`);
     if (!r.ok) {
-      name.textContent = r.status === 404 ? "no loot filter in this playstyle" : `loot filter: ${await r.text()}`;
+      name.textContent = r.status === 404 ? `${label}: no loot filter` : `${label}: ${await r.text()}`;
       return;
     }
-    filterText = await r.text();
+    const text = await r.text();
     let profile = "";
-    try { profile = JSON.parse(filterText).name || ""; } catch (e) { /* shown without a name */ }
-    name.textContent = `${profile || "unnamed profile"} \u2014 loot filter of this playstyle`;
+    try { profile = JSON.parse(text).name || ""; } catch (e) { /* shown without a name */ }
+    name.textContent = `${profile || "unnamed profile"} \u2014 loot filter of ${label}`;
     button.hidden = false;
+    button.addEventListener("click", () => copyFilter(text, status));
   } catch (e) {
     name.textContent = "loot filter not loaded (overlay not running?)";
   }
@@ -128,18 +154,17 @@ async function loadFilter() {
 let copiedTimer = null;
 // The click handler itself calls writeText (the clipboard needs the user's gesture; localhost
 // is a secure context). Refused: the JSON goes in a read-only, selected textarea instead.
-async function copyFilter() {
-  if (filterText == null) return;
-  const status = document.getElementById("filterstatus");
+async function copyFilter(text, status) {
   const box = document.getElementById("filterbox");
   clearTimeout(copiedTimer);
+  document.querySelectorAll("#filters .hint").forEach(s => { s.textContent = ""; });
   try {
-    await navigator.clipboard.writeText(filterText);
+    await navigator.clipboard.writeText(text);
     box.hidden = true;
     status.textContent = "Copied";
     copiedTimer = setTimeout(() => { status.textContent = ""; }, 3000);
   } catch (e) {
-    box.value = filterText;
+    box.value = text;
     box.hidden = false;
     box.focus();
     box.select();
@@ -147,4 +172,3 @@ async function copyFilter() {
   }
 }
 load();
-loadFilter();

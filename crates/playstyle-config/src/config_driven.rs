@@ -1,4 +1,5 @@
-//! The playstyle read from the playstyle folder's files ([`crate::files`]).
+//! The playstyles read from the playstyle folders' files ([`crate::files`]): the selected one
+//! and every other folder beside it, each character following one of them.
 
 use d2r_core::build;
 use d2r_core::game::{ItemDrop, Snapshot};
@@ -7,56 +8,183 @@ use d2r_core::played::Played;
 use d2r_core::playstyle::{Evaluation, EvaluationOf, Files, Playstyle};
 use d2r_core::web::{LiveInfo, Panels};
 
-use crate::config::{Settings, Stage};
-use crate::stash_plan::Wants;
+use crate::config::{Settings, Stage, owns_nothing, playstyle_of};
+use crate::stash_plan::{Other, Others, Wants};
 use crate::{files, marks, stash_plan, web};
 
-/// The playstyle of the folder's files: the character's selected build (else its class's
-/// default) followed along its stage chain, the farm list and the valuables tiers.
+/// The playstyles of the folders' files: each character's playstyle (its selection, else the
+/// one with a default build for its class, else the selected one), its selected build (else
+/// its class's default) followed along its stage chain, the farm list and the valuables tiers.
+/// The shared stash keeps for the other characters and playstyles too.
 #[derive(Debug, Clone, Default)]
 pub struct ConfigDriven {
+    /// The playstyle `config.toml` selects, with the user's and old-place overrides.
+    selected: Folder,
+    /// The other playstyle folders beside it ([`Files::others`]), by name.
+    others: Vec<Folder>,
+}
+
+/// One playstyle folder's settings.
+#[derive(Debug, Clone, Default)]
+struct Folder {
+    /// The folder's name: how a selection (`"<key>/<slug>"`) and the `/config` page name it.
+    key: String,
     config: Settings,
+}
+
+/// The wants of one evaluation and the playstyle (folder name) whose mark tiers apply to them
+/// ([`Playstyle::Wants`]); the default is the selected playstyle's.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlaystyleWants {
+    playstyle: String,
+    wants: Wants,
 }
 
 /// The evaluation's part only the panels read ([`Playstyle::Extra`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Extra<'a> {
+    /// The character's playstyle.
+    pub config: &'a Settings,
     /// The character's current stage, for the build panels.
     pub stage: Option<Stage<'a>>,
     /// The names of the current stage and its later ones, for the farm panel.
     pub chain: Vec<String>,
 }
 
-impl Playstyle for ConfigDriven {
-    type Wants = Wants;
-    type Extra<'a> = Extra<'a>;
+/// Each folder's files: the selected one's as given, every other one's own files only.
+fn folder_files(files: &Files) -> Vec<(String, Files)> {
+    let key = files
+        .shipped
+        .as_deref()
+        .and_then(|dir| dir.file_name()?.to_str())
+        .unwrap_or("default")
+        .to_owned();
+    let selected = Files {
+        others: Vec::new(),
+        ..files.clone()
+    };
+    std::iter::once((key, selected))
+        .chain(
+            files
+                .others
+                .iter()
+                .map(|(key, dir)| (key.clone(), files.only(dir))),
+        )
+        .collect()
+}
 
-    fn load(files: &Files) -> Self {
-        Self {
-            config: files::load(files),
+impl ConfigDriven {
+    /// The selected playstyle first, then the others.
+    fn folders(&self) -> Vec<(&str, &Settings)> {
+        std::iter::once(&self.selected)
+            .chain(&self.others)
+            .map(|f| (f.key.as_str(), &f.config))
+            .collect()
+    }
+
+    /// The playstyle (folder name and settings) character `name` of class `class` follows.
+    fn playstyle_of(&self, name: &str, class: Option<u32>) -> (&str, &Settings) {
+        playstyle_of(&self.folders(), name, class).unwrap_or((&self.selected.key, &self.selected.config))
+    }
+
+    /// The selections live in the selected playstyle's files (an old `config.toml` may hold
+    /// some): every playstyle reads the same ones.
+    fn share_selections(&mut self) {
+        for other in &mut self.others {
+            other.config.bis.clone_from(&self.selected.config.bis);
         }
     }
 
+    /// The other own characters in `played` (not `me`; class known), by the playstyle they
+    /// follow, for the playing character's playstyle `mine`; every other playstyle is listed,
+    /// with or without characters (its farm list counts).
+    fn others(&self, me: &str, mine: &str, played: &Played) -> Others<'_> {
+        let folders = self.folders();
+        let mut others = Others {
+            alongside: Vec::new(),
+            playstyles: folders
+                .iter()
+                .filter(|(key, _)| *key != mine)
+                .map(|(_, config)| (*config, Vec::new()))
+                .collect(),
+        };
+        for (key, entry) in played {
+            let Some(class) = entry.class.filter(|_| *key != me.to_lowercase()) else {
+                continue;
+            };
+            let (folder, config) = self.playstyle_of(key, Some(class));
+            let reached = entry.stage.as_deref();
+            let Some(stage) = config.stage(key, Some(class), entry.level, &owns_nothing, reached) else {
+                continue;
+            };
+            let other = Other {
+                chain: config.stage_chain(stage.slug),
+                class,
+                level: entry.level,
+                worn: entry.worn.clone(),
+            };
+            if folder == mine {
+                others.alongside.push(other);
+            } else if let Some((_, members)) = others
+                .playstyles
+                .iter_mut()
+                .find(|(c, _)| std::ptr::eq(*c, config))
+            {
+                members.push(other);
+            }
+        }
+        others
+    }
+}
+
+impl Playstyle for ConfigDriven {
+    type Wants = PlaystyleWants;
+    type Extra<'a> = Extra<'a>;
+
+    fn load(files: &Files) -> Self {
+        let mut folders = folder_files(files).into_iter().map(|(key, files)| Folder {
+            config: files::load(&files),
+            key,
+        });
+        let mut playstyle = Self {
+            selected: folders.next().unwrap_or_default(),
+            others: folders.collect(),
+        };
+        playstyle.share_selections();
+        playstyle
+    }
+
     fn reload(&mut self, files: &Files) {
-        files::reload(&mut self.config, files);
+        let folders = folder_files(files);
+        let mine = std::iter::once(&mut self.selected).chain(&mut self.others);
+        for (folder, (_, files)) in mine.zip(&folders) {
+            files::reload(&mut folder.config, files);
+        }
+        self.share_selections();
     }
 
-    fn mark_drops(&self, drops: &mut Vec<ItemDrop>, wants: &Wants) -> Marks {
-        marks::apply(drops, &self.config.valuables, wants)
+    fn mark_drops(&self, drops: &mut Vec<ItemDrop>, wants: &PlaystyleWants) -> Marks {
+        let config = self
+            .others
+            .iter()
+            .find(|f| f.key == wants.playstyle)
+            .map_or(&self.selected.config, |f| &f.config);
+        marks::apply(drops, &config.valuables, &wants.wants)
     }
 
-    fn evaluate(&self, snap: &Snapshot, reached: Option<&str>) -> EvaluationOf<'_, Self> {
-        let config = &self.config;
+    fn evaluate(&self, snap: &Snapshot, reached: Option<&str>, played: &Played) -> EvaluationOf<'_, Self> {
         let (class, level) = (Some(snap.player.class), snap.player.char_level);
+        let name = snap.player.name.as_str();
+        let (folder, config) = self.playstyle_of(name, class);
         let holdings = snap.holdings();
         let owns = |item: &str| holdings.count(item);
-        let name = snap.player.name.as_str();
         let damages = config.damages_for_player(name, class, level, &owns, reached);
         let stage = config.stage(name, class, level, &owns, reached);
         let bis = config.resolved_bis(name, class, level, &owns, reached);
         let moved_on = stage_to_remember(config, stage, reached);
         let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
-        let (items, wants) = stash_plan::for_snapshot(snap, config, &chain, bis.as_ref());
+        let others = self.others(name, folder, played);
+        let (items, wants) = stash_plan::for_snapshot(snap, config, &chain, bis.as_ref(), &others);
         Evaluation {
             guidance: Guidance {
                 rating: build::rate(snap.level.id, snap.difficulty, damages),
@@ -64,26 +192,30 @@ impl Playstyle for ConfigDriven {
                 items,
                 marks: Marks::new(),
             },
-            wants,
+            wants: PlaystyleWants {
+                playstyle: folder.to_owned(),
+                wants,
+            },
             reached: moved_on,
-            extra: Extra { stage, chain },
+            extra: Extra { config, stage, chain },
         }
     }
 
     fn panels<'a>(&'a self, evaluation: &'a EvaluationOf<'_, Self>, info: &LiveInfo<'a>) -> Panels<'a> {
         let extra = &evaluation.extra;
+        let config = extra.config;
         let mut panels = web::panels(&web::PanelInfo {
             live: *info,
             bis: evaluation.guidance.bis.as_ref(),
             build: extra.stage.map(|s| s.build),
             stage: extra.stage,
-            farm: &self.config.farm,
-            route: &self.config.route,
+            farm: &config.farm,
+            route: &config.route,
             stage_chain: &extra.chain,
-            not_needed: &self.config.not_needed,
+            not_needed: &config.not_needed,
         });
         if let Some(shop) = info.shop {
-            let marks = marks::shop_marks(shop, &evaluation.wants, self.config.valuables.money);
+            let marks = marks::shop_marks(shop, &evaluation.wants.wants, config.valuables.money);
             for (note, mark) in panels.shop.iter_mut().zip(marks) {
                 note.mark = mark;
             }
@@ -92,11 +224,11 @@ impl Playstyle for ConfigDriven {
     }
 
     fn config_json(&self, played: &Played) -> serde_json::Value {
-        web::config_page::config_json(&self.config, played)
+        web::config_page::config_json(&self.folders(), played)
     }
 
     fn builds_json(&self) -> serde_json::Value {
-        web::config_page::builds_json(&self.config)
+        web::config_page::builds_json(&self.folders())
     }
 
     fn select_build(files: &Files, name: &str, build: Option<&str>) -> anyhow::Result<()> {
@@ -111,7 +243,12 @@ impl Playstyle for ConfigDriven {
         files::set_money_farming(files, on)
     }
 
-    fn loot_filter(files: &Files) -> Option<Vec<u8>> {
+    fn loot_filter(files: &Files, playstyle: Option<&str>) -> Option<Vec<u8>> {
+        let folders = folder_files(files);
+        let (_, files) = match playstyle {
+            Some(key) => folders.iter().find(|(k, _)| k == key)?,
+            None => folders.first()?,
+        };
         files::loot_filter(files)
     }
 
@@ -152,7 +289,7 @@ mod tests {
             quiet: true,
             ..Files::default()
         });
-        let wants = playstyle.evaluate(&snap, None).wants;
+        let wants = playstyle.evaluate(&snap, None, &Played::new()).wants;
         let mut drops = snap.drops.clone();
         let marks = playstyle.mark_drops(&mut drops, &wants);
         let got: Vec<_> = drops
@@ -178,7 +315,7 @@ mod tests {
             "the Long Sword 0os is gone"
         );
         let mut drops = snap.drops;
-        let marks = playstyle.mark_drops(&mut drops, &Wants::default());
+        let marks = playstyle.mark_drops(&mut drops, &PlaystyleWants::default());
         let kinds: Vec<_> = drops
             .iter()
             .map(|d| (d.code.as_deref(), marks.get(&d.id).map(|m| m.kind)))
