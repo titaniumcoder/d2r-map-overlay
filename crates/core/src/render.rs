@@ -1657,7 +1657,7 @@ fn draw_mark_ring(pm: &mut Pixmap, ring: Marker, circle: &Path, (cx, cy, size): 
 
 /// Whether a marked drop sells for a lot to other players: a trade-category (not twink)
 /// valuables match of at least [`COIN_MIN_TIER`].
-fn high_value(mark: &Mark) -> bool {
+pub(crate) fn high_value(mark: &Mark) -> bool {
     matches!(mark.trade, Some((tier, Category::Trade)) if tier >= COIN_MIN_TIER)
 }
 

@@ -1,0 +1,463 @@
+//! In-game UI marks: a click-through layer over the whole screen that points at things in the
+//! game's own windows. While a vendor trade window is open it lists the worthwhile store items
+//! in a box at the top centre. Frames around grid cells take screen rectangles; none are drawn
+//! yet (the vendor and stash grids are not calibrated).
+
+use ab_glyph::FontVec;
+use tiny_skia::{Paint, PathBuilder, Pixmap, Rect as SkRect, Stroke, Transform};
+
+use crate::guidance::MarkKind;
+use crate::offsets::stat_list;
+use crate::shop::{Shop, ShopItem};
+use crate::web::ShopNote;
+use crate::{info, render};
+
+pub type Rgba = [u8; 4];
+
+/// px from the screen top to the box, which the layer centres horizontally: the vendor window
+/// is on the left half, the inventory on the right. To tune after the calibration screenshots.
+pub const BOX_TOP: u32 = 12;
+/// Lines in the box, the "+N more" line included.
+pub const MAX_LINES: usize = 8;
+/// A build piece, an upgrade over the worn item, or a runeword base the builds want.
+pub const BUILD: Rgba = [120, 235, 130, 255];
+/// Sells for a lot (a valuables match that gets the coin on the map).
+pub const MONEY: Rgba = [255, 205, 40, 255];
+const MORE: Rgba = [200, 200, 200, 255];
+const BACKDROP: Rgba = [0, 0, 0, 170];
+const TEXT_PX: f32 = 15.0;
+/// px between the box edge and its text.
+const PAD: f32 = 6.0;
+/// px between two lines.
+const LINE_GAP: f32 = 3.0;
+const FRAME_WIDTH: f32 = 2.0;
+
+/// A rectangle in screen px (the layer covers the whole output, so surface px are screen px).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Line {
+    pub text: String,
+    pub colour: Rgba,
+}
+
+/// What the layer shows: frames around screen rectangles and the text box's lines.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UiMarks {
+    pub frames: Vec<(Rect, Rgba)>,
+    pub lines: Vec<Line>,
+}
+
+impl UiMarks {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.frames.is_empty() && self.lines.is_empty()
+    }
+}
+
+/// Why a store item is listed, in the box's order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Pick {
+    Piece,
+    Better,
+    Base,
+    Money,
+}
+
+/// The open trade window's worthwhile items (`notes` in window order, as the dashboard's
+/// Vendor panel has them): build pieces, upgrades, wanted runeword bases, then money items;
+/// identical lines once.
+#[must_use]
+pub fn vendor(shop: &Shop, notes: &[ShopNote]) -> UiMarks {
+    let mut picks: Vec<(Pick, String)> = Vec::new();
+    for (item, note) in shop.items.iter().zip(notes) {
+        let Some(pick) = pick(note) else {
+            continue;
+        };
+        let line = (pick, short_name(item));
+        if !picks.contains(&line) {
+            picks.push(line);
+        }
+    }
+    picks.sort_by_key(|(pick, _)| *pick);
+    let hidden = if picks.len() > MAX_LINES {
+        picks.len() - (MAX_LINES - 1)
+    } else {
+        0
+    };
+    let mut lines: Vec<Line> = picks
+        .into_iter()
+        .take(MAX_LINES)
+        .map(|(pick, text)| Line {
+            text,
+            colour: if pick == Pick::Money { MONEY } else { BUILD },
+        })
+        .collect();
+    if hidden > 0 {
+        lines.truncate(MAX_LINES - 1);
+        lines.push(Line {
+            text: format!("+{hidden} more"),
+            colour: MORE,
+        });
+    }
+    UiMarks {
+        frames: Vec::new(),
+        lines,
+    }
+}
+
+fn pick(note: &ShopNote) -> Option<Pick> {
+    if note.slot.is_some() {
+        return Some(Pick::Piece);
+    }
+    if note.why.is_some() {
+        return Some(Pick::Better);
+    }
+    let mark = note.mark.as_ref()?;
+    if mark.kind == MarkKind::Keep {
+        return Some(Pick::Base);
+    }
+    render::high_value(mark).then_some(Pick::Money)
+}
+
+/// The game's name plus the socket count: "Crystal Sword 4os".
+fn short_name(item: &ShopItem) -> String {
+    let sockets = item
+        .stats
+        .iter()
+        .find(|s| s.id == stat_list::NUM_SOCKETS)
+        .map_or(0, |s| s.value);
+    if sockets > 0 {
+        format!("{} {sockets}os", item.name)
+    } else {
+        item.name.clone()
+    }
+}
+
+/// The layer's picture at the screen size `(width, height)`; `None` when there is nothing to
+/// show (or no size yet).
+#[must_use]
+pub fn render(marks: &UiMarks, (width, height): (u32, u32), font: &FontVec) -> Option<Pixmap> {
+    if marks.is_empty() {
+        return None;
+    }
+    let mut pm = Pixmap::new(width, height)?;
+    for (rect, colour) in &marks.frames {
+        draw_frame(&mut pm, *rect, *colour);
+    }
+    draw_box(&mut pm, &marks.lines, font);
+    Some(pm)
+}
+
+fn draw_frame(pm: &mut Pixmap, rect: Rect, colour: Rgba) {
+    let inset = FRAME_WIDTH / 2.0;
+    let Some(r) = SkRect::from_xywh(
+        px(rect.x) + inset,
+        px(rect.y) + inset,
+        px(rect.w) - FRAME_WIDTH,
+        px(rect.h) - FRAME_WIDTH,
+    ) else {
+        return;
+    };
+    let stroke = Stroke {
+        width: FRAME_WIDTH,
+        ..Stroke::default()
+    };
+    pm.stroke_path(
+        &PathBuilder::from_rect(r),
+        &paint(colour),
+        &stroke,
+        Transform::identity(),
+        None,
+    );
+}
+
+/// The lines left-aligned on a dark backdrop, the box centred [`BOX_TOP`] px below the top.
+fn draw_box(pm: &mut Pixmap, lines: &[Line], font: &FontVec) {
+    if lines.is_empty() {
+        return;
+    }
+    let size = info::label_size_at(font, TEXT_PX, "");
+    let row = size.ascent - size.descent + LINE_GAP;
+    let widest = lines
+        .iter()
+        .map(|l| info::label_size_at(font, TEXT_PX, &l.text).width)
+        .fold(0.0, f32::max);
+    let (w, h) = (
+        2.0f32.mul_add(PAD, widest),
+        2.0f32.mul_add(PAD, row.mul_add(count(lines.len()), -LINE_GAP)),
+    );
+    let x = ((px(pm.width()) - w) / 2.0).max(0.0);
+    let y = px(BOX_TOP);
+    if let Some(r) = SkRect::from_xywh(x, y, w, h) {
+        pm.fill_rect(r, &paint(BACKDROP), Transform::identity(), None);
+    }
+    let mut baseline = y + PAD + size.ascent;
+    for line in lines {
+        info::draw_label_at(pm, font, TEXT_PX, line.colour, &line.text, (x + PAD, baseline));
+        baseline += row;
+    }
+}
+
+fn paint([r, g, b, a]: Rgba) -> Paint<'static> {
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(r, g, b, a);
+    paint.anti_alias = true;
+    paint
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "at most MAX_LINES lines, far below f32's exact integers"
+)]
+const fn count(n: usize) -> f32 {
+    n as f32
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "screen px, far below f32's exact integers"
+)]
+const fn px(n: u32) -> f32 {
+    n as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::guidance::{Category, Mark, Tier};
+    use crate::item_stats::ItemStat;
+    use crate::shop::shop_item;
+    use anyhow::{Context, Result};
+
+    fn note(slot: Option<&str>, why: Option<&str>, mark: Option<Mark>) -> ShopNote {
+        ShopNote {
+            slot: slot.map(str::to_owned),
+            why: why.map(str::to_owned),
+            mark,
+        }
+    }
+
+    fn mark(kind: MarkKind, trade: Option<(Tier, Category)>) -> Mark {
+        Mark {
+            kind,
+            trade,
+            rule: String::new(),
+            label: String::new(),
+            uncertain: false,
+        }
+    }
+
+    fn shop(items: Vec<ShopItem>) -> Shop {
+        Shop {
+            npc_txt: 0,
+            npc: None,
+            items,
+        }
+    }
+
+    fn socketed(code: &str, sockets: i32) -> ShopItem {
+        let mut item = shop_item(Some(code), 2, 1, 0, 0);
+        item.stats = vec![ItemStat {
+            id: stat_list::NUM_SOCKETS,
+            param: 0,
+            value: sockets,
+            base: false,
+        }];
+        item
+    }
+
+    fn texts(marks: &UiMarks) -> Vec<(&str, Rgba)> {
+        marks.lines.iter().map(|l| (l.text.as_str(), l.colour)).collect()
+    }
+
+    #[test]
+    fn worthwhile_items_build_first_money_last_and_the_rest_left_out() {
+        let shop = shop(vec![
+            shop_item(Some("wnd"), 4, 1, 0, 0),
+            shop_item(Some("hp1"), 2, 3, 0, 0),
+            socketed("crs", 4),
+            shop_item(Some("vgl"), 2, 0, 0, 0),
+            shop_item(Some("lbw"), 2, 1, 0, 0),
+            shop_item(Some("bst"), 2, 1, 0, 0),
+            shop_item(Some("wnd"), 4, 1, 0, 0),
+        ]);
+        let notes = [
+            note(
+                None,
+                None,
+                Some(mark(MarkKind::Trade, Some((Tier::A, Category::Trade)))),
+            ),
+            note(None, None, None),
+            note(None, None, Some(mark(MarkKind::Keep, None))),
+            note(Some("gloves"), None, None),
+            note(None, Some("+4 avg dmg"), None),
+            note(
+                None,
+                None,
+                Some(mark(MarkKind::Trade, Some((Tier::B, Category::Trade)))),
+            ),
+            note(
+                None,
+                None,
+                Some(mark(MarkKind::Trade, Some((Tier::S, Category::Trade)))),
+            ),
+        ];
+        assert_eq!(
+            texts(&vendor(&shop, &notes)),
+            [
+                ("Heavy Gloves", BUILD),
+                ("Long Bow", BUILD),
+                ("Crystal Sword 4os", BUILD),
+                ("Wand", MONEY),
+            ],
+            "piece, better, base, money; the potion, a B match and the second same wand left out"
+        );
+    }
+
+    #[test]
+    fn a_twink_match_is_no_money() {
+        let shop = shop(vec![socketed("crs", 4)]);
+        let notes = [note(
+            None,
+            None,
+            Some(mark(MarkKind::Trade, Some((Tier::S, Category::Twink)))),
+        )];
+        assert!(vendor(&shop, &notes).is_empty());
+    }
+
+    #[test]
+    fn too_many_end_in_a_more_line() {
+        let items: Vec<ShopItem> = (2..=11).map(|n| socketed("crs", n)).collect();
+        let notes: Vec<ShopNote> = items.iter().map(|_| note(Some("weapon"), None, None)).collect();
+        let marks = vendor(&shop(items), &notes);
+        assert_eq!(marks.lines.len(), MAX_LINES);
+        assert_eq!(
+            marks.lines.last().map(|l| (l.text.as_str(), l.colour)),
+            Some(("+3 more", MORE))
+        );
+        let eight: Vec<ShopItem> = (2..=9).map(|n| socketed("crs", n)).collect();
+        let notes: Vec<ShopNote> = eight.iter().map(|_| note(Some("weapon"), None, None)).collect();
+        let marks = vendor(&shop(eight), &notes);
+        assert_eq!(marks.lines.len(), MAX_LINES, "exactly eight fit");
+        assert!(marks.lines.iter().all(|l| l.colour == BUILD));
+    }
+
+    /// Pixels close to `colour` inside `area` (x0, y0, x1, y1 exclusive): (count, x range).
+    fn tinted(pm: &Pixmap, area: (u32, u32, u32, u32), colour: Rgba) -> (u32, u32, u32) {
+        let mut found = (0, u32::MAX, 0);
+        for y in area.1..area.3.min(pm.height()) {
+            for x in area.0..area.2.min(pm.width()) {
+                let Some(p) = pm.pixel(x, y).map(|p| p.demultiply()) else {
+                    continue;
+                };
+                let near = |a: u8, b: u8| a.abs_diff(b) <= 30;
+                if p.alpha() >= 200
+                    && near(p.red(), colour[0])
+                    && near(p.green(), colour[1])
+                    && near(p.blue(), colour[2])
+                {
+                    found = (found.0 + 1, found.1.min(x), found.2.max(x));
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn nothing_to_show_is_no_picture() {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return;
+        };
+        assert!(render(&UiMarks::default(), (800, 600), font).is_none());
+        let line = UiMarks {
+            frames: Vec::new(),
+            lines: vec![Line {
+                text: "Wand".into(),
+                colour: MONEY,
+            }],
+        };
+        assert!(render(&line, (0, 0), font).is_none(), "no screen size yet");
+    }
+
+    #[test]
+    fn the_box_sits_top_centre_in_its_colours() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let marks = UiMarks {
+            frames: Vec::new(),
+            lines: vec![
+                Line {
+                    text: "Heavy Gloves".into(),
+                    colour: BUILD,
+                },
+                Line {
+                    text: "Wand".into(),
+                    colour: MONEY,
+                },
+            ],
+        };
+        let (w, h) = (1000, 600);
+        let pm = render(&marks, (w, h), font).context("a picture for two lines")?;
+        assert_eq!((pm.width(), pm.height()), (w, h));
+        let top = (0, BOX_TOP, w, BOX_TOP + 60);
+        let (green, g_left, g_right) = tinted(&pm, top, BUILD);
+        let (gold, o_left, _) = tinted(&pm, top, MONEY);
+        assert!(green >= 20, "only {green} green pixels");
+        assert!(gold >= 10, "only {gold} gold pixels");
+        assert!(
+            g_left.abs_diff(o_left) <= 2,
+            "left-aligned lines: {g_left} vs {o_left}"
+        );
+        let (left, right) = (g_left, w - 1 - g_right);
+        assert!(
+            left.abs_diff(right) <= 2 * 6 + 2,
+            "the box (widest line) centred: {left} vs {right}"
+        );
+        let backdrop = pm.pixel(w / 2, BOX_TOP + 2).context("a pixel")?;
+        assert!(backdrop.alpha() >= 150, "a dark backdrop behind the text");
+        let below =
+            tinted(&pm, (0, BOX_TOP + 60, w, h), BUILD).0 + tinted(&pm, (0, BOX_TOP + 60, w, h), MONEY).0;
+        assert_eq!(below, 0, "nothing below the box");
+        let corner = pm.pixel(5, h - 5).context("a pixel")?;
+        assert_eq!(corner.alpha(), 0, "the rest of the screen stays clear");
+        Ok(())
+    }
+
+    #[test]
+    fn frames_go_around_their_screen_rectangles() -> Result<()> {
+        let Some(font) = info::font() else {
+            eprintln!("skipped: no info-line font on this machine");
+            return Ok(());
+        };
+        let cell = Rect {
+            x: 100,
+            y: 200,
+            w: 40,
+            h: 40,
+        };
+        let marks = UiMarks {
+            frames: vec![(cell, BUILD)],
+            lines: Vec::new(),
+        };
+        let pm = render(&marks, (400, 400), font).context("a picture for a frame")?;
+        let edge = tinted(&pm, (100, 200, 140, 202), BUILD);
+        assert_eq!((edge.1, edge.2), (100, 139), "the top edge spans the cell");
+        assert_eq!(
+            tinted(&pm, (104, 204, 136, 236), BUILD).0,
+            0,
+            "the cell's inside stays clear"
+        );
+        assert_eq!(tinted(&pm, (0, 0, 400, 30), BUILD).0, 0, "no box without lines");
+        Ok(())
+    }
+}

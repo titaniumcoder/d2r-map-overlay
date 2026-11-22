@@ -43,6 +43,7 @@ pub mod stash;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
 pub mod tombs;
+pub mod ui_marks;
 pub mod weapons_data;
 pub mod web;
 pub mod xp;
