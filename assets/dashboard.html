@@ -52,7 +52,7 @@ a { color: var(--gold); text-decoration: none; } a:hover { text-decoration: unde
 .targets li { font-size: 12px; background: rgba(200,168,90,.08); border: 1px solid rgba(200,168,90,.3);
   color: var(--text); border-radius: 6px; padding: 3px 8px; }
 .row-h { margin: 16px 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); font-weight: 600; }
-#mercbox .gear + .gear { margin-top: 10px; }
+#mercbox .gear + .gear, #nextmercbox .gear + .gear { margin-top: 10px; }
 details.alts { margin-top: 2px; }
 details.alts > summary { cursor: pointer; font-size: 11.5px; color: var(--faint); padding: 2px 0; }
 details.alts[open] > summary { margin-bottom: 5px; }
@@ -100,6 +100,11 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .pc.better .lv::before { content: "▲ "; color: var(--good); }
 .pc.too_high { opacity: .5; }
 .pc.worse { opacity: .38; } .pc.worse .nm { text-decoration: line-through; }
+.charmcard { grid-column: 1 / -1; }
+.charmcard .pieces { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 5px 8px; align-items: start; }
+.pc .lv.at { opacity: .55; }
+.pc .craft { font-size: 11.5px; color: var(--good); }
+.pc .sub.miss { color: var(--bad); }
 .badge { font-size: 10px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--dim); }
 .badge.now { color: var(--good); border-color: currentColor; }
 
@@ -278,6 +283,14 @@ Each card is a slot. The dashed box shows what is equipped (name and required le
 <div id="gearhidden"></div>
 <div id="mercbox"><h3 class="row-h">Mercenary · charms · sockets</h3>
 <div class="gear" id="merc"></div><div class="gear extras" id="charms"></div><div class="gear extras" id="extras"></div></div></div></section>
+<section class="panel full" id="nextpanel" hidden><h2>Next stage: <span id="nextname"></span> <span class="sub" id="nextlevel"></span></h2>
+<details class="help"><summary>How to read this</summary>
+The next build's gear, per slot. Up front: what you already have (✓ worn, ✓ owned = carried, cube, stash or on the mercenary, ✓ stash = shared stash) or can craft now (every rune held and a fitting socketed base, named with where it lies); “at 75” = above your level. Folded under “alternatives”: every other piece of the slot, with the runes still missing and the base. ✕ = not needed for that build.
+</details>
+<div class="gear" id="nextgear"></div>
+<div id="nexthidden"></div>
+<div id="nextmercbox"><h3 class="row-h">Mercenary · charms</h3>
+<div class="gear" id="nextmerc"></div><div class="gear extras" id="nextcharms"></div></div></section>
 <section class="panel full" id="recipepanel" hidden><h2>Recipes <span class="sub">✓ = you have it (shared stash, inventory, cube, stash) · bases can't be read: check them</span></h2>
 <div id="recipes"></div></section>
 <section class="panel full" id="farmpanel" hidden><h2>Farm list <span class="sub">still missing across characters (held ones left out) · runes short in red · where = where it drops in this difficulty · ⚑ in the stash runes = needed</span></h2>

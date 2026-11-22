@@ -16,7 +16,7 @@ use crate::config::{Bis, Recipe};
 /// The gear grid's columns in the user's two rows of five (the Ring column goes in at
 /// [`RING_COLUMN_AT`]): title, build slot, `ItemData::BODY` slots of its header. Swap shares
 /// body 4 with Weapons: only the active weapon set is read.
-const GRID_COLUMNS: [(&str, &str, &[u8]); 9] = [
+pub(super) const GRID_COLUMNS: [(&str, &str, &[u8]); 9] = [
     ("Helm", "helm", &[1]),
     ("Body", "body", &[3]),
     ("Hands", "gloves", &[10]),
@@ -28,10 +28,10 @@ const GRID_COLUMNS: [(&str, &str, &[u8]); 9] = [
     ("Swap", "swap", &[4]),
 ];
 
-const RING_COLUMN_AT: usize = 6;
+pub(super) const RING_COLUMN_AT: usize = 6;
 
 /// The mercenary's grid columns: title, build slot, body slot.
-const MERC_COLUMNS: [(&str, &str, u8); 4] = [
+pub(super) const MERC_COLUMNS: [(&str, &str, u8); 4] = [
     ("Merc weapon", "weapon", 4),
     ("Merc off-hand", "offhand", 5),
     ("Merc body", "body", 3),
@@ -626,7 +626,7 @@ pub fn gear_json(info: &PanelInfo) -> serde_json::Value {
             grid_column(title, info.bis.and_then(|b| b.slots.get(slot)), bodies, info)
         })
         .collect();
-    let ring_pieces = ring_pieces(info);
+    let ring_pieces = ring_pieces(info.bis.map(|b| &b.slots));
     columns.insert(
         RING_COLUMN_AT,
         grid_column("Ring", Some(&ring_pieces), &[6, 7], info),
@@ -679,8 +679,18 @@ fn charms_json(info: &PanelInfo) -> Vec<serde_json::Value> {
             }
         }
     }
+    charm_wishes_json(&wishes, info.build, info)
+}
+
+/// The charm cards of `wishes`, each with the later build it is for (`None`: the build `own`,
+/// whose `[pieces]` details a unique charm shows).
+pub(super) fn charm_wishes_json(
+    wishes: &[(&crate::charms::CharmWish, Option<&crate::config::Build>)],
+    own: Option<&crate::config::Build>,
+    info: &PanelInfo,
+) -> Vec<serde_json::Value> {
     let held = crate::stash_plan::held_from(info.live.owned_items, info.live.stash);
-    let refs: Vec<&CharmWish> = wishes.iter().map(|&(w, _)| w).collect();
+    let refs: Vec<&crate::charms::CharmWish> = wishes.iter().map(|&(w, _)| w).collect();
     let have = crate::charms::found(&refs, held.iter().map(|h| &h.item), Some(info.live.class));
     wishes
         .iter()
@@ -701,7 +711,7 @@ fn charms_json(info: &PanelInfo) -> Vec<serde_json::Value> {
                 "stage": later.map(|b| b.name.as_str()),
             });
             if wish.unique {
-                add_piece_details(&mut json, &wish.name, later.or(info.build));
+                add_piece_details(&mut json, &wish.name, later.or(own));
             }
             if let Some(obj) = json.as_object_mut() {
                 // A unique charm's piece is a guide alternative: here it is simply wanted.
@@ -715,15 +725,11 @@ fn charms_json(info: &PanelInfo) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// The pieces of both ring slots, deduplicated, best first.
-fn ring_pieces(info: &PanelInfo) -> Vec<String> {
+/// The pieces of both ring slots of `slots`, deduplicated, best first.
+pub(super) fn ring_pieces(slots: Option<&std::collections::BTreeMap<String, Vec<String>>>) -> Vec<String> {
     let mut pieces: Vec<String> = Vec::new();
     for slot in ["ring1", "ring2"] {
-        for piece in info
-            .bis
-            .and_then(|b| b.slots.get(slot))
-            .map_or(&[][..], Vec::as_slice)
-        {
+        for piece in slots.and_then(|s| s.get(slot)).map_or(&[][..], Vec::as_slice) {
             if !pieces.contains(piece) {
                 pieces.push(piece.clone());
             }

@@ -49,17 +49,21 @@ function piece(p, build) {
   const tick = p.tick === "worn" ? ' <span class="tick">✓</span>'
     : p.tick === "owned" ? ' <span class="tick have">✓ owned</span>'
     : p.tick === "stash" ? ' <span class="tick have">✓ stash</span>' : "";
-  const lvl = p.level != null ? `<span class="lv">lvl ${p.level}</span>` : "";
+  // The next stage's pieces: a level above the character's reads "at 75", dimmed.
+  const lvl = p.level == null ? "" : p.at ? `<span class="lv at">at ${p.level}</span>` : `<span class="lv">lvl ${p.level}</span>`;
   const sub = p.runes
     ? `<div class="sub">${esc(p.runes.join(" "))}${p.base_hint ? " · " + esc(p.base_hint) : p.bases && p.bases.length ? " · " + esc(p.bases.join(", ")) : ""}</div>`
     : p.base ? `<div class="sub">${esc(p.base)}</div>` : "";
   const stats = p.stats && p.stats.length
     ? `<ul class="st">${p.stats.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : "";
+  const make = (p.craft ? `<div class="craft">${esc(p.craft)}</div>` : "")
+    + ((p.missing || []).length ? `<div class="sub miss">missing ${esc(p.missing.join(" · "))}</div>` : "")
+    + (p.base_owned ? `<div class="sub">base: ${esc(p.base_owned)}</div>` : "");
   const why = (p.why ? `<div class="why">${esc(p.why)}</div>` : "")
     + (p.notes ? `<div class="note">${esc(p.notes)}</div>` : "");
   const setup = (p.now ? ' <span class="badge now">wear now</span>' : "")
     + (p.setup && p.setup !== "alternative" ? ` <span class="badge">${esc(p.setup)}</span>` : "");
-  return `<div class="pc ${esc(kindOf(p))} ${esc(p.state || "better")}${nnPend(build, p.name, false)}"><div class="top"><span class="nm">${esc(p.name)}${tick}</span>${setup}${lvl}${nnButton(build, p.name, false)}</div>${sub}${stats}${why}</div>`;
+  return `<div class="pc ${esc(kindOf(p))} ${esc(p.state || "better")}${nnPend(build, p.name, false)}"><div class="top"><span class="nm">${esc(p.name)}${tick}</span>${setup}${lvl}${nnButton(build, p.name, false)}</div>${sub}${make}${stats}${why}</div>`;
 }
 // A slot's pieces: the guide's own picks (starter / standard, and pieces without a setup)
 // stay visible; the alternatives fold into a <details> so a 14-weapon list stays readable.
@@ -71,14 +75,15 @@ document.addEventListener("toggle", e => {
   if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("alts")) return;
   if (d.open) openAlts.add(d.dataset.slot); else openAlts.delete(d.dataset.slot);
 }, true);
+function altFold(key, alt, build) {
+  return alt.length
+    ? `<details class="alts" data-slot="${esc(key)}"${openAlts.has(key) ? " open" : ""}><summary>${alt.length} alternative${alt.length > 1 ? "s" : ""}</summary>${alt.map(p => piece(p, build)).join("")}</details>`
+    : "";
+}
 function pieceList(pieces, title, build) {
   const main = pieces.filter(p => p.setup !== "alternative");
   const alt = pieces.filter(p => p.setup === "alternative");
-  const shown = main.map(p => piece(p, build)).join("");
-  const folded = alt.length
-    ? `<details class="alts" data-slot="${esc(title)}"${openAlts.has(title) ? " open" : ""}><summary>${alt.length} alternative${alt.length > 1 ? "s" : ""}</summary>${alt.map(p => piece(p, build)).join("")}</details>`
-    : "";
-  return (shown + folded) || '<div class="empty">no build piece for this slot</div>';
+  return (main.map(p => piece(p, build)).join("") + altFold(title, alt, build)) || '<div class="empty">no build piece for this slot</div>';
 }
 function slotCard(title, eqHtml, pieces, build) {
   const eq = eqHtml == null ? "" : `<div class="eq"><span class="lbl">equipped</span>${eqHtml}</div>`;
@@ -136,10 +141,37 @@ function gear(g) {
   }).join("");
   $("merc").innerHTML = (g.merc || []).map(c => slotCard(c.title, null, c.pieces, g.build)).join("");
   $("extras").innerHTML = (g.extras || []).map(c => slotCard(c.title, null, c.pieces, g.build)).join("");
-  $("charms").innerHTML = (g.charms || []).length
-    ? `<div class="slot"><div class="slot-h"><span>Charms</span></div><div class="pieces">${g.charms.map(c => charmLine(c, g.build)).join("")}</div></div>` : "";
+  $("charms").innerHTML = charmCard(g.charms, g.build);
   $("gearhidden").innerHTML = hiddenList(g.build, g.not_needed, `Not needed for ${g.build || "this build"}`);
   $("mercbox").hidden = !(g.merc || []).length && !(g.extras || []).length && !(g.charms || []).length;
+}
+// The charm wishlist as one full-width card, its wishes in columns (user 2026-11-22: "the
+// charms on the webapp into multiple columns, not one long one").
+function charmCard(charms, build) {
+  return (charms || []).length
+    ? `<div class="slot charmcard"><div class="slot-h"><span>Charms</span></div><div class="pieces">${charms.map(c => charmLine(c, build)).join("")}</div></div>` : "";
+}
+// The next stage's gear (user 2026-11-22: "a fury gear list while I walk the summoner ... so
+// that I can directly see what I could already wear"): per slot the pieces held or craftable
+// now, every other one folded under "alternatives"; hidden without a next stage.
+function nextGear(n) {
+  $("nextpanel").hidden = !n;
+  if (!n) {
+    for (const id of ["nextgear", "nexthidden", "nextmerc", "nextcharms"]) $(id).innerHTML = "";
+    return;
+  }
+  $("nextname").textContent = n.build;
+  $("nextlevel").textContent = n.level != null ? `switch at level ${n.level}` : "";
+  const card = c => {
+    const ready = c.pieces.filter(p => p.ready), rest = c.pieces.filter(p => !p.ready);
+    const shown = ready.map(p => piece(p, n.build)).join("") || '<div class="empty">nothing ready yet</div>';
+    return `<div class="slot"><div class="slot-h"><span>${esc(c.title)}</span></div><div class="pieces">${shown}${altFold("next:" + c.title, rest, n.build)}</div></div>`;
+  };
+  $("nextgear").innerHTML = (n.columns || []).map(card).join("");
+  $("nextmerc").innerHTML = (n.merc || []).map(card).join("");
+  $("nextcharms").innerHTML = charmCard(n.charms, n.build);
+  $("nexthidden").innerHTML = hiddenList(n.build, n.not_needed, `Not needed for ${n.build}`);
+  $("nextmercbox").hidden = !(n.merc || []).length && !(n.charms || []).length;
 }
 // One charm wish (user 2026-11-22: "all of them until found"): ✓ once every wanted copy is
 // owned, else have/wanted; a later stage's wish (the summoner sees the Fury's) carries its
@@ -398,6 +430,7 @@ function render(r) {
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
     for (const id of ["guide", "gear", "gearhidden", "merc", "extras", "charms", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
+    nextGear(null);
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
     shop(null);
@@ -419,6 +452,7 @@ function render(r) {
   upgrades(r.upgrades);
   shop(r.shop);
   gear(r.gear);
+  nextGear(r.next_gear);
   skillTrees(r.skills);
   recipes(r.recipes);
   farm(r.farm);

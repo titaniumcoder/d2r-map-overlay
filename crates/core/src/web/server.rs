@@ -926,7 +926,7 @@ mod tests {
         let config = html_page("/config");
         assert_eq!(
             (dashboard.len(), format!("{:#018x}", fnv1a(dashboard.as_bytes()))),
-            (50_689, "0x444ddb6a35fdca0d".to_owned()),
+            (53_914, "0xf07104544d93d986".to_owned()),
             "dashboard page"
         );
         assert_eq!(

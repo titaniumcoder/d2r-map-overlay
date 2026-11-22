@@ -4,6 +4,7 @@
 pub mod config_page;
 pub mod farm;
 pub mod gear;
+pub mod next_gear;
 pub mod recipes;
 #[cfg(test)]
 mod tests;
@@ -54,6 +55,7 @@ pub fn panels<'a>(info: &PanelInfo<'a>) -> Panels<'a> {
         "give": advice_lines(&blocks.give, d2r_core::info::GIVE_TEXT),
         "bis": blocks.bis.iter().map(bis_line).collect::<Vec<_>>(),
         "gear": gear::gear_json(info),
+        "next_gear": next_gear::next_gear_json(info),
         "stage": stage_json(info.stage.as_ref(), &|item| info.live.holdings().count(item)),
         "recipes": recipes::recipes_json(info),
         "gear_attention": attention.is_some(),

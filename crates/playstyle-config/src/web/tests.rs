@@ -3568,3 +3568,178 @@ fn gear_lists_the_charm_wishlist_with_what_is_found_and_the_next_stage_s_wishes(
     );
     Ok(())
 }
+
+/// A Summoner stage whose next stage is the Fury below, with the summoner's ✕ on Harlequin
+/// Crest carried into the Fury's slots.
+fn next_stage_builds() -> (BTreeMap<String, config::Build>, crate::not_needed::Marks) {
+    let slots = |list: &[(&str, &[&str])]| -> BTreeMap<String, Vec<String>> {
+        list.iter()
+            .map(|(slot, pieces)| {
+                (
+                    (*slot).to_owned(),
+                    pieces.iter().map(|p| (*p).to_owned()).collect(),
+                )
+            })
+            .collect()
+    };
+    let mut builds: BTreeMap<String, config::Build> = BTreeMap::new();
+    builds.insert(
+        "summoner".to_owned(),
+        config::Build {
+            name: "Summoner".to_owned(),
+            next: Some("fury".to_owned()),
+            switch_level: Some(75),
+            ..config::Build::default()
+        },
+    );
+    builds.insert(
+        "fury".to_owned(),
+        config::Build {
+            name: "Fury".to_owned(),
+            slots: slots(&[
+                (
+                    "body",
+                    &["Enigma@65", "Fortitude@59", "Stealth@17", "Shaftstop@38"],
+                ),
+                ("helm", &["Harlequin Crest@62", "Jalal's Mane@42"]),
+            ]),
+            merc_slots: slots(&[("helm", &["Vampire Gaze@41", "Bulwark@35"])]),
+            ..config::Build::default()
+        },
+    );
+    let marked: crate::not_needed::NotNeeded =
+        [("summoner".to_owned(), vec!["Harlequin Crest".to_owned()])].into();
+    let mut marks = crate::not_needed::marks(&marked, &builds);
+    crate::not_needed::apply(&mut marks, &mut builds, &mut []);
+    (builds, marks)
+}
+
+#[test]
+fn next_stage_gear_puts_held_and_craftable_pieces_up_front() -> Result<()> {
+    use d2r_core::offsets::item_data::{QUALITY_NORMAL, QUALITY_UNIQUE};
+    let (builds, marks) = next_stage_builds();
+    let build = |slug: &str| builds.get(slug).ok_or_else(|| anyhow!("no {slug}"));
+    let stage = config::Stage {
+        slug: "summoner",
+        build: build("summoner")?,
+        class_default: false,
+        next: Some(("fury", build("fury")?)),
+    };
+    let mut base = stash_item("Loricated Mail", "ucl", QUALITY_NORMAL, None);
+    base.sockets = 4;
+    let stash = [d2r_core::stash::StashTab {
+        kind: d2r_core::stash::TabKind::Page(1),
+        items: vec![base, stash_item("Shaftstop", "xhn", QUALITY_UNIQUE, None)],
+    }];
+    let runes: Vec<(String, u32)> = ["El", "Sol", "Dol", "Lo", "Ith", "Tal", "Eth"]
+        .iter()
+        .map(|r| (format!("{r} Rune"), 1))
+        .collect();
+    let merc_worn = ["Vampire Gaze".to_owned()];
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &stash, &[]);
+    info.live.held_materials = &runes;
+    info.live.merc_worn = &merc_worn;
+    info.build = Some(stage.build);
+    info.stage = Some(stage);
+    info.not_needed = &marks;
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    let next = json.get("next_gear").context("next_gear")?;
+    let at = |path: &str| next.pointer(path).cloned().unwrap_or_default();
+    assert_eq!(at("/build"), "Fury");
+    assert_eq!(at("/level"), 75);
+    let titles: Vec<_> = ["/columns/0/title", "/columns/1/title", "/merc/0/title"]
+        .iter()
+        .map(|p| at(p))
+        .collect();
+    assert_eq!(
+        titles,
+        ["Helm", "Body", "Merc helm"],
+        "empty slots left out: {next}"
+    );
+    // The summoner's ✕ on Harlequin Crest holds for the Fury: gone, listed for the undo.
+    assert_eq!(at("/columns/0/pieces/0/name"), "Jalal's Mane");
+    assert!(at("/columns/0/pieces/1").is_null(), "{next}");
+    assert_eq!(at("/not_needed/0/name"), "Harlequin Crest");
+    assert_eq!(at("/not_needed/0/build"), "Summoner");
+    let body = |i: usize, key: &str| at(&format!("/columns/1/pieces/{i}/{key}"));
+    // Enigma: two runes short, no 3os base held.
+    assert_eq!(body(0, "ready"), false);
+    assert_eq!(body(0, "missing"), serde_json::json!(["Jah 0/1", "Ber 0/1"]));
+    assert!(
+        body(0, "base_owned").is_null() && body(0, "base_hint").is_string(),
+        "{next}"
+    );
+    // Fortitude: every rune and a 4os armour on page 1; above the character's level 42.
+    assert_eq!(body(1, "ready"), true);
+    assert_eq!(
+        body(1, "craft"),
+        "craft: Fortitude in Loricated Mail 4os (base on page 1)"
+    );
+    assert_eq!(body(1, "at"), true);
+    // Stealth: the runes alone don't make it.
+    assert_eq!(body(2, "ready"), false);
+    assert_eq!(body(2, "missing"), serde_json::json!([]));
+    // Shaftstop: in the shared stash, wearable now.
+    assert_eq!(
+        (body(3, "ready"), body(3, "tick"), body(3, "at")),
+        (
+            serde_json::json!(true),
+            serde_json::json!("stash"),
+            serde_json::json!(false)
+        )
+    );
+    assert_eq!(at("/merc/0/pieces/0/tick"), "worn");
+    assert_eq!(at("/merc/0/pieces/1/ready"), false);
+    Ok(())
+}
+
+#[test]
+fn next_stage_gear_needs_a_next_stage() -> Result<()> {
+    let (builds, marks) = next_stage_builds();
+    let fury = builds.get("fury").context("fury")?;
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.not_needed = &marks;
+    assert!(next_gear::next_gear_json(&info).is_null(), "no stage");
+    info.build = Some(fury);
+    info.stage = Some(config::Stage {
+        slug: "fury",
+        build: fury,
+        class_default: false,
+        next: None,
+    });
+    assert!(next_gear::next_gear_json(&info).is_null(), "the last stage");
+    Ok(())
+}
+
+#[test]
+fn next_stage_gear_lists_the_next_build_s_charm_wishes() -> Result<()> {
+    let config = shipped_settings();
+    let build = |slug: &str| config.build_defs.get(slug).ok_or_else(|| anyhow!("no {slug}"));
+    let (summoner, fury) = (build("summoner druid")?, build("fury druid")?);
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.build = Some(summoner);
+    info.stage = Some(config::Stage {
+        slug: "summoner druid",
+        build: summoner,
+        class_default: true,
+        next: Some(("fury druid", fury)),
+    });
+    let next = next_gear::next_gear_json(&info);
+    let names: Vec<&str> = next
+        .get("charms")
+        .and_then(serde_json::Value::as_array)
+        .context("charms")?
+        .iter()
+        .filter_map(|c| c.get("name")?.as_str())
+        .collect();
+    let wanted: Vec<&str> = fury.charms.iter().map(|w| w.name.as_str()).collect();
+    assert_eq!(names, wanted);
+    assert!(
+        next.pointer("/charms/0/stage")
+            .is_some_and(serde_json::Value::is_null)
+    );
+    Ok(())
+}
