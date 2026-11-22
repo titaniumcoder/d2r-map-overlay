@@ -1,12 +1,5 @@
-//! Locating the D2R.exe image in the game's memory and scanning it for signatures.
-//!
-//! D2R's code pages are encrypted, so the live image view contains no-access (`---s`) pages.
-//! Wine maps the image from a memfd, and the same memfd is also mapped elsewhere as one fully
-//! readable `rw-s` alias. We scan the alias and compute addresses relative to the live base.
-//!
-//! D2R also re-encrypts code pages after a while, so the unit-table signature can vanish from the
-//! alias too. [`Image::unit_table`] therefore falls back to a per-build cache and to a structural
-//! search of `.data` (which is never encrypted).
+//! Locating the D2R.exe image and the tables in it. The live view's code pages are encrypted
+//! (`---s`), so reads go through Wine's fully readable `rw-s` memfd alias of the same image.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -22,10 +15,25 @@ use d2r_core::reader::{ReadMem, is_user_ptr};
 const SIZE_OF_IMAGE_RANGE: std::ops::RangeInclusive<u32> = 0x260_0000..=0x2A0_0000;
 /// Bytes read from a mapping's start to look for a PE header.
 const HEADER_LEN: u64 = 0x400;
-/// Chunk size for reading the whole image through the alias.
-const CHUNK: usize = 1 << 20;
+const READ_CHUNK: usize = 1 << 20;
 /// Unit hash table signature; the `rel32` follows the 7 signature bytes.
 const UNIT_TABLE_SIG: &str = "48 03 C7 49 8B 8C C6";
+
+/// PE header layout: `E_LFANEW` from the file start, the rest from the `PE\0\0` signature.
+mod pe {
+    pub const E_LFANEW: usize = 0x3c;
+    pub const NUMBER_OF_SECTIONS: usize = 6;
+    pub const TIME_DATE_STAMP: usize = 8;
+    pub const SIZE_OF_OPTIONAL_HEADER: usize = 20;
+    /// The signature (4 bytes) and the COFF file header (20 bytes).
+    pub const OPTIONAL_HEADER: usize = 24;
+    pub const SIZE_OF_IMAGE: usize = OPTIONAL_HEADER + 56;
+    pub const SECTION_HEADER_LEN: usize = 40;
+    /// NUL-padded.
+    pub const SECTION_NAME_LEN: usize = 8;
+    pub const SECTION_VIRTUAL_SIZE: usize = 8;
+    pub const SECTION_VIRTUAL_ADDRESS: usize = 12;
+}
 
 /// The located D2R image: where it lives (pointers refer to this) and its readable alias.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,24 +53,21 @@ fn le_u16(b: &[u8], off: usize) -> Option<u16> {
     Some(u16::from_le_bytes(bytes.try_into().ok()?))
 }
 
-/// Offset of the `PE\0\0` signature (`e_lfanew` at 0x3c), after checking `MZ` and the signature.
+/// Offset of the `PE\0\0` signature, after checking `MZ` and the signature.
 fn pe_offset(header: &[u8]) -> Option<usize> {
     if header.get(..2)? != b"MZ" {
         return None;
     }
-    let pe = usize::try_from(le_u32(header, 0x3c)?).ok()?;
+    let pe = usize::try_from(le_u32(header, pe::E_LFANEW)?).ok()?;
     (header.get(pe..pe.checked_add(4)?)? == b"PE\0\0").then_some(pe)
 }
 
-/// `SizeOfImage` from a PE header.
 fn size_of_image(header: &[u8]) -> Option<u32> {
-    // COFF file header is 20 bytes after the 4-byte signature; SizeOfImage is at +56 in the optional header.
-    le_u32(header, pe_offset(header)?.checked_add(4 + 20 + 56)?)
+    le_u32(header, pe_offset(header)?.checked_add(pe::SIZE_OF_IMAGE)?)
 }
 
-/// COFF `TimeDateStamp` (signature +8): together with `SizeOfImage` it identifies a build.
 fn time_date_stamp(header: &[u8]) -> Option<u32> {
-    le_u32(header, pe_offset(header)?.checked_add(8)?)
+    le_u32(header, pe_offset(header)?.checked_add(pe::TIME_DATE_STAMP)?)
 }
 
 /// Cache key of a build: `"<TimeDateStamp>-<SizeOfImage>"`, both hex.
@@ -76,20 +81,20 @@ fn build_key(header: &[u8]) -> Option<String> {
 
 /// `(VirtualAddress, VirtualSize)` of the section named `name` (e.g. `b".data"`).
 fn section(header: &[u8], name: &[u8]) -> Option<(u32, u32)> {
-    let pe = pe_offset(header)?;
-    let count = le_u16(header, pe.checked_add(6)?)?;
-    let opt_size = le_u16(header, pe.checked_add(20)?)?;
-    // Section headers (40 bytes each) follow the optional header.
-    let table = pe.checked_add(24)?.checked_add(usize::from(opt_size))?;
+    let sig = pe_offset(header)?;
+    let count = le_u16(header, sig.checked_add(pe::NUMBER_OF_SECTIONS)?)?;
+    let opt_size = le_u16(header, sig.checked_add(pe::SIZE_OF_OPTIONAL_HEADER)?)?;
+    let table = sig
+        .checked_add(pe::OPTIONAL_HEADER)?
+        .checked_add(usize::from(opt_size))?;
     (0..usize::from(count)).find_map(|i| {
-        let at = table.checked_add(i.checked_mul(40)?)?;
-        let raw = header.get(at..at.checked_add(8)?)?;
-        // The name is NUL-padded to 8 bytes.
+        let at = table.checked_add(i.checked_mul(pe::SECTION_HEADER_LEN)?)?;
+        let raw = header.get(at..at.checked_add(pe::SECTION_NAME_LEN)?)?;
         let len = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
         (raw.get(..len)? == name).then(|| {
             Some((
-                le_u32(header, at.checked_add(12)?)?,
-                le_u32(header, at.checked_add(8)?)?,
+                le_u32(header, at.checked_add(pe::SECTION_VIRTUAL_ADDRESS)?)?,
+                le_u32(header, at.checked_add(pe::SECTION_VIRTUAL_SIZE)?)?,
             ))
         })?
     })
@@ -195,27 +200,29 @@ impl Image {
             .with_context(|| format!("reading image alias at rva {rva:#x}"))
     }
 
-    /// Reads the whole image through the alias, in 1 MiB chunks.
     fn read_all(&self, mem: &impl ReadMem) -> Result<Vec<u8>> {
         let size = usize::try_from(self.size)?;
         let mut out = Vec::with_capacity(size);
         while out.len() < size {
-            let len = CHUNK.min(size - out.len());
+            let len = READ_CHUNK.min(size - out.len());
             out.extend(self.read_alias(mem, u64::try_from(out.len())?, len)?);
         }
         Ok(out)
     }
 
-    /// Locates the unit hash table, trying in order:
-    /// 1. the code signature (`live_base + rel32`, `rel32` after the signature), if it hits once;
-    /// 2. the RVA cached for this build in `cache` (if given);
-    /// 3. a structural search of `.data` (needs a game in progress).
-    ///
-    /// With `scan_code` false, step 1 is skipped and only the PE header and `.data` are read
-    /// instead of the whole image (~40 MiB): for retries while waiting for a game, where the
-    /// signature already missed once and only the structural search can newly succeed.
-    ///
-    /// A result from 1 or 3 is written to `cache`; a write failure is only a warning on stderr.
+    /// The PE header: from `image` if the whole image was read, else read on its own.
+    fn header(&self, mem: &impl ReadMem, image: Option<&[u8]>) -> Result<Vec<u8>> {
+        let header_len = usize::try_from(HEADER_LEN.min(self.size))?;
+        image.map_or_else(
+            || self.read_alias(mem, 0, header_len),
+            |img| Ok(img.get(..header_len).unwrap_or(img).to_vec()),
+        )
+    }
+
+    /// Locates the unit hash table by the code signature, else the RVA cached for this build,
+    /// else a structural search of `.data` (needs a game in progress). A found RVA that wasn't
+    /// cached is stored in `cache`. `scan_code` false skips the signature and reads only the
+    /// header and `.data`, not the whole image (~40 MiB): for retries.
     ///
     /// # Errors
     /// Fails if the image can't be read, has no PE header, or all three methods fail.
@@ -225,48 +232,22 @@ impl Image {
         } else {
             None
         };
-        let header_len = usize::try_from(HEADER_LEN.min(self.size))?;
-        let header = match &image {
-            Some(img) => img.get(..header_len).unwrap_or(img).to_vec(),
-            None => self.read_alias(mem, 0, header_len)?,
-        };
+        let header = self.header(mem, image.as_deref())?;
         let build = build_key(&header).context("no PE header in the image alias")?;
-        let found = |rva: u64, source| {
-            if source != UnitTableSource::Cache
-                && let Some(path) = cache
-                && let Err(e) = offset_cache::store(path, &build, rva)
-            {
-                eprintln!("warning: could not cache the unit table offset: {e:#}");
-            }
-            let addr = self
-                .live_base
-                .checked_add(rva)
-                .context("unit table address overflow")?;
-            Ok(UnitTable {
-                addr,
-                rva,
-                source,
-                build: build.clone(),
-            })
-        };
+        let located = |rva, source| self.located_unit_table(rva, source, &build, cache);
 
         let sig_err = match image.as_deref().map(signature_rva) {
-            Some(Ok(rva)) if rva < self.size => return found(rva, UnitTableSource::Signature),
+            Some(Ok(rva)) if rva < self.size => return located(rva, UnitTableSource::Signature),
             Some(Ok(rva)) => anyhow::anyhow!("rva {rva:#x} outside the image"),
             Some(Err(e)) => e,
             None => anyhow::anyhow!("not scanned on retry"),
         };
-        let cache_note = match cache.map(offset_cache::read) {
-            None => "no cache path (neither $XDG_CACHE_HOME nor $HOME set)".to_owned(),
-            Some(Err(e)) => format!("{e:#}"),
-            Some(Ok(entries)) => match entries.get(&build) {
-                Some(&rva) if rva < self.size => return found(rva, UnitTableSource::Cache),
-                Some(rva) => format!("cached rva {rva:#x} for build {build} is outside the image"),
-                None => format!("no cached offset for build {build}"),
-            },
+        let cache_note = match self.cached_rva(cache, &build) {
+            Ok(rva) => return located(rva, UnitTableSource::Cache),
+            Err(note) => note,
         };
         let structure_err = match self.structural_rva(mem, &header, image.as_deref()) {
-            Ok(rva) => return found(rva, UnitTableSource::Structure),
+            Ok(rva) => return located(rva, UnitTableSource::Structure),
             Err(e) => e,
         };
         bail!(
@@ -275,16 +256,56 @@ impl Image {
         )
     }
 
+    /// The unit table at `rva`, stored in `cache` unless it came from there (a failed store
+    /// only warns).
+    fn located_unit_table(
+        &self,
+        rva: u64,
+        source: UnitTableSource,
+        build: &str,
+        cache: Option<&Path>,
+    ) -> Result<UnitTable> {
+        if source != UnitTableSource::Cache
+            && let Some(path) = cache
+            && let Err(e) = offset_cache::store(path, build, rva)
+        {
+            eprintln!("warning: could not cache the unit table offset: {e:#}");
+        }
+        let addr = self
+            .live_base
+            .checked_add(rva)
+            .context("unit table address overflow")?;
+        Ok(UnitTable {
+            addr,
+            rva,
+            source,
+            build: build.to_owned(),
+        })
+    }
+
+    /// The unit-table RVA cached for `build`, or why there is none.
+    fn cached_rva(&self, cache: Option<&Path>, build: &str) -> Result<u64, String> {
+        match cache.map(offset_cache::read) {
+            None => Err("no cache path (neither $XDG_CACHE_HOME nor $HOME set)".to_owned()),
+            Some(Err(e)) => Err(format!("{e:#}")),
+            Some(Ok(entries)) => match entries.get(build) {
+                Some(&rva) if rva < self.size => Ok(rva),
+                Some(rva) => Err(format!(
+                    "cached rva {rva:#x} for build {build} is outside the image"
+                )),
+                None => Err(format!("no cached offset for build {build}")),
+            },
+        }
+    }
+
     /// Live address of the quest-flags global ([`d2r_core::offsets::quest_flags`]), by a
-    /// structural search of `.data` ([`find_quest_flags`]; needs a game in progress). Reads the
-    /// PE header, `.data` and one header per pointer-like `.data` word (~45k small reads,
-    /// once per process).
+    /// structural search of `.data` ([`find_quest_flags`]; needs a game in progress, and costs
+    /// ~45k small reads).
     ///
     /// # Errors
     /// Fails if `.data` can't be read or the search doesn't find exactly one record pair.
     pub fn quest_flags_global(&self, mem: &impl ReadMem) -> Result<u64> {
-        let header_len = usize::try_from(HEADER_LEN.min(self.size))?;
-        let header = self.read_alias(mem, 0, header_len)?;
+        let header = self.header(mem, None)?;
         let (rva, vsize) = section(&header, b".data").context("no .data section in the PE header")?;
         let len = usize::try_from(vsize)?.min(usize::try_from(self.size.saturating_sub(u64::from(rva)))?);
         let data = self.read_alias(mem, u64::from(rva), len)?;
@@ -294,8 +315,7 @@ impl Image {
             .context("quest flags address overflow")
     }
 
-    /// Structural search for the unit table in `.data` (see [`find_unit_table`]); `.data` is
-    /// taken from `image` if it was read, else read on its own.
+    /// [`find_unit_table`] over `.data`, taken from `image` if it was read.
     fn structural_rva(&self, mem: &impl ReadMem, header: &[u8], image: Option<&[u8]>) -> Result<u64> {
         let (rva, vsize) = section(header, b".data").context("no .data section in the PE header")?;
         let start = usize::try_from(rva)?;
@@ -356,79 +376,79 @@ fn signature_rva(image: &[u8]) -> Result<u64> {
 /// Unit types with a block in the hash table (player, monster, object, missile, item, tile).
 const TABLE_TYPES: std::ops::RangeInclusive<u32> = 0..=5;
 
-/// Finds the unit hash table in `data` (the `.data` section, which starts at `data_rva`).
-///
-/// A candidate is an 8-aligned offset where, for every block `t` in [`TABLE_TYPES`]
-/// (128 slots of 8 bytes at `candidate + t * 1024`), every non-null slot `s` points to a unit
-/// whose type (`+0x00`) is `t` and whose id (`+0x08`) satisfies `id & 127 == s`; the player
-/// block must be non-empty and at least 2 slots non-null overall. The id check is what rejects
-/// the table's shifted neighbours, which pass the type check whenever the edge slots are null.
-///
-/// Raw slot values are filtered first (every non-null slot a plausible user pointer), using
-/// prefix counts so each offset costs O(1); only survivors have their pointees read.
+/// The little-endian u64 words of `data`; a trailing partial word is ignored.
+fn le_words(data: &[u8]) -> Vec<u64> {
+    data.as_chunks::<8>()
+        .0
+        .iter()
+        .map(|&c| u64::from_le_bytes(c))
+        .collect()
+}
+
+/// `out[i]` = how many of `words[..i]` match `pred`, so any window's count is O(1).
+fn prefix_counts(words: &[u64], pred: fn(u64) -> bool) -> Vec<u32> {
+    let mut acc = 0u32;
+    std::iter::once(0)
+        .chain(words.iter().map(|&w| {
+            acc += u32::from(pred(w));
+            acc
+        }))
+        .collect()
+}
+
+/// Finds the unit hash table in `data` (the `.data` section, which starts at `data_rva`): the
+/// one 8-aligned offset where every non-null slot `s` of every type block `t` points to a unit
+/// of type `t` with `id & 127 == s`, the player block is non-empty and at least 2 slots are set.
+/// The id check rejects the table's shifted neighbours, which pass the type check.
 ///
 /// # Errors
 /// Fails unless exactly one candidate is found; the error lists the candidate RVAs.
 fn find_unit_table(mem: &impl ReadMem, data: &[u8], data_rva: u64) -> Result<u64> {
     let slots = usize::try_from(unit_table::SLOTS)?;
     let span = slots * (*TABLE_TYPES.end() as usize + 1);
-    // A trailing partial word (none in practice: sections are page-aligned) is ignored.
-    let words: Vec<u64> = data
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .map(|&c| u64::from_le_bytes(c))
-        .collect();
-    // prefix[i] = number of words in words[..i] matching the predicate.
-    let prefix = |pred: fn(u64) -> bool| {
-        let mut acc = 0u32;
-        std::iter::once(0)
-            .chain(words.iter().map(|&w| {
-                acc += u32::from(pred(w));
-                acc
-            }))
-            .collect::<Vec<u32>>()
-    };
-    let bad = prefix(|w| w != 0 && !is_user_ptr(w));
-    let nonnull = prefix(|w| w != 0);
-    let count = |pfx: &[u32], lo: usize| -> u32 {
-        let at = |i| pfx.get(i).copied().unwrap_or(0);
+    let words = le_words(data);
+    let non_pointers = prefix_counts(&words, |w| w != 0 && !is_user_ptr(w));
+    let non_nulls = prefix_counts(&words, |w| w != 0);
+    let count_in_block = |counts: &[u32], lo: usize| -> u32 {
+        let at = |i| counts.get(i).copied().unwrap_or(0);
         at(lo + slots) - at(lo)
     };
     let block = |w: usize, t: u32| w + t as usize * slots;
+    let slots_look_like_a_table = |w: usize| {
+        TABLE_TYPES
+            .clone()
+            .all(|t| count_in_block(&non_pointers, block(w, t)) == 0)
+            && count_in_block(&non_nulls, w) > 0
+            && TABLE_TYPES
+                .clone()
+                .map(|t| count_in_block(&non_nulls, block(w, t)))
+                .sum::<u32>()
+                >= 2
+    };
 
-    // Pointee (type, id), memoized: neighbouring candidates share most pointers.
-    let mut units: HashMap<u64, Option<(u32, u32)>> = HashMap::new();
+    let mut type_and_id: HashMap<u64, Option<(u32, u32)>> = HashMap::new();
     let mut unit_at = |p: u64| {
-        *units.entry(p).or_insert_with(|| {
+        *type_and_id.entry(p).or_insert_with(|| {
             Some((
                 mem.read_u32(p + unit::TYPE).ok()?,
                 mem.read_u32(p + unit::ID).ok()?,
             ))
         })
     };
-
-    let mut found = Vec::new();
-    for w in 0..(words.len() + 1).saturating_sub(span) {
-        let cheap = TABLE_TYPES.clone().all(|t| count(&bad, block(w, t)) == 0)
-            && count(&nonnull, w) > 0
-            && TABLE_TYPES
-                .clone()
-                .map(|t| count(&nonnull, block(w, t)))
-                .sum::<u32>()
-                >= 2;
-        if !cheap {
-            continue;
-        }
-        let deep = TABLE_TYPES.clone().all(|t| {
+    let mut units_sit_in_their_slots = |w: usize| {
+        TABLE_TYPES.clone().all(|t| {
             let lo = block(w, t);
             words.get(lo..lo + slots).is_some_and(|blk| {
                 blk.iter().zip(0u32..).all(|(&p, slot)| {
                     p == 0 || unit_at(p).is_some_and(|(ty, id)| ty == t && id & 127 == slot)
                 })
             })
-        });
-        if deep {
+        })
+    };
+
+    let mut found = Vec::new();
+    for w in 0..(words.len() + 1).saturating_sub(span) {
+        if slots_look_like_a_table(w) && units_sit_in_their_slots(w) {
             found.push(data_rva + u64::try_from(w * 8)?);
         }
     }
@@ -441,8 +461,7 @@ fn find_unit_table(mem: &impl ReadMem, data: &[u8], data_rva: u64) -> Result<u64
 
 /// Finds the quest-flags global in `data` (the `.data` section, which starts at `data_rva`):
 /// the first of exactly one pair of adjacent 8-byte slots that both point to a quest-record
-/// header ([`d2r_core::quests::is_header`]). Live 2026-11-18 exactly two slots matched, adjacent;
-/// the first holds the player's quest flags.
+/// header ([`d2r_core::quests::is_header`]); the first holds the player's quest flags.
 ///
 /// # Errors
 /// Fails unless exactly one adjacent pair is found; the error lists the matching RVAs.
@@ -530,20 +549,25 @@ mod tests {
         let mut put = |at: usize, bytes: &[u8]| {
             h.splice(at..at + bytes.len(), bytes.iter().copied());
         };
-        let pe = 0x80;
+        let sig = 0x80;
+        let pe32_plus_optional_header_len: u16 = 0xF0;
         put(0, b"MZ");
-        put(0x3c, &0x80u32.to_le_bytes());
-        put(pe, b"PE\0\0");
-        put(pe + 6, &2u16.to_le_bytes()); // NumberOfSections
-        put(pe + 8, &TIMESTAMP.to_le_bytes());
-        put(pe + 20, &0xF0u16.to_le_bytes()); // SizeOfOptionalHeader (PE32+)
-        put(pe + 24 + 56, &size_of_image.to_le_bytes());
+        put(pe::E_LFANEW, &0x80u32.to_le_bytes());
+        put(sig, b"PE\0\0");
+        put(sig + pe::NUMBER_OF_SECTIONS, &2u16.to_le_bytes());
+        put(sig + pe::TIME_DATE_STAMP, &TIMESTAMP.to_le_bytes());
+        put(
+            sig + pe::SIZE_OF_OPTIONAL_HEADER,
+            &pe32_plus_optional_header_len.to_le_bytes(),
+        );
+        put(sig + pe::SIZE_OF_IMAGE, &size_of_image.to_le_bytes());
+        let section_table = sig + pe::OPTIONAL_HEADER + usize::from(pe32_plus_optional_header_len);
         let sections = [(b".text", 0x1000, 0x1000), (b".data", DATA_RVA, DATA_VSIZE)];
         for (i, (name, rva, vsize)) in sections.into_iter().enumerate() {
-            let at = pe + 24 + 0xF0 + i * 40;
+            let at = section_table + i * pe::SECTION_HEADER_LEN;
             put(at, name);
-            put(at + 8, &vsize.to_le_bytes());
-            put(at + 12, &rva.to_le_bytes());
+            put(at + pe::SECTION_VIRTUAL_SIZE, &vsize.to_le_bytes());
+            put(at + pe::SECTION_VIRTUAL_ADDRESS, &rva.to_le_bytes());
         }
         h
     }
@@ -746,10 +770,7 @@ mod tests {
 
     #[test]
     fn structure_rejects_shifted_decoy() -> Result<()> {
-        // The player one slot off, the other blocks intact: every type matches at this offset,
-        // only the id hash (0x105 & 127 = 5, not 6) rejects it. At offset +8 the player block
-        // lines up but the monster in block 1 slot 0 lands in block 0, so that fails on type.
-        // (Shifting every block alike would just be the real table 8 bytes later.)
+        // The player one slot off: every type matches, only the id hash (0x105 & 127 = 5) rejects it.
         let shifted: Vec<_> = real_slots()
             .map(|(t, s, p)| (t, if t == 0 { s + 1 } else { s }, p))
             .collect();
@@ -757,8 +778,6 @@ mod tests {
             .err()
             .context("expected error")?;
         assert!(err.to_string().contains("no candidate"), "{err}");
-        // With the real table present, neither the decoy nor the real table's ±8 neighbours
-        // (which pass the type check: their edge slots are null) are reported.
         let data = data_with(&[(0x1000, shifted), (0x2_0000, real_slots().collect())]);
         assert_eq!(find_unit_table(&heap_mem(), &data, DRVA)?, DRVA + 0x2_0000);
         Ok(())
