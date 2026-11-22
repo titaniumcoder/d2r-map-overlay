@@ -450,6 +450,16 @@ pub mod stat_list {
     /// druid's wolves not. A second copy at +0xB50 also had it (synced or previous; not read).
     pub const STATE_FLAGS: u64 = 0xB30;
     pub const STATE_FLAG_DWORDS: usize = 8;
+    /// The second copy of the state bitfield (see [`STATE_FLAGS`]); only recorded in the
+    /// journal's `buffs` event, to learn whether it lags or mirrors the first.
+    pub const STATE_FLAGS_COPY: u64 = 0xB50;
+    /// u32 owner unit type and unit id of a list (see [`NEXT`]).
+    pub const OWNER_TYPE: u64 = 0x08;
+    pub const OWNER_ID: u64 = 0x0C;
+    /// Bytes of each of the player's lists copied into the journal's `buffs` event: past
+    /// [`NEXT`] and the aggregated array's pointer and count, where a buff list's state id and
+    /// expiry frame are expected but not yet located.
+    pub const DUMP_LEN: usize = 0x100;
 }
 
 /// State ids (states.txt rows), bits of [`stat_list::STATE_FLAGS`].

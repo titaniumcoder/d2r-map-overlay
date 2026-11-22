@@ -9,10 +9,11 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use d2r_core::game::{
-    Addr, BorderLink, Bounds, Candidate, ChosenBy, Equipped, ItemDrop, Level, Monster, OperatedObject, Place,
-    Player, Preset, PresetKind, Room, RoomLink, RoomPos, RoomRect, Shrine, Skills, Snapshot, SpeedStats,
-    Well, char_level_from_raw, difficulty_from_raw, has_state, identified_unique_or_set, is_shrine_object,
-    is_terrorized, is_town, is_well_object, magic_or_better, maybe_white_base,
+    Addr, BorderLink, Bounds, BuffResearch, Candidate, ChosenBy, Equipped, ItemDrop, Level, Monster,
+    OperatedObject, Place, Player, Preset, PresetKind, Room, RoomLink, RoomPos, RoomRect, Shrine, Skills,
+    Snapshot, SpeedStats, StatListDump, Well, active_states, char_level_from_raw, difficulty_from_raw,
+    has_state, identified_unique_or_set, is_shrine_object, is_terrorized, is_town, is_well_object,
+    magic_or_better, maybe_white_base,
 };
 use d2r_core::items::{self, DropKind};
 use d2r_core::objects::is_consumable_quest_object;
@@ -25,6 +26,8 @@ use d2r_core::reader::ReadMem;
 use d2r_core::skills_data;
 use d2r_core::stash::{self, StashTab};
 
+/// Most of the player's stat lists dumped for the journal's `buffs` event.
+const MAX_BUFF_LISTS: usize = 32;
 /// Most units walked per unit type (over all hash slots).
 const MAX_UNITS_PER_TYPE: usize = 1000;
 /// Most rooms walked per level.
@@ -475,6 +478,7 @@ pub fn snapshot(
     let staff_tomb = player.act.and_then(|a| r.staff_tomb(a.0));
     let terrorized = is_terrorized(&monsters);
     let skills = r.skills(chosen.addr.0, player.class);
+    let buff_research = r.buff_research(chosen.addr.0);
     // Vendors stand in towns only; elsewhere the monsters' inventories aren't walked.
     let shop = if is_town(player.level_id) {
         r.shop(monsters.iter().map(|m| m.addr.0), items_table)
@@ -515,6 +519,7 @@ pub fn snapshot(
         trail: Vec::new(),
         skills,
         shop,
+        buff_research,
         warnings: r.into_warnings(),
     })
 }
@@ -960,6 +965,7 @@ impl<M: ReadMem> Reader<'_, M> {
             wsm: None,
             strength: self.stat(addr, stat_list::STRENGTH).ok().flatten(),
             dexterity: self.stat(addr, stat_list::DEXTERITY).ok().flatten(),
+            states: self.states(addr, stat_list::STATE_FLAGS),
         };
         Ok((player, level))
     }
@@ -1210,6 +1216,74 @@ impl<M: ReadMem> Reader<'_, M> {
         };
         self.bytes(list, stat_list::STATE_FLAGS, stat_list::STATE_FLAG_DWORDS * 4)
             .is_ok_and(|flags| has_state(&flags, state))
+    }
+
+    /// The unit's active states, decoded from the state bitfield at `at` in its stat list
+    /// ([`stat_list::STATE_FLAGS`] or its copy). Optional data like [`Reader::has_state`]: no
+    /// stat list or an unreadable bitfield is no states.
+    fn states(&self, addr: u64, at: u64) -> Vec<u32> {
+        let Ok(Some(list)) = self.ptr(addr, unit::STATS) else {
+            return Vec::new();
+        };
+        self.bytes(list, at, stat_list::STATE_FLAG_DWORDS * 4)
+            .map_or_else(|_| Vec::new(), |flags| active_states(&flags))
+    }
+
+    /// The player's raw stat lists for the journal's `buffs` event ([`BuffResearch`]): the
+    /// chain from the unit's own list along [`stat_list::NEXT`], at most [`MAX_BUFF_LISTS`],
+    /// stopping silently at a cycle or an unreadable list (research data: no warnings, the
+    /// snapshot reads it every tick). `None` without a stat list.
+    fn buff_research(&self, player: u64) -> Option<BuffResearch> {
+        let top = self.ptr(player, unit::STATS).ok().flatten()?;
+        let mut seen = HashSet::new();
+        let mut lists = Vec::new();
+        let mut cur = Some(top);
+        while let Some(list) = cur {
+            if lists.len() >= MAX_BUFF_LISTS || !seen.insert(list) {
+                break;
+            }
+            let Some(dump) = self.stat_list_dump(list) else {
+                break;
+            };
+            lists.push(dump);
+            cur = self.ptr(list, stat_list::NEXT).ok().flatten();
+        }
+        let flags = self.u32(top, stat_list::FLAGS).unwrap_or(0);
+        let full = if flags & stat_list::FLAG_FULL_STATS == 0 {
+            Vec::new()
+        } else {
+            self.stat_array(top, stat_list::FULL_ENTRIES, stat_list::FULL_COUNT)
+                .unwrap_or_default()
+        };
+        Some(BuffResearch {
+            states_copy: self.states(player, stat_list::STATE_FLAGS_COPY),
+            lists,
+            full,
+        })
+    }
+
+    /// One list of [`Reader::buff_research`]; `None` if not even its header up to
+    /// [`stat_list::NEXT`] is readable.
+    fn stat_list_dump(&self, list: u64) -> Option<StatListDump> {
+        let short = usize::try_from(stat_list::NEXT).ok()? + 8;
+        let head = self
+            .bytes(list, 0, stat_list::DUMP_LEN)
+            .or_else(|_| self.bytes(list, 0, short))
+            .ok()?;
+        let u32_at = |off: u64| {
+            let off = usize::try_from(off).ok()?;
+            let b = head.get(off..off + 4)?;
+            Some(u32::from_le_bytes(b.try_into().ok()?))
+        };
+        Some(StatListDump {
+            addr: Addr(list),
+            owner_type: u32_at(stat_list::OWNER_TYPE).unwrap_or(0),
+            owner_id: u32_at(stat_list::OWNER_ID).unwrap_or(0),
+            flags: u32_at(stat_list::FLAGS).unwrap_or(0),
+            head: hex(&head),
+            count: self.u64(list, stat_list::COUNT).unwrap_or(0),
+            entries: self.stat_entries(list).unwrap_or_default(),
+        })
     }
 
     /// The shrines, wells and operated consumable quest objects among the loaded object units;
@@ -3528,6 +3602,130 @@ mod tests {
         let others = state_field(others);
         assert!(!has_state(&others, state::DESECRATED));
         assert!(has_state(&others, 188) && has_state(&others, 0) && has_state(&others, 255));
+    }
+
+    #[test]
+    fn active_states_decode_every_bit() {
+        // Bits 0 and 31 of dword 0, Battle Orders (32) in dword 1, desecrated (189) and the
+        // last bit (255).
+        let flags = state_field([0x8000_0001, 1, 0, 0, 0, 0x2000_0000, 0, 0x8000_0000]);
+        assert_eq!(active_states(&flags), [0, 31, 32, 189, 255]);
+        assert_eq!(active_states(&state_field([0; 8])), [0u32; 0]);
+        let every: Vec<u32> = (0..256).collect();
+        assert_eq!(active_states(&state_field([u32::MAX; 8])), every);
+        // A short field: only its whole dwords count.
+        assert_eq!(active_states(&[1, 0, 0, 0, 0xFF]), [0]);
+        for &id in &active_states(&flags) {
+            assert!(has_state(&flags, id), "agrees with has_state: {id}");
+        }
+    }
+
+    /// The player Alice with a top stat list (Battle Orders and Feral Rage set, Feral Rage
+    /// only in the second copy, an aggregated array) chained to a buff-like list that chains
+    /// back to the top (a cycle).
+    fn world_with_player_buffs() -> Result<FakeMem> {
+        use d2r_core::reader::ReadMem;
+        const TOP: u64 = 0x90_0000;
+        const BUFF: u64 = 0x91_0000;
+        const TOP_ENTRIES: u64 = 0x92_0000;
+        const BUFF_ENTRIES: u64 = 0x92_1000;
+        const FULL: u64 = 0x92_2000;
+        let mut m = world()?;
+        let mut alice = vec![0u8; UNIT_SIZE];
+        m.read(P_ALICE, &mut alice)?;
+        let off = usize::try_from(unit::STATS)?;
+        alice
+            .get_mut(off..off + 8)
+            .context("stats field in unit")?
+            .copy_from_slice(&TOP.to_le_bytes());
+        m.add(P_ALICE, alice);
+        put(
+            &mut m,
+            TOP,
+            0xB70,
+            &[
+                (stat_list::OWNER_TYPE, &unit_table::PLAYER.to_le_bytes()),
+                (stat_list::OWNER_ID, &7u32.to_le_bytes()),
+                (stat_list::FLAGS, &stat_list::FLAG_FULL_STATS.to_le_bytes()),
+                (stat_list::ENTRIES, &TOP_ENTRIES.to_le_bytes()),
+                (stat_list::COUNT, &1u64.to_le_bytes()),
+                (stat_list::NEXT, &BUFF.to_le_bytes()),
+                (stat_list::FULL_ENTRIES, &FULL.to_le_bytes()),
+                (stat_list::FULL_COUNT, &2u64.to_le_bytes()),
+                (stat_list::STATE_FLAGS, &state_field([0, 1, 0, 0, 0, 0, 0, 0])),
+                (
+                    stat_list::STATE_FLAGS_COPY,
+                    &state_field([0, 1, 0, 0x0100_0000, 0, 0, 0, 0]),
+                ),
+            ],
+        )?;
+        // The buff list is only 0xE0 bytes long: its dump falls back to the short header.
+        put(
+            &mut m,
+            BUFF,
+            0xE0,
+            &[
+                (stat_list::OWNER_TYPE, &unit_table::PLAYER.to_le_bytes()),
+                (stat_list::OWNER_ID, &7u32.to_le_bytes()),
+                (stat_list::FLAGS, &0x40u32.to_le_bytes()),
+                (0x14, &120u32.to_le_bytes()),
+                (stat_list::ENTRIES, &BUFF_ENTRIES.to_le_bytes()),
+                (stat_list::COUNT, &2u64.to_le_bytes()),
+                (stat_list::NEXT, &TOP.to_le_bytes()),
+            ],
+        )?;
+        entries(&mut m, TOP_ENTRIES, &[(stat_list::LEVEL, 30)]);
+        entries(&mut m, BUFF_ENTRIES, &[(stat_list::IAS, 18), (stat_list::FHR, 9)]);
+        entries(&mut m, FULL, &[(stat_list::LEVEL, 30), (stat_list::IAS, 18)]);
+        Ok(m)
+    }
+
+    #[test]
+    fn player_states_and_buff_research() -> Result<()> {
+        let s = snapshot(&world_with_player_buffs()?, TABLE, None, None, None)?;
+        assert_eq!(s.player.addr.0, P_ALICE);
+        assert_eq!(s.player.states, [32], "Battle Orders from the first copy");
+        assert_eq!(
+            serde_json::to_value(&s)?.pointer("/player/states"),
+            Some(&serde_json::json!([32]))
+        );
+        let r = s.buff_research.context("research dump")?;
+        assert_eq!(r.states_copy, [32, 120]);
+        assert_eq!(r.full, [(0, stat_list::LEVEL, 30), (0, stat_list::IAS, 18)]);
+        let got: Vec<_> = r
+            .lists
+            .iter()
+            .map(|l| (l.addr.0, l.owner_type, l.owner_id, l.flags, l.count, l.head.len()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    0x90_0000,
+                    unit_table::PLAYER,
+                    7,
+                    stat_list::FLAG_FULL_STATS,
+                    1,
+                    stat_list::DUMP_LEN * 2
+                ),
+                (0x91_0000, unit_table::PLAYER, 7, 0x40, 2, 0xD8 * 2),
+            ],
+            "the cycle back to the top list ends the chain"
+        );
+        let buff = r.lists.get(1).context("buff list")?;
+        assert_eq!(buff.entries, [(0, stat_list::IAS, 18), (0, stat_list::FHR, 9)]);
+        assert_eq!(buff.head.get(0x28..0x30), Some("78000000"), "u32 120 at +0x14");
+        assert!(
+            !s.warnings.iter().any(|w| w.contains("stat")),
+            "research data warns about nothing: {:?}",
+            s.warnings
+        );
+
+        // No stat list: no states, no dump, no warning.
+        let s = snapshot(&world()?, TABLE, None, None, None)?;
+        assert_eq!(s.player.states, [0u32; 0]);
+        assert_eq!(s.buff_research, None);
+        Ok(())
     }
 
     /// `M0` → `M1` → `M2`, each with a stat list whose state bitfield has `bits` set (`None`: an

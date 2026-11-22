@@ -171,6 +171,10 @@ pub struct Snapshot {
     /// out of the JSON when `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shop: Option<crate::shop::Shop>,
+    /// The player's raw stat lists for the journal's `buffs` event ([`BuffResearch`]);
+    /// `None` when the player has no readable stat list. Live-mode only, not in the JSON.
+    #[serde(skip)]
+    pub buff_research: Option<BuffResearch>,
     pub warnings: Vec<String>,
 }
 
@@ -214,6 +218,54 @@ pub fn has_state(flags: &[u8], state: u32) -> bool {
         .ok()
         .and_then(|i| dwords.get(i))
         .is_some_and(|&d| u32::from_le_bytes(d) & (1 << (state % 32)) != 0)
+}
+
+/// The states set in the state bitfield `flags` (layout as in [`has_state`]), ascending.
+#[must_use]
+pub fn active_states(flags: &[u8]) -> Vec<u32> {
+    let (dwords, _) = flags.as_chunks::<4>();
+    (0u32..)
+        .zip(dwords)
+        .flat_map(|(i, &d)| {
+            let d = u32::from_le_bytes(d);
+            (0..32)
+                .filter(move |bit| d & (1 << bit) != 0)
+                .map(move |bit| i * 32 + bit)
+        })
+        .collect()
+}
+
+/// Raw dump of the player's stat lists for the buff tracker research (the journal's `buffs`
+/// event, PLAN.md "Backlog: buff tracker"): where the buffs' own lists (state id, expiry
+/// frame, Feral Rage stacks, Cyclone Armor absorb) sit is not known yet. Live-mode only.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct BuffResearch {
+    /// The states decoded from the bitfield's second copy
+    /// ([`crate::offsets::stat_list::STATE_FLAGS_COPY`]), to compare with
+    /// [`Player::states`].
+    pub states_copy: Vec<u32>,
+    /// Every list of the player's chain, from the unit's own list along
+    /// [`crate::offsets::stat_list::NEXT`], in chain order (capped by the reader).
+    pub lists: Vec<StatListDump>,
+    /// The top list's aggregated array ([`crate::offsets::stat_list::FULL_ENTRIES`]),
+    /// `(layer, stat id, value)`; empty without one.
+    pub full: Vec<(u16, u16, u32)>,
+}
+
+/// One raw stat list of [`BuffResearch::lists`].
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct StatListDump {
+    pub addr: Addr,
+    pub owner_type: u32,
+    pub owner_id: u32,
+    pub flags: u32,
+    /// Hex of the list's first [`crate::offsets::stat_list::DUMP_LEN`] bytes (fewer when
+    /// that read failed: the first [`crate::offsets::stat_list::NEXT`] + 8).
+    pub head: String,
+    /// The list's own entry count ([`crate::offsets::stat_list::COUNT`]).
+    pub count: u64,
+    /// Its `(layer, stat id, value)` entries; empty when unreadable.
+    pub entries: Vec<(u16, u16, u32)>,
 }
 
 /// The difficulty from the raw `ActMisc` value; anything above Hell (2) is unknown.
@@ -261,6 +313,11 @@ pub struct Player {
     pub strength: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dexterity: Option<u32>,
+    /// The active states (states.txt ids, ascending) from the player's state bitfield
+    /// ([`crate::offsets::stat_list::STATE_FLAGS`]): the dashboard's Buffs panel
+    /// ([`crate::buffs`]). Empty when unreadable; left out of the JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<u32>,
 }
 
 /// The player's speed stats and elemental resistances (stat ids from itemstatcost.txt, summed
