@@ -1073,8 +1073,15 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   bar's 26 px), a later one 1080, so the frames were drawn; the warning is printed only once.
   Since recording 2 also: while the stash window is open (`GameReader::stash_open`, the panel
   flag), the inventory's move / stow frames (`Window::Stash(None)`; a trade window wins,
-  `live::window_marks`). Not wired: the stash-grid frames and the store-grid frames (the
-  shown tabs are not found, see Memory layer).
+  `live::window_marks`) and the stash text box (`ui_marks::stash_sells`, user decision
+  2026-11-22: "Both: the text box now, frames later", then text only: "'bone visor 3os page
+  3' is unique enough"): one red line per stash-plan sell item on the personal stash or a
+  shared page, its name as the stash plan has it (eth, sockets, Magic / Rare) and its place —
+  "Bone Visor 3os (page 3)", "Spear (personal)"; same-named items on one page each with their
+  top-left cell, 1-based — "Rare Ring (page 3, row 2, col 5)". Personal first, then by page;
+  at most 8 lines, the last "+N more"; none when nothing is to sell. Not the inventory's, the
+  cube's or the gems / materials / runes tab's.
+  No stash-grid or store-grid frames: the shown tabs aren't read (see Memory layer).
 - UI-state research (2026-11-22): d2go reads a panel-flag byte array at a `.data` global found
   by a code signature, but D2R re-encrypts its code pages (see Memory layer) and the on-disk
   D2R.exe is encrypted. Probe instead: `D2R_UI_PROBE=1` (`crates/reader-mem/src/ui_probe.rs`,
@@ -1099,8 +1106,11 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - [x] UI-state recording 1 (2026-11-22): panel array candidate; tabs not found.
 - [x] UI-state recording 2 (2026-11-22 12:47–12:51): stash flag confirmed (`+0x18`) and
   wired (`Window::Stash(None)`); the shown stash tab / page and store tab not found.
-- [ ] Shown tabs: needs a heap search (e.g. snapshot the heap's small-value bytes at known
-  tabs and narrow, Cheat-Engine style) — not started; the session protocol below still fits.
+- [x] Stash text box: each sell item's name and page, the cell for same-named twins (2026-11-22).
+- [x] ~~Shown tabs (heap search for the stash's shown tab / page and the store tab)~~
+  **dropped** (user decision 2026-11-22: "then the text is good enough, no need for more
+  memory consumption"): text only, no stash-grid or store-grid frames. The old protocol below
+  is kept for reference.
   Was: confirm the stash flag (open and close), find the shown stash tab
   / shared page and the shown store tab → wire `Window::Stash(…)` and `vendor(…, Some(tab))`.
   Session (one town, ~4 min, every step held ≥ 5 s, nothing else in between, no item moves):

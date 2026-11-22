@@ -170,28 +170,60 @@ pub fn vendor(shop: &Shop, notes: &[ShopNote], tab: Option<u8>) -> UiMarks {
     }
 }
 
-/// The stash's items to take out and sell, where they are: "Bone Visor (page 3)",
-/// "2× Spear (personal)"; not the inventory's, cube's or the gems / materials / runes tab's.
+/// One stash item to sell: where it is and its top-left cell (`None`: not read).
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct StashSell<'a> {
+    spot: Spot,
+    name: &'a str,
+    cell: Option<(u8, u8)>,
+}
+
+/// The stash's items to take out and sell, by the stash plan's name (with "eth" and sockets)
+/// and place, personal stash first, then by page: "Bone Visor 3os (page 3)", "Spear
+/// (personal)". Items of the same name on the same page each get their top-left cell, 1-based:
+/// "Ring (page 3, row 2, col 5)". Not the inventory's, the cube's or the gems / materials /
+/// runes tab's.
 #[must_use]
 pub fn stash_sells(advice: &[Advice]) -> Vec<Line> {
-    let lines = advice
+    let mut found = Vec::new();
+    for line in advice.iter().filter(|line| line.action == Action::Sell) {
+        if !matches!(line.spot, Spot::Stash | Spot::Page(_)) {
+            continue;
+        }
+        let count = usize::try_from(line.count).unwrap_or(usize::MAX).max(1);
+        let cells = line.cells.iter().map(|c| Some((c.y, c.x)));
+        let unread = std::iter::repeat_n(None, count.saturating_sub(line.cells.len()));
+        found.extend(cells.chain(unread).map(|cell| StashSell {
+            spot: line.spot,
+            name: &line.name,
+            cell,
+        }));
+    }
+    found.sort();
+    let twins = |item: &StashSell| {
+        found
+            .iter()
+            .filter(|other| other.spot == item.spot && other.name == item.name)
+            .count()
+            > 1
+    };
+    let lines = found
         .iter()
-        .filter(|line| line.action == Action::Sell)
-        .filter_map(|line| {
-            let place = match line.spot {
-                Spot::Stash => "personal".to_owned(),
+        .map(|item| {
+            let page = match item.spot {
                 Spot::Page(n) => format!("page {n}"),
-                Spot::Inventory | Spot::Cube => return None,
+                _ => "personal".to_owned(),
             };
-            let count = if line.count > 1 {
-                format!("{}× ", line.count)
-            } else {
-                String::new()
+            let place = match item.cell {
+                Some((row, col)) if twins(item) => {
+                    format!("{page}, row {}, col {}", row + 1, col + 1)
+                }
+                _ => page,
             };
-            Some(Line {
-                text: format!("{count}{} ({place})", line.name),
+            Line {
+                text: format!("{} ({place})", item.name),
                 colour: SELL,
-            })
+            }
         })
         .collect();
     capped(lines)
@@ -612,36 +644,56 @@ mod tests {
         );
     }
 
-    fn sell(name: &str, spot: Spot, count: u32) -> Advice {
+    fn sell(name: &str, spot: Spot, at: &[CellRect]) -> Advice {
         Advice {
             name: name.to_owned(),
-            count,
-            ..advice(spot, Action::Sell, &[])
+            count: u32::try_from(at.len()).unwrap_or(1).max(1),
+            ..advice(spot, Action::Sell, at)
         }
     }
 
+    fn texts_of(lines: &[Line]) -> Vec<(&str, Rgba)> {
+        lines.iter().map(|l| (l.text.as_str(), l.colour)).collect()
+    }
+
     #[test]
-    fn the_stash_box_lists_its_sell_items_where_they_are() {
+    fn the_stash_box_says_where_each_sell_item_is() {
         use crate::guidance::Tab;
         let plan = [
-            sell("Bone Visor", Spot::Page(3), 1),
-            sell("Wand", Spot::Inventory, 1),
-            sell("Gem", Spot::Cube, 1),
+            sell("Bone Visor 3os", Spot::Page(3), &[cells(4, 1, 2, 2)]),
+            sell("Wand", Spot::Inventory, &[cells(0, 0, 1, 2)]),
+            sell("Gem", Spot::Cube, &[]),
             advice(Spot::Page(2), Action::Stow(Tab::Gems), &[]),
             advice(Spot::Stash, Action::Keep(Side::Own), &[]),
-            sell("Spear", Spot::Stash, 2),
+            sell("Spear", Spot::Stash, &[cells(7, 0, 1, 3)]),
+            sell(
+                "Rare Ring",
+                Spot::Page(3),
+                &[cells(9, 9, 1, 1), cells(0, 0, 1, 1)],
+            ),
+            sell("Rare Ring", Spot::Page(4), &[cells(2, 2, 1, 1)]),
+            sell("Amulet", Spot::Page(1), &[]),
         ];
-        let lines = stash_sells(&plan);
         assert_eq!(
-            lines
-                .iter()
-                .map(|l| (l.text.as_str(), l.colour))
-                .collect::<Vec<_>>(),
-            [("Bone Visor (page 3)", SELL), ("2× Spear (personal)", SELL)],
-            "not the inventory's or the cube's, not kept or stowed items"
+            texts_of(&stash_sells(&plan)),
+            [
+                ("Spear (personal)", SELL),
+                ("Amulet (page 1)", SELL),
+                ("Bone Visor 3os (page 3)", SELL),
+                ("Rare Ring (page 3, row 1, col 1)", SELL),
+                ("Rare Ring (page 3, row 10, col 10)", SELL),
+                ("Rare Ring (page 4)", SELL),
+            ],
+            "by place; a cell only to tell two same-named items on one page apart"
         );
-        assert!(stash_sells(&plan[1..4]).is_empty(), "none in the stash: no lines");
-        let many: Vec<Advice> = (1..=10).map(|n| sell("Spear", Spot::Page(n), 1)).collect();
+        assert!(stash_sells(&plan[1..5]).is_empty(), "none in the stash: no lines");
+    }
+
+    #[test]
+    fn a_full_stash_box_ends_in_more() {
+        let many: Vec<Advice> = (1..=10)
+            .map(|n| sell("Spear", Spot::Page(n), &[cells(0, 0, 1, 3)]))
+            .collect();
         let lines = stash_sells(&many);
         assert_eq!(lines.len(), MAX_LINES);
         assert_eq!(
