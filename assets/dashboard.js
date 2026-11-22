@@ -413,18 +413,6 @@ function next(n) {
       + (n.then ? `<div class="then">then: ${esc(n.then)}</div>` : "")
     : "";
 }
-// The player's active states as chips: good buffs, then bad ones (highlighted), then the
-// uncurated ones muted. Stacks and time left appear once the reader has them (null until then).
-function buffs(list) {
-  list = list || [];
-  $("buffpanel").hidden = !list.length;
-  $("buffs").innerHTML = list.map(b => {
-    const extra = [b.stacks != null ? "×" + b.stacks : null, b.seconds_left != null ? b.seconds_left + "s" : null]
-      .filter(Boolean).join(" ");
-    return `<span class="buff ${esc(b.kind)}" title="state ${esc(b.state)}">${esc(b.name)}`
-      + `${extra ? `<span class="n">${esc(extra)}</span>` : ""}</span>`;
-  }).join("");
-}
 // The open trade window: one column per store tab, the build's pieces first and bold (with
 // their slot), then the items whose stats beat the worn ones ("▲ better" and why), the ones
 // above the character level dimmed.
@@ -470,7 +458,6 @@ function render(r) {
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
     next(null);
-    buffs(null);
     shop(null);
     // The sound keys stay remembered; the first frame back from the menu only records.
     soundQuiet = true;
@@ -493,7 +480,6 @@ function render(r) {
   // it only records.
   if (r.offline) soundQuiet = true; else sounds(r, p.name);
   next(r.next);
-  buffs(r.buffs);
   shop(r.shop);
   gear(r.gear);
   skillTrees(r.skills);

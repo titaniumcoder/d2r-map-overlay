@@ -95,7 +95,6 @@ pub fn live_info<'a>(
         strength: None,
         dexterity: None,
         marks: &EMPTY_MARKS,
-        states: &[],
         updated_at: 1_700_000_000,
     }
 }

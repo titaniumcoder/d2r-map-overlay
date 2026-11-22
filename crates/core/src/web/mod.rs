@@ -62,7 +62,6 @@ pub struct LiveInfo<'a> {
     pub strength: Option<u32>,
     /// Base dexterity.
     pub dexterity: Option<u32>,
-    pub states: &'a [u32],
     /// Marked ground drops by unit id.
     pub marks: &'a crate::guidance::Marks,
     /// Unix seconds of the tick that produced this data.
@@ -117,7 +116,6 @@ pub fn live_json(info: &LiveInfo, panels: Panels) -> String {
         "skills": skills::skills_json(info.class, info.char_level, info.skills, panels.skill_plan),
         "shop": vendor::shop_json(info, &panels.shop),
         "drops": drops_json(info.marks),
-        "buffs": crate::buffs::lines(info.states),
     });
     if let Some(obj) = json.as_object_mut() {
         for (key, value) in panels.sections {
