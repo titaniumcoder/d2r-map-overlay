@@ -1,14 +1,12 @@
-//! The skills panel: the class's three skill trees, marked against the playstyle's skill plan
-//! ([`super::Panels::skill_plan`]).
+//! The skills panel: the class's three skill trees, marked against the playstyle's skill plan.
 
 use serde::Deserialize;
 
-/// One skill plan entry (a build file's `[[skill_plan]]`, parsed by the playstyle): by character level `by_level` the guide has `points` hard
-/// points in `skill` (CUMULATIVE, not the points added at that level).
+/// By character level `by_level`, `points` hard points in `skill` (cumulative, not added).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SkillTarget {
-    /// The skill's displayed name, as in [`crate::skills_data::SKILLS`].
+    /// Display name, as in [`crate::skills_data::SKILLS`].
     pub skill: String,
     pub points: u8,
     pub by_level: u8,
@@ -16,14 +14,8 @@ pub struct SkillTarget {
     pub note: String,
 }
 
-/// The skill trees (`live_json`'s `skills` section): `{ "total", "left", "right", "trees":
-/// [...] }`, `null` when the allocation is empty (unread) or the class unknown. `total` is
-/// the hard points spent; `left` / `right` are the mouse-button skills as `{ "id", "name" }`
-/// (or `null`). Each of the three trees (pages 1–3, the game's tab order) is `{ "name",
-/// "points", "skills": [...] }` with every class skill on that page as `{ "id", "name",
-/// "row", "col", "req", "points", "locked", "left", "right" }`: its grid place, required level,
-/// hard points, whether the required level is above the character's, and whether it is on a
-/// mouse button.
+/// The class's three skill trees in the game's tab order; `null` when the allocation is
+/// unread or the class unknown.
 pub fn skills_json(
     class: u32,
     char_level: Option<u8>,
@@ -108,8 +100,7 @@ pub fn skills_json(
     })
 }
 
-/// The skill plan's target for `skill` at character level `level`: the highest cumulative
-/// target among its entries due by then (0 when none is).
+/// The highest cumulative target for `skill` due by `level` (0 when none is).
 pub fn plan_target(plan: &[SkillTarget], skill: &str, level: u8) -> u8 {
     plan.iter()
         .filter(|t| t.by_level <= level && t.skill.trim().eq_ignore_ascii_case(skill))
@@ -118,9 +109,8 @@ pub fn plan_target(plan: &[SkillTarget], skill: &str, level: u8) -> u8 {
         .unwrap_or(0)
 }
 
-/// A skill's target at `level` and how its hard `points` compare: `"under"` below the target,
-/// `"over"` above anything the plan ever puts there (wasted points), `"ahead"` above the
-/// current target but within the plan (an early quest point), `None` on target.
+/// A skill's target at `level`, and `"under"`, `"over"` (beyond anything the plan ever puts
+/// there) or `"ahead"` (an early quest point) when `points` are off it.
 pub fn plan_mark(plan: &[SkillTarget], skill: &str, level: u8, points: u8) -> (u8, Option<&'static str>) {
     let target = plan_target(plan, skill, level);
     let most = plan_target(plan, skill, u8::MAX);
@@ -136,9 +126,8 @@ pub fn plan_mark(plan: &[SkillTarget], skill: &str, level: u8, points: u8) -> (u
     (target, mark)
 }
 
-/// Where the next skill point goes: the first plan entry, in order, that is due at `level`
-/// and not reached yet (`points_of` gives a skill's hard points by name); when every due
-/// entry is reached, the first upcoming entry not reached yet.
+/// Where the next skill point goes: the first unreached due entry, else the first unreached
+/// upcoming one.
 pub fn next_point(plan: &[SkillTarget], level: u8, points_of: impl Fn(&str) -> u8) -> Option<&SkillTarget> {
     let open = |t: &&SkillTarget| points_of(&t.skill) < t.points;
     plan.iter()

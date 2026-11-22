@@ -1,9 +1,5 @@
-//! What a playstyle makes of one snapshot ([`crate::playstyle::Playstyle`]): the area rating,
-//! the `BiS` list, the sell / move / keep / give-away plan of the player's items and the
-//! ground-drop marks, with the small types they are made of (valuables [`Tier`] and
-//! [`Category`], an item's [`Spot`] and [`Action`], the [`Bis`] selection). The reader returns
-//! raw items ([`crate::game::Snapshot`]); live mode (and `--render`) computes this next to it
-//! and hands both to the renderer, the journal and the dashboard.
+//! What a playstyle makes of one snapshot: the area rating, the `BiS` list, the plan for the
+//! player's items and the ground-drop marks.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -11,59 +7,45 @@ use serde::{Deserialize, Serialize};
 
 use crate::build;
 
-/// The mark of each marked ground drop, by the drop's unit id
-/// ([`crate::game::ItemDrop::id`]); drops without a mark aren't in it.
+/// Marked ground drops by unit id.
 pub type Marks = HashMap<u32, Mark>;
 
-/// What a ground drop is marked for (`d2r_playstyle_config::marks`); the map draws each kind in
-/// its own style.
+/// What a ground drop is marked for; the map draws each kind in its own style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MarkKind {
-    /// For the player's own builds: a base for an open runeword need, a build piece.
+    /// For the player's own builds.
     Keep,
-    /// A farm-list unique or set still missing (a keep too, drawn with a star).
+    /// A farm-list unique or set still missing.
     Farm,
-    /// Worth trading: a valuables rule (`d2r_playstyle_config::valuables`).
     Trade,
 }
 
-/// Why a ground drop is marked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mark {
     pub kind: MarkKind,
-    /// A trade mark's valuables tier and category (the ring colour); `None` for keep and farm.
+    /// A trade mark's tier and category; `None` for keep and farm.
     pub trade: Option<(Tier, Category)>,
     /// The valuables rule's name, the piece's name, or "<runeword> base".
     pub rule: String,
-    /// The short map tag drawn beside the ring (at most 4 characters: `5os`, `Shae`, `KoT`);
-    /// empty for none.
+    /// The map tag beside the ring, at most 4 characters; empty for none.
     pub label: String,
-    /// The match rests on what the overlay can't check (an unidentified unique's name, the
-    /// item's stats such as an unknown enhanced defense): drawn dashed.
+    /// The match rests on what the overlay can't check (an unidentified name, unknown stats).
     pub uncertain: bool,
 }
 
-/// The playstyle's results for one snapshot. Kept apart from the reader's [`crate::game::Snapshot`];
-/// compared with it to skip re-rendering an unchanged frame.
+/// The playstyle's results for one snapshot.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Guidance {
-    /// How the current area suits the character's build ([`build::rate`] of its damage types,
-    /// e.g. `Settings::damages_for_player` in `d2r-playstyle-config`); colours the info line's
-    /// monster levels.
+    /// How the current area suits the character's build.
     pub rating: build::Rating,
-    /// The character's `BiS` build and gear list (`Settings::resolved_bis` there); the
-    /// dashboard's chase list.
     pub bis: Option<Bis>,
-    /// What to do with each of the player's items, merged and sorted for the dashboard
-    /// (`d2r_playstyle_config::stash_plan::plan`).
+    /// What to do with each of the player's items, merged and sorted.
     pub items: Vec<Advice>,
-    /// The ground-drop rings (`d2r_playstyle_config::marks::apply`).
     pub marks: Marks,
 }
 
-/// How much a drop is worth. Declared lowest first, so the derived order is "worse < better"
-/// (and the best ring is drawn last, on top).
+/// How much a drop is worth; declared lowest first, so the derived order is worse < better.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Tier {
     B,
@@ -71,8 +53,7 @@ pub enum Tier {
     S,
 }
 
-/// What a drop is valuable for: selling (`trade`, tradable runeword bases included) or a runeword
-/// base for the player's own characters (`twink`).
+/// Selling (`trade`) or a runeword base for the player's own characters (`twink`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Category {
@@ -80,8 +61,7 @@ pub enum Category {
     Twink,
 }
 
-/// Where an item is: on the character (inventory, Horadric Cube, personal stash) or on a
-/// shared-stash page (1-based, the game's UI order).
+/// Where an item is; `Page` is a 1-based shared-stash page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Spot {
     Inventory,
@@ -91,7 +71,6 @@ pub enum Spot {
 }
 
 impl Spot {
-    /// The short label shown after the item name: `inv`, `cube`, `stash`, `page 4`.
     #[must_use]
     pub fn label(self) -> String {
         match self {
@@ -103,7 +82,6 @@ impl Spot {
     }
 }
 
-/// What a kept item is kept for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Side {
     /// The player's own builds: shared pages 1–2.
@@ -113,7 +91,6 @@ pub enum Side {
 }
 
 impl Side {
-    /// The shared pages of the side, as shown: `1–2` / `3–4`.
     #[must_use]
     pub const fn pages(self) -> &'static str {
         match self {
@@ -123,10 +100,7 @@ impl Side {
     }
 }
 
-/// One of the stash window's tabs for stackables (D2R shows `Personal | Shared | Gems |
-/// Materials | Runes`; the game sorts each stackable into its tab by type,
-/// [`crate::stash::tab_of`]). In memory the three are one "advanced" tab unit
-/// ([`crate::stash::TabKind::Materials`]).
+/// The stash window's tabs for stackables; in memory the three are one "advanced" tab unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Tab {
     Gems,
@@ -135,7 +109,6 @@ pub enum Tab {
 }
 
 impl Tab {
-    /// The short label shown as a move's target: `gems`, `mats`, `runes`.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -146,43 +119,35 @@ impl Tab {
     }
 }
 
-/// What to do with an item. Declared in the dashboard's order (the derived `Ord` sorts by it).
+/// What to do with an item, declared in the dashboard's order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Action {
     Sell,
-    /// Kept, but on the wrong place: move it to the side's pages.
+    /// Kept, but on the wrong pages.
     Move(Side),
-    /// A gem, rune or material outside its stash tab: move it there (user rule, 2026-11-22).
+    /// A gem, rune or material outside its stash tab.
     Stow(Tab),
-    /// Kept where it is.
     Keep(Side),
     GiveAway,
 }
 
-/// One line of the dashboard's Sell / Keep panel: identical items (same name, spot and action)
-/// merged with their count.
+/// One line of the Sell / Keep panel; identical items merged with their count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Advice {
     pub name: String,
     pub spot: Spot,
     pub action: Action,
-    /// Why a scored magic / rare item is sold ("no build stats", "worse than worn").
+    /// Why a scored magic / rare item is sold.
     pub reason: Option<&'static str>,
     pub count: u32,
 }
 
-/// A character's `BiS` selection and (legacy) inline gear list: `[bis.<name>]` (user request,
-/// 2026-11-17). Since the build files exist, the webapp writes only `build` here; the inline
-/// `slots`/`merc_slots` stay for hand-written entries and win over the selected build's.
+/// A character's `BiS` selection; hand-written inline `slots` win over the selected build's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bis {
-    /// The selected build's slug (lowercased build name from `builds/*.toml`, e.g.
-    /// "blood boil"); empty when the entry is inline-only or nothing is selected.
+    /// The selected build's slug; empty when nothing is selected.
     pub build: String,
-    /// Slot name → pieces in chase order (`"Name@<required level>"`; the guide shows the
-    /// highest-level one the character can currently use, so a slot can graduate from Spirit
-    /// to Enigma as the character levels).
+    /// Slot name → pieces in chase order, as `"Name@<required level>"`.
     pub slots: BTreeMap<String, Vec<String>>,
-    /// The mercenary's slot name → pieces.
     pub merc_slots: BTreeMap<String, Vec<String>>,
 }

@@ -1,8 +1,6 @@
 //! The shared-stash panel: the normal pages and the gems / runes / materials tab.
 
-/// The normal shared-stash pages as `[{ "page": n, "items": [{ "text", "colour" }] }]`, UI
-/// order, 1-based page numbers ([`crate::stash::TabKind::Page`]); the materials tab is left
-/// to [`stash_materials`].
+/// The normal shared-stash pages in UI order.
 pub fn stash_pages(tabs: &[crate::stash::StashTab]) -> Vec<serde_json::Value> {
     tabs.iter()
         .filter_map(|tab| match tab.kind {
@@ -15,9 +13,7 @@ pub fn stash_pages(tabs: &[crate::stash::StashTab]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// One stash item with its quality tag as `{ "text", "colour" }`. Uniques are gold and sets
-/// green (the overlay's drop colours); magic and rare get their classic colours, everything
-/// else stays plain.
+/// One stash item with its quality tag, in the overlay's drop colours.
 fn stash_item_line(item: &crate::stash::StashItem) -> serde_json::Value {
     use crate::offsets::item_data;
     let (tag, colour) = match u32::from(item.quality) {
@@ -28,8 +24,7 @@ fn stash_item_line(item: &crate::stash::StashItem) -> serde_json::Value {
         _ => ("", "#dddddd"),
     };
     let mut tag = tag.to_owned();
-    // Base-name items already carry an "eth " prefix from the keep-list naming; only the
-    // unique/set names need the tag.
+    // Base-name items already carry an "eth " prefix in their name.
     if item.ethereal
         && matches!(
             u32::from(item.quality),
@@ -49,13 +44,11 @@ fn stash_item_line(item: &crate::stash::StashItem) -> serde_json::Value {
     serde_json::json!({ "text": text, "colour": colour })
 }
 
-/// The gems/runes/materials tab's stacks as `{ "gems": [...], "runes": [...], "other": [...] }`,
-/// each entry `{ "name", "qty", "code" }`: gems by colour (amethyst … skull) then grade
-/// (chipped … perfect), runes by rune number, the rest by name. Emptied stacks (quantity 0)
-/// are left out; a stack whose size was unreadable keeps `"qty": null`.
+/// The materials tab's stacks: gems by colour then grade, runes by number, the rest by name.
+/// Emptied stacks are left out; an unreadable size stays `null`.
 pub fn stash_materials(tabs: &[crate::stash::StashTab]) -> serde_json::Value {
     use crate::items::{self, DropKind};
-    // A fn, not a closure: closures can't be generic over the three key types.
+    // A fn, not a closure: closures can't be generic over the key type.
     fn values<K>(v: Vec<(K, serde_json::Value)>) -> Vec<serde_json::Value> {
         v.into_iter().map(|(_, e)| e).collect()
     }

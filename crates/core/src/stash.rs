@@ -1,17 +1,5 @@
-//! The shared stash as read from unit memory (see `research/notes/stash-format.md` §3 and
-//! `PLAN.md`): each shared tab is a player-type unit without an act, one per page. The
-//! player unit's own `Inventory` lists the live tabs in the game's UI order
-//! ([`crate::offsets::inventory::TAB_LIST`]: the normal pages, then the gems/runes/materials
-//! tab), and each tab unit's `Inventory` chains its items
-//! ([`crate::offsets::inventory::FIRST_ITEM`]). Stale tab units from earlier characters linger
-//! in the unit table; they are not in the list (and the fallback discriminator,
-//! [`crate::offsets::inventory::OWNER_ID`] = the current player, leaves them out too).
-//!
-//! D2R loads the stash contents only once the stash has been opened in the game, and the tab
-//! units vanish again later (UI closed, area transitions), so the session caches the captured
-//! tabs for the rest of the game and drops the cache only when the player unit id changes
-//! (user decision, 2026-11-17; see `session::Session`). A torn mid-load read (tabs present,
-//! every tab still empty) never downgrades a cache that has items.
+//! The shared stash's model (tabs, items) and what is derived from it: material names and
+//! tabs, runewords by their runes, and copy counts across the account's holdings.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,38 +10,33 @@ use crate::names::ItemKind;
 use crate::offsets::item_data;
 use crate::runewords_data::{RUNEWORDS, Runeword};
 
-/// One item of a shared-stash tab, named for the dashboard and the `BiS` ticks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StashItem {
-    /// The unique or set display name when known, else the base name with `eth` and sockets
-    /// ([`crate::names::display_name`]); a
-    /// materials-tab stack is named by [`material_name`] when its code is known.
+    /// The unique or set name when known, else the base name with `eth` and sockets.
     pub name: String,
-    /// The item code (`"r01"`), `None` when the items table wasn't found.
+    /// `None` when the items table wasn't found.
     pub code: Option<String>,
-    /// Raw `ItemData` quality (2 normal, 4 magic, 5 set, 6 rare, 7 unique; see
-    /// [`item_data::QUALITY`]).
+    /// Raw `ItemData` quality ([`item_data::QUALITY`]).
     pub quality: u8,
     pub identified: bool,
     pub ethereal: bool,
     pub runeword: bool,
-    /// Stack size ([`item_data::QUANTITY`]): only items of the gems/runes/materials tab.
+    /// Stack size; only on the materials tab.
     pub quantity: Option<u32>,
-    /// Socket count ([`ItemDrop::sockets`]); 0 in dumps written before it existed.
+    /// 0 in dumps written before it existed.
     #[serde(default)]
     pub sockets: u8,
-    /// uniqueitems / setitems row of a unique or set item ([`ItemDrop::unique_index`]).
+    /// uniqueitems / setitems row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique_index: Option<u32>,
-    /// The stats of a magic, rare or crafted item ([`ItemDrop::stats`]); empty otherwise.
+    /// Magic, rare or crafted items only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stats: Vec<crate::item_stats::ItemStat>,
 }
 
 impl StashItem {
-    /// The item as the playstyle's rules take it (`d2r_playstyle_config::stash_plan`): the fields the
-    /// reader had, the flags rebuilt from the identified / ethereal / runeword bits (the only
-    /// ones the rules look at), no unit id or position.
+    /// The item as the playstyle's rules take it: only the identified / ethereal / runeword
+    /// flags, no unit id or position.
     #[must_use]
     pub fn to_drop(&self) -> ItemDrop {
         let quality = u32::from(self.quality);
@@ -78,8 +61,7 @@ impl StashItem {
     }
 }
 
-/// Which shared-stash tab: a normal page, numbered 1-based in the game's UI order, or the
-/// gems/runes/materials tab. JSON: `{"page": 1}` / `"materials"`.
+/// A normal page (1-based, UI order) or the gems/runes/materials tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TabKind {
@@ -87,15 +69,13 @@ pub enum TabKind {
     Materials,
 }
 
-/// One shared-stash tab with its items, in the tab's inventory order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StashTab {
     pub kind: TabKind,
     pub items: Vec<StashItem>,
 }
 
-/// The `StashItem` for a stored item's fields; `quantity` is the stack size of a
-/// materials-tab item (`None` elsewhere).
+/// `quantity`: the stack size of a materials-tab item.
 #[must_use]
 pub fn stash_item(drop: &ItemDrop, quantity: Option<u32>) -> StashItem {
     let material = quantity.and(drop.code.as_deref()).and_then(material_name);
@@ -121,8 +101,7 @@ pub const RUNE_NAMES: [&str; 33] = [
     "Ber", "Jah", "Cham", "Zod",
 ];
 
-/// Required character level of each rune by rune number (`r01` El … `r33` Zod): misc.txt
-/// `levelreq` (blizzhackers/d2data `misc.json`, D2R). Hel is 0 there, not 33.
+/// misc.txt `levelreq` by rune number (Hel is 0 there, not 33).
 const RUNE_LEVELS: [u32; 33] = [
     11, 11, 13, 13, 15, 15, 17, 19, 21, 23, 25, 27, 29, 31, 0, 35, 37, 39, 41, 43, 45, 47, 49, 51, 53, 55,
     57, 59, 61, 63, 65, 67, 69,
@@ -136,11 +115,8 @@ fn rune_number(code: &str) -> Option<u8> {
     }
 }
 
-/// The runeword spelled by the rune `codes` in socket order (`["r07", "r05"]` (Tal Eth) →
-/// Stealth); `None` when a code isn't a rune or no runeword has exactly that sequence.
-/// When several runewords share the runes (Shael Ko Eld is "Hustle (armor)" and
-/// "Hustle (weapon)"), the one whose bases fit the item code `base` wins; without a code
-/// (or no fit) the first in table order.
+/// The runeword spelled by the rune `codes` in socket order. When several share the runes
+/// (Hustle armor / weapon), the one whose bases fit `base` wins, else the first.
 #[must_use]
 pub fn runeword_by_runes(codes: &[String], base: Option<&str>) -> Option<&'static Runeword> {
     let names = codes
@@ -160,8 +136,7 @@ pub fn runeword_by_runes(codes: &[String], base: Option<&str>) -> Option<&'stati
     Some(matches.find(|w| fits(w)).unwrap_or(first))
 }
 
-/// The armour-side item-type groups of [`Runeword::bases`] (every other group in the table
-/// is a weapon group: "weapons", "axes", "missile weapons", ...).
+/// The armour-side item-type groups of [`Runeword::bases`]; every other one is a weapon group.
 const ARMOR_GROUPS: [&str; 7] = [
     "armor",
     "auric shields",
@@ -172,15 +147,13 @@ const ARMOR_GROUPS: [&str; 7] = [
     "voodoo heads",
 ];
 
-/// Whether runeword `word` can be made in the base with item code `code`, coarsely: a weapon
-/// (a weapons.txt code) needs a weapon group, anything else an armour group.
+/// Coarsely: a weapon needs a weapon group, anything else an armour group.
 fn base_fits(word: &Runeword, code: &str) -> bool {
     let weapon = crate::weapons_data::name(code).is_some();
     word.bases.iter().any(|b| ARMOR_GROUPS.contains(b) != weapon)
 }
 
-/// The required character level of runeword `word`'s runes: the highest rune `levelreq`
-/// (a runeword item needs the max of that and its base's own requirement).
+/// The highest rune `levelreq` of `word` (the base's own requirement aside).
 #[must_use]
 pub fn runes_level(word: &Runeword) -> Option<u32> {
     word.runes
@@ -197,10 +170,7 @@ pub fn runes_level(word: &Runeword) -> Option<u32> {
 /// Gem grade prefixes by [`items::gem`] grade; the normal grade has none.
 const GEM_GRADES: [&str; 5] = ["Chipped ", "Flawed ", "", "Flawless ", "Perfect "];
 
-/// Names of the stackables the game sorts into the stash's Materials tab (user screenshot,
-/// 2026-11-22: uber keys, organs, rejuvenation potions, the Colossal Ancient statues, essences,
-/// token, Standard of Heroes, worldstone shards; misc.txt names). [`tab_of`] takes its codes
-/// as the Materials tab's. Unknown codes keep their code as the name.
+/// The stackables (other than gems and runes) the game sorts into the Materials tab.
 const OTHER_MATERIALS: [(&str, &str); 30] = [
     ("rvs", "Rejuvenation Potion"),
     ("rvl", "Full Rejuvenation Potion"),
@@ -234,10 +204,7 @@ const OTHER_MATERIALS: [(&str, &str); 30] = [
     ("xa5", "Northern Worldstone Shard"),
 ];
 
-/// The stash tab the game sorts a stackable of item code `code` into (user rule, 2026-11-22:
-/// "materials all go to Materials, gems to the Gems tab, runes to the Runes tab"): every gem
-/// and skull grade to Gems, the runes to Runes, the [`OTHER_MATERIALS`] to Materials; `None`
-/// for anything else.
+/// The stash tab the game sorts a stackable into; `None` for anything else.
 #[must_use]
 pub fn tab_of(code: &str) -> Option<Tab> {
     if OTHER_MATERIALS.iter().any(|(c, _)| *c == code) {
@@ -253,8 +220,7 @@ pub fn tab_of(code: &str) -> Option<Tab> {
     }
 }
 
-/// The in-game name of a gem, rune or other stackable by its code (`"gcv"` → `"Chipped
-/// Amethyst"`, `"r01"` → `"El Rune"`); `None` for an unknown code.
+/// The in-game name of a gem, rune or other stackable (`"gcv"` → `"Chipped Amethyst"`).
 #[must_use]
 pub fn material_name(code: &str) -> Option<String> {
     if let Some(&(_, name)) = OTHER_MATERIALS.iter().find(|(c, _)| *c == code) {
@@ -273,9 +239,7 @@ pub fn material_name(code: &str) -> Option<String> {
     }
 }
 
-/// The runes and gems among `items` (the player's own inventory, cube and stash items; the
-/// shared materials tab's stacks are counted from [`StashTab`]s instead) as `(name, count)`
-/// with [`material_name`] names, sorted by name: the recipe inputs' ✓ on the dashboard.
+/// The runes and gems among `items` as `(name, count)`, sorted by name.
 #[must_use]
 pub fn held_materials<'a>(items: impl IntoIterator<Item = &'a ItemDrop>) -> Vec<(String, u32)> {
     let mut out: Vec<(String, u32)> = Vec::new();
@@ -297,8 +261,7 @@ pub fn held_materials<'a>(items: impl IntoIterator<Item = &'a ItemDrop>) -> Vec<
     out
 }
 
-/// The white (normal or superior quality) socketed bases among `items` that hold no runeword
-/// yet, as `"[eth ]<base name> <n>os"`, sorted: the recipe base lines' hint on the dashboard.
+/// Normal or superior socketed bases without a runeword, as `"[eth ]<base> <n>os"`, sorted.
 #[must_use]
 pub fn white_bases<'a>(items: impl IntoIterator<Item = &'a ItemDrop>) -> Vec<String> {
     let mut out: Vec<String> = items
@@ -320,11 +283,8 @@ pub fn white_bases<'a>(items: impl IntoIterator<Item = &'a ItemDrop>) -> Vec<Str
     out
 }
 
-/// Display names of the identified unique/set items and the named runewords (the reader
-/// names them from their socketed runes) across `tabs`, first-seen order, duplicates
-/// (case-insensitive) left out: the ✓ source for `BiS` pieces sitting in the stash. An
-/// identified unique/set whose `item_data::FILE_INDEX` was unreadable keeps its base name
-/// here, which no `BiS` piece name matches — a wrong tick is therefore unlikely.
+/// Identified unique/set and named runeword names across `tabs`, first-seen order, without
+/// case-insensitive duplicates.
 #[must_use]
 pub fn stash_names(tabs: &[StashTab]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -343,65 +303,67 @@ pub fn stash_names(tabs: &[StashTab]) -> Vec<String> {
     out
 }
 
-/// What the account holds of named uniques, sets and runewords, for counting copies: the
-/// farm list's status and the stage switch's `switch_requires` groups
-/// (`d2r_playstyle_config::config::SwitchGroup`).
+/// What the account holds of named uniques, sets and runewords, for counting copies.
 #[derive(Debug, Clone, Copy)]
 pub struct Holdings<'a> {
-    /// The (session-cached) shared-stash tabs.
     pub stash: &'a [StashTab],
-    /// The played character's identified unique/set and runeword names, each once
-    /// ([`crate::game::Snapshot::owned_names`]: worn, carried, cubed, privately stashed).
+    /// The character's identified unique/set and runeword names, each once.
     pub owned: &'a [String],
-    /// One name per runeword copy outside the shared stash, the mercenary's worn ones
-    /// included ([`crate::game::Snapshot::runeword_copies`]).
+    /// One name per runeword copy outside the shared stash, the mercenary's included.
     pub runeword_copies: &'a [String],
-    /// One name per identified unique/set item and runeword the mercenary wears
-    /// ([`crate::game::Snapshot::merc_worn`]); only its uniques/sets count here, its runewords
-    /// are already in `runeword_copies`.
+    /// Only its uniques/sets count here; its runewords are in `runeword_copies`.
     pub merc_worn: &'a [String],
 }
 
 impl Holdings<'_> {
-    /// The copies of `name`: `(in the shared stash, on the played character or its
-    /// mercenary)`, matched by [`crate::names::same_name`]. `kind` says which items count;
-    /// `None` takes a runeword name ([`crate::runewords_data::lookup`]) as a runeword and any
-    /// other as a unique or set. A runeword counts one per copy (the stash's runeword items
-    /// and `runeword_copies`); a unique or set counts its identified stash items of that
-    /// quality, at most one copy the character holds (`owned` lists each name once) and each
-    /// one the mercenary wears.
+    /// `(in the shared stash, on the character or its mercenary)` copies of `name`. `None`
+    /// kind: a runeword name counts as a runeword, any other as a unique or set.
     #[must_use]
     pub fn copies(&self, name: &str, kind: Option<ItemKind>) -> (u32, u32) {
-        let same = |n: &str| crate::names::same_name(n, name);
-        let stash_items = self.stash.iter().flat_map(|tab| &tab.items);
         let runeword = kind.map_or_else(
             || crate::runewords_data::lookup(name).is_some(),
             |kind| kind == ItemKind::Runeword,
         );
         let (stashed, carried) = if runeword {
-            (
-                stash_items.filter(|i| i.runeword && same(&i.name)).count(),
-                self.runeword_copies.iter().filter(|n| same(n)).count(),
-            )
+            self.runeword_copies_of(name)
         } else {
-            let quality_ok = |q: u32| match kind {
-                Some(ItemKind::Unique) => q == item_data::QUALITY_UNIQUE,
-                Some(ItemKind::Set) => q == item_data::QUALITY_SET,
-                _ => matches!(q, item_data::QUALITY_UNIQUE | item_data::QUALITY_SET),
-            };
-            (
-                stash_items
-                    .filter(|i| i.identified && quality_ok(u32::from(i.quality)) && same(&i.name))
-                    .count(),
-                usize::from(self.owned.iter().any(|n| same(n)))
-                    .saturating_add(self.merc_worn.iter().filter(|n| same(n)).count()),
-            )
+            self.unique_or_set_copies_of(name, kind)
         };
         let clamp = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
         (clamp(stashed), clamp(carried))
     }
 
-    /// All copies of `name`, wherever held ([`Holdings::copies`] with the kind inferred).
+    /// One per copy: the stash's runeword items and `runeword_copies`.
+    fn runeword_copies_of(&self, name: &str) -> (usize, usize) {
+        let same = |n: &str| crate::names::same_name(n, name);
+        let stashed = self.stash_items().filter(|i| i.runeword && same(&i.name)).count();
+        let carried = self.runeword_copies.iter().filter(|n| same(n)).count();
+        (stashed, carried)
+    }
+
+    /// Identified stash items of the quality, at most one the character holds (`owned` lists
+    /// each name once) and each one the mercenary wears.
+    fn unique_or_set_copies_of(&self, name: &str, kind: Option<ItemKind>) -> (usize, usize) {
+        let same = |n: &str| crate::names::same_name(n, name);
+        let quality_ok = |q: u32| match kind {
+            Some(ItemKind::Unique) => q == item_data::QUALITY_UNIQUE,
+            Some(ItemKind::Set) => q == item_data::QUALITY_SET,
+            _ => matches!(q, item_data::QUALITY_UNIQUE | item_data::QUALITY_SET),
+        };
+        let stashed = self
+            .stash_items()
+            .filter(|i| i.identified && quality_ok(u32::from(i.quality)) && same(&i.name))
+            .count();
+        let carried = usize::from(self.owned.iter().any(|n| same(n)))
+            .saturating_add(self.merc_worn.iter().filter(|n| same(n)).count());
+        (stashed, carried)
+    }
+
+    fn stash_items(&self) -> impl Iterator<Item = &StashItem> {
+        self.stash.iter().flat_map(|tab| &tab.items)
+    }
+
+    /// All copies of `name`, wherever held, the kind inferred.
     #[must_use]
     pub fn count(&self, name: &str) -> u32 {
         let (stashed, carried) = self.copies(name, None);
@@ -596,7 +558,6 @@ mod tests {
         }
     }
 
-    /// An item with `code`, `quality` and `sockets` (no flags) for the holdings tests.
     fn drop_of(code: &str, quality: u32, sockets: u8) -> ItemDrop {
         ItemDrop {
             id: 0,
@@ -651,7 +612,6 @@ mod tests {
 
     #[test]
     fn rune_names_are_the_generated_rune_set() {
-        // The generated runeword data lists the same 33 names (in another order).
         let mut ours = RUNE_NAMES.to_vec();
         let mut generated = crate::runewords_data::RUNE_NAMES.to_vec();
         ours.sort_unstable();

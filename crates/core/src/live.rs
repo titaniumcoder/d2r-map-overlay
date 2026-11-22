@@ -1,9 +1,5 @@
-//! Live mode reader thread: follows the game process and sends rendered frames to the UI loop.
-//!
-//! Waits for the [`GameReader`] to attach to D2R (once per process), then snapshots and renders
-//! ~5 times a second. Each snapshot is folded into a [`Session`] (markers seen, superunique
-//! kills; saved by [`game_file`] across overlay restarts); unchanged results are not re-rendered
-//! or sent. The overlay is hidden in towns and outside a game.
+//! Live mode reader thread: follows the game process, snapshots it ~5 times a second and sends
+//! rendered frames to the UI loop. The overlay is hidden in towns and outside a game.
 
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -22,16 +18,12 @@ use ab_glyph::FontVec;
 
 use crate::{config, cows, game_file, info, journal, played, quest_log, render, web};
 
-/// Snapshot interval (~5 Hz).
 const TICK: Duration = Duration::from_millis(200);
-/// Wait between attempts to find the game or open its memory.
 const RETRY: Duration = Duration::from_secs(2);
 
-/// The UI loop dropped its end of the channel: stop.
 #[derive(Debug)]
 struct UiGone;
 
-/// Unix seconds right now (`0` before the epoch, which no live clock is).
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -42,10 +34,8 @@ fn send(tx: &Sender<Msg>, msg: Msg) -> Result<(), UiGone> {
     tx.send(msg).map_err(|_| UiGone)
 }
 
-/// Runs until the UI is gone, reading the game through `reader` and evaluating it with
-/// `playstyle`. `player` picks among several player units; `size` is the frame size;
-/// `journal` records what is seen (see [`crate::journal`]); `config` picks the shrines drawn;
-/// `files` are the playstyle's, which it reloads from when they change on disk.
+/// Runs until the UI is gone. `player` picks among several player units; `files` are the
+/// playstyle's, hot-reloaded when they change on disk.
 #[allow(
     clippy::too_many_arguments,
     reason = "plain pass-through of main's settings; a struct for one caller adds nothing"
@@ -60,16 +50,12 @@ pub fn run<P: Playstyle + 'static>(
     config: &config::Config,
     files: &Files,
 ) {
-    // The companion web page: selects each character's build in a browser (user decision,
-    // 2026-11-17). Its `/config` JSON and selection writes are the playstyle's (`P`).
     let web_files = files.clone();
     thread::spawn(move || web::serve::<P>(&web_files));
     let config_path = config::default_path();
     let mut watched = Watched::now(config_path.as_deref(), files);
     let mut config = config.clone();
     loop {
-        // Hot-reload while no game is attached (webapp edits, hand edits); during a session
-        // `follow_game` reloads on its own tick loop.
         if check_reload(&mut config, config_path.as_deref(), files, &mut watched) {
             playstyle.reload(files);
         }
@@ -94,11 +80,8 @@ pub fn run<P: Playstyle + 'static>(
             ),
             Attach::Exited { pid } => (pid, Ok(())),
         };
-        // `follow_game` may have reloaded on its own: resync so the next outer check doesn't
-        // reload the same file twice.
+        // `follow_game` reloads on its own; resync so the same change isn't reloaded twice.
         watched = Watched::now(config_path.as_deref(), files);
-        // The process is gone (or never got a table): hide until the next one is in a game.
-        // The dashboard keeps the last snapshot, marked offline.
         web::clear_live();
         if follow.and_then(|()| send(tx, Msg::Hide)).is_err() {
             return;
@@ -107,16 +90,12 @@ pub fn run<P: Playstyle + 'static>(
     }
 }
 
-/// The file's last modification time, if readable.
 fn modified_at(path: &std::path::Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// The watched state behind the hot reload: `config.toml`'s mtime and the playstyle's files
-/// ([`Files::fingerprint`]: every file it reads, its `builds/` folders listed). Re-checked
-/// every tick (user decision, 2026-11-17: a cheap `read_dir` per builds folder): a directory's
-/// own mtime would miss in-place edits of a build file, while this notices both those and
-/// added/removed files.
+/// What the hot reload compares each tick. Per-file mtimes, since a directory's own mtime
+/// misses in-place edits of a build file.
 #[derive(Debug, Default, PartialEq)]
 struct Watched {
     config: Option<SystemTime>,
@@ -124,7 +103,6 @@ struct Watched {
 }
 
 impl Watched {
-    /// The current on-disk state of `config_path` and the playstyle's `files`.
     fn now(config_path: Option<&Path>, files: &Files) -> Self {
         Self {
             config: config_path.and_then(modified_at),
@@ -133,12 +111,9 @@ impl Watched {
     }
 }
 
-/// Hot-reloads `config` when `config.toml` changed on disk (webapp edits, hand edits). A failed
-/// reload (unreadable, invalid TOML) logs and keeps the current config, so a half-written or
-/// broken file can never blank the overlay's settings; the watched state is still recorded,
-/// so the error is logged once per change, not once per tick. True when `config.toml` or a
-/// playstyle file changed: the caller then reloads the playstyle (which keeps what a broken
-/// file of its own decided, [`Playstyle::reload`]).
+/// Reloads `config` when `config.toml` changed on disk. True when it or a playstyle file
+/// changed: the caller then reloads the playstyle. The new state is recorded even when the
+/// reload fails, so a broken file is reported once per change.
 fn check_reload(
     config: &mut config::Config,
     config_path: Option<&Path>,
@@ -151,14 +126,19 @@ fn check_reload(
     }
     let config_changed = watched.config != now.config;
     *watched = now;
-    let Some(path) = config_path.filter(|_| config_changed) else {
-        return true;
-    };
+    if let Some(path) = config_path.filter(|_| config_changed) {
+        reload_config(config, path);
+    }
+    true
+}
+
+/// A file that can't be read or parsed keeps the current config.
+fn reload_config(config: &mut config::Config, path: &Path) {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) => {
             eprintln!("config {}: {e}; keeping the current one", path.display());
-            return true;
+            return;
         }
     };
     match config::parse(&text) {
@@ -182,11 +162,27 @@ fn check_reload(
             );
         }
     }
-    true
 }
 
-/// Publishes one tick's dashboard JSON ([`web::live_json`]) from the snapshot, the dashboard's
-/// text blocks and the quest flags, plus the playstyle's panels for its `evaluation`.
+/// Publishes the dashboard JSON and the gear state the config page annotates from.
+fn publish_web<'a, P: Playstyle>(
+    snap: &game::Snapshot,
+    playstyle: &'a P,
+    evaluation: &'a EvaluationOf<'_, P>,
+    width: u32,
+    quests: &[u16],
+) {
+    let blocks = render::text_blocks(snap, &evaluation.guidance, width, info::font());
+    web::publish_gear(web::GearInfo {
+        worn: game::worn_names(&snap.equipped_items),
+        owned: snap.owned_names.clone(),
+        stash: snap.stash_names.clone(),
+        equipped: snap.equipped.clone(),
+        merc_equipped: snap.merc_equipped.clone(),
+    });
+    publish_dashboard(snap, playstyle, evaluation, &blocks, quests);
+}
+
 fn publish_dashboard<'a, P: Playstyle>(
     snap: &game::Snapshot,
     playstyle: &'a P,
@@ -224,7 +220,7 @@ fn publish_dashboard<'a, P: Playstyle>(
     web::publish_live(web::live_json(&info, playstyle.panels(evaluation, &info)));
 }
 
-/// Snapshots at [`TICK`] until the process exits; `Ok(())` then, `Err` if the UI is gone.
+/// Snapshots at [`TICK`] until the process exits; `Err` if the UI is gone.
 #[allow(
     clippy::too_many_arguments,
     reason = "plain pass-through of run's settings; a struct for one caller adds nothing"
@@ -248,39 +244,29 @@ fn follow_game<P: Playstyle>(
     }
     let mut saver = game_file::Saver::new(state_path);
     let mut cow_stats = cows::Counter::open(cows::default_path(), journal::default_dir().as_deref());
-    // Last-played times for the config page's order (user request, 2026-11-18).
     let mut last_played = played::Tracker::open(played::default_path(), || {
         reader
             .save_dir()
             .map_or_else(played::Played::new, |dir| played::seed_from_saves(&dir))
     });
-    // Each difficulty's finished quests per character: the game shows only the current one's.
+    // The game shows only the current difficulty's quests; this remembers the others.
     let mut quest_memory = quest_log::Memory::open(quest_log::default_path());
     let mut dedup = Dedup::default();
-    // The last evaluation's wants, with the player unit they were computed for. The marks are
-    // needed before the session merge (the journal records them) and the evaluation needs the
-    // merge, so a tick's keep marks use the previous tick's wants: one tick (~200 ms) late.
-    // Another player unit (a new game, another character) starts from none (trade marks only)
-    // instead of the old character's keep marks.
+    // The previous tick's wants, by player unit id: the drop marks are needed before the
+    // session merge that the evaluation needs, so keep marks run one tick late.
     let mut wants = (None, P::Wants::default());
     loop {
         let start = Instant::now();
-        // Hot-reload here, not only in `run`: this loop is where every consumer (the shrines,
-        // the playstyle) reads `config`, and it only returns when D2R exits.
         if check_reload(config, config_path, files, &mut watched) {
             playstyle.reload(files);
         }
-        // The previous player id (or game.json's on a restart) keeps the choice sticky.
         match reader.snapshot(player, session.player_id()) {
             Ok(mut snap) => {
-                // The playstyle's view of the snapshot: the drop marks first (the journal records
-                // them with the drop); the rest once the session's stash is in.
                 if wants.0 != Some(snap.player.id) {
                     wants = (None, P::Wants::default());
                 }
                 let marks = playstyle.mark_drops(&mut snap.drops, &wants.1);
-                // Before `apply` and the shrine filter: they drop monster presets and shrines
-                // the journal wants to see.
+                // Before `apply` and the shrine filter, which drop what the journal records.
                 journal.observe(&snap, &marks);
                 last_played.record(
                     &snap.player.name,
@@ -290,10 +276,8 @@ fn follow_game<P: Playstyle>(
                 );
                 let update = session.apply(&mut snap);
                 config.shrines.retain_shown(&mut snap.shrines, snap.difficulty);
-                // Before the evaluation: the route reads the quests done.
                 let quests = reader.quest_flags(update.new_game);
                 let quests_done = quest_memory.observe(&snap.player.name, snap.difficulty, quests);
-                // After `session.apply`: the item plan counts the cached stash pages.
                 let mut evaluation =
                     playstyle.evaluate(&snap, last_played.reached(&snap.player.name), quests_done);
                 if let Some(slug) = evaluation.reached {
@@ -305,39 +289,12 @@ fn follow_game<P: Playstyle>(
                     journal.arrival(&snap, arrival);
                 }
                 if update.new_game {
-                    eprintln!(
-                        "new game (previous player no longer present): remembered markers and kills cleared; \
-                         player {:?} chosen by {} among {} candidates",
-                        snap.player.name,
-                        snap.player_chosen_by.label(),
-                        snap.player_candidates.len()
-                    );
+                    log_new_game(&snap);
                 }
                 cow_stats.record(&update, session.cow_kills());
                 saver.tick(&mut session, Instant::now());
-                // The webapp's live dashboard gets the level, keep, sell, give-away and BiS
-                // blocks the overlay no longer draws (2026-11-17 text-stack migration);
-                // serialization of a few short lines at 5 Hz is cheap. Cleared again on
-                // snapshot errors (menu, loading) and game exit.
-                let blocks = render::text_blocks(&snap, &evaluation.guidance, w, info::font());
-                // The config page annotates its resolved `BiS` view with the live ✓ and the
-                // equipped-quality pairs; published alongside the dashboard JSON.
-                web::publish_gear(web::GearInfo {
-                    worn: game::worn_names(&snap.equipped_items),
-                    owned: snap.owned_names.clone(),
-                    stash: snap.stash_names.clone(),
-                    equipped: snap.equipped.clone(),
-                    merc_equipped: snap.merc_equipped.clone(),
-                });
-                publish_dashboard(&snap, &*playstyle, &evaluation, &blocks, quests);
-                if let Some((tabs, items)) = update.stash_captured {
-                    eprintln!("shared stash captured: {tabs} tabs, {items} items");
-                    journal.stash(true, tabs, items);
-                }
-                if update.stash_invalidated {
-                    eprintln!("shared stash cache dropped (new game)");
-                    journal.stash(false, 0, 0);
-                }
+                publish_web(&snap, &*playstyle, &evaluation, w, quests);
+                record_stash_cache(&update, journal);
                 if let Some(msg) = tick_msg(&mut dedup, snap, evaluation.guidance, (w, h), info::font()) {
                     send(tx, msg)?;
                 }
@@ -347,7 +304,6 @@ fn follow_game<P: Playstyle>(
                     cow_stats.flush();
                     return Ok(());
                 }
-                // Menu or loading: the dashboard keeps the last game, marked offline.
                 web::clear_live();
                 reader.forget_quests();
                 if dedup.hide(Hidden::NoGame) {
@@ -361,10 +317,29 @@ fn follow_game<P: Playstyle>(
     }
 }
 
-/// What one snapshot's tick sends, if anything. The overlay hides in towns (the breakpoint
-/// guide line it used to show there overlapped the game's terror-zone list and lives on the
-/// dashboard; user request, 2026-11-17); elsewhere the map. `None`: the screen is up to date
-/// (or rendering failed, logged).
+fn log_new_game(snap: &Snapshot) {
+    eprintln!(
+        "new game (previous player no longer present): remembered markers and kills cleared; \
+         player {:?} chosen by {} among {} candidates",
+        snap.player.name,
+        snap.player_chosen_by.label(),
+        snap.player_candidates.len()
+    );
+}
+
+fn record_stash_cache(update: &crate::session::Update, journal: &mut Journal) {
+    if let Some((tabs, items)) = update.stash_captured {
+        eprintln!("shared stash captured: {tabs} tabs, {items} items");
+        journal.stash(true, tabs, items);
+    }
+    if update.stash_invalidated {
+        eprintln!("shared stash cache dropped (new game)");
+        journal.stash(false, 0, 0);
+    }
+}
+
+/// The overlay hides in towns, elsewhere shows the map. `None`: the screen is up to date (or
+/// rendering failed, logged).
 fn tick_msg(
     dedup: &mut Dedup,
     snap: Snapshot,
@@ -385,27 +360,23 @@ fn tick_msg(
     }
 }
 
-/// Why the overlay is hidden.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Hidden {
-    /// The player is in a town (quietly hidden).
     Town,
-    /// No snapshot could be read (menu, loading).
+    /// Menu or loading.
     NoGame,
 }
 
-/// Suppresses repeated work: the same snapshot and guidance twice in a row are not re-rendered,
-/// and a run of hidden ticks (for the same reason) sends one [`Msg::Hide`].
+/// Suppresses re-rendering an unchanged frame and repeating a [`Msg::Hide`].
 #[derive(Debug, Default)]
 struct Dedup {
-    /// The last snapshot and guidance sent as a frame; `None` while hidden.
+    /// `None` while hidden.
     last: Option<(Snapshot, Guidance)>,
-    /// Why the previous tick hid the overlay, if it did (a hide was already sent).
     hidden: Option<Hidden>,
 }
 
 impl Dedup {
-    /// The snapshot and guidance to render, or `None` if they equal the ones on screen.
+    /// `None` if they equal the ones on screen.
     fn changed(&mut self, snap: Snapshot, guidance: Guidance) -> Option<(&Snapshot, &Guidance)> {
         self.hidden = None;
         let frame = (snap, guidance);
@@ -416,9 +387,9 @@ impl Dedup {
         Some((snap, guidance))
     }
 
-    /// Records a hidden tick; true if this starts a run for `why` (send a hide, log the reason).
+    /// True if this starts a run of hidden ticks for `why`.
     fn hide(&mut self, why: Hidden) -> bool {
-        // Forget the frame: after the hide, even an identical snapshot must be sent again.
+        // After a hide, even an identical snapshot must be sent again.
         self.last = None;
         self.hidden.replace(why) != Some(why)
     }
@@ -434,7 +405,6 @@ mod tests {
         serde_json::from_str(json).context("parsing fixture")
     }
 
-    /// A readable speed stat list: the breakpoint guide's input (see [`crate::game::SpeedStats`]).
     fn speed() -> crate::game::SpeedStats {
         crate::game::SpeedStats {
             fcr: 22,
@@ -473,8 +443,6 @@ mod tests {
     #[test]
     fn towns_hide_even_with_a_guide_and_the_field_shows_the_map() -> Result<()> {
         let font = info::font();
-        // The guide line moved to the dashboard (it overlapped the game's terror-zone list):
-        // a town hides even when the breakpoint guide could be shown.
         let mut town = fixture()?;
         town.level.id = 1;
         town.player.speed = Some(speed());
@@ -540,7 +508,6 @@ mod tests {
         assert!(d.changed(fixture()?, Guidance::default()).is_some());
         assert!(d.hide(Hidden::Town), "entering town hides once");
         assert!(!d.hide(Hidden::Town), "staying in town sends nothing");
-        // Town → menu: a different reason, so the menu is logged and hidden (again, harmless).
         assert!(d.hide(Hidden::NoGame));
         assert!(d.hide(Hidden::Town));
         assert!(
@@ -576,7 +543,6 @@ mod tests {
                 .set_modified(at)?;
             Ok(())
         };
-        // A new farm list, an edited and a new build file: each one a reload.
         let farm = shipped.join("farm.toml");
         std::fs::write(&farm, "")?;
         assert!(
@@ -596,7 +562,6 @@ mod tests {
             "build edited"
         );
         assert_eq!(cfg.shrines.show, vec![12], "the core config untouched");
-        // config.toml: reloaded; a broken one keeps the current settings (still a change).
         std::fs::write(&path, "[shrines]\nshow = [\"gem\"]\n")?;
         touch(&path, 2_000)?;
         assert!(check_reload(&mut cfg, Some(&path), &files, &mut watched));

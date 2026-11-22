@@ -1,34 +1,25 @@
-//! Where a playstyle's files are ([`Files`]): the user's override folder, the old places from
-//! before the folder layout, the shipped folder (`playstyles/<name>/`), and the data dir with
-//! the per-character build selection. What the files hold and how they load is the playstyle's
-//! (`d2r_playstyle_config::files`); the core only locates them, watches them for the hot
-//! reload ([`Files::fingerprint`]) and hands them to the playstyle.
-//!
-//! The shipped folder is read at run time from the source tree the binary was built in (the
-//! workspace root's `playstyles/`): a regenerated build file hot-reloads without a rebuild.
-//! `$D2R_PLAYSTYLES_DIR` overrides it, and `playstyles/` next to the binary is the fallback.
+//! Where a playstyle's files are; the core locates and watches them, the playstyle loads them.
+//! The shipped folder is read at run time from the source tree, so edits need no rebuild.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// Where a playstyle's files are (see the module docs). `None`: no such place on this machine.
+/// `None`: no such place on this machine.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Files {
-    /// The shipped folder, `playstyles/<name>/` in the source tree.
+    /// `playstyles/<name>/`.
     pub shipped: Option<PathBuf>,
-    /// The user's override folder (`~/.config/d2r-map-overlay/playstyle/`).
+    /// `~/.config/d2r-map-overlay/playstyle/`.
     pub user: Option<PathBuf>,
-    /// The config dir holding the old places (`~/.config/d2r-map-overlay/`).
+    /// The config dir holding the pre-folder-layout files (`~/.config/d2r-map-overlay/`).
     pub legacy: Option<PathBuf>,
-    /// The data dir holding `bis.toml` (`~/.local/share/d2r-map-overlay/`).
+    /// Holds `bis.toml` (`~/.local/share/d2r-map-overlay/`).
     pub state: Option<PathBuf>,
-    /// No messages on stderr while loading: the web server loads the playstyle per request;
-    /// the start and the hot reload already reported the same files.
+    /// No load messages: the web server loads per request, the start already reported them.
     pub quiet: bool,
 }
 
 impl Files {
-    /// The places of playstyle `name` (`config.toml`'s `playstyle`) on this machine.
     #[must_use]
     pub fn new(name: &str) -> Self {
         let config_dir = crate::config::default_path().and_then(|p| p.parent().map(Path::to_path_buf));
@@ -41,7 +32,6 @@ impl Files {
         }
     }
 
-    /// The same places, loaded without messages ([`Files::quiet`]).
     #[must_use]
     pub fn quiet(&self) -> Self {
         Self {
@@ -50,14 +40,13 @@ impl Files {
         }
     }
 
-    /// Prints `message` on stderr unless [`Files::quiet`].
     pub fn say(&self, message: std::fmt::Arguments) {
         if !self.quiet {
             eprintln!("{message}");
         }
     }
 
-    /// `rel` in each place, the winning one first: user, old place, shipped.
+    /// `rel` in each place, the winning one first.
     #[must_use]
     pub fn layers(&self, rel: &str) -> [Option<PathBuf>; 3] {
         [&self.user, &self.legacy, &self.shipped].map(|dir| dir.as_ref().map(|d| d.join(rel)))
@@ -73,11 +62,23 @@ impl Files {
         self.legacy.as_ref().map(|d| d.join("config.toml"))
     }
 
-    /// Every file a load may read, with its mtime (`None`: missing), sorted: the hot reload
-    /// compares it each tick. The `builds/` folders' `*.toml` files are listed, so added,
-    /// removed and edited build files all show (and a regenerated `*.source.json` doesn't).
+    /// Every file a load may read with its mtime, sorted, for the hot reload to compare.
     #[must_use]
     pub fn fingerprint(&self) -> Vec<(PathBuf, Option<SystemTime>)> {
+        let mut out: Vec<_> = self
+            .watched_paths()
+            .into_iter()
+            .map(|p| {
+                let modified = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+                (p, modified)
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The fixed files of each place plus its `builds/*.toml`, so added and removed builds show.
+    fn watched_paths(&self) -> Vec<PathBuf> {
         let mut paths = Vec::new();
         for dir in [&self.user, &self.legacy, &self.shipped].into_iter().flatten() {
             paths.extend(["playstyle.toml", "farm.toml", "route.toml", "config.toml"].map(|f| dir.join(f)));
@@ -91,20 +92,11 @@ impl Files {
             }
         }
         paths.extend(self.bis_path());
-        let mut out: Vec<_> = paths
-            .into_iter()
-            .map(|p| {
-                let modified = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
-                (p, modified)
-            })
-            .collect();
-        out.sort();
-        out
+        paths
     }
 }
 
-/// `playstyles/` in the source tree the binary was built in: the workspace root, two levels
-/// above this crate (`crates/core`).
+/// `playstyles/` at the workspace root of the source tree the binary was built in.
 fn source_playstyles() -> PathBuf {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     crate_dir
@@ -114,28 +106,12 @@ fn source_playstyles() -> PathBuf {
         .join("playstyles")
 }
 
-/// The environment variable naming the folder that holds the playstyle folders (instead of
-/// `playstyles/` in the source tree the binary was built in).
+/// Names the folder holding the playstyle folders, instead of the source tree's.
 pub const DIR_VAR: &str = "D2R_PLAYSTYLES_DIR";
 
-/// The shipped folder of playstyle `name`: `<root>/<name>/` in the first root that has it.
-/// The roots: `$D2R_PLAYSTYLES_DIR` when set (alone: an explicit choice), else `playstyles/`
-/// in the source tree the binary was built in, then `playstyles/` next to the binary. `None`
-/// (reported) when no root has it or `name` isn't a plain folder name.
+/// `None` (reported) when no root has it or `name` isn't a plain folder name.
 fn shipped_dir(name: &str) -> Option<PathBuf> {
-    let roots = std::env::var_os(DIR_VAR).map_or_else(
-        || {
-            let mut roots = vec![source_playstyles()];
-            if let Some(dir) = std::env::current_exe()
-                .ok()
-                .and_then(|exe| exe.parent().map(Path::to_path_buf))
-            {
-                roots.push(dir.join("playstyles"));
-            }
-            roots
-        },
-        |dir| vec![PathBuf::from(dir)],
-    );
+    let roots = playstyle_roots();
     let found = find_shipped(name, &roots);
     if found.is_none() {
         let looked: Vec<String> = roots.iter().map(|r| r.join(name).display().to_string()).collect();
@@ -148,8 +124,26 @@ fn shipped_dir(name: &str) -> Option<PathBuf> {
     found
 }
 
-/// `<root>/<name>/` in the first of `roots` that has it as a folder; `None` too for a name
-/// that isn't a plain folder name (letters, digits, `-`, `_`).
+/// `$D2R_PLAYSTYLES_DIR` alone when set (an explicit choice), else the source tree's
+/// `playstyles/`, then the one next to the binary.
+fn playstyle_roots() -> Vec<PathBuf> {
+    std::env::var_os(DIR_VAR).map_or_else(
+        || {
+            let mut roots = vec![source_playstyles()];
+            if let Some(dir) = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(Path::to_path_buf))
+            {
+                roots.push(dir.join("playstyles"));
+            }
+            roots
+        },
+        |dir| vec![PathBuf::from(dir)],
+    )
+}
+
+/// `<root>/<name>/` in the first of `roots` that has it; `None` for a name that isn't plain
+/// (letters, digits, `-`, `_`).
 fn find_shipped(name: &str, roots: &[PathBuf]) -> Option<PathBuf> {
     let plain = !name.is_empty()
         && name

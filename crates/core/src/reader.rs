@@ -1,11 +1,5 @@
-//! The reader plugin's interface: [`GameReader`], what the core needs from a game reader, and
-//! [`ReadMem`], read access to the game's memory (the quest record decoder, [`crate::quests`],
-//! reads through it too).
-//!
-//! The reader plugins are crates of their own, picked at build time by the binary's Cargo
-//! features; today `d2r-reader-mem` (the memory reader over a platform layer, with the
-//! Proton/Linux platform behind its `proton` feature). A reader fills the core's
-//! [`crate::game::Snapshot`].
+//! The reader plugin's interface ([`GameReader`]) and read access to the game's memory
+//! ([`ReadMem`]).
 
 use std::io;
 use std::path::PathBuf;
@@ -14,68 +8,57 @@ use anyhow::Result;
 
 use crate::game;
 
-/// Outcome of one [`GameReader::attach`] attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Attach {
     /// No game process, or its memory can't be opened (logged): try again later.
     Waiting,
-    /// Attached and the unit table located: snapshots can be read.
+    /// Attached and the unit table located.
     Ready { pid: u32 },
     /// The process exited before the unit table was found.
     Exited { pid: u32 },
 }
 
-/// What the rest of the program needs from a game reader. One reader follows one game process
-/// at a time; [`attach`](GameReader::attach) again after it exits.
+/// One reader follows one game process at a time; [`attach`](GameReader::attach) again after
+/// it exits.
 pub trait GameReader {
-    /// Live mode: one attempt to find the game and open its memory (failures are logged once
-    /// per distinct error, with a hint when access is denied). Once open, locates the unit
-    /// table, retrying with a backoff while the process lives (blocks until found or exited).
+    /// One attempt to find the game and open its memory; once open, blocks until the unit
+    /// table is found or the process exits.
     fn attach(&mut self) -> Attach;
 
-    /// `--probe` / `--dump`: one attempt, no waiting: find the game, open its memory, locate
-    /// the image and the unit table. What was found is passed to `report` as `(label, value)`
-    /// as it is found, so a failure still shows how far it got.
+    /// One attempt without waiting; each finding goes to `report` as it is found, so a failure
+    /// still shows how far it got.
     ///
     /// # Errors
     /// Fails if any step fails.
     fn attach_now(&mut self, report: &mut dyn FnMut(&'static str, String)) -> Result<()>;
 
-    /// Searches the item-code table now, blocking (`--dump`); in live mode [`snapshot`]
-    /// starts the search in the background once items are seen.
-    ///
-    /// [`snapshot`]: GameReader::snapshot
+    /// Searches the item-code table now, blocking; live mode searches in the background.
     fn locate_items_now(&mut self);
 
-    /// Reads one snapshot. `player` picks among several player units; `previous` is the unit
-    /// id chosen before (see [`game::ChosenBy`]).
+    /// `player` picks among several player units; `previous` is the unit id chosen before.
     ///
     /// # Errors
     /// Not attached, or no game state (menu, loading).
     fn snapshot(&mut self, player: Option<&str>, previous: Option<u32>) -> Result<game::Snapshot>;
 
-    /// The current game's quest record ([`crate::quests::read`]); empty until found. `new_game`
-    /// drops the previous game's record.
+    /// The current game's quest record; empty until found.
     fn quest_flags(&mut self, new_game: bool) -> &[u16];
 
-    /// Drops the quest record (no game: menu, loading).
     fn forget_quests(&mut self);
 
-    /// True while the attached process exists.
     fn is_alive(&self) -> bool;
 
-    /// The game's save directory (character save files), if found.
+    /// The game's character save directory.
     fn save_dir(&self) -> Option<PathBuf>;
 }
 
-/// Lowest address treated as a plausible user-space pointer (exclusive).
+/// Plausible user-space pointers lie strictly between these.
 const MIN_USER_PTR: u64 = 0x10000;
-/// Highest address treated as a plausible user-space pointer (exclusive).
 const MAX_USER_PTR: u64 = 0x7fff_ffff_ffff;
 
-/// Read access to another process's address space. Little-endian helpers are provided.
+/// Read access to another process's address space (little-endian).
 pub trait ReadMem {
-    /// Fills `buf` from `addr`; a short or failed read is an error.
+    /// A short read is an error.
     ///
     /// # Errors
     /// Any I/O error, including unmapped or no-access addresses.
@@ -121,8 +104,7 @@ pub trait ReadMem {
         self.read_array(addr).map(u64::from_le_bytes)
     }
 
-    /// Reads a pointer; `Ok(None)` if the value isn't a plausible user-space address
-    /// (null, tiny, or kernel-half).
+    /// `Ok(None)` if the value isn't a plausible user-space address.
     ///
     /// # Errors
     /// See [`ReadMem::read`].
@@ -132,7 +114,7 @@ pub trait ReadMem {
     }
 }
 
-/// True if `p` is a plausible user-space pointer (not null, not tiny, not kernel-half).
+/// Not null, not tiny, not kernel-half.
 #[must_use]
 pub const fn is_user_ptr(p: u64) -> bool {
     MIN_USER_PTR < p && p < MAX_USER_PTR

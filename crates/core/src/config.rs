@@ -1,14 +1,5 @@
-//! User configuration: `$XDG_CONFIG_HOME/d2r-map-overlay/config.toml` (else
-//! `~/.config/d2r-map-overlay/config.toml`). Optional; see `config.example.toml`.
-//!
-//! Loaded once at start. A missing file means the defaults; an unreadable or invalid one is
-//! reported once on stderr and the defaults are used, so a typo never stops the overlay.
-//!
-//! The core's settings only: the shrines drawn and which playstyle runs (`playstyle =
-//! "<name>"`). The playstyle's own files (builds, farm list, valuables tiers, damages) live in
-//! its folder ([`crate::playstyle::Files`]). Older config files still carry the playstyle's
-//! `[valuables]`, `[builds]` and `[bis]` tables: they are accepted here unread and read by the
-//! playstyle as a fallback.
+//! The core's user configuration (`config.toml`, see `config.example.toml`): the shrines drawn
+//! and which playstyle runs. A broken file is reported and the defaults are used.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -18,7 +9,7 @@ use serde::de::IgnoredAny;
 
 use crate::game::Shrine;
 
-/// Shrine names by shrines.txt code (row): `SHRINE_NAMES[code]`.
+/// Shrine names by shrines.txt code (row).
 pub const SHRINE_NAMES: [&str; 23] = [
     "none",
     "refilling",
@@ -45,41 +36,18 @@ pub const SHRINE_NAMES: [&str; 23] = [
     "poison",
 ];
 
-/// The map label of each shrine type, by shrines.txt code like [`SHRINE_NAMES`]: three capital
-/// letters, one per type. Listed in `config.example.toml`'s `[shrines]` comment.
+/// Map labels in [`SHRINE_NAMES`] order.
 pub const SHRINE_TAGS: [&str; 23] = [
-    "NON", // none
-    "REF", // refilling
-    "HLT", // health
-    "MNA", // mana
-    "HEX", // health exchange
-    "MEX", // mana exchange
-    "ARM", // armor
-    "CMB", // combat
-    "RFI", // resist fire
-    "RCO", // resist cold
-    "RLI", // resist lightning
-    "RPO", // resist poison
-    "SKL", // skill
-    "MRC", // mana recharge
-    "STA", // stamina
-    "EXP", // experience
-    "ENI", // enirhs
-    "POR", // portal
-    "GEM", // gem
-    "FIR", // fire
-    "MON", // monster
-    "XPL", // exploding
-    "POI", // poison
+    "NON", "REF", "HLT", "MNA", "HEX", "MEX", "ARM", "CMB", "RFI", "RCO", "RLI", "RPO", "SKL", "MRC", "STA",
+    "EXP", "ENI", "POR", "GEM", "FIR", "MON", "XPL", "POI",
 ];
 
-/// The `BiS` slot names, in display order (amulet, rings, body, helm, hands, feet, belt,
-/// weapons; user's order, 2026-11-17).
+/// The `BiS` slot names, in display order.
 pub const SLOT_NAMES: [&str; 11] = [
     "amulet", "ring1", "ring2", "body", "helm", "gloves", "boots", "belt", "weapon", "offhand", "swap",
 ];
 
-/// Class names by class id (charstats row), for `[builds.class]`.
+/// Class names by class id (charstats row).
 pub const CLASS_NAMES: [&str; 8] = [
     "amazon",
     "sorceress",
@@ -88,24 +56,19 @@ pub const CLASS_NAMES: [&str; 8] = [
     "barbarian",
     "druid",
     "assassin",
-    // D2R patch class (user's "Demonmaster" read id 7 live, 2026-11-17).
     "warlock",
 ];
 
-/// Shrines shown when the config doesn't say.
 const DEFAULT_SHRINES: [&str; 5] = ["refilling", "skill", "stamina", "gem", "monster"];
-/// Shrine types shown in Normal only by default: stamina is useless later (user, 2026-11-15).
+/// Stamina is useless after Normal.
 const DEFAULT_NORMAL_ONLY: [&str; 1] = ["stamina"];
 
-/// The playstyle run when the config doesn't say: the one shipped in the repo
-/// (`playstyles/summoner-fury/`).
 pub const DEFAULT_PLAYSTYLE: &str = "summoner-fury";
 
-/// The whole (core) configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub shrines: Shrines,
-    /// The playstyle's folder name (`playstyles/<name>/`, see [`crate::playstyle::Files`]).
+    /// The playstyle's folder name (`playstyles/<name>/`).
     pub playstyle: String,
 }
 
@@ -118,11 +81,11 @@ impl Default for Config {
     }
 }
 
-/// `[shrines]`: the shrine types to show, as shrines.txt codes.
+/// `[shrines]`, as shrines.txt codes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shrines {
     pub show: Vec<u8>,
-    /// Of `show`, the types shown in Normal only (e.g. stamina; user request 2026-11-15).
+    /// Of `show`, the types shown in Normal only.
     pub normal_only: Vec<u8>,
 }
 
@@ -135,9 +98,7 @@ impl Default for Shrines {
 }
 
 impl Shrines {
-    /// Keeps the shrines to draw: unused ones whose type is in `show`, minus the `normal_only`
-    /// types outside Normal (`difficulty` 0; an unknown difficulty shows them). Wells are always
-    /// drawn.
+    /// Keeps the unused shown shrines; an unknown difficulty counts as Normal.
     pub fn retain_shown(&self, shrines: &mut Vec<Shrine>, difficulty: Option<u8>) {
         let normal = difficulty.is_none_or(|d| d == 0);
         shrines.retain(|s| {
@@ -146,14 +107,12 @@ impl Shrines {
     }
 }
 
-/// The file as written; names are turned into codes by [`parse`].
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RawConfig {
     shrines: RawShrines,
     playstyle: Option<String>,
-    // The playstyle's tables of older config files: accepted, not read here (the playstyle
-    // reads them as its fallback, [`crate::playstyle::Files`]).
+    // Older config files carry the playstyle's tables; the playstyle reads them as a fallback.
     #[serde(rename = "valuables")]
     _valuables: Option<IgnoredAny>,
     #[serde(rename = "builds")]
@@ -204,8 +163,7 @@ pub fn class_id(key: &str) -> Option<u32> {
     by_name.or_else(|| key.parse().ok().filter(|&id: &u32| id < 8))
 }
 
-/// Parses a config file's text; also returns warnings about ignored entries (unknown shrine
-/// names).
+/// Also returns warnings about ignored unknown shrine names.
 ///
 /// # Errors
 /// Fails on invalid TOML, unknown keys or wrongly typed values.
@@ -248,13 +206,11 @@ pub fn default_path() -> Option<PathBuf> {
     Some(base.join("d2r-map-overlay").join("config.toml"))
 }
 
-/// Loads the config at [`default_path`]; see [`load_from`].
 pub fn load() -> Config {
     default_path().map_or_else(Config::default, |p| load_from(&p))
 }
 
-/// Loads the config at `path`. Missing: the defaults. Unreadable or invalid: one message on
-/// stderr, then the defaults. Ignored entries are reported too.
+/// A missing, unreadable or invalid file gives the defaults (the latter two reported).
 #[must_use]
 pub fn load_from(path: &Path) -> Config {
     let text = match std::fs::read_to_string(path) {
@@ -320,8 +276,6 @@ mod tests {
         Ok(())
     }
 
-    /// Older config files carry the playstyle's tables: the core accepts them unread (the
-    /// playstyle reads them, `playstyle::files`), whatever they hold.
     #[test]
     fn tolerates_the_old_playstyle_tables() -> Result<()> {
         let (c, warnings) = parse(
@@ -337,7 +291,6 @@ mod tests {
     fn class_ids() {
         assert_eq!(class_id("Assassin"), Some(6));
         assert_eq!(class_id("0"), Some(0));
-        // The D2R patch class.
         assert_eq!(class_id("Warlock"), Some(7));
         assert_eq!(class_id("8"), None);
         assert_eq!(class_id("monk"), None);

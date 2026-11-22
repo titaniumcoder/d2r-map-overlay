@@ -1,11 +1,5 @@
-//! The core of the D2R map overlay: the game state model ([`game::Snapshot`]), the game data
-//! tables (`*_data`), the map renderer ([`render`]), the overlay window ([`overlay`]), the
-//! session and journal, the live loop ([`live`]) and the dashboard's core half ([`web`]).
-//!
-//! The plugins are crates of their own and plug in through two traits defined here:
-//! [`reader::GameReader`] (how the game is read) and [`playstyle::Playstyle`] (what the
-//! player's strategy makes of it). The binary picks one of each at build time (Cargo
-//! features) and wires them into [`live::run`]. See `PLAN.md` for the architecture.
+//! The core of the D2R map overlay. Plugins implement [`reader::GameReader`] and
+//! [`playstyle::Playstyle`]; the binary wires one of each into [`live::run`].
 
 pub mod affixes_data;
 pub mod bases_data;

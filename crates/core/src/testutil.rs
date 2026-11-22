@@ -1,5 +1,4 @@
-//! Test doubles for the OS boundary, shared with the plugin crates' tests (Cargo feature
-//! `testutil`).
+//! Test doubles for the OS boundary, shared with the plugin crates (feature `testutil`).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -35,8 +34,8 @@ impl ReadMem for FakeMem {
     }
 }
 
-/// A fresh, empty directory path under the system temp dir, unique per process and `name`
-/// (a leftover from an earlier run is removed). Not created: the code under test creates it.
+/// A path under the temp dir, unique per process and `name`; a leftover is removed, nothing
+/// is created.
 ///
 /// # Errors
 /// The leftover can't be removed.

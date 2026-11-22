@@ -1,11 +1,5 @@
-//! The current game's [`GameState`] on disk (the filesystem side of [`Session`]'s memory), so an
-//! overlay restart within a game keeps what was explored, killed and operated.
-//!
-//! One file, `game.json` in the cache dir, holds the latest game only (tagged with its player
-//! id inside the state). It is written at most every [`SAVE_INTERVAL`] when the state changed,
-//! via a temp file and a rename so a crash mid-write never leaves half a file. On start the
-//! saved state is offered to the [`Session`], which uses it only if the first snapshot's player
-//! id matches. Errors are logged once and otherwise ignored: the overlay works without the file.
+//! The current game's [`GameState`] on disk, so an overlay restart within a game keeps what was
+//! explored, killed and operated. Errors are logged once; the overlay works without the file.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -15,7 +9,6 @@ use anyhow::{Context, Result};
 
 use crate::session::{GameState, Session};
 
-/// Least time between two writes.
 pub const SAVE_INTERVAL: Duration = Duration::from_secs(3);
 
 /// `$XDG_CACHE_HOME/d2r-map-overlay`, else `$HOME/.cache/d2r-map-overlay`; `None` if neither is
@@ -31,7 +24,6 @@ pub fn cache_dir() -> Option<PathBuf> {
     Some(base.join("d2r-map-overlay"))
 }
 
-/// `game.json` in the cache dir ([`cache_dir`]).
 #[must_use]
 pub fn default_path() -> Option<PathBuf> {
     cache_dir().map(|d| d.join("game.json"))
@@ -53,7 +45,7 @@ pub fn load(path: &Path) -> Option<GameState> {
         .ok()
 }
 
-/// Writes `state` to `path` through a temp file next to it.
+/// Through a temp file and a rename, so a crash never leaves half a file.
 fn write(path: &Path, state: &GameState) -> Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -70,7 +62,7 @@ pub struct Saver {
     /// `None`: no cache dir, nothing is saved.
     path: Option<PathBuf>,
     last_write: Option<Instant>,
-    /// A write failed already: later failures are not logged again.
+    /// Later failures are not logged again.
     failed: bool,
 }
 
@@ -84,9 +76,7 @@ impl Saver {
         }
     }
 
-    /// Writes `session`'s state if it changed and the last write was at least
-    /// [`SAVE_INTERVAL`] before `now`; a change seen earlier waits for a later call. Returns
-    /// whether it wrote (or tried to).
+    /// Returns whether it wrote (or tried to).
     pub fn tick(&mut self, session: &mut Session, now: Instant) -> bool {
         let Some(path) = &self.path else { return false };
         if self

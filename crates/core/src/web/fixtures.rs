@@ -1,20 +1,17 @@
-//! Dashboard test fixtures, shared by the core's web tests and the playstyle crates' panel
-//! tests (Cargo feature `testutil`).
+//! Dashboard test fixtures, shared with the playstyle crates' tests (feature `testutil`).
 
 use super::LiveInfo;
 
-/// No skills read: the `skills` section is `null`.
 pub static EMPTY_SKILLS: crate::game::Skills = crate::game::Skills {
     points: Vec::new(),
     left: None,
     right: None,
 };
 
-/// No marked ground drops: the `drops` section is empty.
 pub static EMPTY_MARKS: std::sync::LazyLock<crate::guidance::Marks> =
     std::sync::LazyLock::new(crate::guidance::Marks::new);
 
-/// A stash item for the panel tests (identified, not a runeword).
+/// Identified, not a runeword.
 #[must_use]
 pub fn stash_item(name: &str, code: &str, quality: u32, quantity: Option<u32>) -> crate::stash::StashItem {
     crate::stash::StashItem {
@@ -66,7 +63,7 @@ pub fn test_stash() -> Vec<crate::stash::StashTab> {
     ]
 }
 
-/// A `LiveInfo` over borrowed test data: difficulty 2 is hell.
+/// Difficulty 2 is hell.
 #[must_use]
 pub fn live_info<'a>(
     class: u32,

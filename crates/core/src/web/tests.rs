@@ -1,5 +1,4 @@
-//! The core dashboard JSON's tests (the fixtures they share with the playstyle's panel tests
-//! are in [`super::fixtures`]).
+//! Tests of the core dashboard JSON.
 
 use super::*;
 use anyhow::{Context, Result, anyhow};
@@ -7,7 +6,7 @@ use anyhow::{Context, Result, anyhow};
 use super::fixtures::{live_info, test_stash};
 use super::skills::{next_point, plan_mark, plan_target, skills_json};
 
-/// The core panels alone (no playstyle sections, no plan, no vendor notes).
+/// The core panels alone.
 fn live_json(info: &LiveInfo) -> String {
     super::live_json(info, Panels::default())
 }
@@ -15,8 +14,7 @@ fn live_json(info: &LiveInfo) -> String {
 #[test]
 fn live_json_has_the_skill_trees() -> Result<()> {
     let blocks = crate::render::TextBlocks::default();
-    // A level 20 Warlock (class 7): Summon Goatman 16, Blood Boil 1, Miasma Bolt 2; Attack
-    // on the left button, Blood Boil on the right.
+    // Warlock (7): Summon Goatman 16, Blood Boil 1, Miasma Bolt 2; Attack left, Blood Boil right.
     let skills = crate::game::Skills {
         points: vec![(373, 16), (380, 1), (395, 2)],
         left: Some(0),
@@ -37,7 +35,6 @@ fn live_json_has_the_skill_trees() -> Result<()> {
     let demon = at("/skills/trees/0/skills");
     let demon = demon.as_array().context("demon skills")?;
     assert_eq!(demon.len(), 10, "every skill of the page, spent or not");
-    // `(field, value)` pairs of the Demon tree's skill `id`.
     let fields = |id: u16, keys: &[&str]| -> Vec<serde_json::Value> {
         let skill = demon.iter().find(|k| k.get("id") == Some(&id.into()));
         keys.iter()
@@ -100,8 +97,6 @@ fn live_json_has_the_stash_pages_and_materials() -> Result<()> {
     let json =
         serde_json::from_str::<serde_json::Value>(&live_json(&live_info(1, &blocks, &[], &stash, &[])))
             .map_err(|e| anyhow!("valid json: {e}"))?;
-    // The normal pages in UI order with quality-tagged item lines (uniques gold); the
-    // materials tab is not a page.
     assert_eq!(
         json.get("stash_pages"),
         Some(&serde_json::json!([
@@ -112,7 +107,6 @@ fn live_json_has_the_stash_pages_and_materials() -> Result<()> {
             {"page": 2, "items": []},
         ]))
     );
-    // Gems by colour then grade, runes by number, the rest by name; the empty stack is out.
     assert_eq!(
         json.get("stash_materials"),
         Some(&serde_json::json!({
@@ -187,7 +181,6 @@ fn unknown_classes_slots_and_qualities_are_shown_not_dropped() -> Result<()> {
     Ok(())
 }
 
-/// A skill-plan entry.
 fn target(skill: &str, points: u8, by_level: u8) -> SkillTarget {
     SkillTarget {
         skill: skill.to_owned(),
@@ -221,7 +214,6 @@ fn skill_plan_targets_marks_and_next_point() -> Result<()> {
         "beyond the plan"
     );
     assert_eq!(plan_mark(&plan, "Fissure", 7, 1), (0, Some("over")));
-    // The next point: the first due entry not reached, in plan order …
     let points = |fs: u8, mb: u8| {
         move |name: &str| {
             if name == "Firestorm" {
@@ -236,11 +228,9 @@ fn skill_plan_targets_marks_and_next_point() -> Result<()> {
     let next = |level, fs, mb| next_point(&plan, level, points(fs, mb)).map(|t| (t.skill.as_str(), t.points));
     assert_eq!(next(7, 1, 0), Some(("Firestorm", 2)));
     assert_eq!(next(7, 2, 0), Some(("Molten Boulder", 1)));
-    // … else the first upcoming one; nothing once the plan is done.
     assert_eq!(next(7, 2, 1), Some(("Firestorm", 3)));
     assert_eq!(next(9, 3, 1), None);
-    // In the live JSON: the per-skill target and mark, and the hint (a level 7 druid with
-    // Firestorm 1: under, next point Firestorm).
+    // A level 7 druid (5) with Firestorm (225) 1.
     let skills = crate::game::Skills {
         points: vec![(225, 1)],
         left: None,
@@ -261,7 +251,6 @@ fn skill_plan_targets_marks_and_next_point() -> Result<()> {
         "the stage's last target"
     );
     assert_eq!(json.pointer("/next/skill"), Some(&serde_json::json!("Firestorm")));
-    // Without a plan: no targets.
     let json = skills_json(5, Some(7), &skills, &[]);
     assert!(json.pointer("/trees/0/skills/0/target").is_none());
     assert_eq!(json.get("next"), Some(&serde_json::Value::Null));

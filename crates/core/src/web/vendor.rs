@@ -1,27 +1,18 @@
-//! The vendor panel: the open trade window, with the playstyle's notes
-//! ([`super::Panels::shop`]).
+//! The vendor panel: the open trade window, with the playstyle's notes.
 
 use super::LiveInfo;
 
 /// What the playstyle says about one item of the open trade window.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ShopNote {
-    /// The build slot (`gloves`, `ring`, `merc helm`, …) whose piece the item is, if any.
+    /// The build slot (`gloves`, `ring`, `merc helm`, …) whose piece the item is.
     pub slot: Option<String>,
-    /// Why its stats beat what is worn in its body slot (the biggest gains); `None`: not
-    /// better.
+    /// Why it beats what is worn in its body slot; `None`: not better.
     pub why: Option<String>,
 }
 
-/// The open trade window (`live_json`'s `shop` section), `null` when none is open:
-/// `{ "npc", "items": [{ "name", "quality", "tab", "req", "high", "slot", "better", "why",
-/// "count" }] }`.
-/// `tab` is `armor` / `weapons` / `misc` (the store page); `high` = the required level is
-/// above the character's; `slot`, `better` and `why` come from the item's note in `notes`
-/// (same order as the window's items, [`ShopNote`]): `slot` the build slot whose piece the
-/// item is, else `null`; `better` = its stats beat what is worn in its body slot (`why` the
-/// biggest gains, else `null`). Identical entries (same name, quality and tab: potions,
-/// scrolls) are listed once with their `count`.
+/// The open trade window, `null` when none is open; `notes` are in window order. Identical
+/// entries (potions, scrolls) are listed once with their `count`.
 pub fn shop_json(info: &LiveInfo, notes: &[ShopNote]) -> serde_json::Value {
     let Some(shop) = info.shop else {
         return serde_json::Value::Null;

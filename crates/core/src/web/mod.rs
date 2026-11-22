@@ -1,14 +1,5 @@
-//! The companion web app, core half: a small HTTP server on `localhost` ([`server`]) serving
-//! the live dashboard (`/`) and the build selection page (`/config`, [`page`]).
-//!
-//! The dashboard's JSON ([`live_json`]) is the core's panels — character bar, breakpoint guide,
-//! equipped list, shared stash ([`stash`]), skill trees ([`skills`]) and vendor window
-//! ([`vendor`]) — plus the playstyle's ([`Panels`], built by
-//! [`crate::playstyle::Playstyle::panels`]: sell / keep, gear grid, recipes, farm list, …).
-//! The `/config` JSON and the build selection writes go through the playstyle too
-//! ([`crate::playstyle::Playstyle::config_json`], [`crate::playstyle::Playstyle::select_build`]).
-//! `live` publishes the dashboard JSON each tick ([`publish_live`]), and the gear state the
-//! config page annotates from ([`publish_gear`]).
+//! The companion web app, core half: a `localhost` HTTP server for the live dashboard (`/`) and
+//! the build selection page (`/config`), with the core's dashboard panels.
 
 #[cfg(any(test, feature = "testutil"))]
 pub mod fixtures;
@@ -24,7 +15,7 @@ pub use server::{GearInfo, clear_live, publish_gear, publish_live, serve, write_
 pub use skills::SkillTarget;
 pub use vendor::ShopNote;
 
-/// The character classes by txt row id, in [`crate::breakpoints`] per-class table order.
+/// Class names by txt row id.
 const CLASS_NAMES: [&str; 8] = [
     "amazon",
     "sorceress",
@@ -36,70 +27,49 @@ const CLASS_NAMES: [&str; 8] = [
     "warlock",
 ];
 
-/// One tick's dashboard data, gathered by `live` from the snapshot and the dashboard's text
-/// blocks ([`crate::render::TextBlocks`]) and serialized by [`live_json`]. The playstyle's
-/// panels read it too ([`crate::playstyle::Playstyle::panels`]).
+/// One tick's dashboard data, serialized by [`live_json`] and read by the playstyle's panels.
 #[derive(Debug, Clone, Copy)]
 pub struct LiveInfo<'a> {
     pub player_name: &'a str,
     /// Character class txt row (see [`CLASS_NAMES`]).
     pub class: u32,
-    /// `None` when the level stat was unreadable.
     pub char_level: Option<u8>,
-    /// `None` when unreadable (in the menu no snapshot exists at all).
     pub difficulty: Option<u8>,
     /// The current area's name (or a `Level <id>` fallback).
     pub area: &'a str,
     pub blocks: &'a crate::render::TextBlocks,
-    /// The equipped `(body slot, quality)` pairs, shown under the `BiS` chase list.
+    /// `(body slot, quality)` pairs.
     pub equipped: &'a [(u8, u32)],
-    /// The equipped items enriched for the gear grid's column headers
-    /// ([`crate::game::Equipped`]): per body slot code, name and runeword flag.
     pub equipped_items: &'a [crate::game::Equipped],
-    /// The player's own inventory, cube and stash items with their stats
-    /// ([`crate::game::Snapshot::owned_items`]): the farm list's rolled entries (an amulet
-    /// with Teleport) look at their stats.
+    /// The player's own inventory, cube and stash items with their stats.
     pub owned_items: &'a [(crate::game::ItemDrop, crate::game::Place)],
-    /// Display names of the identified unique/set items the character owns (equipped,
-    /// carried, personally stashed): the grid pieces' ✓ ticks.
+    /// Identified unique/set names owned (equipped, carried, personally stashed).
     pub owned: &'a [String],
-    /// One name per runeword copy outside the shared stash, the mercenary's worn ones included
-    /// ([`crate::game::Snapshot::runeword_copies`]): the Recipes panel's built count.
+    /// One name per runeword copy outside the shared stash, the mercenary's included.
     pub runeword_copies: &'a [String],
-    /// The identified unique/set and runeword names the mercenary wears
-    /// ([`crate::game::Snapshot::merc_worn`]): counted copies (farm list, stage switch) and
-    /// worn ones (the playstyle's farm list).
     pub merc_worn: &'a [String],
-    /// The (session-cached) shared-stash tabs, shown in their own panel.
     pub stash: &'a [crate::stash::StashTab],
-    /// Names of the identified unique/set items in the shared stash, emitted as
-    /// `stash_owned` for reference; the per-`BiS`-line `tick` ([`info::Tick`]) is what the
-    /// page marks ✓(stash) from.
+    /// Identified unique/set names in the shared stash.
     pub stash_owned: &'a [String],
-    /// The character's skill allocation, shown as the class's three skill trees.
     pub skills: &'a crate::game::Skills,
-    /// Runes and gems held outside the shared materials tab ([`crate::game::Snapshot`]).
+    /// Runes and gems held outside the shared materials tab.
     pub held_materials: &'a [(String, u32)],
-    /// White socketed bases the character holds ([`crate::stash::white_bases`]).
     pub white_bases: &'a [String],
-    /// The quest flags of the current game ([`crate::quests::read`]); empty when unread.
+    /// Quest flags of the current game; empty when unread.
     pub quests: &'a [u16],
-    /// The vendor trade window open right now ([`crate::game::Snapshot::shop`]).
     pub shop: Option<&'a crate::shop::Shop>,
-    /// Base strength and dexterity ([`crate::game::Player::strength`]); `None` if unread.
+    /// Base strength.
     pub strength: Option<u32>,
+    /// Base dexterity.
     pub dexterity: Option<u32>,
-    /// The player's active states ([`crate::game::Player::states`]): the Buffs panel.
     pub states: &'a [u32],
-    /// The marked ground drops by unit id ([`crate::guidance::Guidance::marks`]): the `drops`
-    /// section the page's drop sounds key on.
+    /// Marked ground drops by unit id.
     pub marks: &'a crate::guidance::Marks,
     /// Unix seconds of the tick that produced this data.
     pub updated_at: u64,
 }
 
 impl LiveInfo<'_> {
-    /// What the account holds, for copy counts ([`crate::stash::Holdings`]).
     #[must_use]
     pub const fn holdings(&self) -> crate::stash::Holdings<'_> {
         crate::stash::Holdings {
@@ -111,39 +81,18 @@ impl LiveInfo<'_> {
     }
 }
 
-/// What the playstyle adds to one tick's dashboard ([`crate::playstyle::Playstyle::panels`]):
-/// its own sections, and its part of the core skills and vendor panels.
+/// What the playstyle adds to one tick's dashboard.
 #[derive(Debug, Default)]
 pub struct Panels<'a> {
-    /// The playstyle's top-level sections of the live JSON, by key (in this build: `sell`,
-    /// `move`, `keep_own`, `keep_trade`, `give`, `bis`, `gear`, `stage`, `recipes`,
-    /// `upgrades`, `gear_attention`, `gear_attention_why`, `farm`). Merged into the core's
-    /// object; a key the core sets itself is never overwritten.
+    /// Top-level sections of the live JSON; a key the core sets itself is never overwritten.
     pub sections: serde_json::Map<String, serde_json::Value>,
     /// The skill plan the skills panel marks the trees against (empty: no plan).
     pub skill_plan: &'a [SkillTarget],
-    /// The vendor panel's notes, one per item of the open trade window in window order
-    /// (missing ones: no slot, not better).
+    /// One note per item of the open trade window, in window order.
     pub shop: Vec<ShopNote>,
 }
 
-/// Serializes one tick's dashboard data: the core panels from `info` plus the playstyle's
-/// `panels`. Pure: the same input gives the same JSON, so the tests need no game. The core's
-/// part:
-/// `{ "live": true, "updated_at": <unix secs>, "player": {"name", "class", "level",
-/// "difficulty"}, "area": …, "guide": […], "equipped": […], "stash_pages": […],
-/// "stash_materials": {…}, "stash_owned": […], "skills": {…} | null, "shop": {…} | null,
-/// "drops": […], "buffs": […] }`,
-/// where each line is `{ "text": …, "colour": "#rrggbb" }` (the overlay line's colour as hex;
-/// the guide's per-span colours are flattened to the base colour). The shared stash comes as
-/// `stash_pages` (the normal tabs in the game's UI order, [`stash::stash_pages`]) and
-/// `stash_materials` (the gems/runes/materials tab's stacks, [`stash::stash_materials`]). The
-/// `skills` section is the class's three skill trees ([`skills::skills_json`]), `shop` the open
-/// trade window ([`vendor::shop_json`]), `drops` the marked ground drops ([`drops_json`]), `buffs` the player's states worth
-/// showing as `{ "state", "name", "kind": "good" | "bad" | "other", "stacks", "seconds_left" }`
-/// ([`crate::buffs::lines`]; the last two `null` until they can be read). The
-/// playstyle's sections are listed in
-/// `d2r_playstyle_config::web`.
+/// Serializes one tick's dashboard: the core panels from `info` plus the playstyle's `panels`.
 #[must_use]
 pub fn live_json(info: &LiveInfo, panels: Panels) -> String {
     let class = CLASS_NAMES
@@ -178,10 +127,7 @@ pub fn live_json(info: &LiveInfo, panels: Panels) -> String {
     json.to_string()
 }
 
-/// The marked ground drops as `[{ "id", "kind": "keep" | "farm" | "trade", "tier": "S" | "A" |
-/// "B" | null }]`, by unit id (the marks are a hash map: sorted, so an unchanged frame gives the
-/// same JSON). The page sounds once per new id of a farm mark or an S / A trade mark (user
-/// request, 2026-11-20).
+/// The marked ground drops sorted by unit id, so an unchanged frame gives the same JSON.
 fn drops_json(marks: &crate::guidance::Marks) -> Vec<serde_json::Value> {
     let mut drops: Vec<_> = marks.iter().collect();
     drops.sort_unstable_by_key(|(id, _)| **id);
@@ -197,7 +143,6 @@ fn drops_json(marks: &crate::guidance::Marks) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// `equipped` lines as `{ "text", "colour" }` objects in the block's colour.
 fn text_lines(lines: &[String], colour: [u8; 4]) -> Vec<serde_json::Value> {
     let hex = hex(colour);
     lines
@@ -206,21 +151,18 @@ fn text_lines(lines: &[String], colour: [u8; 4]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// A guide band as a `{ "text", "colour" }` object: the band's base colour as hex, spans
-/// flattened away (the dashboard keeps the values readable, not the per-span red).
+/// A guide band in its base colour; the per-span colours are dropped on the dashboard.
 fn band_line(band: &crate::info::Band) -> serde_json::Value {
     serde_json::json!({ "text": band.text, "colour": hex(band.colour) })
 }
 
-/// An overlay `[u8; 4]` RGBA colour as `#rrggbb` (the alpha is the same 255 everywhere).
+/// An RGBA colour as `#rrggbb`.
 #[must_use]
 pub fn hex([r, g, b, _]: [u8; 4]) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
-/// The equipped items as dashboard lines: `helm: unique`, `ring2: rare`, … (the `BiS` "already
-/// better" pairs; see [`crate::game::Snapshot::equipped`]). Unknown slots and qualities are
-/// shown as such rather than dropped.
+/// `helm: unique`, `ring2: rare`, …
 fn equipped_lines(equipped: &[(u8, u32)]) -> Vec<String> {
     equipped
         .iter()
@@ -232,7 +174,6 @@ fn equipped_lines(equipped: &[(u8, u32)]) -> Vec<String> {
         .collect()
 }
 
-/// The classic quality name of an `ItemData` quality (see [`crate::offsets::item_data`]).
 fn quality_name(quality: u32) -> String {
     use crate::offsets::item_data;
     match quality {

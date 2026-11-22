@@ -1,11 +1,5 @@
-//! Click-through Wayland layer-shell window that shows a rendered [`Pixmap`] in the top-right corner.
-//!
-//! Thin on purpose: all drawing happens in [`crate::render`]; this module only owns the surface,
-//! maps/unmaps it as [`Msg`]s arrive, and copies pixels into a shm buffer. Runs until killed (Ctrl+C).
-//!
-//! `SIGUSR1` toggles the map off and on (user request, 2026-11-18): the surface has no keyboard,
-//! so a compositor key binding sends the signal, e.g. `pkill -USR1 -x d2r-map-overlay`. Only the
-//! surface hides; the reader and the dashboard go on. Every start is visible.
+//! Click-through Wayland layer-shell window that shows a rendered [`Pixmap`] in the top-right
+//! corner. `SIGUSR1` toggles it (the surface takes no keyboard, so a compositor binding sends it).
 
 use std::io::{ErrorKind, Read};
 use std::os::unix::net::UnixStream;
@@ -30,33 +24,30 @@ use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_registry, registry_handlers};
 use tiny_skia::Pixmap;
 
-/// Gap in px between the overlay and the right screen edge.
+/// px from the right screen edge.
 const MARGIN: i32 = 20;
-/// Gap in px below the top edge: clears D2R's own clock and area-name lines in that corner.
+/// px below the top edge: clears D2R's own clock and area-name lines.
 const MARGIN_TOP: i32 = 70;
 
 /// What the reader and focus threads tell the UI loop.
 #[derive(Debug)]
 pub enum Msg {
-    /// A new rendered minimap; also ends a [`Msg::Hide`].
+    /// Also ends a [`Msg::Hide`].
     Frame(Pixmap),
     /// No usable game state (menu, loading screen, game exited).
     Hide,
-    /// Whether the game window has keyboard focus.
+    /// The game window has keyboard focus.
     Focus(bool),
 }
 
-/// Runs the overlay until the compositor closes it or every [`Msg`] sender is gone.
-///
-/// The surface starts hidden; it shows once focus is `true` and a frame has arrived.
-/// `size` is the expected frame size (frames of another size are shown at their own size).
+/// Runs the overlay until the compositor closes it or every [`Msg`] sender is gone. It shows
+/// once the game has focus and a frame has arrived.
 ///
 /// # Errors
 /// Fails without a Wayland session, without the wlr layer-shell protocol, or on a Wayland protocol error.
 pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
-    // First, so a hotkey pressed during start-up doesn't hit SIGUSR1's default action (terminate).
-    // A signal handler may do almost nothing safely, so signal-hook's handler only writes a byte
-    // to this socket pair; the loop wakes on the read end and toggles here, on its own thread.
+    // First, so an early SIGUSR1 doesn't terminate. The handler only writes a byte to this
+    // socket pair (about all a signal handler may do safely); the loop toggles on the read end.
     let (toggles, on_signal) = UnixStream::pair().context("creating the SIGUSR1 socket pair")?;
     toggles
         .set_nonblocking(true)
@@ -77,9 +68,7 @@ pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
         Some("d2r-map-overlay"),
         None,
     );
-    // Click-through: an empty input region means pointer events go to the window below.
-    // It is wl_surface state (kept across layer unmaps); the surface copies the region on set,
-    // so dropping `region` at the end of `run` is fine.
+    // Click-through: an empty input region sends pointer events to the window below.
     let region = Region::new(&compositor).context("creating the input region")?;
     layer.set_input_region(Some(region.wl_region()));
 
@@ -102,8 +91,6 @@ pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
         error: None,
     };
 
-    // calloop polls the Wayland socket and the channel's wake-up fd together, so a message wakes
-    // the loop as promptly as a compositor event. `WaylandSource` flushes before every poll.
     let mut event_loop: EventLoop<'static, Overlay> =
         EventLoop::try_new().context("creating the event loop")?;
     WaylandSource::new(conn, queue)
@@ -126,7 +113,6 @@ pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
         .insert_source(
             Generic::new(toggles, Interest::READ, Mode::Level),
             |_, toggles, overlay: &mut Overlay| {
-                // One byte per signal; bytes of signals that arrived together are read at once.
                 let mut buf = [0u8; 64];
                 // `&UnixStream` implements `Read`; calloop only hands out a shared reference.
                 loop {
@@ -156,14 +142,14 @@ pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
     overlay.error.map_or(Ok(()), Err)
 }
 
-/// Copies tiny-skia's premultiplied RGBA into `wl_shm` ARGB8888 (a little-endian u32 = bytes B, G, R, A).
+/// Premultiplied RGBA to `wl_shm` ARGB8888 (little-endian: bytes B, G, R, A).
 pub fn rgba_to_argb8888(rgba: &[u8], out: &mut [u8]) {
     for (dst, &[r, g, b, a]) in out.as_chunks_mut::<4>().0.iter_mut().zip(rgba.as_chunks::<4>().0) {
         *dst = [b, g, r, a];
     }
 }
 
-/// Whether the overlay should be on screen; pure, so the combinations are unit-tested.
+/// Whether the overlay should be on screen.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -173,7 +159,7 @@ struct Visibility {
     focused: bool,
     has_frame: bool,
     hidden: bool,
-    /// Switched off by the user (`SIGUSR1`); stays off through frames and focus changes.
+    /// Switched off by `SIGUSR1`; stays off through frames and focus changes.
     user_hidden: bool,
 }
 
@@ -201,33 +187,28 @@ enum Surface {
     Unmapped,
     /// Buffer-less commit sent; a buffer may only be attached after the configure that answers it.
     AwaitingConfigure,
-    /// Configure acked (sctk acks before calling our handler), no buffer attached yet.
+    /// Configure acked, no buffer attached yet.
     Configured,
-    /// A buffer is attached: on screen.
     Mapped,
 }
 
-/// One protocol step [`Overlay::sync`] takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
     Nothing,
     /// Set the layer state and commit without a buffer (requests a configure).
     CommitEmpty,
-    /// Attach the current frame and commit.
     Present,
     /// Attach a null buffer and commit.
     Unmap,
 }
 
-/// The next step towards `visible` and the surface state after it. `dirty`: the frame changed
-/// since it was last presented.
+/// The next step towards `visible` and the surface state after it.
 const fn plan(surface: Surface, visible: bool, dirty: bool) -> (Action, Surface) {
     match (surface, visible) {
         (Surface::Unmapped, true) => (Action::CommitEmpty, Surface::AwaitingConfigure),
         (Surface::Configured, true) => (Action::Present, Surface::Mapped),
         (Surface::Mapped, true) if dirty => (Action::Present, Surface::Mapped),
         (Surface::Mapped, false) => (Action::Unmap, Surface::Unmapped),
-        // Waiting for a configure, already up to date, or hidden and staying hidden.
         _ => (Action::Nothing, surface),
     }
 }
@@ -239,7 +220,6 @@ struct Overlay {
     pool: SlotPool,
     layer: LayerSurface,
     conn: Connection,
-    /// Size of the layer surface (the latest frame's size).
     size: (u32, u32),
     frame: Option<Pixmap>,
     /// `frame` changed since it was last presented.
@@ -249,7 +229,6 @@ struct Overlay {
     /// The buffer on screen; kept alive while the compositor may read it.
     buffer: Option<Buffer>,
     closed: bool,
-    /// Why the loop stopped, if it was a failure.
     error: Option<anyhow::Error>,
 }
 
@@ -273,7 +252,6 @@ impl Overlay {
         self.sync();
     }
 
-    /// Flips the user's on/off switch (one `SIGUSR1`), logs the new state and syncs the surface.
     fn toggle(&mut self) {
         self.vis.user_hidden = !self.vis.user_hidden;
         eprintln!(
@@ -283,7 +261,7 @@ impl Overlay {
         self.sync();
     }
 
-    /// Moves the surface one step towards [`Visibility::visible`]; stops the loop on failure.
+    /// Stops the loop on failure.
     fn sync(&mut self) {
         let (action, next) = plan(self.surface, self.vis.visible(), self.dirty);
         let done = match action {
@@ -305,8 +283,7 @@ impl Overlay {
         }
     }
 
-    /// (Re)sends the layer state and commits without a buffer. The protocol resets a layer
-    /// surface to its just-created state on unmap, so this runs before every (re)map.
+    /// The protocol resets a layer surface on unmap, so this runs before every (re)map.
     fn commit_empty(&self) {
         self.layer.set_anchor(Anchor::TOP | Anchor::RIGHT);
         self.layer.set_margin(MARGIN_TOP, MARGIN, 0, 0);
@@ -315,14 +292,12 @@ impl Overlay {
         self.layer.commit();
     }
 
-    /// Attaching a null buffer unmaps the layer surface.
     fn unmap(&mut self) {
         self.layer.wl_surface().attach(None, 0, 0);
         self.layer.commit();
         self.buffer = None;
     }
 
-    /// Copies the frame into a fresh shm buffer, damages the whole surface and commits.
     fn present(&mut self) -> Result<()> {
         let Some(frame) = &self.frame else {
             bail!("present without a frame");
@@ -376,7 +351,7 @@ impl LayerShellHandler for Overlay {
                 configure.new_size, self.size
             );
         }
-        // Later configures (while mapped) need no action: the next frame is drawn at our size anyway.
+        // Later configures need no action: the next frame is drawn at our size anyway.
         if self.surface == Surface::AwaitingConfigure {
             self.surface = Surface::Configured;
             self.sync();
@@ -461,7 +436,6 @@ mod tests {
         let mut out = [0; 8];
         rgba_to_argb8888(&rgba, &mut out);
         assert_eq!(out, [3, 2, 1, 4, 30, 20, 10, 40]);
-        // As a little-endian u32 that is 0xAARRGGBB.
         assert_eq!(u32::from_le_bytes([3, 2, 1, 4]), 0x0401_0203);
     }
 
@@ -522,7 +496,6 @@ mod tests {
     fn surface_plan() {
         use Action as A;
         use Surface as S;
-        // Map: buffer-less commit, wait for the configure, then present.
         assert_eq!(
             plan(S::Unmapped, true, true),
             (A::CommitEmpty, S::AwaitingConfigure)
@@ -532,11 +505,9 @@ mod tests {
             (A::Nothing, S::AwaitingConfigure)
         );
         assert_eq!(plan(S::Configured, true, false), (A::Present, S::Mapped));
-        // Mapped: redraw only when the frame changed; unmap when no longer visible.
         assert_eq!(plan(S::Mapped, true, true), (A::Present, S::Mapped));
         assert_eq!(plan(S::Mapped, true, false), (A::Nothing, S::Mapped));
         assert_eq!(plan(S::Mapped, false, true), (A::Unmap, S::Unmapped));
-        // Hidden stays hidden, wherever the surface is.
         assert_eq!(plan(S::Unmapped, false, true), (A::Nothing, S::Unmapped));
         assert_eq!(
             plan(S::AwaitingConfigure, false, true),
