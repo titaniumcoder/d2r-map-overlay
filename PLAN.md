@@ -1641,6 +1641,13 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   byte-identical; the page snapshot test passes; `cargo build --release` still writes
   `target/release/d2r-map-overlay`.
 
+## Open: stash-plan anomalies (found 2026-11-22, user: "not yet", keep all bases)
+- A not-needed mark doesn't reach `switch_requires`: Harmony (marked not needed) still keeps a Colossus Crossbow 4os via the Summoner's switch group.
+- Any-of switch groups (merc life-leech helm, Cannot Be Frozen, powerful weapon) want every candidate as a piece even when the group is already met by a worn item (Bulwark worn → Isenhart's Horns still kept).
+- Base fit ignores the build's weapon rules: a Gothic Bow 6os is kept for the Fury's Breath of the Dying (a werewolf can't use a bow); a Legend Sword 3os for Hustle (one-handed, against the always-two-handed rule).
+- Sigon's Sabot kept for a Summoner level window (40-60) the character has passed (plus a Fury guide alternative).
+User decided 2026-11-22: guide alternatives keep their bases ("the bases are fine, keep them").
+
 ## Milestones
 - [x] **M0 setup**: mise Rust pin, `cargo init`, lint config, rustfmt, PLAN.md + CLAUDE.md + .gitignore, `git init`, first commit.
    From here on the user can start sessions directly in `~/Work/d2r_map_overlay`.
