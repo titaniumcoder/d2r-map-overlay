@@ -1,6 +1,5 @@
-//! Verified D2R struct offsets (source: `PLAN.md` "Memory layer" and `research/*.py`).
-//!
-//! All values are byte offsets from the struct's base address. Pointers are 8 bytes.
+//! Verified D2R struct offsets: byte offsets from each struct's base address, pointers are 8 bytes.
+//! Provenance and live-verification notes are in `PLAN.md` "Memory layer".
 
 /// Unit hash table: per unit type, `SLOTS` chain heads of 8 bytes each; type `t` starts at
 /// `table + t * SLOTS * SLOT_SIZE`.
@@ -10,7 +9,7 @@ pub mod unit_table {
     /// Unit type ids (also the value of `unit::TYPE`).
     pub const PLAYER: u32 = 0;
     pub const MONSTER: u32 = 1;
-    /// Objects (shrines, wells, chests, ...); only those near the player are loaded. Live 2026-11-15.
+    /// Objects (shrines, wells, chests, ...); only those near the player are loaded.
     pub const OBJECT: u32 = 2;
     pub const ITEM: u32 = 4;
 }
@@ -31,94 +30,68 @@ pub mod unit {
     pub const ACT: u64 = 0x20;
     /// ptr to `Path`.
     pub const PATH: u64 = 0x38;
-    /// ptr to the unit's `StatList` (verified live on items, 2026-11-15).
+    /// ptr to the unit's `StatList`.
     pub const STATS: u64 = 0x88;
-    /// ptr to the unit's `Inventory` (see [`super::inventory`]); live 2026-11-15 on player units,
-    /// 2026-11-18 on socketed item units (the chain holds the socketed runes/gems/jewels).
+    /// ptr to the unit's `Inventory` (see [`super::inventory`]); on a socketed item it holds the
+    /// socketed runes/gems/jewels.
     pub const INVENTORY: u64 = 0x90;
-    /// ptr to the player's [`super::skills`] header. Live-verified 2026-11-17 (Warlock, clvl 38,
-    /// python probe `skillprobe.py`): the header's first-skill chain held 19 skills — Attack,
-    /// Kick, Throw, Unsummon, the two scrolls and tomes, and the Warlock's skills with points
-    /// plus the two granted only by gear.
+    /// ptr to the player's [`super::skills`] header.
     pub const SKILLS: u64 = 0x100;
-    /// ptr to the next unit in the hash chain (same slot = same `id & 127`). Verified live
-    /// 2026-11-15 for items (43 chained units), monsters (24) and objects (1): every chained unit
-    /// had the slot's type and `id & 127 == slot`. The earlier 0x150 only ever reached slot heads,
-    /// so a unit sharing a slot was invisible (a dropped sapphire never showed).
+    /// ptr to the next unit in the hash chain (same slot = same `id & 127`).
     pub const NEXT: u64 = 0x158;
 }
 
-/// The player's skill list header ([`unit::SKILLS`]). Live-verified 2026-11-17.
+/// The player's skill list header ([`unit::SKILLS`]).
 pub mod skills {
     /// ptr to the first [`super::skill`] node; the rest follow [`super::skill::NEXT`].
     pub const FIRST: u64 = 0x00;
-    /// ptr to the skill node on the left mouse button. Live: pointed at the list's Attack node.
+    /// ptr to the skill node on the left mouse button.
     pub const LEFT: u64 = 0x08;
-    /// ptr to the skill node on the right mouse button. Live: pointed at the Death Mark (375)
-    /// node of the same list. Left/right follow the community layout; not yet seen changing.
+    /// ptr to the skill node on the right mouse button.
     pub const RIGHT: u64 = 0x10;
 }
 
-/// One node of the player's skill list (`Skill`). Live-verified 2026-11-17 on a level 38
-/// Warlock: the class skills' [`HARD_POINTS`] were Summon Goatman 16, Demonic Mastery 10,
-/// Death Mark 1, Summon Tainted 1, Summon Defiler 3, Blood Oath 1, Engorge 1, Blood Boil 1,
-/// Bind Demon 7 = 41 = clvl 38 − 1 + 4 Normal quest points, with no unspent points (no
-/// `newskills` stat on the player). Miasma Bolt and Enhanced Entropy were in the list with 0:
-/// the gear grants them (+1 each, item stat 107 `item_singleskill` on weapon and off-hand).
-/// No field in the first 0x100 bytes carried that +1 bonus (Summon Goatman, +1 from the
-/// weapon, differs from Demonic Mastery only in the hard points and flags), so the node holds
-/// base points only; the bonus is item stats, not read.
+/// One node of the player's skill list (`Skill`). Holds base points only: gear-granted skills
+/// sit in the list with 0 hard points and their bonus lives in item stats.
 pub mod skill {
     /// ptr to the skill's skills.txt record ([`super::skill_txt`]).
     pub const TXT: u64 = 0x00;
     /// ptr to the next node; null ends the list.
     pub const NEXT: u64 = 0x08;
-    /// u32 hard (allocated) points; 1 on Attack/Kick/Throw and the scrolls/tomes. (The u32 at
-    /// `+0x40` is a tome's charge count, live 15 identify / 17 town portal; not read.)
+    /// u32 hard (allocated) points; 1 on Attack/Kick/Throw and the scrolls/tomes.
     pub const HARD_POINTS: u64 = 0x38;
 }
 
 /// The game's skills.txt record a [`skill::TXT`] points to.
 pub mod skill_txt {
-    /// u16 skills.txt row (`*Id`). Live: 0 Attack, 217–220 scrolls/tomes, 373–402 Warlock.
+    /// u16 skills.txt row (`*Id`).
     pub const ID: u64 = 0x00;
 }
 
 /// `Inventory` of a unit.
 pub mod inventory {
-    /// u32 unit id of the player the inventory belongs to. Live 2026-11-15: the player's own
-    /// inventory and its shared-stash tab units (player-type units without an act, one per shared
-    /// page) carry the player's id here; stale tab units left from other characters or the
-    /// offline shared stash carry another id. Cathan's Seal moved page 1→5 through tab units
-    /// 3537311729, 4184574968, 2092279292, 1046131454, 523057535, all with this field = Vex's id.
+    /// u32 unit id of the player the inventory belongs to; stale shared-stash tab units left from
+    /// other characters or the offline stash carry another id.
     pub const OWNER_ID: u64 = 0x48;
     /// ptr to the first item unit stored in this inventory (null when empty); the rest follow
-    /// through [`super::item_data::NEXT_IN_INVENTORY`]. Live 2026-11-17 on the shared-stash tab
-    /// units: page 5 chained Sigon's Visor and Shelter, the gems/runes/materials tab its 49
-    /// stacks. `+0x18` is the last item and the u32 at `+0x4C` the item count (2 and 49 then).
+    /// through [`super::item_data::NEXT_IN_INVENTORY`].
     pub const FIRST_ITEM: u64 = 0x10;
-    /// Candidate offsets of the player's shared-stash tab list header: ptr to the first node
-    /// ([`super::stash_tab_node`]), then [`TAB_LIST_LAST`] and [`TAB_LIST_COUNT`] relative to
-    /// it; the nodes are in the game's UI order. Live 2026-11-17 on the PLAYER unit's
-    /// inventory, two games: the header was at `+0x60` in one (six nodes, the five normal
-    /// pages then the gems/runes/materials tab; page 5's tab unit held Sigon's set, as in the
-    /// UI) and at `+0x68` in the next (`+0x60` null), so the reader accepts the first
-    /// candidate whose first → last walk matches the count.
+    /// Candidate offsets of the player's shared-stash tab list header (ptr to the first
+    /// [`super::stash_tab_node`], nodes in UI order). It moves between games, so the reader takes
+    /// the first candidate whose first → last walk matches [`TAB_LIST_COUNT`].
     pub const TAB_LIST: [u64; 2] = [0x60, 0x68];
     /// ptr to the last node, relative to a [`TAB_LIST`] header.
     pub const TAB_LIST_LAST: u64 = 0x08;
-    /// u32 node count (6 live), relative to a [`TAB_LIST`] header.
+    /// u32 node count, relative to a [`TAB_LIST`] header.
     pub const TAB_LIST_COUNT: u64 = 0x10;
 }
 
 /// A node of the player inventory's shared-stash tab list ([`inventory::TAB_LIST`]).
-/// Live 2026-11-17: `+0x04` u32 was 0x10 on every node, `+0x08` u64 `0x6ffffb000100` on the
-/// normal pages and `0x6ffffb010100` on the gems/runes/materials tab.
 pub mod stash_tab_node {
     /// u32 unit id of the tab unit (a player-type unit without an act).
     pub const TAB_ID: u64 = 0x00;
-    /// u8: 1 on the gems/runes/materials ("advanced") tab, 0 on the normal pages. A hint seen
-    /// on one account (one advanced tab, five pages), not proven to be a kind field.
+    /// u8: 1 on the gems/runes/materials ("advanced") tab, 0 on the normal pages (a hint, not a
+    /// proven kind field).
     pub const ADVANCED: u64 = 0x0A;
     /// ptr to the next node; null ends the list.
     pub const NEXT: u64 = 0x10;
@@ -143,14 +116,11 @@ pub mod room1 {
 /// `Room2` (level layout; present for the whole level).
 pub mod room2 {
     /// ptr to an array of [`NEAR_COUNT`] `Room2` pointers: the "near rooms", which include rooms
-    /// of adjacent levels. Live 2026-11-15 (python probe, Outer Cloister 27): the top-row rooms
-    /// had near rooms in Barracks (28), the bottom-row ones in Monastery Gate (26), so a
-    /// walk-through border to another level shows up here without any tile preset or room tile.
+    /// of adjacent levels, so a walk-through border to another level shows up here.
     pub const NEAR: u64 = 0x10;
-    /// u32 number of entries in [`NEAR`]. Live 2026-11-15: +0x20 sometimes read 9 with null
-    /// entries after the real ones; that is a different field, this one is the count.
+    /// u32 number of entries in [`NEAR`] (`+0x20` is a different field despite looking similar).
     pub const NEAR_COUNT: u64 = 0x18;
-    /// ptr to the room's level-preset record (`level_preset`). Live-verified 2026-11-15 over 8 games.
+    /// ptr to the room's level-preset record (`level_preset`).
     pub const LEVEL_PRESET: u64 = 0x40;
     /// ptr to the next `Room2` of the level.
     pub const NEXT: u64 = 0x48;
@@ -213,29 +183,22 @@ pub mod preset {
 
 /// `Act` (the unit's act; `unit::ACT`).
 pub mod act {
-    /// ptr to `ActMisc`. Live-verified 2026-11-15; older builds had it at +0x78 (now points into code).
+    /// ptr to `ActMisc`.
     pub const MISC: u64 = 0x70;
 }
 
 /// `ActMisc` (per-act game data).
 pub mod act_misc {
-    /// u16 difficulty: 0 Normal, 1 Nightmare, 2 Hell. Live-verified 2026-11-15 (Normal only).
+    /// u16 difficulty: 0 Normal, 1 Nightmare, 2 Hell.
     pub const DIFFICULTY: u64 = 0x830;
     /// u32 level id of the real Tal Rasha's Tomb (66..=72, the one with the orifice), set in
-    /// Act 2 (`dwStaffTombLevel`). D2R layout from jagarop/d2.re `D2R/IDA.h` (`D2DrlgStrc`
-    /// +0x120, beside Difficulty +0x830). Live-verified 2026-11-18 (one Normal game): 72, and
-    /// the character had entered Duriel's Lair from tomb 72.
+    /// Act 2 (`dwStaffTombLevel`).
     pub const STAFF_TOMB_LEVEL: u64 = 0x120;
 }
 
 /// The client's quest flags of the current game: a `.data` global points to a `BitBuffer`
-/// header, which points to 48 little-endian u16 words, one per quest (classic d2s order,
-/// see [`crate::quests::QUESTS`]). Live-verified 2026-11-18 (druid "Elemental", clvl 21,
-/// Normal, Acts 1–2 done, research/quests.py): the global sat at rva 0x1edaf78 (build
-/// `6ad81202-279c000`), found by a structural search of `.data` (exactly two adjacent slots
-/// point to a header of this shape; the first is this record, the second a record of
-/// unknown meaning with bits 13/15 on finished quests). `PlayerData +0x40/+0x48/+0x50` hold
-/// headers of the same shape per difficulty, but on the client they stay all zero.
+/// header, which points to 48 little-endian u16 words, one per quest (classic d2s order, see
+/// [`crate::quests::QUESTS`]). The per-difficulty copies in `PlayerData` stay zero on the client.
 pub mod quest_flags {
     /// ptr to the word buffer.
     pub const BUFFER: u64 = 0x00;
@@ -248,12 +211,9 @@ pub mod quest_flags {
     /// Expected [`BITS`] and [`BYTES`] values.
     pub const BITS_VALUE: u32 = 0x300;
     pub const BYTES_VALUE: u64 = 0x60;
-    /// Bit 0 of a quest word: reward granted (D2MOO `QFLAG_REWARDGRANTED`): the quest is done
-    /// and its reward taken. Live: set on every finished Act 1–2 quest.
+    /// Bit of a quest word: done and its reward taken (D2MOO `QFLAG_REWARDGRANTED`).
     pub const REWARD_GRANTED: u16 = 0x0001;
-    /// Bit 1: reward pending (`QFLAG_REWARDPENDING`): done, reward not yet taken (Charsi's
-    /// imbue, Larzuk's socket); D2MOO clears it when the reward is granted. Live: set alone
-    /// on word 41 (Akara's respec, unused), clear on Tools of the Trade (imbue used).
+    /// Bit of a quest word: done, reward not yet taken, e.g. Charsi's imbue (`QFLAG_REWARDPENDING`).
     pub const REWARD_PENDING: u16 = 0x0002;
 }
 
@@ -266,23 +226,22 @@ pub mod player_data {
 
 /// `MonsterData` (unit data of a monster).
 pub mod monster_data {
-    /// u32 owner type (pet chain hypothesis: classic layouts carry owner type/id in the first
-    /// two dwords; NOT yet live-verified — journal logs both for the merc check).
+    /// u32 owner type (hypothesis, not live-verified; the journal logs it for the merc check).
     pub const OWNER_TYPE: u64 = 0x00;
-    /// u32 owner unit id: the local player's id on their merc/pets (hypothesis, see above).
+    /// u32 owner unit id: the local player's id on their merc/pets (hypothesis).
     pub const OWNER_ID: u64 = 0x04;
     /// u16 name seed (unique/superunique names).
     pub const NAME_SEED: u64 = 0x18;
-    /// u8 flag byte (observed 0x08, 0x0C on elites; bits to confirm).
+    /// u8 flag byte (classic bits: superunique 0x02, champion 0x04, unique 0x08, minion 0x10).
     pub const FLAGS: u64 = 0x1A;
-    /// `FLAGS` bit of a superunique (classic D2 bit; champion 0x04, unique 0x08, minion 0x10).
+    /// `FLAGS` bit of a superunique.
     pub const SUPERUNIQUE: u8 = 0x02;
 }
 
 /// `StaticPath`: the path of a unit that doesn't move (items and objects; `path` is for moving
-/// units). Objects live-verified 2026-11-15.
+/// units).
 pub mod static_path {
-    /// u32 world x (tiles). Live-verified 2026-11-14 with a dropped gem next to the player.
+    /// u32 world x (tiles).
     pub const X: u64 = 0x10;
     /// u32 world y (tiles).
     pub const Y: u64 = 0x14;
@@ -290,111 +249,83 @@ pub mod static_path {
 
 /// Item unit modes (`unit::MODE` of an item).
 pub mod item_mode {
-    /// Lying on the ground (live-verified 2026-11-14).
+    /// Lying on the ground.
     pub const ON_GROUND: u32 = 3;
-    /// In a storage page: inventory, stash, cube (`item_data::PAGE` tells which). Live 2026-11-15.
+    /// In a storage page: inventory, stash, cube (`item_data::PAGE` tells which).
     pub const STORED: u32 = 0;
 }
 
-/// Object unit modes (`unit::MODE` of an object). An untouched shrine is in mode 0 (live
-/// 2026-11-15).
+/// Object unit modes (`unit::MODE` of an object).
 pub mod object_mode {
-    /// Neutral: an untouched shrine. Any other mode (1 = operating, the click animation; 2 =
-    /// operated, seen live on a clicked Health shrine) means it is used. Wells refill, so a well
-    /// is drawn in any mode.
+    /// Neutral: an untouched shrine; any other mode means used. Wells refill, so they ignore it.
     pub const NEUTRAL: u32 = 0;
 }
 
-/// `ObjectData` (unit data of an object). `+0x00` points to the object's objects.txt record (not
-/// read: the unit's txt id says the same).
+/// `ObjectData` (unit data of an object).
 pub mod object_data {
-    /// u8 shrine type = shrines.txt code (1..=22) of a shrine object. Live 2026-11-15: a Health
-    /// shrine read 2.
+    /// u8 shrine type = shrines.txt code (1..=22); only meaningful on shrine objects.
     pub const SHRINE_TYPE: u64 = 0x08;
 }
 
 /// `ItemData` (unit data of an item).
 pub mod item_data {
     /// u32 quality (classic D2: 1 low, 2 normal, 3 superior, 4 magic, 5 set, 6 rare, 7 unique,
-    /// 8 crafted). Live-verified: a normal gem reads 2.
+    /// 8 crafted).
     pub const QUALITY: u64 = 0x00;
-    /// Classic values; unique (7) live-verified 2026-11-15, set (5) still to see.
     pub const QUALITY_SET: u32 = 5;
     pub const QUALITY_UNIQUE: u32 = 7;
-    /// Other classic quality values (2 and 4 seen live; 1 low quality is unverified).
     pub const QUALITY_LOW: u32 = 1;
     pub const QUALITY_NORMAL: u32 = 2;
     pub const QUALITY_SUPERIOR: u32 = 3;
     pub const QUALITY_MAGIC: u32 = 4;
     pub const QUALITY_RARE: u32 = 6;
-    /// Crafted (classic 8; not seen live yet).
     pub const QUALITY_CRAFTED: u32 = 8;
-    /// u32 unit id of the player owning the item. Live 2026-11-15: every stash (page 4) and
-    /// inventory (page 0) item carried the local player's unit id; ground items carry
-    /// [`NO_OWNER`]. Only the local client's own stash is in memory, so the stash owner is the
-    /// local player.
+    /// u32 unit id of the player owning the item; ground items carry [`NO_OWNER`]. Only the
+    /// local client's own stash is in memory, so the stash owner is the local player.
     pub const OWNER: u64 = 0x0C;
-    /// `OWNER` of an item nobody owns (live: ground items).
+    /// `OWNER` of an item nobody owns (ground items).
     pub const NO_OWNER: u32 = 0xFFFF_FFFF;
-    /// u32 item flags. Live: `0x0080_0000` on unidentified magic items. The bit values below are
-    /// classic D2 and still to verify in D2R.
+    /// u32 item flags (`0x0080_0000` seen on unidentified magic items).
     pub const FLAGS: u64 = 0x18;
-    /// `FLAGS` bit of an ethereal item (classic; to verify live).
+    /// `FLAGS` bit of an ethereal item (classic; unverified).
     pub const FLAG_ETHEREAL: u32 = 0x0040_0000;
-    /// `FLAGS` bit of a finished runeword. Live 2026-11-18: set (flags `0x0480_0810`) on an
-    /// equipped Stealth armour and Leaf staff, clear on the other equipped items.
+    /// `FLAGS` bit of a finished runeword.
     pub const FLAG_RUNEWORD: u32 = 0x0400_0000;
-    /// `FLAGS` bit of an identified item (classic; live: set on an identified quest unique).
+    /// `FLAGS` bit of an identified item.
     pub const FLAG_IDENTIFIED: u32 = 0x10;
     /// `FLAGS` bit of an item for sale in a vendor's trade window (classic `ITEMFLAG_INSTORE`).
-    /// Live 2026-11-18 (Ormus, ~60 items): set on every store item and on no other item.
     pub const FLAG_IN_STORE: u32 = 0x2000;
-    /// u32 uniqueitems / setitems row (`*ID`) of a unique / set item. Live-verified 2026-11-15 for
-    /// an identified unique (Khalim's Flail: 127 = uniqueitems `KhalimFlail`). Sets verified
-    /// live too (2026-11-17: the stash reader resolves Sigon's set pieces via this field),
-    /// and whether it is filled in before the item is identified (so only trusted with
-    /// [`FLAG_IDENTIFIED`]).
+    /// u32 uniqueitems / setitems row (`*ID`) of a unique / set item; only trusted with
+    /// [`FLAG_IDENTIFIED`].
     pub const FILE_INDEX: u64 = 0x34;
-    /// u16 magic prefix id of a magic item (first of three; 0 = none): `PREFIX_BASE` (785) +
-    /// the magicprefix.txt row (`affixes_data::PREFIXES`). Live 2026-11-18 on 14 owned magic
-    /// items checked against their stat lists. The rare name words are the u16 at `+0x42`
-    /// (prefix) and `+0x44` (suffix), not read. Store items assumed to share the layout.
+    /// u16 magic prefix id (first of three; 0 = none): `PREFIX_BASE` (785) + the magicprefix.txt
+    /// row (`affixes_data::PREFIXES`).
     pub const MAGIC_PREFIX: u64 = 0x48;
-    /// u16 magic suffix id (first of three, `+0x4E/+0x50/+0x52`; 0 taken as none, unsettled:
-    /// magicsuffix row 0 is "of Health", to check on a live item) = the magicsuffix.txt
-    /// row. Live 2026-11-18: a Battle Staff of Teleportation (Teleport charges) read 532.
+    /// u16 magic suffix id (first of three, `+0x4E/+0x50/+0x52`; 0 taken as none) = the
+    /// magicsuffix.txt row.
     pub const MAGIC_SUFFIX: u64 = 0x4E;
-    /// u8 body slot of an equipped item (0 none; 1 helm, 3 armour, 4 weapon…). Live 2026-11-17:
-    /// the local player's equipped items carry their slot here, the mercenary's too.
+    /// u8 body slot of an equipped item (0 none; 1 helm, 3 armour, 4 weapon…), the merc's too.
     pub const BODY: u64 = 0x54;
-    /// u8 storage page of a stored item: `PAGE_INVENTORY` 0, stash 4; 255 when equipped (body
-    /// slot in the byte at `+0x54`), on the ground or on the cursor. Live-verified 2026-11-15
-    /// over 74 items.
-    /// A store item's page is its trade-window tab (live 2026-11-18, Ormus): 0 armor, 1 and 2
-    /// weapons, 3 misc.
+    /// u8 storage page of a stored item: `PAGE_INVENTORY` 0, stash 4; 255 when equipped, on the
+    /// ground or on the cursor. A store item's page is its trade tab (0 armor, 1–2 weapons, 3 misc).
     pub const PAGE: u64 = 0x55;
     pub const PAGE_INVENTORY: u8 = 0;
-    /// The Horadric Cube (live 2026-11-15, owner = the player's unit id).
+    /// The Horadric Cube.
     pub const PAGE_CUBE: u8 = 3;
-    /// Personal stash (owner = the player's unit id) and the shared stash tabs (live
-    /// 2026-11-15: each tab is its own pseudo-owner id, no player's). Also items of owner
-    /// [`NO_OWNER`], all at (0,0) with quality 2: the stacks of the gems/runes/materials tab
-    /// (live 2026-11-17, reached through that tab's [`super::inventory::FIRST_ITEM`] chain).
+    /// Personal stash and the shared stash tabs (each tab its own pseudo-owner id); also the
+    /// [`NO_OWNER`] stacks of the gems/runes/materials tab.
     pub const PAGE_STASH: u8 = 4;
-    /// u32 stack size of an item on the shared stash's gems/runes/materials tab. Live
-    /// 2026-11-17: rvs 50, rvl 43, gcy 19, r01 8, gzv 0 (an emptied stack stays in the tab);
-    /// those items carry no stat list, [`OWNER`] [`NO_OWNER`] and [`PAGE`] [`PAGE_STASH`].
+    /// u32 stack size of an item on the shared stash's gems/runes/materials tab (an emptied
+    /// stack stays at 0); those items carry no stat list.
     pub const QUANTITY: u64 = 0x9C;
     /// ptr to the next item unit in the same `Inventory` (see
-    /// [`super::inventory::FIRST_ITEM`]); null ends the chain. Live 2026-11-17 on the shared
-    /// stash tabs (every item of each tab, the advanced tab's stacks included); live 2026-11-18
-    /// also on a socketed item's own inventory (its runes, in socket order).
+    /// [`super::inventory::FIRST_ITEM`]); null ends the chain. Socketed items chain in socket order.
     pub const NEXT_IN_INVENTORY: u64 = 0xB0;
     /// Bytes of `ItemData` copied into the journal's drop event for checking the offsets above.
     pub const HEAD_LEN: usize = 0x50;
 }
 
-/// `StatList` (unit `+0x88`). Verified live on items (damage 21/22, durability 72/73, defense 31).
+/// `StatList` (unit `+0x88`).
 pub mod stat_list {
     /// ptr to the array of [`STAT_SIZE`]-byte entries `{u16 layer, u16 stat id, u32 value}`.
     pub const ENTRIES: u64 = 0x30;
@@ -403,16 +334,13 @@ pub mod stat_list {
     pub const STAT_SIZE: u64 = 8;
     /// Stat id `item_numsockets` (itemstatcost.txt).
     pub const NUM_SOCKETS: u16 = 194;
-    /// Stat id `level` (itemstatcost.txt): the character level on a player unit. Not yet
-    /// live-verified; the reader also accepts the value shifted left by 8.
+    /// Stat id `level`: the character level on a player unit (the reader also accepts it << 8).
     pub const LEVEL: u16 = 12;
-    /// Stat ids `strength` and `dexterity` (itemstatcost.txt), plain values. Not yet
-    /// live-verified on the player's list.
+    /// Stat ids `strength` and `dexterity` (itemstatcost.txt), plain values.
     pub const STRENGTH: u16 = 0;
     pub const DEXTERITY: u16 = 2;
-    /// Stat ids of the four elemental resistances, on items and on the player's own list (the
-    /// quest resists; itemstatcost.txt interleaves fire/light/cold/poison with their max
-    /// counterparts, so light is 41, cold 43).
+    /// Stat ids of the four elemental resistances (itemstatcost.txt interleaves them with their
+    /// max counterparts, so light is 41, cold 43).
     pub const RESIST_FIRE: u16 = 39;
     pub const RESIST_LIGHTNING: u16 = 41;
     pub const RESIST_COLD: u16 = 43;
@@ -423,50 +351,35 @@ pub mod stat_list {
     pub const FHR: u16 = 99;
     /// Stat id `item_fastercastrate` (FCR, %).
     pub const FCR: u16 = 105;
-    /// ptr to the unit's next stat list (the chain: base list → magic-affix list → …; each
-    /// list's `+0x08/+0x0C` owner (unit type, unit id) tells whose it is). Live 2026-11-17:
-    /// an equipped item's base list chained to its affix list (res/FHR on it), so item-granted
-    /// stats are readable by walking this chain per item — the player's own `+0x88` list is
-    /// BASE-ONLY (level/strength/…, no item stats).
+    /// ptr to the unit's next stat list (base list → magic-affix list → …; [`OWNER_TYPE`] /
+    /// [`OWNER_ID`] tell whose). The player's own list is base-only, without item stats.
     pub const NEXT: u64 = 0xD0;
-    /// u32 list flags. [`FLAG_FULL_STATS`] marks an extended list (an item's or unit's top list)
-    /// that also carries the aggregated [`FULL_ENTRIES`] array.
+    /// u32 list flags.
     pub const FLAGS: u64 = 0x1C;
-    /// Live 2026-11-19: set on the top list (`unit + 0x88`) of all 168 item units read (worn,
-    /// carried, stashed, socketed runes, the merc's); the chained affix lists have 0x40 instead.
+    /// [`FLAGS`] bit of a unit's top list, which also carries the aggregated [`FULL_ENTRIES`].
     pub const FLAG_FULL_STATS: u32 = 0x8000_0000;
-    /// ptr / u64 count of the list's aggregated stat array (same entry layout as [`ENTRIES`]):
-    /// the item's base + affix lists, its runeword list and its socketed runes/gems/jewels,
-    /// summed with modifiers applied (ED% on defence and damage). Live 2026-11-19 (druid,
-    /// level 22): Ancients' Pledge (Ral Ort Tal in a shield) read fire/light/cold/poison
-    /// 48/48/43/48 here while its owner-matching chain had no resists at all; a Stealth read
-    /// FCR/FHR 25 and poison 30 (Tal). On items without sockets or runeword it equals the chain
-    /// sum (162 of 168 items compared).
+    /// ptr / u64 count of the aggregated stat array (layout as [`ENTRIES`]): base, affix,
+    /// runeword and socketed stats summed with modifiers applied (ED% on defence and damage).
     pub const FULL_ENTRIES: u64 = 0xE8;
     pub const FULL_COUNT: u64 = 0xF0;
     /// The unit's state bitfield: [`STATE_FLAG_DWORDS`] little-endian u32, state `n` is bit
-    /// `n % 32` of dword `n / 32` (states.txt rows). Live 2026-11-15 on monsters (Moo Moo Farm,
-    /// terrorized): all 24 cows had [`super::state::DESECRATED`] set here, the player and the
-    /// druid's wolves not. A second copy at +0xB50 also had it (synced or previous; not read).
+    /// `n % 32` of dword `n / 32` (states.txt rows).
     pub const STATE_FLAGS: u64 = 0xB30;
     pub const STATE_FLAG_DWORDS: usize = 8;
-    /// The second copy of the state bitfield (see [`STATE_FLAGS`]); only recorded in the
-    /// journal's `buffs` event, to learn whether it lags or mirrors the first.
+    /// A second copy of [`STATE_FLAGS`]; only journaled, to learn whether it lags or mirrors.
     pub const STATE_FLAGS_COPY: u64 = 0xB50;
     /// u32 owner unit type and unit id of a list (see [`NEXT`]).
     pub const OWNER_TYPE: u64 = 0x08;
     pub const OWNER_ID: u64 = 0x0C;
-    /// Bytes of each of the player's lists copied into the journal's `buffs` event: past
-    /// [`NEXT`] and the aggregated array's pointer and count, where a buff list's state id and
-    /// expiry frame are expected but not yet located.
+    /// Bytes of each of the player's lists copied into the journal's `buffs` event, where a
+    /// buff's state id and expiry frame are expected but not yet located.
     pub const DUMP_LEN: usize = 0x100;
 }
 
 /// State ids (states.txt rows), bits of [`stat_list::STATE_FLAGS`].
 pub mod state {
-    /// `desecrated`: the Terror Zone state of a monster. Live-verified 2026-11-15 on monsters of
-    /// a terrorized area; NOT yet checked that monsters of a normal area have it clear.
-    /// (State 56 `terror` is an unrelated fear effect.)
+    /// `desecrated`: the Terror Zone state of a monster (state 56 `terror` is unrelated).
+    /// Not yet checked that monsters of a normal area have it clear.
     pub const DESECRATED: u32 = 189;
 }
 

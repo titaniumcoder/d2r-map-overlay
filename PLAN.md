@@ -151,6 +151,28 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   Includes other levels' rooms: top-row rooms of 27 had near rooms in 28, bottom-row ones in 26. Used for
   walk-through border exits (`Snapshot::border_links`, drawn as a triangle on the shared edge). Earlier note: only
   filled for loaded rooms, and no walkable-connection info for unexplored rooms (openings need the seed).
+- **Smaller notes** (moved from `offsets.rs` comments, 2026-11-22):
+  - Skill node `+0x40` u32 = a tome's charge count (live 15 identify / 17 town portal; not read). Skill header
+    left/right follow the community layout (left pointed at Attack, right at Death Mark 375); not yet seen changing.
+  - Inventory: `+0x18` last item, `+0x4C` u32 item count (live 2 and 49 on page 5 and the advanced tab).
+  - Stash tab node: `+0x04` u32 was 0x10 on every node; `+0x08` u64 `0x6ffffb000100` on normal pages,
+    `0x6ffffb010100` on the advanced tab; `+0x0A` u8 1 on the advanced tab is a hint from one account only.
+  - MonsterData `+0x00/+0x04` owner type/id: classic-layout hypothesis for merc/pets, not live-verified.
+  - Item quality: unique (7) live 2026-11-15, normal (2) and magic (4) seen; low (1) and crafted (8) unverified;
+    ethereal flag `0x0040_0000` and identified `0x10` are classic bits (identified seen on a quest unique).
+  - `+0x34` file index is only trusted with the identified flag (unknown whether filled before identify).
+  - Magic suffix id 0 is taken as "none", unsettled: magicsuffix row 0 is "of Health".
+  - Stat ids `level` (12), `strength` (0), `dexterity` (2) on the player's list are not yet live-verified (the
+    reader also accepts level shifted left by 8). A second state bitfield copy at stat list `+0xB50` is only
+    journaled, to learn whether it lags or mirrors `+0xB30`.
+  - Terror Zone state `desecrated` (189): not yet checked that monsters of a normal area have it clear (state 56
+    `terror` is an unrelated fear effect).
+  - Breakpoints: the per-class frame bases reproduce every classic breakpoint table; the Warlock row is assumed
+    necromancer-like and matches d2runewizard's table.
+  - Immunity data: at most 20 monster types per area (10 spawn columns plus 10 uniques in Normal); Bloody
+    Foothills Normal has one poison-immune type.
+  - Cows: kills in the last seconds before an overlay crash can be in `cows.json` but not yet in `game.json`, so
+    they count twice after a restart (known gap).
 
 - **Skills** (live 2026-11-17, Warlock clvl 38, probe `skillprobe.py`): unit `+0x100` → skill list header
   (`+0x00` first skill, `+0x08` left-button skill, `+0x10` right-button skill). Skill node: `+0x00` → skills.txt
