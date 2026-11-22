@@ -70,18 +70,7 @@ pub fn shop_notes(info: &PanelInfo) -> Vec<ShopNote> {
     };
     let profile = score_profile(info);
     let plan = shop_plan(info);
-    let worn: Vec<(u8, Piece<'_>)> = info
-        .live
-        .equipped_items
-        .iter()
-        .map(|e| {
-            let piece = Piece {
-                code: e.code.as_deref(),
-                stats: &e.stats,
-            };
-            (e.body, piece)
-        })
-        .collect();
+    let worn = worn_pieces(info);
     shop.items
         .iter()
         .map(|item| {
@@ -96,6 +85,75 @@ pub fn shop_notes(info: &PanelInfo) -> Vec<ShopNote> {
             }
         })
         .collect()
+}
+
+/// The equipped items as `(body slot, piece)` for [`crate::gear_score`].
+fn worn_pieces<'i>(info: &PanelInfo<'i>) -> Vec<(u8, crate::gear_score::Piece<'i>)> {
+    info.live
+        .equipped_items
+        .iter()
+        .map(|e| {
+            let piece = crate::gear_score::Piece {
+                code: e.code.as_deref(),
+                stats: &e.stats,
+            };
+            (e.body, piece)
+        })
+        .collect()
+}
+
+/// An owned piece measured against what it would replace.
+enum Versus {
+    /// Worth wearing ([`crate::gear_score::verdict`]), with its gains.
+    Better(String),
+    /// Scores [`crate::gear_score::MIN_GAIN`] or more below what it would replace.
+    Worse,
+    Even,
+}
+
+/// The best-scoring owned copy (carried, cube, stash, shared stash) of piece `name` with read
+/// stats against the worn gear; `None` without such a copy or when it can't be compared. The
+/// vendor's rules without its build plan: no lost FCR/FHR breakpoint, [`MIN_GAIN`] to be better.
+///
+/// [`MIN_GAIN`]: crate::gear_score::MIN_GAIN
+fn owned_versus_worn(
+    name: &str,
+    req: Option<u32>,
+    worn: &[(u8, crate::gear_score::Piece<'_>)],
+    profile: &crate::gear_score::Profile,
+    info: &PanelInfo,
+) -> Option<Versus> {
+    use crate::gear_score::{MIN_GAIN, Piece, replaced_score, scores, verdict};
+    let points = |p: Piece<'_>| scores(p, profile).0;
+    let copy = info
+        .live
+        .owned_items
+        .iter()
+        .map(|(item, _)| item)
+        .filter(|item| {
+            !item.stats.is_empty() && d2r_core::names::same_name(&d2r_core::names::display_name(item), name)
+        })
+        .map(|item| Piece {
+            code: item.code.as_deref(),
+            stats: &item.stats,
+        })
+        .max_by(|a, b| points(*a).total_cmp(&points(*b)))?;
+    if let Some(why) = verdict(copy, req, worn, profile, None) {
+        return Some(Versus::Better(why));
+    }
+    let old = replaced_score(copy, worn, profile)?;
+    Some(if points(copy) + MIN_GAIN <= old {
+        Versus::Worse
+    } else {
+        Versus::Even
+    })
+}
+
+/// Whether build piece `name` is one of the guides' `setup = "alternative"` pieces.
+fn is_alternative(name: &str, info: &PanelInfo) -> bool {
+    info.build
+        .and_then(|b| b.pieces.get(name))
+        .is_some_and(|p| p.setup == "alternative")
 }
 
 /// What the stage's pieces allow a store item to replace; `None` without a build.
@@ -303,9 +361,10 @@ fn equip_upgrades(bis: &Bis, lvl: u32, info: &PanelInfo) -> Vec<serde_json::Valu
     out
 }
 
-/// The first of `pieces` above the worn one (the list is ranked; ring slots, with two rings worn,
-/// go by level only) that is owned, wearable at `lvl` and better than what is equipped in
-/// `slot`, with where it is.
+/// The first of `pieces` that is owned, wearable at `lvl` and better than what is equipped in
+/// `slot`, with where it is. A guide alternative is better by its owned copy's stats
+/// ([`owned_versus_worn`]); any other piece by level, and only above the worn one (the list is
+/// ranked; ring slots, with two rings worn, go by level only and have no alternatives judged).
 fn owned_upgrade<'p>(
     pieces: &'p [String],
     slot: &str,
@@ -315,22 +374,42 @@ fn owned_upgrade<'p>(
     let bodies = slot_bodies(slot);
     let eq_level = equipped_level(bodies, info);
     let one_body = bodies.len() == 1;
-    let above_worn = pieces
+    let worn_at = pieces
         .iter()
-        .take_while(|p| !(one_body && is_worn(d2r_core::info::piece_name(p), info)));
-    above_worn.filter(|p| !outgrown(p, info)).find_map(|piece| {
-        let name = d2r_core::info::piece_name(piece);
-        let req = d2r_core::info::piece_level(piece)?;
-        let tick = d2r_core::info::piece_tick(piece, &[], info.live.owned, info.live.stash_owned)?;
-        (req <= lvl && piece_state(Some(req), eq_level, lvl) == "better").then(|| {
+        .position(|p| one_body && is_worn(d2r_core::info::piece_name(p), info));
+    let profile = score_profile(info);
+    let worn = worn_pieces(info);
+    let versus = eq_level.map_or_else(String::new, |eq| format!(" (equipped: lvl {eq})"));
+    pieces
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !outgrown(p, info))
+        .find_map(|(i, piece)| {
+            let name = d2r_core::info::piece_name(piece);
+            let req = d2r_core::info::piece_level(piece)?;
+            let tick = d2r_core::info::piece_tick(piece, &[], info.live.owned, info.live.stash_owned)?;
+            if req > lvl {
+                return None;
+            }
+            let gain = if one_body && is_alternative(name, info) {
+                if is_worn(name, info) {
+                    return None;
+                }
+                match owned_versus_worn(name, Some(req), &worn, &profile, info)? {
+                    Versus::Better(why) => format!(" · {why}"),
+                    Versus::Worse | Versus::Even => return None,
+                }
+            } else if worn_at.is_none_or(|w| i < w) && piece_state(Some(req), eq_level, lvl) == "better" {
+                versus.clone()
+            } else {
+                return None;
+            };
             let place = match tick {
                 d2r_core::info::Tick::Worn | d2r_core::info::Tick::Owned => "you have it",
                 d2r_core::info::Tick::Stash => "in the shared stash",
             };
-            let versus = eq_level.map_or_else(String::new, |eq| format!(" (equipped: lvl {eq})"));
-            (name, format!("{place} · lvl {req}{versus}"))
+            Some((name, format!("{place} · lvl {req}{gain}")))
         })
-    })
 }
 
 /// The `"craft"` upgrades: runeword recipes with every rune owned whose piece is wearable and
@@ -464,7 +543,8 @@ pub fn gear_attention(info: &PanelInfo, upgrades: &[serde_json::Value]) -> Optio
 
 /// Whether `piece` is an unowned upgrade wearable at `lvl` that drops up to monster level
 /// `max_mlvl`: a unique or set item by its quality level, a runeword by its unowned runes' (the
-/// base counts as findable). Any other piece has no item level to check and never is.
+/// base counts as findable). Any other piece has no item level to check and never is, nor is a
+/// guide alternative: unowned, it is neither better nor worse than what is worn.
 #[must_use]
 pub fn findable_upgrade(
     piece: &str,
@@ -480,7 +560,11 @@ pub fn findable_upgrade(
     };
     let unowned = d2r_core::info::piece_tick(piece, &[], info.live.owned, info.live.stash_owned).is_none()
         && !is_worn(name, info);
-    if !unowned || req > lvl || piece_state(Some(req), eq_level, lvl) != "better" {
+    if !unowned
+        || req > lvl
+        || is_alternative(name, info)
+        || piece_state(Some(req), eq_level, lvl) != "better"
+    {
         return false;
     }
     if let Some(word) = d2r_core::runewords_data::lookup(name) {
@@ -611,12 +695,15 @@ fn merc_columns(info: &PanelInfo) -> Vec<serde_json::Value> {
                 info,
             );
             beat_below_worn(&mut json);
+            // The mercenary's items have no stats in the snapshot.
+            judge_alternatives(&mut json, |_, _| None);
             Some(serde_json::json!({ "title": title, "pieces": json }))
         })
         .collect()
 }
 
-/// Marks the grid pieces ranked below the first worn one as `"worse"`, without a `now` badge.
+/// Marks the grid pieces ranked below the first worn one as `"worse"`, without a `now` badge;
+/// the guides' alternatives follow the stage's own pieces, so their place says nothing.
 pub fn beat_below_worn(pieces: &mut [serde_json::Value]) {
     let Some(first) = pieces
         .iter()
@@ -628,9 +715,39 @@ pub fn beat_below_worn(pieces: &mut [serde_json::Value]) {
         .iter_mut()
         .skip(first + 1)
         .filter_map(serde_json::Value::as_object_mut)
+        .filter(|obj| obj.get("setup").and_then(serde_json::Value::as_str) != Some("alternative"))
     {
         obj.insert("state".to_owned(), serde_json::json!("worse"));
         obj.remove("now");
+    }
+}
+
+/// Sets the state of each guide alternative not worn from `versus` (name, required level):
+/// `"better"` (an upgrade), `"worse"` (struck, no `now` badge), else `"too_high"` when its
+/// level says so or `"neutral"`; its level alone never strikes it.
+fn judge_alternatives(
+    pieces: &mut [serde_json::Value],
+    versus: impl Fn(&str, Option<u32>) -> Option<Versus>,
+) {
+    for obj in pieces.iter_mut().filter_map(serde_json::Value::as_object_mut) {
+        let text = |key: &str| obj.get(key).and_then(serde_json::Value::as_str);
+        if text("setup") != Some("alternative") || text("tick") == Some("worn") {
+            continue;
+        }
+        let req = obj
+            .get("level")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|l| u32::try_from(l).ok());
+        let state = match versus(text("name").unwrap_or_default(), req) {
+            Some(Versus::Better(_)) => "better",
+            Some(Versus::Worse) => "worse",
+            _ if text("state") == Some("too_high") => "too_high",
+            _ => "neutral",
+        };
+        if state == "worse" {
+            obj.remove("now");
+        }
+        obj.insert("state".to_owned(), serde_json::json!(state));
     }
 }
 
@@ -679,6 +796,11 @@ pub fn grid_column(
     // The Ring column holds two worn rings: a piece between them can still beat the second.
     if bodies.len() == 1 {
         beat_below_worn(&mut pieces);
+        let profile = score_profile(info);
+        let worn = worn_pieces(info);
+        judge_alternatives(&mut pieces, |name, req| {
+            owned_versus_worn(name, req, &worn, &profile, info)
+        });
     }
     serde_json::json!({
         "title": title,

@@ -1824,6 +1824,268 @@ fn no_equip_upgrade_below_the_worn_piece_of_the_list() -> Result<()> {
     Ok(())
 }
 
+/// A build with `slot`'s `pieces`, those named in `alternatives` as guide alternatives.
+fn build_with_alternatives(slot: &str, pieces: &[&str], alternatives: &[&str]) -> config::Build {
+    config::Build {
+        name: "Test".to_owned(),
+        slots: [(slot.to_owned(), pieces.iter().map(|&p| p.to_owned()).collect())].into(),
+        pieces: alternatives
+            .iter()
+            .map(|&name| {
+                let info = config::PieceInfo {
+                    setup: "alternative".to_owned(),
+                    ..config::PieceInfo::default()
+                };
+                (name.to_owned(), info)
+            })
+            .collect(),
+        ..config::Build::default()
+    }
+}
+
+/// An identified unique or set item of the character's with its stats, in the shared stash.
+fn owned_named(
+    quality: u32,
+    index: u32,
+    code: &str,
+    stats: Vec<d2r_core::item_stats::ItemStat>,
+) -> (d2r_core::game::ItemDrop, d2r_core::game::Place) {
+    let item = d2r_core::game::ItemDrop {
+        cell: None,
+        id: index,
+        code: Some(code.to_owned()),
+        kind: d2r_core::items::DropKind::Base,
+        quality,
+        flags: d2r_core::offsets::item_data::FLAG_IDENTIFIED,
+        ethereal: false,
+        sockets: 0,
+        unique_index: Some(index),
+        stats,
+        item_data_head: String::new(),
+        x: 0,
+        y: 0,
+    };
+    (item, d2r_core::game::Place::Shared)
+}
+
+const fn affix(id: u16, value: i32) -> d2r_core::item_stats::ItemStat {
+    d2r_core::item_stats::ItemStat {
+        id,
+        param: 0,
+        value,
+        base: false,
+    }
+}
+
+/// The live JSON of a druid at `level` wearing `equipped`, owning `owned_items` (names in
+/// `owned`), on `build`.
+fn owned_gear_json(
+    build: &config::Build,
+    level: u8,
+    owned: &[String],
+    owned_items: &[(d2r_core::game::ItemDrop, d2r_core::game::Place)],
+    equipped: &[d2r_core::game::Equipped],
+) -> Result<serde_json::Value> {
+    let bis = config::Bis {
+        build: build.name.clone(),
+        slots: build.slots.clone(),
+        merc_slots: BTreeMap::new(),
+    };
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.live.char_level = Some(level);
+    info.bis = Some(&bis);
+    info.build = Some(build);
+    info.live.owned = owned;
+    info.live.owned_items = owned_items;
+    info.live.equipped_items = equipped;
+    Ok(serde_json::from_str(&live_json(&info))?)
+}
+
+/// Whether grid piece `p` is not a guide alternative (those are never struck for their place).
+fn not_alternative(p: &serde_json::Value) -> bool {
+    p.get("setup").and_then(serde_json::Value::as_str) != Some("alternative")
+}
+
+fn column_states(json: &serde_json::Value, column: usize) -> Vec<(String, String)> {
+    json.pointer(&format!("/gear/columns/{column}/pieces"))
+        .and_then(serde_json::Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .map(|p| {
+            let text = |k: &str| {
+                p.get(k)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            (text("name"), text("state"))
+        })
+        .collect()
+}
+
+fn upgrade_keys(json: &serde_json::Value) -> Vec<String> {
+    json.get("upgrades")
+        .and_then(serde_json::Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .filter_map(|u| Some(u.get("key")?.as_str()?.to_owned()))
+        .collect()
+}
+
+#[test]
+fn guide_alternatives_are_judged_by_owned_stats_not_by_list_position() -> Result<()> {
+    use d2r_core::item_stats::stat;
+    use d2r_core::offsets::item_data::{QUALITY_NORMAL, QUALITY_UNIQUE};
+    // The summoner wears Lore; the guide's helms follow the stage's own pieces.
+    let build = build_with_alternatives(
+        "helm",
+        &[
+            "Jalal's Mane@42",
+            "Lore@27",
+            "Druid pelt@3",
+            "Harlequin Crest@62",
+            "Ravenlore@74",
+            "Tarnhelm@15",
+        ],
+        &["Harlequin Crest", "Ravenlore", "Tarnhelm"],
+    );
+    let lore = d2r_core::game::Equipped {
+        stats: vec![
+            affix(stat::ALL_SKILLS, 1),
+            affix(stat::ENERGY, 10),
+            affix(stat::RES_LIGHTNING, 30),
+        ],
+        quality: QUALITY_NORMAL,
+        ..rune_worded(1, "dr4", "Lore")
+    };
+    let worn = [lore];
+    let json = owned_gear_json(&build, 80, &[], &[], &worn)?;
+    let states = |json: &serde_json::Value| {
+        column_states(json, 0)
+            .into_iter()
+            .map(|(n, s)| format!("{n}: {s}"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        states(&json),
+        [
+            "Jalal's Mane: better",
+            "Lore: worse",
+            "Druid pelt: worse",
+            "Harlequin Crest: neutral",
+            "Ravenlore: neutral",
+            "Tarnhelm: neutral",
+        ],
+        "unowned alternatives are neither struck nor upgrades"
+    );
+    assert_eq!(upgrade_keys(&json), Vec::<String>::new());
+    // An owned Shako beats Lore; an owned weak Ravenlore is struck.
+    let owned = ["Harlequin Crest".to_owned(), "Ravenlore".to_owned()];
+    let items = [
+        owned_named(
+            QUALITY_UNIQUE,
+            248,
+            "uap",
+            vec![
+                affix(stat::ALL_SKILLS, 2),
+                affix(stat::MAX_LIFE, 100),
+                affix(stat::MAX_MANA, 100),
+                affix(stat::MAGIC_FIND, 50),
+            ],
+        ),
+        owned_named(QUALITY_UNIQUE, 350, "uap", vec![affix(stat::RES_LIGHTNING, 5)]),
+    ];
+    let json = owned_gear_json(&build, 80, &owned, &items, &worn)?;
+    let shown = states(&json);
+    assert!(shown.contains(&"Harlequin Crest: better".to_owned()), "{shown:?}");
+    assert!(shown.contains(&"Ravenlore: worse".to_owned()), "{shown:?}");
+    assert!(shown.contains(&"Tarnhelm: neutral".to_owned()), "{shown:?}");
+    assert_eq!(upgrade_keys(&json), ["equip:helm:Harlequin Crest"]);
+    let why = json
+        .pointer("/upgrades/0/why")
+        .and_then(serde_json::Value::as_str);
+    assert!(
+        why.is_some_and(|w| w.starts_with("you have it · lvl 62 · ")),
+        "{why:?}"
+    );
+    // Not wearable yet: no upgrade, not struck either.
+    let json = owned_gear_json(&build, 60, &owned, &items, &worn)?;
+    assert_eq!(upgrade_keys(&json), Vec::<String>::new());
+    assert!(states(&json).contains(&"Harlequin Crest: neutral".to_owned()));
+    Ok(())
+}
+
+#[test]
+fn an_owned_alternative_scoring_lower_is_no_upgrade_over_the_worn_core_piece() -> Result<()> {
+    use d2r_core::item_stats::stat;
+    use d2r_core::offsets::item_data::{QUALITY_SET, QUALITY_UNIQUE};
+    // The Fury wears Laying of Hands; Soul Drainer (an alternative ranked below) is owned.
+    let build = build_with_alternatives(
+        "gloves",
+        &["Laying of Hands@63", "Soul Drainer@74"],
+        &["Soul Drainer"],
+    );
+    let laying = d2r_core::game::Equipped {
+        body: 10,
+        quality: QUALITY_SET,
+        code: Some("ulg".to_owned()),
+        name: Some("Laying of Hands".to_owned()),
+        file_index: Some(96),
+        runeword: false,
+        stats: vec![affix(stat::IAS, 20), affix(stat::RES_FIRE, 50)],
+    };
+    let soul_drainer = owned_named(
+        QUALITY_UNIQUE,
+        312,
+        "umg",
+        vec![affix(stat::LIFE_LEECH, 7), affix(stat::MANA_LEECH, 7)],
+    );
+    let owned = ["Soul Drainer".to_owned()];
+    let json = owned_gear_json(&build, 80, &owned, &[soul_drainer], &[laying])?;
+    assert_eq!(upgrade_keys(&json), Vec::<String>::new(), "{json}");
+    assert_eq!(
+        column_states(&json, 2),
+        [
+            ("Laying of Hands".to_owned(), "worse".to_owned()),
+            ("Soul Drainer".to_owned(), "worse".to_owned())
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn ring_column_alternatives_keep_the_level_rule() -> Result<()> {
+    use d2r_core::offsets::item_data::QUALITY_UNIQUE;
+    let build = build_with_alternatives("ring1", &["Raven Frost@45", "Nagelring@7"], &["Nagelring"]);
+    let raven = d2r_core::game::Equipped {
+        body: 6,
+        quality: QUALITY_UNIQUE,
+        code: Some("rin".to_owned()),
+        name: Some("Raven Frost".to_owned()),
+        file_index: Some(275),
+        runeword: false,
+        stats: Vec::new(),
+    };
+    let json = owned_gear_json(&build, 80, &[], &[], &[raven])?;
+    let ring = json
+        .pointer("/gear/columns")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|c| {
+            c.iter()
+                .position(|c| c.get("title").and_then(serde_json::Value::as_str) == Some("Ring"))
+        })
+        .context("no Ring column")?;
+    assert_eq!(
+        column_states(&json, ring),
+        [
+            ("Raven Frost".to_owned(), "worse".to_owned()),
+            ("Nagelring".to_owned(), "worse".to_owned())
+        ]
+    );
+    Ok(())
+}
+
 fn rune_worded(body: u8, code: &str, name: &str) -> d2r_core::game::Equipped {
     d2r_core::game::Equipped {
         body,
@@ -3157,7 +3419,7 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
         "{weapon:?}"
     );
     assert_eq!(field(&at(&weapon, 0), "tick"), "worn");
-    for beaten in weapon.iter().skip(1) {
+    for beaten in weapon.iter().skip(1).filter(|p| not_alternative(p)) {
         assert_eq!(field(beaten, "state"), "worse", "{beaten}");
         assert_eq!(field(beaten, "now"), serde_json::Value::Null, "{beaten}");
     }
@@ -3209,4 +3471,42 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
     assert!(weapon.iter().all(|p| field(p, "tick") != "worn"), "{weapon:?}");
     assert_eq!(super::gear::merc_open(weapons, &info).len(), weapons.len());
     Ok(())
+}
+
+#[test]
+fn merc_guide_alternatives_are_not_struck_below_the_worn_piece() {
+    let build = config::Build {
+        merc_slots: [(
+            "weapon".to_owned(),
+            vec![
+                "Insight@27".to_owned(),
+                "Harmony@39".to_owned(),
+                "Soul Harvest@19".to_owned(),
+            ],
+        )]
+        .into(),
+        ..build_with_alternatives("helm", &[], &["Harmony"])
+    };
+    let bis = config::Bis {
+        build: build.name.clone(),
+        slots: build.slots.clone(),
+        merc_slots: build.merc_slots.clone(),
+    };
+    let blocks = d2r_core::render::TextBlocks::default();
+    let merc = ["Insight".to_owned()];
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.live.char_level = Some(57);
+    info.live.merc_worn = &merc;
+    info.bis = Some(&bis);
+    info.build = Some(&build);
+    let gear = gear_json(&info);
+    let states: Vec<_> = gear
+        .pointer("/merc/0/pieces")
+        .and_then(serde_json::Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .filter_map(|p| p.get("state")?.as_str())
+        .collect();
+    // Insight is worn (its own level beats it, as in every column); Harmony was struck before.
+    assert_eq!(states, ["worse", "neutral", "worse"], "{gear}");
 }

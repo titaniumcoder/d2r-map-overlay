@@ -856,8 +856,14 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   off-hand, shield, Demon Limb or charge wand), and its unique charms in `[extras] charms`.
   Stats and levels from d2data (runewords with their rune bonuses). One copy each is "keep own";
   each runeword also wants a base like the user's own runeword options. The lists are ranked, so
-  an owned piece below the worn one is no equip upgrade and is struck in the grid (Ring column
-  excepted: two worn rings). The merc stays the Act 5 2x Lawbringer (the guide's Act 2 Might
+  an owned stage piece below the worn one is no equip upgrade and is struck in the grid (Ring
+  column excepted: two worn rings). **Alternatives are judged by stats, never by place (user bug
+  2026-11-22: the summoner's guide helms all struck below a worn Lore)**: an owned alternative with
+  read stats (carried, cube, stash, shared stash; the best copy) is compared with `gear_score`
+  against what it would replace: `verdict` without the vendor's build plan (no lost FCR/FHR
+  breakpoint, `MIN_GAIN`) = "better" and an equip upgrade, `MIN_GAIN` or more below = struck,
+  else neutral; an unowned one (or one without stats: runewords, the merc's) is neutral (dimmed
+  only when too high) and never "findable". Ring column unchanged. The merc stays the Act 5 2x Lawbringer (the guide's Act 2 Might
   merc is not taken). Open: magic charm types (Sharp / Shimmering / Fine ... of Vita) have no
   build-file form.
 - **Summoner guide and merc alternatives (user, 2026-11-22: "did you do it for the summoner
