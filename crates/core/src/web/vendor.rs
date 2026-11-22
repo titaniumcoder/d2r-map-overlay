@@ -9,6 +9,9 @@ pub struct ShopNote {
     pub slot: Option<String>,
     /// Why it beats what is worn in its body slot; `None`: not better.
     pub why: Option<String>,
+    /// The mark it would get as a ground drop: a runeword base the builds want (keep) or a
+    /// valuables match (trade).
+    pub mark: Option<crate::guidance::Mark>,
 }
 
 /// The open trade window, `null` when none is open; `notes` are in window order. Identical

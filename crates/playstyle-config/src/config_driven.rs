@@ -72,7 +72,7 @@ impl Playstyle for ConfigDriven {
 
     fn panels<'a>(&'a self, evaluation: &'a EvaluationOf<'_, Self>, info: &LiveInfo<'a>) -> Panels<'a> {
         let extra = &evaluation.extra;
-        web::panels(&web::PanelInfo {
+        let mut panels = web::panels(&web::PanelInfo {
             live: *info,
             bis: evaluation.guidance.bis.as_ref(),
             build: extra.stage.map(|s| s.build),
@@ -81,7 +81,14 @@ impl Playstyle for ConfigDriven {
             route: &self.config.route,
             stage_chain: &extra.chain,
             not_needed: &self.config.not_needed,
-        })
+        });
+        if let Some(shop) = info.shop {
+            let marks = marks::shop_marks(shop, &self.config.valuables, &evaluation.wants);
+            for (note, mark) in panels.shop.iter_mut().zip(marks) {
+                note.mark = mark;
+            }
+        }
+        panels
     }
 
     fn config_json(&self, gear: &GearInfo, played: &Played) -> serde_json::Value {

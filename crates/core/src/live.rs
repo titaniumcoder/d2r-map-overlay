@@ -279,7 +279,6 @@ fn follow_game<P: Playstyle>(
                     last_played.reach(&snap.player.name, slug);
                 }
                 evaluation.guidance.marks = marks;
-                wants = (Some(snap.player.id), std::mem::take(&mut evaluation.wants));
                 if let Some(arrival) = update.arrival {
                     journal.arrival(&snap, arrival);
                 }
@@ -288,7 +287,9 @@ fn follow_game<P: Playstyle>(
                 }
                 cow_stats.record(&update, session.cow_kills());
                 saver.tick(&mut session, Instant::now());
+                // The panels judge the trade window's items by the wants too.
                 publish_web(&snap, &*playstyle, &evaluation, w, quests);
+                wants = (Some(snap.player.id), std::mem::take(&mut evaluation.wants));
                 record_stash_cache(&update, journal);
                 if let Some(msg) = tick_msg(&mut dedup, snap, evaluation.guidance, (w, h), info::font()) {
                     send(tx, msg)?;

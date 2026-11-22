@@ -91,6 +91,7 @@ pub fn shop_notes(info: &PanelInfo) -> Vec<ShopNote> {
             ShopNote {
                 slot: shop_match(item, info).map(|(slot, _)| slot),
                 why: verdict(piece, item.req_level, &worn, &profile),
+                mark: None,
             }
         })
         .collect()

@@ -9,7 +9,8 @@ use d2r_core::game::ItemDrop;
 use d2r_core::guidance::{Mark, MarkKind, Marks};
 use d2r_core::item_stats::stat;
 use d2r_core::items::DropKind;
-use d2r_core::offsets::item_data;
+use d2r_core::offsets::{item_data, stat_list};
+use d2r_core::shop::{Shop, ShopItem};
 use d2r_core::socket_bases;
 
 use crate::stash_plan::{self, Wants};
@@ -27,6 +28,46 @@ pub fn apply(drops: &mut Vec<ItemDrop>, enabled: &config::Valuables, wants: &Wan
         true
     });
     marks
+}
+
+/// The mark each item of the open trade window would get as a ground drop, in window order:
+/// a runeword base the builds want, or a valuables match. Store items are identified, so the
+/// stat rules decide (a +3 wand). The window sells no uniques or sets, so no piece marks.
+#[must_use]
+pub fn shop_marks(shop: &Shop, enabled: &config::Valuables, wants: &Wants) -> Vec<Option<Mark>> {
+    let for_bases = tiers_for_white_bases(enabled);
+    shop.items
+        .iter()
+        .map(|item| mark(&as_drop(item), (enabled, &for_bases), wants))
+        .collect()
+}
+
+/// A store item as the drop the rules judge; the socket count is its stat.
+fn as_drop(item: &ShopItem) -> ItemDrop {
+    let sockets = item
+        .stats
+        .iter()
+        .find(|s| s.id == stat_list::NUM_SOCKETS)
+        .and_then(|s| u8::try_from(s.value).ok())
+        .unwrap_or(0);
+    let kind = d2r_core::items::classify(
+        item.quality,
+        item.code.as_deref().and_then(d2r_core::items::code_bytes),
+    );
+    ItemDrop {
+        id: 0,
+        code: item.code.clone(),
+        kind: kind.unwrap_or(DropKind::Base),
+        quality: item.quality,
+        flags: item_data::FLAG_IDENTIFIED | item_data::FLAG_IN_STORE,
+        ethereal: false,
+        sockets,
+        unique_index: None,
+        stats: item.stats.clone(),
+        item_data_head: String::new(),
+        x: 0,
+        y: 0,
+    }
 }
 
 /// `enabled` without the twink tiers below S: such a white base is own gear, not a trade good.
@@ -112,6 +153,39 @@ mod tests {
             x: 0,
             y: 0,
         }
+    }
+
+    #[test]
+    fn store_items_are_judged_by_their_read_stats() {
+        use d2r_core::guidance::Tier;
+        use d2r_core::item_stats::ItemStat;
+        let wand = |stats: Vec<ItemStat>| {
+            let mut item = d2r_core::shop::shop_item(Some("wnd"), item_data::QUALITY_MAGIC, 1, 0, 0);
+            item.stats = stats;
+            item
+        };
+        // +3 to the necromancer's Poison and Bone tab (class 2, tab 1).
+        let plus3 = ItemStat {
+            id: stat::SKILL_TAB,
+            param: 2 * 8 + 1,
+            value: 3,
+            base: false,
+        };
+        let shop = Shop {
+            npc_txt: 0,
+            npc: None,
+            items: vec![wand(vec![plus3]), wand(Vec::new())],
+        };
+        let marks = shop_marks(&shop, &config::Valuables::default(), &Wants::default());
+        let seen: Vec<Option<(MarkKind, Option<Tier>)>> = marks
+            .iter()
+            .map(|m| m.as_ref().map(|m| (m.kind, m.trade.map(|(t, _)| t))))
+            .collect();
+        assert_eq!(
+            seen,
+            [Some((MarkKind::Trade, Some(Tier::A))), None],
+            "a +3 wand sells well, an identified plain one doesn't"
+        );
     }
 
     #[test]

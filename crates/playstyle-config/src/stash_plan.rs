@@ -1271,6 +1271,38 @@ mod tests {
     }
 
     #[test]
+    fn a_store_base_the_builds_want_is_marked_keep() {
+        use d2r_core::guidance::MarkKind;
+        use d2r_core::offsets::stat_list;
+        let mut spirit = Needs::default();
+        spirit.base("Spirit", DRUID, Some(4));
+        let (_, wants) = plan(&[], &spirit, &druid());
+        let socketed = |sockets: i32| {
+            let mut item = d2r_core::shop::shop_item(Some("crs"), item_data::QUALITY_NORMAL, 1, 0, 0);
+            item.stats = vec![ItemStat {
+                id: stat_list::NUM_SOCKETS,
+                param: 0,
+                value: sockets,
+                base: false,
+            }];
+            item
+        };
+        let shop = d2r_core::shop::Shop {
+            npc_txt: 0,
+            npc: None,
+            items: vec![socketed(4), socketed(3)],
+        };
+        let marks = crate::marks::shop_marks(&shop, &crate::config::Valuables::default(), &wants);
+        let rules: Vec<Option<(MarkKind, String)>> =
+            marks.into_iter().map(|m| m.map(|m| (m.kind, m.rule))).collect();
+        assert_eq!(
+            rules,
+            [Some((MarkKind::Keep, "Spirit base".to_owned())), None],
+            "the socket count is the store item's stat"
+        );
+    }
+
+    #[test]
     fn a_ground_base_is_wanted_only_when_better_than_the_kept_one() {
         // Spirit in the weapon slot, a Crystal Sword 4os kept on page 1.
         let mut spirit = Needs::default();
