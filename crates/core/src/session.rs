@@ -1,47 +1,5 @@
-//! State accumulated over snapshots of one game: what was seen in each level, superuniques
-//! killed, seals operated and where the player arrived in each level.
-//!
-//! **Memory**: every preset (raw, before filtering), shrine, well, room link and border link
-//! seen is remembered per level for the game and merged back into later snapshots of that level, so the map keeps what
-//! was explored even after D2R unloads it. The filters below then run over live and remembered
-//! presets alike. A shrine keeps its latest `used`; a border link's `entry` is recomputed per
-//! snapshot. Rooms of landmark candidate pieces ([`crate::render::candidate_room`]) seen loaded
-//! are remembered too and marked [`Room::seen_loaded`](crate::game::Room::seen_loaded), so a
-//! clearing explored without the Gidbinn altar stays ruled out once it unloads. Monsters, items
-//! and the player are live only;
-//! a level seen terrorized (Terror Zone) stays so for the current visit (zones rotate hourly).
-//! [`GameState`] is that per-game part; `game_file` keeps it on disk across overlay restarts.
-//!
-//! **Superunique presets**: a monster preset is drawn iff its txt id is in
-//! [`SUPERUNIQUES`](crate::levels_data::SUPERUNIQUES) (751 + the superuniques.txt row, see
-//! `research/gen_levels.py`) and it wasn't killed in this game. Other monster presets are
-//! ordinary fixed spawns. Older versions learned the ids in play and kept them in a
-//! `superuniques.txt` next to the offset cache; that file is no longer read and can be deleted.
-//! Quest monster presets ([`QUEST_MONSTERS`](crate::render::QUEST_MONSTERS), the prison doors
-//! of Frigid Highlands) are kept too, until a dead monster with the same txt id is seen
-//! within [`QUEST_KILL_RADIUS`] of one; that preset then counts as killed for the game.
-//!
-//! Pure: no I/O. [`Session::apply`] folds each snapshot in and rewrites it for drawing, so the
-//! renderer stays a function of the snapshot alone.
-//!
-//! **Game change**: the per-game part is cleared when the player's unit id changes. The choice
-//! is sticky ([`Session::player_id`] feeds [`ChosenBy::Previous`](crate::game::ChosenBy::Previous)),
-//! so in a group game the id only changes once the chosen player is no longer a candidate (or
-//! `--player` names someone else), not when the item owner vote flips. Online the
-//! server hands out a random-looking 32-bit player unit id per game, so a repeat is practically
-//! impossible; offline games may reuse small ids, which then carries the old game's state over
-//! (accepted: it only keeps markers hidden or remembered that a fresh look would redraw). The
-//! act pointer is not part of the key on purpose: it changes on act travel, and kills, seals,
-//! entries and explored levels must survive moving between acts within a game.
-//!
-//! **Entry**: the player's position when the level id changes is the level's arrival point (first
-//! visit per game wins; a new game counts as a level change). For [`ARRIVAL_SETTLE`] snapshots it
-//! follows the player while no tile is near it, so a stale first frame can't lock a wrong point.
-//! The tile preset nearest to it, within [`ENTRY_RADIUS`], is the way in and gets
-//! [`Preset::entry`](crate::game::Preset::entry); the other tiles stay exits. Arriving by waypoint or portal has no tile nearby, so no entry. The
-//! very first snapshot of a session has no previous level (the overlay may start mid-level),
-//! so it records no arrival. A walk-through border ([`Snapshot::border_links`]) to the level the
-//! player came from is the entry if the arrival point lies within [`ENTRY_RADIUS`] of its rooms.
+//! State accumulated over the snapshots of one game (explored level contents, kills, operated
+//! seals, arrival points), folded into each snapshot so the renderer needs nothing else. No I/O.
 
 use std::collections::{HashMap, HashSet};
 
@@ -56,18 +14,16 @@ use crate::render::{candidate_room, quest_monster};
 use crate::stash::{self, StashTab};
 
 /// Most distance in tiles between a dead superunique and the superunique preset it is credited
-/// to. Generous: it only picks which marker to remove (the nearest), and superunique presets of
-/// one level lie far apart.
+/// to; generous, since superunique presets of one level lie far apart.
 const KILL_RADIUS: f64 = 30.0;
 /// Most distance in tiles between a dead quest monster (live position) and the quest monster
 /// preset of the same txt id it is credited to.
 const QUEST_KILL_RADIUS: f64 = 10.0;
 /// Most distance in tiles between a living superunique and the superunique preset its unit id is
-/// bound to: it spawns on its preset, so a small radius suffices and keeps a passing
-/// superunique from binding to another's preset.
+/// bound to; small, so a passing superunique doesn't bind to another's preset.
 const BIND_RADIUS: f64 = 15.0;
 /// Most distance in tiles between an operated consumable quest object (live position) and the
-/// object preset it hides: preset and live positions may differ by a tile or two.
+/// object preset it hides: the two positions may differ by a tile or two.
 const OPERATED_RADIUS: f64 = 5.0;
 /// Most distance in tiles between the arrival point and the entry tile preset.
 const ENTRY_RADIUS: f64 = 25.0;
@@ -93,18 +49,14 @@ pub struct Update {
     pub cow_run: bool,
     /// Cows newly counted dead in this snapshot.
     pub new_cows: u32,
-    /// The shared stash was captured for the first time this game: (tab count, item count).
-    /// D2R fills the stash only once the stash was opened in the game. Fires only for a
-    /// capture with at least one item, so the journal never records a torn under-count (see
-    /// [`Session::stash_tick`]).
+    /// The shared stash was first captured with items this game: (tab count, item count).
     pub stash_captured: Option<(u32, u32)>,
     /// The session's cached shared stash was dropped: a new game (player unit id changed).
     pub stash_invalidated: bool,
 }
 
-/// The per-game part of a [`Session`]: everything that must survive an overlay restart within
-/// the game. Serialized as JSON by `game_file`. `player_id` is required (a file without it is
-/// rejected, never restored as id 0); the other fields default, so older files still load.
+/// The per-game part of a [`Session`], kept on disk by `game_file` across overlay restarts.
+/// `player_id` is required (never restored as id 0); the other fields default.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameState {
     /// Player unit id of the game this state belongs to.
@@ -124,7 +76,7 @@ pub struct GameState {
     /// id (recorded with the arrival, first visit wins).
     #[serde(default)]
     came_from: HashMap<u32, u32>,
-    /// Every preset seen per level id, raw (before filtering, `entry` false), first seen first.
+    /// Every preset seen per level id, before filtering and with `entry` false.
     #[serde(default)]
     presets: HashMap<u32, Vec<Preset>>,
     /// Every shrine seen per level id, with its latest state.
@@ -133,33 +85,28 @@ pub struct GameState {
     /// Every well seen per level id.
     #[serde(default)]
     wells: HashMap<u32, Vec<Well>>,
-    /// Every room-tile link seen per level id. Kept with the border links: a level with a
-    /// room link draws tile exits, not a border arrow ([`crate::render::border_exits`]).
+    /// Every room-tile link seen per level id.
     #[serde(default)]
     room_links: HashMap<u32, Vec<RoomLink>>,
     /// Every walk-through border link seen per level id (`entry` false; it is set per snapshot).
     #[serde(default)]
     border_links: HashMap<u32, Vec<BorderLink>>,
-    /// Origins (x, y) of landmark candidate rooms ([`crate::render::candidate_room`]) seen
-    /// loaded in this game, per level id: their preset lists were complete then.
+    /// Origins (x, y) of landmark candidate rooms seen loaded in this game, per level id: their
+    /// preset lists were complete then, so a clearing without the landmark stays ruled out.
     #[serde(default)]
     loaded_rooms: HashMap<u32, HashSet<(u32, u32)>>,
-    /// Levels seen terrorized in this game ([`Snapshot::terrorized`]). Kept so the info line
-    /// doesn't drop back to the table monster levels once the desecrated monsters near the
-    /// player are dead or unloaded.
+    /// Levels seen terrorized in this visit, so the info line keeps the zone once the
+    /// desecrated monsters near the player are dead or unloaded.
     #[serde(default)]
     terrorized: HashSet<u32>,
-    /// Cows (by unit id) seen dead in the Moo Moo Farm in this game: each counts once
-    /// ([`crate::cows`]).
+    /// Cows (by unit id) seen dead in the Moo Moo Farm in this game.
     #[serde(default)]
     cows: HashSet<u32>,
     /// The player was in the Moo Moo Farm in this game (the cow run is counted).
     #[serde(default)]
     cow_run: bool,
     /// The player's path through each level of this game, by level id (world tiles, oldest
-    /// first): a point at least [`TRAIL_STEP`] from the previous one, at most [`TRAIL_CAP`] per
-    /// level (the oldest go first). Every level since the user asked for it everywhere
-    /// (2026-11-15); it started in the Moo Moo Farm.
+    /// first).
     #[serde(default)]
     trails: HashMap<u32, Vec<(u16, u16)>>,
 }
@@ -172,14 +119,26 @@ impl GameState {
         }
     }
 
-    /// Remembers the live presets, shrines, wells and links of `snap`'s level and adds the
-    /// remembered ones it lacks (same kind, txt and position for presets; same position for
-    /// shrines and wells; equal links). Returns whether anything was newly remembered or a
-    /// shrine changed.
+    /// Remembers the live presets, shrines, wells, links and loaded candidate rooms of `snap`'s
+    /// level and adds the remembered ones it lacks. Returns whether anything was newly
+    /// remembered or a shrine changed.
     fn remember(&mut self, snap: &mut Snapshot) -> bool {
         let level = snap.level.id;
-        let mut changed = false;
+        let mut changed = self.remember_presets(level, snap);
+        changed |= self.remember_shrines(level, snap);
+        changed |= self.remember_wells(level, snap);
+        changed |= merge(self.room_links.entry(level).or_default(), &mut snap.room_links);
+        changed |= merge(
+            self.border_links.entry(level).or_default(),
+            &mut snap.border_links,
+        );
+        changed |= self.remember_loaded_rooms(level, snap);
+        changed
+    }
 
+    /// Presets match on kind, txt and position.
+    fn remember_presets(&mut self, level: u32, snap: &mut Snapshot) -> bool {
+        let mut changed = false;
         let same = |a: &Preset, b: &Preset| (a.kind, a.txt, a.x, a.y) == (b.kind, b.txt, b.x, b.y);
         let seen = self.presets.entry(level).or_default();
         for p in &snap.presets {
@@ -197,7 +156,12 @@ impl GameState {
             .cloned()
             .collect();
         snap.presets.extend(missing);
+        changed
+    }
 
+    /// Shrines match on position and keep their latest state.
+    fn remember_shrines(&mut self, level: u32, snap: &mut Snapshot) -> bool {
+        let mut changed = false;
         let seen = self.shrines.entry(level).or_default();
         for live in &snap.shrines {
             match seen.iter_mut().find(|s| (s.x, s.y) == (live.x, live.y)) {
@@ -218,7 +182,11 @@ impl GameState {
             .cloned()
             .collect();
         snap.shrines.extend(missing);
+        changed
+    }
 
+    fn remember_wells(&mut self, level: u32, snap: &mut Snapshot) -> bool {
+        let mut changed = false;
         let seen = self.wells.entry(level).or_default();
         for live in &snap.wells {
             if !seen.iter().any(|w| (w.x, w.y) == (live.x, live.y)) {
@@ -232,16 +200,13 @@ impl GameState {
             .cloned()
             .collect();
         snap.wells.extend(missing);
+        changed
+    }
 
-        changed |= merge(self.room_links.entry(level).or_default(), &mut snap.room_links);
-        // Live links carry `entry` false here (it is set after `remember`), so equality is
-        // the room pair.
-        changed |= merge(
-            self.border_links.entry(level).or_default(),
-            &mut snap.border_links,
-        );
-
-        // Only levels with candidate rooms get an entry, so the game file stays small.
+    /// Remembers which landmark candidate rooms were seen loaded and sets their
+    /// [`Room::seen_loaded`](crate::game::Room::seen_loaded).
+    fn remember_loaded_rooms(&mut self, level: u32, snap: &mut Snapshot) -> bool {
+        let mut changed = false;
         for room in snap
             .level
             .rooms
@@ -287,17 +252,14 @@ pub struct Session {
     /// `state` changed since [`Session::take_changed`] last returned it.
     changed: bool,
     /// Superunique preset each superunique monster (by unit id) was first seen alive near in
-    /// this game. Its death kills that preset however far it was chased. Not saved: a restart
-    /// mid-fight falls back to the corpse's nearest preset.
+    /// this game.
     bound: HashMap<u32, LevelPos>,
     /// Level id of the previous snapshot (kept across games: only its change matters).
     last_level: Option<u32>,
     /// Level whose arrival point may still move, and how many more snapshots it may.
     settling: Option<(u32, u8)>,
-    /// The shared stash captured the last time live tab units were seen (the user had opened
-    /// the stash at least once this game). Kept until the player unit id changes: the tab
-    /// units vanish once the stash UI closes or on area transitions, but the contents stay
-    /// valid for the game (user decision, 2026-11-17). Not saved to disk.
+    /// The shared stash last captured from live tab units, kept for the game: the tab units
+    /// vanish when the stash UI closes or on area transitions.
     stash: Option<Vec<StashTab>>,
 }
 
@@ -345,7 +307,8 @@ impl Session {
     }
 
     /// Switches to the game of player unit id `player_id`; returns whether that is a new game
-    /// (the first snapshot is not, unless it discarded a restored state of another game).
+    /// (the first snapshot is not, unless it discarded a restored state of another game). The
+    /// act pointer is no part of the key: the game state must survive act travel.
     fn enter_game(&mut self, player_id: u32) -> bool {
         if self.started && self.state.player_id == player_id {
             return false;
@@ -365,12 +328,8 @@ impl Session {
         }
     }
 
-    /// Folds `snap` into the session and rewrites it for drawing: remembered presets, shrines
-    /// and wells of the level are added, then monster presets are kept only
-    /// if they are a superunique's (see [`superunique`]) or a quest monster's (see
-    /// [`quest_monster`]) not killed in this game, and consumable
-    /// quest object presets only if not seen operated in this game. A level once seen
-    /// terrorized stays [`Snapshot::terrorized`] until the player leaves it (re-detected on the next visit).
+    /// Folds `snap` into the session and rewrites it for drawing: remembered level contents
+    /// are added, the entry is marked, and killed or used presets are dropped.
     pub fn apply(&mut self, snap: &mut Snapshot) -> Update {
         let mut update = Update {
             new_game: self.enter_game(snap.player.id),
@@ -379,58 +338,74 @@ impl Session {
         self.stash_tick(snap, &mut update);
         self.changed |= self.state.remember(snap);
         let level = snap.level.id;
-        // Terror Zones rotate hourly: the latch holds for one visit, and a new visit re-detects.
         self.latch_terrorized(snap, level);
         let previous = self.last_level.replace(level);
         let level_changed = previous.is_some_and(|old| old != level);
-        let here = (snap.player.x, snap.player.y);
-        if (level_changed || update.new_game) && !self.state.arrivals.contains_key(&level) {
-            self.changed |= self.state.arrivals.insert(level, here) != Some(here);
-            if let Some(old) = previous.filter(|_| level_changed) {
-                self.changed |= self.state.came_from.insert(level, old) != Some(old);
-            }
-            self.settling = Some((level, ARRIVAL_SETTLE));
+        if level_changed || update.new_game {
+            self.record_arrival(snap, previous.filter(|_| level_changed));
         }
-        // A tile preset or a border to the level come from near the arrival point is the entry.
-        // `|`, not `||`: both kinds get marked.
+        update.arrival = self.settle_arrival(snap);
+        self.kill_superuniques(snap);
+        self.kill_quest_monsters(snap);
+        if level == cows::COW_LEVEL {
+            self.count_cows(snap, &mut update);
+        }
+        self.follow_trail(snap);
+        self.drop_spent_presets(snap);
+        update
+    }
+
+    /// Records the player's position as the level's arrival point (first visit per game wins)
+    /// and `from` as the level it was entered from.
+    fn record_arrival(&mut self, snap: &Snapshot, from: Option<u32>) {
+        let level = snap.level.id;
+        if self.state.arrivals.contains_key(&level) {
+            return;
+        }
+        let here = (snap.player.x, snap.player.y);
+        self.changed |= self.state.arrivals.insert(level, here) != Some(here);
+        if let Some(old) = from {
+            self.changed |= self.state.came_from.insert(level, old) != Some(old);
+        }
+        self.settling = Some((level, ARRIVAL_SETTLE));
+    }
+
+    /// Marks the entry near the level's arrival point. While the arrival settles and no entry
+    /// is near it, the arrival follows the player. Returns the arrival once it settled.
+    fn settle_arrival(&mut self, snap: &mut Snapshot) -> Option<(u32, u16, u16)> {
+        let level = snap.level.id;
+        let here = (snap.player.x, snap.player.y);
         let from = self.state.came_from.get(&level).copied();
         let mark = |snap: &mut Snapshot, at| {
-            mark_entry(snap, at) | from.is_some_and(|from| mark_border_entry(snap, from, at))
+            let tile = mark_entry(snap, at);
+            let border = from.is_some_and(|from| mark_border_entry(snap, from, at));
+            tile || border
         };
-        if let Some(&arrival) = self.state.arrivals.get(&level) {
-            let found = mark(snap, arrival);
-            let was_settling = self.settling.is_some_and(|(l, _)| l == level);
-            self.settling = match self.settling {
-                Some((l, left)) if l == level && !found && left > 0 => {
-                    self.changed |= self.state.arrivals.insert(level, here) != Some(here);
-                    if mark(snap, here) {
-                        None
-                    } else {
-                        Some((l, left - 1))
-                    }
+        let &arrival = self.state.arrivals.get(&level)?;
+        let found = mark(snap, arrival);
+        let was_settling = self.settling.is_some_and(|(l, _)| l == level);
+        self.settling = match self.settling {
+            Some((l, left)) if l == level && !found && left > 0 => {
+                self.changed |= self.state.arrivals.insert(level, here) != Some(here);
+                if mark(snap, here) {
+                    None
+                } else {
+                    Some((l, left - 1))
                 }
-                Some((l, _)) if l == level => None,
-                other => other,
-            };
-            if was_settling && self.settling.is_none() {
-                update.arrival = self.state.arrivals.get(&level).map(|&(x, y)| (level, x, y));
             }
-        }
-
-        // A living superunique near its spawn binds its unit id to the nearest superunique
-        // preset; its death kills that preset wherever it happens. A dead superunique never seen
-        // alive there (killed while loading, say) falls back to the nearest preset within
-        // KILL_RADIUS of the corpse.
-        let nearest_preset = |m: &Monster, radius: f64| {
-            let (mx, my) = (f64::from(m.x), f64::from(m.y));
-            snap.presets
-                .iter()
-                .filter(|p| p.kind == PresetKind::Monster && superunique(p.txt).is_some())
-                .map(|p| ((f64::from(p.x) - mx).hypot(f64::from(p.y) - my), p))
-                .filter(|&(d, _)| d <= radius)
-                .min_by(|a, b| a.0.total_cmp(&b.0))
-                .map(|(_, p)| (level, p.x, p.y))
+            Some((l, _)) if l == level => None,
+            other => other,
         };
+        if was_settling && self.settling.is_none() {
+            return self.state.arrivals.get(&level).map(|&(x, y)| (level, x, y));
+        }
+        None
+    }
+
+    /// A living superunique near its spawn binds its unit id to the nearest superunique
+    /// preset, and its death kills that preset wherever it happens. A superunique never seen
+    /// alive (killed while loading) kills the preset nearest its corpse.
+    fn kill_superuniques(&mut self, snap: &Snapshot) {
         for m in snap
             .monsters
             .iter()
@@ -441,23 +416,22 @@ impl Session {
                     .bound
                     .get(&m.id)
                     .copied()
-                    .or_else(|| nearest_preset(m, KILL_RADIUS))
+                    .or_else(|| nearest_superunique_preset(snap, m, KILL_RADIUS))
                 {
                     self.changed |= self.state.killed.insert(pos);
                 }
             } else if !self.bound.contains_key(&m.id)
-                && let Some(pos) = nearest_preset(m, BIND_RADIUS)
+                && let Some(pos) = nearest_superunique_preset(snap, m, BIND_RADIUS)
             {
                 self.bound.insert(m.id, pos);
             }
         }
+    }
 
-        self.kill_quest_monsters(snap);
-        if level == cows::COW_LEVEL {
-            self.count_cows(snap, &mut update);
-        }
-        self.follow_trail(snap);
-
+    /// Notes the operated quest objects, then keeps monster presets only for superuniques and
+    /// quest monsters not killed in this game, and drops quest objects seen operated.
+    fn drop_spent_presets(&mut self, snap: &mut Snapshot) {
+        let level = snap.level.id;
         for o in &snap.operated_objects {
             self.changed |= self.state.operated.insert((level, o.x, o.y));
         }
@@ -467,7 +441,6 @@ impl Session {
                     && (f64::from(x) - f64::from(ox)).hypot(f64::from(y) - f64::from(oy)) <= OPERATED_RADIUS
             })
         };
-
         snap.presets.retain(|p| match p.kind {
             PresetKind::Monster => {
                 (superunique(p.txt).is_some() || quest_monster(p.txt).is_some())
@@ -476,14 +449,24 @@ impl Session {
             PresetKind::Object => !(is_consumable_quest_object(p.txt) && operated_near(p.x, p.y)),
             _ => true,
         });
-        update
     }
 }
 
-/// A live stash read merged over the cached capture, per tab (review 2026-11-17): a live tab
-/// that reads empty keeps the cached tab of the same kind (its unit not loaded yet, or a torn
-/// read), and a live read without a materials tab (the memory-order fallback when the UI-order
-/// tab list is unreadable) never replaces a cache that came from the list.
+/// The superunique preset nearest to `m` within `radius` tiles, as (level id, x, y).
+fn nearest_superunique_preset(snap: &Snapshot, m: &Monster, radius: f64) -> Option<LevelPos> {
+    let (mx, my) = (f64::from(m.x), f64::from(m.y));
+    snap.presets
+        .iter()
+        .filter(|p| p.kind == PresetKind::Monster && superunique(p.txt).is_some())
+        .map(|p| ((f64::from(p.x) - mx).hypot(f64::from(p.y) - my), p))
+        .filter(|&(d, _)| d <= radius)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, p)| (snap.level.id, p.x, p.y))
+}
+
+/// A live stash read merged over the cached capture, per tab: an empty live tab keeps the
+/// cached tab of its kind (unit not loaded yet, or a torn read), and a live read without a
+/// materials tab (the memory-order fallback) never replaces a cache from the UI-order list.
 fn merge_stash(cached: Option<&[stash::StashTab]>, live: Vec<stash::StashTab>) -> Vec<stash::StashTab> {
     let Some(cached) = cached else { return live };
     let has_materials = |tabs: &[stash::StashTab]| tabs.iter().any(|t| t.kind == stash::TabKind::Materials);
@@ -503,8 +486,8 @@ fn merge_stash(cached: Option<&[stash::StashTab]>, live: Vec<stash::StashTab>) -
 }
 
 impl Session {
-    /// Latches the level's terrorized state for this visit: a level once seen terrorized stays
-    /// so until the player leaves it (re-detected on the next visit).
+    /// A level once seen terrorized stays so until the player leaves it: zones rotate hourly,
+    /// so the next visit re-detects.
     fn latch_terrorized(&mut self, snap: &mut Snapshot, level: u32) {
         if self.last_level != Some(level) {
             self.changed |= self.state.terrorized.remove(&level);
@@ -516,17 +499,10 @@ impl Session {
         }
     }
 
-    /// Captures, caches and serves the shared stash (see [`crate::stash`]): the live tabs are
-    /// captured the first time they appear (the user opened the stash), kept while the tab
-    /// units are gone, and dropped on a new game. Reports a first capture or an invalidation
-    /// in `update`.
-    ///
-    /// A degraded live read — tab units present but every tab still empty (a torn mid-load
-    /// capture, research note §3.4) — never downgrades a cache that has items: the session
-    /// would otherwise serve an empty or partial stash until the user reopens the stash UI.
-    /// The trade-off: a stash emptied entirely keeps showing its last capture until the next
-    /// live read that has items (or a new game). The first-capture event fires only for a
-    /// read with at least one item, so the journal never records a torn under-count.
+    /// Captures, caches and serves the shared stash: the live tabs are captured once they
+    /// appear (the user opened the stash), kept while the tab units are gone, and dropped on a
+    /// new game. A live read with every tab empty (torn mid-load) never replaces a cache with
+    /// items, so a stash emptied entirely shows its last capture until the next game.
     fn stash_tick(&mut self, snap: &mut Snapshot, update: &mut Update) {
         if update.new_game && self.stash.take().is_some() {
             update.stash_invalidated = true;
@@ -582,7 +558,6 @@ impl Session {
         });
         if here != (0, 0) && far_enough {
             if trail.len() >= TRAIL_CAP {
-                // O(n) shift, but at most once per new point of a 5000-point Vec.
                 trail.remove(0);
             }
             trail.push(here);
@@ -591,9 +566,8 @@ impl Session {
         snap.trail.clone_from(trail);
     }
 
-    /// A dead quest monster (prison door broken) kills the nearest quest monster preset of its
-    /// txt id within [`QUEST_KILL_RADIUS`]. Normal monsters get no unit-id binding: a door
-    /// doesn't move.
+    /// A dead quest monster (a broken prison door) kills the nearest quest monster preset of
+    /// its txt id within [`QUEST_KILL_RADIUS`]; doors don't move, so no unit-id binding.
     fn kill_quest_monsters(&mut self, snap: &Snapshot) {
         let level = snap.level.id;
         for m in snap
@@ -638,10 +612,9 @@ fn mark_entry(snap: &mut Snapshot, (ax, ay): (u16, u16)) -> bool {
     true
 }
 
-/// Marks the border links to `from` (the level the player came from) as the entry, if the
-/// arrival point lies within [`ENTRY_RADIUS`] of one of their rooms in this level: walking over
-/// the border puts the player there, while a waypoint or portal from that level does not.
-/// Returns whether it was.
+/// Marks the border links to `from` (the level the player came from) as the entry if the
+/// arrival point lies within [`ENTRY_RADIUS`] of one of their rooms (a waypoint or portal from
+/// that level lands elsewhere). Returns whether it did.
 fn mark_border_entry(snap: &mut Snapshot, from: u32, (ax, ay): (u16, u16)) -> bool {
     let near = |r: &RoomRect| {
         let gap = |a: u16, lo: u32, len: u32| {
@@ -808,7 +781,7 @@ mod tests {
         let mut first = stash_snap(7, 0xa000, 1, &["Harlequin Crest"]);
         session.apply(&mut first);
 
-        // Tab units seen again but still empty (torn mid-load capture, §3.4): the cache with
+        // Tab units seen again but still empty (torn mid-load capture): the cache with
         // its item survives and keeps being served.
         let mut torn = stash_snap(7, 0xa000, 1, &[]);
         let update = session.apply(&mut torn);

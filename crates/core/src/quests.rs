@@ -134,8 +134,7 @@ mod tests {
     use super::*;
     use crate::testutil::FakeMem;
 
-    /// Elemental's live record (2026-11-18, Normal): Acts 1–2 done, Act 3 entered,
-    /// Blood Raven skipped, respec unused.
+    /// A live Normal record: Acts 1–2 done, Act 3 entered, Blood Raven skipped, respec unused.
     const ELEMENTAL: [u16; 42] = [
         0x0001, 0x9001, 0x000c, 0x1049, 0x1019, 0x1055, 0x1019, 0x0001, 0x0001, 0x1011, 0x3c79, 0x1005,
         0x1181, 0x1005, 0x3e25, 0x2001, 0x0001, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -198,11 +197,13 @@ mod tests {
         let read_back = read(&mem, GLOBAL)?;
         assert_eq!(read_back.len(), WORDS);
         assert_eq!(read_back.get(..ELEMENTAL.len()), Some(&ELEMENTAL[..]));
-        // Another shape (no game yet): an error, not garbage.
         header.splice(8..12, 0x200u32.to_le_bytes());
         assert!(!is_header(&header));
         mem.add(HEADER, header);
-        assert!(read(&mem, GLOBAL).is_err());
+        assert!(
+            read(&mem, GLOBAL).is_err(),
+            "another shape (no game yet) is an error, not garbage"
+        );
         Ok(())
     }
 }

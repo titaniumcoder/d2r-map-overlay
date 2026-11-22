@@ -1,12 +1,5 @@
-//! Research journal: what the overlay saw, as JSON Lines, for finding patterns offline (room
-//! preset ids of special rooms, which objects sit in which piece, elite and drop spots).
-//!
-//! One file per UTC day (`YYYY-MM-DD.jsonl`, UTC because the local offset needs a time-zone
-//! database), appended to. Every line is `{"t": unix secs, "game": key, "ev": kind, ...}`.
-//! [`Recorder`] is the pure part: it turns snapshots into events and dedupes them per game, which
-//! keeps the volume small. [`Journal`] adds the file: buffered, flushed once per call, never
-//! synced. A write error is printed once and turns the journal off for the run; it never stops
-//! the overlay.
+//! Research journal: what the overlay saw, deduped per game, as JSON Lines in one file per UTC
+//! day (`{"t": unix secs, "game": key, "ev": kind, ...}`), for finding patterns offline.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -105,10 +98,8 @@ pub enum Event {
         y: u16,
         piece: Option<u32>,
     },
-    /// A shown ground item (unique, set, gem, rune, charm, marked base) on first sight, with
-    /// its mark (`mark` keep / farm / trade, `null`: none; `tier` and `category` only for a
-    /// trade mark; `rule` the valuables rule, the piece or "<runeword> base") and raw fields
-    /// for checking unverified offsets.
+    /// A shown ground item on first sight, with its mark (`tier` and `category` only for a
+    /// trade mark) and raw fields for checking unverified offsets.
     Drop {
         level: u32,
         id: u32,
@@ -117,8 +108,6 @@ pub enum Event {
         quality: u32,
         x: u32,
         y: u32,
-        /// Journals written before marks v2 have no `mark` (their marks were all trade); a
-        /// reader of old lines takes a missing one as `null` (`Event` is only written here).
         mark: Option<MarkKind>,
         tier: Option<Tier>,
         category: Option<Category>,
@@ -146,8 +135,8 @@ pub enum Event {
     Well { level: u32, txt: u32, x: u32, y: u32 },
     /// The level was first seen terrorized (Terror Zone) in this game.
     Terror { level: u32, terrorized: bool },
-    /// A monster whose `MonsterData` owner id matches the local player (merc/pet hypothesis,
-    /// NOT yet live-verified — the raw owner fields decide whether the offset is right).
+    /// A monster whose `MonsterData` owner id matches the local player (unverified merc/pet
+    /// offset; the raw owner fields decide).
     Merc {
         level: u32,
         id: u32,
@@ -160,16 +149,9 @@ pub enum Event {
     },
     /// The shared-stash tab units were first seen live in a game (`captured`, with the tab
     /// and item counts) or the session's stash cache was dropped (a new game; counts 0).
-    /// Answers whether the stash must be opened before the tab units exist (research note
-    /// `stash-format.md` §3.4).
     Stash { captured: bool, tabs: u32, items: u32 },
-    /// The player's shown states changed (any but [`buffs::HIDDEN`]; the first snapshot of a
-    /// game is a change from nothing): the buff tracker research (PLAN.md, "Backlog: buff
-    /// tracker"). `added` / `removed` with their states.txt names, every active state, the
-    /// states of the bitfield's second copy, and a raw dump of the player's stat-list chain
-    /// (each list's address, owner, flags, first `stat_list::DUMP_LEN` bytes as hex and its
-    /// `[layer, stat id, value]` entries, both capped by the reader) plus the top list's
-    /// aggregated array and whether the dump was cut. At most [`MAX_BUFF_EVENTS`] per game.
+    /// The player's shown states (all but [`buffs::HIDDEN`]) changed, with a raw dump of the
+    /// player's stat-list chain for the buff tracker research. At most [`MAX_BUFF_EVENTS`] a game.
     Buffs {
         level: u32,
         added: Vec<u32>,
@@ -278,12 +260,21 @@ impl Recorder {
                 ..Self::default()
             };
         }
-        let level = snap.level.id;
-        let rooms = &snap.level.rooms;
-        let piece = |x: u32, y: u32| piece_at(rooms, x, y);
         let mut out = Vec::new();
-
         self.level(snap, &mut out);
+        self.markers(snap, &mut out);
+        self.links(snap, &mut out);
+        self.elites(snap, &mut out);
+        self.mercs_seen(snap, snap.level.id, &mut out);
+        self.drops(snap, marks, &mut out);
+        self.objects(snap, &mut out);
+        self.buffs(snap, &mut out);
+        out
+    }
+
+    /// The marker events of `snap`'s tile, object and monster presets, once per spot.
+    fn markers(&mut self, snap: &Snapshot, out: &mut Vec<Event>) {
+        let level = snap.level.id;
         for p in &snap.presets {
             if !matches!(
                 p.kind,
@@ -298,7 +289,7 @@ impl Recorder {
                     txt: p.txt,
                     x: p.x,
                     y: p.y,
-                    piece: piece(p.x, p.y),
+                    piece: piece_at(&snap.level.rooms, p.x, p.y),
                     superunique: match p.kind {
                         PresetKind::Monster => session::superunique(p.txt),
                         _ => None,
@@ -306,6 +297,11 @@ impl Recorder {
                 });
             }
         }
+    }
+
+    /// The link events of `snap`'s room tiles, once per room and target level.
+    fn links(&mut self, snap: &Snapshot, out: &mut Vec<Event>) {
+        let (level, rooms) = (snap.level.id, &snap.level.rooms);
         for l in &snap.room_links {
             let (x, y) = (l.from_room.x, l.from_room.y);
             if self.links.insert((level, x, y, l.to_level_id)) {
@@ -318,8 +314,13 @@ impl Recorder {
                 });
             }
         }
+    }
+
+    /// The monster event of each elite on first sight and its killed event on first death.
+    fn elites(&mut self, snap: &Snapshot, out: &mut Vec<Event>) {
+        let level = snap.level.id;
         for m in snap.monsters.iter().filter(|m| m.flags & ELITE != 0) {
-            let at = piece(u32::from(m.x), u32::from(m.y));
+            let at = piece_at(&snap.level.rooms, u32::from(m.x), u32::from(m.y));
             let dead = self.monsters.entry(m.id).or_insert_with(|| {
                 out.push(Event::Monster {
                     level,
@@ -345,11 +346,6 @@ impl Recorder {
                 });
             }
         }
-        self.mercs_seen(snap, level, &mut out);
-        self.drops(snap, marks, &mut out);
-        self.objects(snap, &mut out);
-        self.buffs(snap, &mut out);
-        out
     }
 
     /// The `buffs` event when the player's shown states changed since the last one (up to
@@ -460,8 +456,7 @@ impl Recorder {
         }
     }
 
-    /// First sight of the local player's merc/pet (`MonsterData` owner id, unverified
-    /// hypothesis): emits the raw owner fields so the offset can be verified live.
+    /// The merc event of each of the local player's mercs/pets on first sight.
     fn mercs_seen(&mut self, snap: &Snapshot, level: u32, out: &mut Vec<Event>) {
         for m in snap.monsters.iter().filter(|m| m.owner_id == snap.player.id) {
             if !m.is_dead() && self.mercs.insert(m.id) {
@@ -657,14 +652,15 @@ fn open_day(dir: &Path, date: String) -> io::Result<DayFile> {
     })
 }
 
+/// Unix seconds; 0 for a clock before 1970.
 fn unix_now() -> u64 {
-    // A clock before 1970 is a broken clock: write 0 rather than fail.
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
 }
 
-/// `YYYY-MM-DD` (UTC) of unix time `t` (Howard Hinnant's `civil_from_days`).
+/// `YYYY-MM-DD` (UTC: local time needs a time-zone database) of unix time `t` (Howard
+/// Hinnant's `civil_from_days`).
 fn utc_date(t: u64) -> String {
     let z = t / 86_400 + 719_468;
     let era = z / 146_097;

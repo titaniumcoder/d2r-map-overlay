@@ -1,11 +1,5 @@
-//! The quests each character finished, per difficulty (PLAN.md, plugin refactor step 9).
-//!
-//! The game only exposes the current difficulty's quest flags ([`crate::quests::read`]), but
-//! the route needs the others too (Normal's quests while playing Nightmare). So every read is
-//! merged into `quests.json` in the data dir: lowercased character name →
-//! `{ "name", "normal": [...], "nightmare": [...], "hell": [...] }` (quest names as in
-//! [`crate::quests::QUESTS`]). A quest once seen done is never forgotten: a merge only adds.
-//! Written like `played.json` (temp file and rename), only when something new was seen.
+//! The quests each character finished, per difficulty, remembered in `quests.json`: the game
+//! only exposes the current difficulty's flags. A merge only adds, so a done quest stays done.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -161,10 +155,9 @@ impl Memory {
         }
     }
 
-    /// Notes the quest record `words` of character `name` in `difficulty` (the current game's)
-    /// and returns everything remembered for that character; quests already remembered stay.
-    /// `None` while the quests are unknown: an implausible name, the name and difficulty not
-    /// yet seen [`STABLE_TICKS`] times in a row, or no record (with words) read yet in this
+    /// Notes the quest record `words` of character `name` in the current game's `difficulty`
+    /// and returns everything remembered for that character. `None` while unknown: an
+    /// implausible name, not yet [`STABLE_TICKS`] stable, or no record read yet in this
     /// difficulty for this character.
     pub fn observe(&mut self, name: &str, difficulty: Option<u8>, words: &[u16]) -> Option<&QuestsDone> {
         if !crate::played::plausible_name(name) {
@@ -172,40 +165,56 @@ impl Memory {
             return None;
         }
         let key = name.to_lowercase();
-        let count = match self.streak.take() {
-            Some((k, d, n)) if k == key && d == difficulty => n.saturating_add(1),
-            _ => 1,
-        };
-        self.streak = Some((key.clone(), difficulty, count));
+        let count = self.bump_streak(&key, difficulty);
         let difficulty = difficulty?;
         if count < STABLE_TICKS {
             return None;
         }
         if self.current.as_ref().is_none_or(|(k, _)| *k != key) {
-            let stored = self
-                .path
-                .as_deref()
-                .and_then(read)
-                .and_then(|mut log| log.remove(&key))
-                .map_or_else(QuestsDone::default, |e| e.done);
-            self.current = Some((key, stored));
-            self.record_seen = None;
+            self.switch_to(key);
         }
         if self.record_seen.is_some_and(|d| d != difficulty) {
             self.record_seen = None;
         }
         if !words.is_empty() {
-            self.record_seen = Some(difficulty);
-            let mut seen = QuestsDone::default();
-            if let Some(set) = seen.get_mut(difficulty) {
-                set.extend(crate::quests::done(words).map(str::to_owned));
-            }
-            if self.current.as_mut().is_some_and(|(_, done)| done.merge(&seen)) {
-                self.save(name);
-            }
+            self.note_record(name, difficulty, words);
         }
         self.record_seen?;
         self.current.as_ref().map(|(_, done)| done)
+    }
+
+    /// Counts `key` and `difficulty` seen once more in a row; returns the run length.
+    fn bump_streak(&mut self, key: &str, difficulty: Option<u8>) -> u32 {
+        let count = match self.streak.take() {
+            Some((k, d, n)) if k == key && d == difficulty => n.saturating_add(1),
+            _ => 1,
+        };
+        self.streak = Some((key.to_owned(), difficulty, count));
+        count
+    }
+
+    /// Makes `key` the current character, with the quests the file remembers for it.
+    fn switch_to(&mut self, key: String) {
+        let stored = self
+            .path
+            .as_deref()
+            .and_then(read)
+            .and_then(|mut log| log.remove(&key))
+            .map_or_else(QuestsDone::default, |e| e.done);
+        self.current = Some((key, stored));
+        self.record_seen = None;
+    }
+
+    /// Merges the quests `words` shows done in `difficulty`, saving when any is new.
+    fn note_record(&mut self, name: &str, difficulty: u8, words: &[u16]) {
+        self.record_seen = Some(difficulty);
+        let mut seen = QuestsDone::default();
+        if let Some(set) = seen.get_mut(difficulty) {
+            set.extend(crate::quests::done(words).map(str::to_owned));
+        }
+        if self.current.as_mut().is_some_and(|(_, done)| done.merge(&seen)) {
+            self.save(name);
+        }
     }
 
     /// Merges the current character's quests into the file as it is on disk now (what the

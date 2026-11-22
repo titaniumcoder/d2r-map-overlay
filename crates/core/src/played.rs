@@ -1,27 +1,10 @@
-//! When each character was last played, so the config page lists the recent ones first.
-//!
-//! `played.json` in the data dir maps the lowercased character name to its display name and
-//! the unix time it was last seen in a game (and its class, when seen live). [`Tracker`] records
-//! the live player each tick and merges that one entry into the file (via a temp file and a
-//! rename), only when the character changed or at most every [`WRITE_INTERVAL`]. The config
-//! page can [`remove`] a character; the tracker never writes back entries it only read, so a
-//! removed character returns only when it is played again.
-//!
-//! Each entry also keeps the guide stage the character last reached ([`Tracker::reach`]), so a
-//! switch whose required items sat in the shared stash (unread until the stash is opened each
-//! game) stays switched. The file is that latch's source of truth: the tracker never writes its
-//! in-memory copy back, and re-reads it after the config page's [`remove`] or [`clear_stage`]
-//! (a new build selection), so both reset it while the overlay runs.
-//!
-//! Without the file (first start) it is seeded from D2R's own save directory (the reader finds
-//! it; under Proton it is in the game's prefix): online characters leave `<Name><account digits>.ctlo` (key bindings, rewritten on
-//! leaving a game), offline ones `<Name>.d2s`; their modification times are the recency. A
-//! missing or corrupt file only means no order: the page then keeps the config order.
+//! `played.json`: when each character was last played (so the config page lists recent ones
+//! first) and the guide stage it last reached, which latches even while the stash is unread.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use std::{fs, io};
 
@@ -31,9 +14,13 @@ use serde::{Deserialize, Serialize};
 /// Least time between two writes for the same character.
 pub const WRITE_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Serialises every read-modify-write of the file: the live loop's [`Tracker`] and the web
-/// thread's [`remove`] must not both start from the same old map.
+/// Serialises every read-modify-write of the file (live loop and web thread).
 static FILE_WRITE: Mutex<()> = Mutex::new(());
+
+/// Locks [`FILE_WRITE`]; a poisoned lock still guards, since the map is re-read from disk.
+fn lock_file() -> MutexGuard<'static, ()> {
+    FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// Bumped by every edit outside the tracker ([`remove`], [`clear_stage`]): a [`Tracker`] that
 /// synced an older count re-reads its character's stage from the file.
@@ -47,7 +34,7 @@ pub struct Entry {
     /// Unix seconds.
     pub t: u64,
     /// The class id (charstats row, see [`crate::config::CLASS_NAMES`]); `None` when only
-    /// known from the save files or from a file written before the class was recorded.
+    /// known from the save files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub class: Option<u32>,
     /// The slug of the guide stage the character last reached live ([`Tracker::reach`]);
@@ -119,9 +106,8 @@ pub fn plausible_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphabetic() || b == b'-' || b == b'_')
 }
 
-/// Last-played times from the save files in `dir` (newest file per character); unreadable
-/// entries are skipped. `dir` is the game's save directory, from the reader
-/// ([`crate::reader::GameReader::save_dir`]).
+/// Last-played times from the save files in the game's save directory `dir` (newest file per
+/// character). Online characters leave `.ctlo` files, rewritten on leaving a game.
 #[must_use]
 pub fn seed_from_saves(dir: &Path) -> Played {
     let mut played = Played::new();
@@ -159,8 +145,7 @@ pub fn seed_from_saves(dir: &Path) -> Played {
 /// # Errors
 /// Fails when the file can't be written.
 pub fn remove(path: &Path, name: &str) -> Result<bool> {
-    // A poisoned lock still guards the file; the map is re-read from disk anyway.
-    let _guard = FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+    let _guard = lock_file();
     let Some(mut played) = read(path) else {
         return Ok(false);
     };
@@ -180,7 +165,7 @@ pub fn remove(path: &Path, name: &str) -> Result<bool> {
 /// # Errors
 /// Fails when the file can't be written.
 pub fn clear_stage(path: &Path, name: &str) -> Result<bool> {
-    let _guard = FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+    let _guard = lock_file();
     let Some(mut played) = read(path) else {
         return Ok(false);
     };
@@ -199,9 +184,7 @@ pub fn clear_stage(path: &Path, name: &str) -> Result<bool> {
 }
 
 /// The live player's last sighting and the file it is merged into, fed by the live loop.
-///
-/// Only the character seen in this game is held in memory; each save re-reads the file and
-/// replaces just that entry, so a character [`remove`]d from the page meanwhile stays removed.
+/// Each save re-reads the file and replaces just that entry, so a [`remove`] sticks.
 #[derive(Debug)]
 pub struct Tracker {
     /// The lowercased key and entry of the character last recorded.
@@ -230,11 +213,9 @@ impl Tracker {
         let Some(path) = tracker.path.as_deref() else {
             return tracker;
         };
-        let _guard = FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+        let _guard = lock_file();
         if read(path).is_none() {
             let seeded = seed();
-            // An empty seed isn't written: the next start tries again (a `record` writes the
-            // file anyway).
             if !seeded.is_empty() {
                 let names: Vec<_> = seeded.values().map(|e| e.name.as_str()).collect();
                 eprintln!("played: seeded from the save files: {names:?}");
@@ -253,18 +234,10 @@ impl Tracker {
             return;
         }
         let key = name.to_lowercase();
-        // A switch first saves the previous character's unsaved last sighting.
         if self.current.as_ref().is_some_and(|(k, _)| *k != key) {
             self.save();
         }
-        // The stage reached: from memory for the same character unless the file was edited
-        // outside meanwhile, else from the file (memory only without one).
-        let edits = OUTSIDE_EDITS.load(Ordering::SeqCst);
-        let stage = match self.current.take() {
-            Some((k, entry)) if k == key && (edits == self.synced || self.path.is_none()) => entry.stage,
-            _ => self.stored_stage(&key),
-        };
-        self.synced = edits;
+        let stage = self.take_stage(&key);
         self.current = Some((
             key.clone(),
             Entry {
@@ -274,15 +247,29 @@ impl Tracker {
                 stage,
             },
         ));
-        if self
-            .last_write
-            .as_ref()
-            .is_some_and(|(k, at)| *k == key && now.saturating_duration_since(*at) < WRITE_INTERVAL)
-        {
+        if self.wrote_recently(&key, now) {
             return;
         }
         self.last_write = Some((key, now));
         self.save();
+    }
+
+    /// The stage `key` reached: the in-memory one for the same character unless the file was
+    /// edited outside since, else the file's.
+    fn take_stage(&mut self, key: &str) -> Option<String> {
+        let edits = OUTSIDE_EDITS.load(Ordering::SeqCst);
+        let stage = match self.current.take() {
+            Some((k, entry)) if k == key && (edits == self.synced || self.path.is_none()) => entry.stage,
+            _ => self.stored_stage(key),
+        };
+        self.synced = edits;
+        stage
+    }
+
+    fn wrote_recently(&self, key: &str, now: Instant) -> bool {
+        self.last_write
+            .as_ref()
+            .is_some_and(|(k, at)| k == key && now.saturating_duration_since(*at) < WRITE_INTERVAL)
     }
 
     /// The guide stage `name` (any case) has reached, if recorded: what [`Tracker::record`]
@@ -311,7 +298,7 @@ impl Tracker {
     /// `key`'s stage as stored in the file.
     fn stored_stage(&self, key: &str) -> Option<String> {
         let path = self.path.as_deref()?;
-        let _guard = FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+        let _guard = lock_file();
         read(path)?.remove(key)?.stage
     }
 
@@ -321,14 +308,14 @@ impl Tracker {
         self.save_with(None);
     }
 
-    /// [`Tracker::save`], storing stage `reached` when given; otherwise the file's stage stays
-    /// (the file is the latch's source of truth) and becomes the in-memory one.
+    /// [`Tracker::save`], storing stage `reached` when given; otherwise the file's stage (the
+    /// latch's source of truth) stays and becomes the in-memory one.
     fn save_with(&mut self, reached: Option<&str>) {
         let (Some(path), Some((key, entry))) = (self.path.as_deref(), self.current.as_mut()) else {
             return;
         };
         let result = {
-            let _guard = FILE_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+            let _guard = lock_file();
             let mut played = read(path).unwrap_or_default();
             let old = played.get(key);
             let class = entry.class.or_else(|| old.and_then(|old| old.class));

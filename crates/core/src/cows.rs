@@ -1,19 +1,5 @@
-//! Cow counter for the Moo Moo Farm (level [`COW_LEVEL`]), a fun request.
-//!
-//! **This run** ([`Tally`]): [`crate::session::Session`] counts each cow once by unit id, the
-//! first time it is seen dead in level 39, and keeps the ids in its `GameState` (so an overlay
-//! restart within a game keeps the count; a new game starts at 0). In level 39 the info line
-//! then reads `Normal · Moo Moo Farm · kill count: 57 / victims alive: 23`.
-//!
-//! **Lifetime** ([`Stats`]): total, best run and runs (games in which the player entered level
-//! 39), in `cows.json` in the data dir. Not shown for now. [`Counter`] loads it, folds each
-//! snapshot's [`Update`] in and writes it via a temp file and a rename, at most every
-//! [`SAVE_INTERVAL`] and only when it changed. Without the file (first start) it is seeded from
-//! the journal: the journal only logged elite monsters, so `runs` is the number of distinct
-//! games with a level-39 event, and total and best only count the elite cows logged killed.
-//!
-//! Known gap: kills in the last few seconds before an overlay crash may be in `cows.json` but
-//! not yet in `game.json`, and are then counted again after the restart.
+//! Cow counter for the Moo Moo Farm (level [`COW_LEVEL`]): this run's [`Tally`] and the
+//! lifetime [`Stats`] kept in `cows.json`.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -29,8 +15,7 @@ use crate::session::Update;
 /// The Moo Moo Farm.
 pub const COW_LEVEL: u32 = 39;
 
-/// monstats.txt rows of cows: `hellbovine` (391), and 735, the Cow King's live unit (journal,
-/// two games: superunique + unique flags at the Cow King's preset in level 39).
+/// monstats.txt rows of cows: `hellbovine` (391) and the Cow King's live unit (735).
 const COW_TXTS: [u32; 2] = [391, 735];
 
 #[must_use]
@@ -84,9 +69,8 @@ impl Stats {
         *self != before
     }
 
-    /// Stats seeded from journal lines (JSON, see [`crate::journal`]): runs = distinct `game`
-    /// values with an event in level 39; total and best from the cows logged `killed` there
-    /// (elites only, each unit id once per game). Unparsable lines are skipped.
+    /// Stats seeded from journal lines: runs = distinct games with an event in level 39; total
+    /// and best count the cows logged `killed` there (the journal logs elites only).
     pub fn seed<'a>(lines: impl IntoIterator<Item = &'a str>) -> Self {
         let mut games: HashSet<String> = HashSet::new();
         let mut killed: HashMap<String, HashSet<u32>> = HashMap::new();
@@ -160,8 +144,7 @@ pub struct Counter {
 
 impl Counter {
     /// Loads `path`; if it doesn't exist, seeds the stats from the journal in `journal_dir` and
-    /// writes them at once (so the seed runs only once). A file that can't be read or parsed
-    /// is logged and the stats start at 0.
+    /// writes them at once. A file that can't be read or parsed is logged and starts at 0.
     pub fn open(path: Option<PathBuf>, journal_dir: Option<&Path>) -> Self {
         let mut counter = Self {
             stats: Stats::default(),
@@ -289,7 +272,6 @@ mod tests {
         assert_eq!(counter.stats.runs, 2);
         assert!(path.exists(), "the seed is written at once");
 
-        // A second open reads the file, not the journal.
         fs::write(
             journal.join("2026-11-15.jsonl"),
             "{\"t\":3,\"game\":\"c\",\"ev\":\"arrival\",\"level\":39,\"x\":1,\"y\":1}\n",
@@ -303,7 +285,8 @@ mod tests {
                 total: 4,
                 best: 4,
                 runs: 3
-            }
+            },
+            "a second open reads the file, not the journal"
         );
         Ok(())
     }

@@ -1,17 +1,5 @@
 //! The seven Tal Rasha's Tombs (levels 66..=72) and their Horadric symbols, drawn on the
-//! Canyon of the Magi's exits instead of seven identical "Tal Rasha's Tomb" names (user
-//! request, 2026-11-18).
-//!
-//! The symbol belongs to the tomb level, not to the game: each tomb has its own entrance warp
-//! (lvlwarp.txt "Act 2 Desert to Tomb Tal 1".."7", rows 38..=44, which Canyon of the Magi's
-//! levels.txt row lists as `Warp1..7` next to `Vis1..7` = levels 66..=72), so its doorway
-//! always carries the same symbol. Only which tomb is the real one changes per game.
-//!
-//! The pictures: classic `data\global\ui\MENU\invps.DC6` (d2data.mpq), 7 frames of 102 × 93,
-//! one per tomb level in order; the 1.13c quest log draws frame `staff tomb level − 66` as
-//! "The Symbol of the True Tomb of Tal Rasha" (D2Client.dll disassembly, troytt/diablo2-web
-//! `kb/ui/d2client-quest-log-true-tomb-symbol-113c.md`). The frames were extracted from the
-//! local d2data.mpq and decoded on 2026-11-18; [`Symbol`] describes each one.
+//! Canyon of the Magi's exits. The symbol belongs to the tomb level, not to the game.
 
 use std::ops::RangeInclusive;
 
@@ -20,7 +8,7 @@ use tiny_skia::{Path, PathBuilder};
 /// Level ids of Tal Rasha's Tomb 1..7.
 pub const TOMB_LEVELS: RangeInclusive<u32> = 66..=72;
 
-/// A tomb's symbol, as the invps.DC6 frame shows it.
+/// A tomb's symbol, as frame `level − 66` of `invps.DC6` shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Symbol {
     /// Tomb 1 (66): a pinwheel, four curved blades around a small square.
@@ -70,7 +58,6 @@ impl Symbol {
     /// reach a little past it).
     #[must_use]
     pub fn glyph(self, cx: f32, cy: f32, half: f32) -> Glyph {
-        // Unit coordinates (-1..=1, y down) to canvas px.
         let p = |u: f32, v: f32| (u.mul_add(half, cx), v.mul_add(half, cy));
         let mut lines = PathBuilder::new();
         let mut solid = PathBuilder::new();
@@ -89,29 +76,8 @@ impl Symbol {
         };
         match self {
             Self::Pinwheel => {
-                // Four curved blades pointing up, right, down and left from a small square: the
-                // up blade bows left with its tip turned right, the others are it turned
-                // clockwise by quarter turns.
-                for k in 0..4u8 {
-                    let turn = |u: f32, w: f32| {
-                        let (mut x, mut y) = (u, -w);
-                        for _ in 0..k {
-                            (x, y) = (-y, x);
-                        }
-                        p(x, y)
-                    };
-                    let [(ax, ay), (bx, by), (tx, ty), (cx2, cy2), (dx, dy)] = [
-                        (-0.14, 0.12),
-                        (-0.4, 0.6),
-                        (0.06, 1.0),
-                        (-0.08, 0.55),
-                        (0.14, 0.12),
-                    ]
-                    .map(|(u, w)| turn(u, w));
-                    solid.move_to(ax, ay);
-                    solid.quad_to(bx, by, tx, ty);
-                    solid.quad_to(cx2, cy2, dx, dy);
-                    solid.close();
+                for quarter_turns in 0..4u8 {
+                    add_pinwheel_blade(&mut solid, &p, quarter_turns);
                 }
                 poly(
                     &mut solid,
@@ -125,15 +91,7 @@ impl Symbol {
                 poly(&mut lines, &[(-0.8, -0.7), (0.8, -0.7)], false);
                 poly(&mut lines, &[(-0.8, 0.7), (0.8, 0.7)], false);
             }
-            Self::Crescent => {
-                let ((lx, ly), (rx, ry)) = (p(-1.0, -0.7), p(1.0, -0.7));
-                // Quad bottoms halfway to the control points: outer 0.5, inner -0.05.
-                let ((ox, oy), (ix, iy)) = (p(0.0, 1.7), p(0.0, 0.6));
-                solid.move_to(lx, ly);
-                solid.quad_to(ox, oy, rx, ry);
-                solid.quad_to(ix, iy, lx, ly);
-                solid.close();
-            }
+            Self::Crescent => add_crescent(&mut solid, &p, (1.0, -0.7), 1.7, 0.6),
             Self::Ring => {
                 let (x, y) = p(0.0, 0.0);
                 lines.push_circle(x, y, 0.75 * half);
@@ -152,16 +110,9 @@ impl Symbol {
                 poly(&mut lines, &[(0.0, 0.0), (0.33, 0.5), (-0.33, 0.5)], true);
             }
             Self::Eclipse => {
-                // A ring above a broad crescent that cups it.
                 let (x, y) = p(0.0, -0.4);
                 lines.push_circle(x, y, 0.5 * half);
-                let ((lx, ly), (rx, ry)) = (p(-0.95, 0.0), p(0.95, 0.0));
-                // Quad bottoms halfway to the control points: outer 0.95, inner 0.45.
-                let ((ox, oy), (ix, iy)) = (p(0.0, 1.9), p(0.0, 0.9));
-                solid.move_to(lx, ly);
-                solid.quad_to(ox, oy, rx, ry);
-                solid.quad_to(ix, iy, lx, ly);
-                solid.close();
+                add_crescent(&mut solid, &p, (0.95, 0.0), 1.9, 0.9);
             }
         }
         Glyph {
@@ -169,6 +120,48 @@ impl Symbol {
             solid: solid.finish(),
         }
     }
+}
+
+/// One curved pinwheel blade: the upward one (bowing left, tip turned right) rotated clockwise
+/// by `quarter_turns`. `p` maps unit coordinates (-1..=1, y down) to canvas px.
+fn add_pinwheel_blade(pb: &mut PathBuilder, p: &impl Fn(f32, f32) -> (f32, f32), quarter_turns: u8) {
+    let turn = |u: f32, w: f32| {
+        let (mut x, mut y) = (u, -w);
+        for _ in 0..quarter_turns {
+            (x, y) = (-y, x);
+        }
+        p(x, y)
+    };
+    let [(ax, ay), (bx, by), (tx, ty), (cx, cy), (dx, dy)] = [
+        (-0.14, 0.12),
+        (-0.4, 0.6),
+        (0.06, 1.0),
+        (-0.08, 0.55),
+        (0.14, 0.12),
+    ]
+    .map(|(u, w)| turn(u, w));
+    pb.move_to(ax, ay);
+    pb.quad_to(bx, by, tx, ty);
+    pb.quad_to(cx, cy, dx, dy);
+    pb.close();
+}
+
+/// A horns-up crescent between the horns (±`horn.0`, `horn.1`), bounded by two quads whose
+/// control points sit at `outer_v` and `inner_v` below the centre (each quad's bottom lies
+/// halfway between the horns' height and its control point).
+fn add_crescent(
+    pb: &mut PathBuilder,
+    p: &impl Fn(f32, f32) -> (f32, f32),
+    horn: (f32, f32),
+    outer_v: f32,
+    inner_v: f32,
+) {
+    let ((lx, ly), (rx, ry)) = (p(-horn.0, horn.1), p(horn.0, horn.1));
+    let ((ox, oy), (ix, iy)) = (p(0.0, outer_v), p(0.0, inner_v));
+    pb.move_to(lx, ly);
+    pb.quad_to(ox, oy, rx, ry);
+    pb.quad_to(ix, iy, lx, ly);
+    pb.close();
 }
 
 #[cfg(test)]
@@ -197,7 +190,6 @@ mod tests {
             let paths: Vec<&Path> = g.lines.iter().chain(g.solid.iter()).collect();
             assert!(!paths.is_empty(), "{s:?} draws nothing");
             for b in paths.iter().filter_map(|p| p.compute_tight_bounds()) {
-                // Half-side 8 around (50, 40), with float slack.
                 assert!(b.left() >= 41.9 && b.right() <= 58.1, "{s:?} x {b:?}");
                 assert!(b.top() >= 31.9 && b.bottom() <= 48.1, "{s:?} y {b:?}");
                 assert!(b.width().max(b.height()) >= 3.0, "{s:?} tiny {b:?}");
