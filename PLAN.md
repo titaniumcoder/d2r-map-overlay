@@ -318,7 +318,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   until step 7) embedded; tiers per category in the playstyle's `playstyle.toml` `[valuables]`
   (default S+A both). Ground: trade ring by tier
   (S red, A orange, dashed = uncertain); since step 10 also keep (green) and farm (green + star)
-  rings, see the plugin refactor's step 10. Inventory keep list (dashboard; formerly green lines on the overlay): certain
+  rings, see the plugin refactor's step 10; since 2026-11-22 a short tag beside every ring and a
+  gold coin on S/A trade rings (see Overlay). Inventory keep list (dashboard; formerly green lines on the overlay): certain
   S/A, uncertain only S — moved to the dashboard with the 2026-11-17 text-stack migration (see Overlay), the
   reader and its tiers unchanged. Unique/set names from src/item_names_data.rs (research/gen_item_names.py).
 
@@ -667,6 +668,29 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   `info::place_labels` places labels by rank (exit > wp > orifice > shrine > well): above the
   marker, else below, right, left; a label with no free spot is dropped, exit names are always
   drawn.
+- Drop tags (user request, 2026-11-22, after an A-tier Key of Terror went unnoticed: "add labels
+  but short. 5os for a base with 5 sockets. 3 to 4 letters"): only marked drops (keep / farm /
+  trade ring) get one, unmarked drops none. `Mark::label`, computed by the playstyle plugin
+  (`d2r_playstyle_config::labels`), at most 4 characters, first match wins: a valuables rule's
+  `label` (new optional field in `valuables.json`, only on certain matches: Annihilus `Anni`, Torch
+  `Torc`, Shako `Shak`, Griffon's `Grif`, SoJ `SoJ`, Colossal Jewels `CJ`, Tal Rasha's `TalS`, IK
+  `IK`, Trang-Oul's `Trng`, Laying of Hands `LoH`, Sigon's `Sigo`, statues `Stat`, CJ materials
+  `CJM`, Worldstone shards `Shrd`, magic / rare jewels `MJ` / `RJ`, magic / rare circlets `Circ`,
+  Jeweler's Monarch `JMon`); by code: uber keys `KoT` `KoH` `KoD`, organs `Horn` `Eye` `Brn`,
+  essences `Twst` `Chrg` `Burn` `Fest`, token `Tok`, Standard of Heroes `Std`; runes their name
+  (`Shae`, `Ber`); charms `SC` / `LC` / `GC`, unique ones `Anni` / `Torc` / `Ghee` / `Sund`
+  (sunders); gems grade + colour (`PAme`); a socketed non-unique/set base `5os`, ethereal `e4os`;
+  else the first 4 letters of the unique / set name (also for an unidentified one whose base
+  carries only that item, `names::sole_name`: an unidentified Shako is Harlequin Crest) or of the
+  base name ("The " skipped). Drawn 11 px in the ring's colour with the dark outline, after the
+  marker tags (most valuable look first: S, A, B, farm, keep), placed outside the ring
+  (`LabelSpec::clear` = ring radius + 3 px) and off the player's dot where another spot is free
+  (`LabelSpec::avoid`). Not yet seen live.
+- Gold coin (same request: "a gold symbol for something that has a high selling value"): a 3 px
+  gold disc with a darker rim on the ring's upper left (the farm star sits at the upper right),
+  on a trade-category valuables match of tier `render::COIN_MIN_TIER` (A) or better; there is no
+  vendor price model, so "sells for a lot to other players" = trade tier S/A. Twink bases and B
+  get none.
 - XP colouring (user request, 2026-11-18): exit labels and the info line's area name are grey
   (`info::LOW_XP_TEXT`) when the area's table monster level gives the character less than
   `xp::LOW_XP` = 25% experience, white otherwise; towns, unknown levels and a terrorized current
@@ -1112,7 +1136,7 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
 - [x] **M1 reader** (verified live in Jail 1, 2026-11-14; fixture tests/fixtures/jail1-snapshot.json): `d2r-map-overlay --dump` prints one JSON snapshot. Validate against `research/rooms.py` / `presets.py` output in Jail 1 and Tower 5; confirm player chain `+0x150` and the elite flag bits.
 - [x] **M2 overlay**: draw a static snapshot file (no game needed) — layer-shell, click-through, iso render.
 - [x] **M3 live**: reader thread + Hyprland focus hide/show; ~5 Hz redraw.
-- [ ] **M4 markers**: classification tables, per-game accumulation, exit labels (exit labels done 2026-11-18, XP-coloured; marker labels 2026-11-18; Canyon tomb symbols + real tomb 2026-11-18; not yet verified live).
+- [ ] **M4 markers**: classification tables, per-game accumulation, exit labels (exit labels done 2026-11-18, XP-coloured; marker labels 2026-11-18; Canyon tomb symbols + real tomb 2026-11-18; drop tags and the gold coin on S/A trade rings 2026-11-22, see Overlay; not yet verified live).
 - [x] **M4b item drops**: implemented 2026-11-14 (items table found live; static path verified with a gem). Quality values live-confirmed 2026-11-17: set (5) on quest item `qui` and small charm `sml`, unique (7) on quest item `spc` — all with `unique_index` 0 (unidentified/no name), consistent with the index-only-when-identified rule. Named drops confirmed from the journal 2026-11-18: identified dirk `dir` = unique row 40 The Diggler; `bsd`/`gts`/`brs` = set rows 13/14/15 Isenhart's Lightbrand/Parry/Case; `chn` = set row 26 Cathan's Mesh.
 - [ ] **Cleanup**: remove D2RMH exe/launcher (`~/.local/bin/d2rmh`); keep classic 1.13c files for phase 2.
 - [x] **Map toggle** (2026-11-18): `SIGUSR1` hides/shows the map; key binding left to the user's Hyprland config.
