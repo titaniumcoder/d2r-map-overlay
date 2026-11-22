@@ -98,7 +98,7 @@ crates/core/       — `d2r-core` (lib `d2r_core`): everything both plugins and 
                      `testutil` feature, a dev-dependency feature of the plugin crates)
 crates/reader-mem/ — `d2r-reader-mem`: the reader plugin
   lib.rs           — `Platform` (find process, open memory, find image, heap regions, save dir);
-                     `ProtonReader = MemoryReader<Proton>`; Windows port notes
+                     `ProtonReader = MemoryReader<Proton>` (Windows port: see "Windows platform" below)
   memory_reader.rs — game layer driver over any `Platform`: unit-table retry/backoff + offset cache,
                      background items-table search, quest-global search budget
   game.rs          — the structure walk (generic over `ReadMem`) → `d2r_core::game::Snapshot`
@@ -193,6 +193,20 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   bit 0 (Seven Tombs `0x3e25`), Tools of the Trade `0x1049` = imbue used (user confirmed), Blood
   Raven `0x000c` (not done), Act 3 entered (word 16 = 1, quests 0), Act 5 all 0, respec word
   `0x8002` = pending (unused). Assumed to be the current game's difficulty (only Normal seen).
+## Windows platform (notes, not planned)
+A Windows build would add a `Platform` implementation (behind its own feature) and reuse the game layer:
+- `find_game`: Toolhelp32 (`CreateToolhelp32Snapshot` + `Process32First/NextW`, exe `D2R.exe`); `is_alive`: `OpenProcess` + `GetExitCodeProcess` (`STILL_ACTIVE`).
+- `open` / `Mem`: `OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION)` + `ReadProcessMemory`: FFI, so `unsafe` (forbidden here) or a wrapper crate keeping it (e.g. `read-process-memory`).
+- `find_image`: module base from `EnumProcessModulesEx` / `Module32FirstW`, `live_base == alias_base` (no memfd alias). Encrypted code pages stay unreadable, so the code-signature unit-table scan needs another source: readable sections only, the per-build offset cache and the structural `.data` search.
+- `heap_regions`: `VirtualQueryEx`, committed private `PAGE_READWRITE` regions. `save_dir`: `%USERPROFILE%\Saved Games\Diablo II Resurrected`.
+
+## Reader incidents (moved from code comments, 2026-11-22)
+- Presets are deduplicated: live (Dry Hills, 2026-11-14) the same preset came back 3–5 times (a Room2's preset list is reachable more than once or repeats).
+- Only the player's own shared-stash tab units count: stale tab units from other characters / the offline shared stash showed up live (2026-11-15: BigWolf's Gravenspine while playing Vex).
+- Owned item names are keyed by owner because the player is chosen after the scan: in a public game (2026-11-17) other players' equipped items filled the gear grid.
+- Object 236 "health wellforhell" was a Health shrine live (2026-11-15).
+- A dynamic path's u16 x/y offsets hold something else on a static path (live: 22407, 0).
+
 ## Markers
 - **Waypoint**: object ids table (119, 157 seen; full list from objects.txt waypoint rows).
 - **Exits**: type-5 presets + room-tile links (link target level id → label "→ Jail Level 2").
