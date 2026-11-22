@@ -300,6 +300,9 @@ mod tests {
             (only.shipped, only.user, only.legacy, only.state, only.others),
             (Some(b.join("alpha")), None, None, Some(dir.join("data")), vec![])
         );
+        // The repo ships the trapsin beside the default.
+        let repo = other_folders("summoner-fury", &[source_playstyles()]);
+        assert!(repo.iter().any(|(name, _)| name == "trapsin"), "{repo:?}");
         std::fs::remove_dir_all(&dir)?;
         Ok(())
     }

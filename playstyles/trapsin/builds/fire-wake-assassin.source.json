@@ -1,0 +1,760 @@
+{
+ "build": "Fire Blast / Wake of Fire Assassin leveling (Maxroll Season 16 Assassin Leveling Build Guide), from level 13 to the Lightning Sentry reset at 38",
+ "source_url": "https://maxroll.gg/d2/guides/assassin-leveling-guide",
+ "guide_updated": "2026-11-13",
+ "author": "Teo1904 (Maxroll); levels 1-13 left out (Tristram runs, user 2026-11-22)",
+ "setup_legend": {
+  "lvl 13-26 (Normal Act 2-5: Wake of Fire)": "Wake of Fire from 12 (2 traps + Fire Blast); Stealth at 17, Leaf at 19, the Act 2 merc from Act 4 Normal, Ancients' Pledge made in Act 5 and stashed, a Battle Staff of Teleportation from Ormus at 20-23 (worn on the swap from 24).",
+  "lvl 27-38 (Nightmare Act 1-3: Wake of Fire, then Fire Blast)": "Nightmare: Spirit sword + Ancients' Pledge, Lore, magic gloves/belt/boots from the Act 1 shop, a Wand of Lower Resistance at 30-35 (used from 36). Reset into Lightning Sentry at 38 (the Trapsin stage).",
+  "setups": "'setup' is the window a piece is worn in ('lvl a-b'); 'alternative' = the guide's Gear Options wearable by 38. Magic pieces are the guide's shop picks."
+ },
+ "stat_source": "Maxroll Season 16 guide text (skill points, gear checklist, Gear Options); item stats and required levels from blizzhackers/d2data (uniqueitems.json, setitems.json, runes.json + misc.json rune levels, magicprefix/suffix.json).",
+ "targets": {
+  "level_milestones": [
+   {
+    "when": "level 13",
+    "target": "Fire Blast 5, Claw Mastery 1, Burst of Speed 5, Wake of Fire 2 (the guide's points up to 13; Tristram runs before)"
+   },
+   {
+    "when": "level 17",
+    "target": "Stealth (Tal Eth)"
+   },
+   {
+    "when": "level 19",
+    "target": "Leaf (Tir Ral, Short Staff)"
+   },
+   {
+    "when": "level 24",
+    "target": "Battle Staff of Teleportation on the swap"
+   },
+   {
+    "when": "level 26",
+    "target": "Spirit Crystal Sword + Ancients' Pledge, Nightmare"
+   },
+   {
+    "when": "level 27",
+    "target": "Lore; Insight for the merc"
+   },
+   {
+    "when": "level 31",
+    "target": "Wake of Fire 20"
+   },
+   {
+    "when": "level 36",
+    "target": "Wand of Lower Resistance on the swap"
+   },
+   {
+    "when": "level 38",
+    "target": "reset into Lightning Sentry (Trapsin)"
+   }
+  ],
+  "skill_points": "1 per level from 2 plus the quests: Den of Evil +1, Radament +1, Izual +2 per difficulty. At 38: 37 levels + Normal 4 + Nightmare Den of Evil and Radament = 43.",
+  "playstyle": "Elite packs first: single monsters give far less experience. Lay 2 Wake of Fire traps as you run through an area and Fire Blast single targets and Act bosses; keep Burst of Speed up."
+ },
+ "merc": {
+  "acts": [
+   2
+  ],
+  "type": "Act 2 Desert Mercenary, hired after entering Act 4 Normal with a Pike from Halbu (for Grand Vizier of Chaos and Colenzo the Annihilator); Insight from 27 (the endgame guide's Starter merc); the Nightmare Defensive (Holy Freeze) one is the Trapsin's",
+  "why": "The leveling guide's only merc; the endgame guide keeps an Act 2 Defensive (Holy Freeze) merc."
+ },
+ "skill_plan": {
+  "entries": [
+   {
+    "stage": "lvl 13-26 (Normal Act 2-5: Wake of Fire)",
+    "level": "13",
+    "skill": "Fire Blast",
+    "points": 5,
+    "note": "Levels 1-13 come from Tristram runs: the guide's points up to 13 as one target (Fire Blast 2-5 and 8, Claw Mastery from the Den of Evil, Burst of Speed 6-7 and 9-11, Wake of Fire 12-13)."
+   },
+   {
+    "stage": "lvl 13-26 (Normal Act 2-5: Wake of Fire)",
+    "level": "13",
+    "skill": "Claw Mastery",
+    "points": 1,
+    "note": "Prerequisite of Burst of Speed (the guide's Den of Evil point)."
+   },
+   {
+    "stage": "lvl 13-26 (Normal Act 2-5: Wake of Fire)",
+    "level": "13",
+    "skill": "Burst of Speed",
+    "points": 5,
+    "note": "Keep it up at all times."
+   },
+   {
+    "stage": "lvl 13-26 (Normal Act 2-5: Wake of Fire)",
+    "level": "13",
+    "skill": "Wake of Fire",
+    "points": 2,
+    "main_skill": "Wake of Fire",
+    "note": "Main skill from 12: lay 2 Wake of Fire traps, Fire Blast on single targets and Act bosses."
+   },
+   {
+    "stage": "lvl 13-26 (Normal Act 2-5: Wake of Fire)",
+    "level": "14",
+    "skill": "Wake of Fire",
+    "points": 1,
+    "note": null
+   },
+   {
+    "stage": "lvl 13-26 (Normal Act 2-5: Wake of Fire)",
+    "level": "Radament (Normal)",
+    "skill": "Fire Blast",
+    "points": 1,
+    "note": "Quest point."
+   },
+   {
+    "stage": "lvl 13-26 (Normal Act 2-5: Wake of Fire)",
+    "level": "15-20",
+    "skill": "Wake of Fire",
+    "points": 6,
+    "note": null
+   },
+   {
+    "stage": "lvl 13-26 (Normal Act 2-5: Wake of Fire)",
+    "level": "Izual (Normal)",
+    "skill": "Fire Blast",
+    "points": 2,
+    "note": "Quest points."
+   },
+   {
+    "stage": "lvl 13-26 (Normal Act 2-5: Wake of Fire)",
+    "level": "21-26",
+    "skill": "Wake of Fire",
+    "points": 6,
+    "note": "Wake of Fire 15, Fire Blast 8 at 26."
+   },
+   {
+    "stage": "lvl 27-38 (Nightmare Act 1-3: Wake of Fire, then Fire Blast)",
+    "level": "Den of Evil (Nightmare)",
+    "skill": "Fire Blast",
+    "points": 1,
+    "note": "Quest point; the guide names no skill for it, so Fire Blast like its other quest points."
+   },
+   {
+    "stage": "lvl 27-38 (Nightmare Act 1-3: Wake of Fire, then Fire Blast)",
+    "level": "27-31",
+    "skill": "Wake of Fire",
+    "points": 5,
+    "note": "Wake of Fire 20."
+   },
+   {
+    "stage": "lvl 27-38 (Nightmare Act 1-3: Wake of Fire, then Fire Blast)",
+    "level": "Radament (Nightmare)",
+    "skill": "Fire Blast",
+    "points": 1,
+    "note": "Quest point."
+   },
+   {
+    "stage": "lvl 27-38 (Nightmare Act 1-3: Wake of Fire, then Fire Blast)",
+    "level": "32-38",
+    "skill": "Fire Blast",
+    "points": 7,
+    "note": "At 38: Fire Blast 17, Wake of Fire 20, Burst of Speed 5, Claw Mastery 1 = 43 points; the reset follows."
+   }
+  ]
+ },
+ "respec": {
+  "into": "Trapsin (next stage)",
+  "when": "level 38 (the guide's earliest; its summary says the start of Act 4 Nightmare, at least level 36)",
+  "how": "Lightning Sentry 15, Charged Bolt Sentry 10, Death Sentry 9, Burst of Speed 3, Cloak of Shadows 1, Mind Blast 1, Fire Blast 1, Shock Web 1, Psychic Hammer 1, Claw Mastery 1 = 43 points."
+ },
+ "items": [
+  {
+   "name": "Leaf",
+   "slot": "weapon",
+   "setup": "lvl 19-26 (Normal Act 3-5: Leaf)",
+   "kind": "runeword",
+   "req_level": 19,
+   "base": "Short Staff with exactly 2 sockets, not magic (Akara sells them after the Den of Evil; a Short Staff, not a Long Staff)",
+   "stats": [
+    "+3 to Fire Skills",
+    "+3 to Fire Bolt, Inferno and Warmth (Sorceress Only)",
+    "+2 Defense per Character Level",
+    "Cold Resist +33%",
+    "Adds 5-30 Fire Damage (Ral)",
+    "+2 to Mana after each Kill (Tir)"
+   ],
+   "why": "+3 to Fire Skills: Fire Blast and Wake of Fire three levels higher; the guide's weapon from level 19 until Spirit.",
+   "notes": "Tir Ral from the Normal Countess.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Spirit",
+   "slot": "weapon",
+   "setup": "lvl 26-38 (Normal Act 5 / Nightmare: Spirit sword + Ancients' Pledge)",
+   "kind": "runeword",
+   "req_level": 25,
+   "base": "Crystal Sword (43 Str) or Broad Sword (48 Str, up to 48 Str needed at 26) with 4 sockets: from the Secret Cow Level, socketed by Larzuk (Act 5 Normal Siege on Harrogath reward)",
+   "stats": [
+    "+2 to All Skills",
+    "+25-35% Faster Cast Rate",
+    "+55% Faster Hit Recovery",
+    "+89-112 to Mana",
+    "+22 to Vitality",
+    "+250 Defense vs. Missile",
+    "+3-8 Magic Absorb"
+   ],
+   "why": "+2 to All Skills, FCR and mana; with Ancients' Pledge the guide's Nightmare setup until the reset (it stays on the Trapsin until the claws).",
+   "notes": "Tal Thul Ort Amn from the Nightmare Countess.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Ancients' Pledge",
+   "slot": "offhand",
+   "setup": "lvl 26-38 (Normal Act 5 / Nightmare: Spirit sword + Ancients' Pledge)",
+   "kind": "runeword",
+   "req_level": 21,
+   "base": "Large Shield (34 Str) or Kite Shield (47 Str, better for run speed) with 3 sockets, not magic (Farah)",
+   "stats": [
+    "+50% Enhanced Defense",
+    "Cold Resist +30%",
+    "All Resistances +13",
+    "10% Damage Taken Goes To Mana"
+   ],
+   "why": "Resistances for Nightmare; made in Normal Act 5 and stashed until the Spirit sword (Leaf is two-handed).",
+   "notes": "Ral Ort Tal (the Act 5 Rescue on Mount Arreat quest runes).",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Battle Staff of Teleportation",
+   "slot": "swap",
+   "setup": "lvl 24-38 (Battle Staff of Teleportation on the swap from 24)",
+   "kind": "magic",
+   "req_level": 24,
+   "base": "Battle Staff from Ormus (Act 3 Normal), shopped at levels 20-23: only staves with a red background (level 24 requirement)",
+   "stats": [
+    "Teleport (charges)",
+    "two-handed staff: on the swap only"
+   ],
+   "why": "Teleport charges: skip the Maggot Lair, Lightning Immunes and the Chaos Sanctuary's long ways.",
+   "notes": "Recharge with Ort + a chipped gem in the cube.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Wand of Lower Resistance",
+   "slot": "swap",
+   "setup": "lvl 36-38 (Wand of Lower Resistance on the swap from 36)",
+   "kind": "magic",
+   "req_level": 36,
+   "base": "Bone Wand / Grave Wand from Akara or Drognan in Nightmare, shopped at levels 30-35: only wands with a red background",
+   "stats": [
+    "Lower Resist (charges)",
+    "breaks lightning immunes"
+   ],
+   "why": "Lower Resist charges against Act bosses and lightning immunes; kept on the swap after the reset until Infinity.",
+   "notes": "Recharge with Ort + a chipped gem in the cube.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Lore",
+   "slot": "helm",
+   "setup": "lvl 27-38 (Nightmare: Lore)",
+   "kind": "runeword",
+   "req_level": 27,
+   "base": "2-socket helm, not magic (Charsi's 2-socket Cap / Skull Cap from the start of the game)",
+   "stats": [
+    "+1 to All Skills",
+    "+10 to Energy",
+    "+2 to Light Radius",
+    "+2 to Mana after each Kill"
+   ],
+   "why": "+1 to All Skills; the guide's helm from Nightmare.",
+   "notes": "Ort Sol from the Nightmare Countess.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Stealth",
+   "slot": "body",
+   "setup": "lvl 17-38 (Normal Act 2 on: Stealth until the reset)",
+   "kind": "runeword",
+   "req_level": 17,
+   "base": "2-socket body armor, not magic (Charsi)",
+   "stats": [
+    "+25% Faster Run/Walk",
+    "+25% Faster Cast Rate",
+    "+25% Faster Hit Recovery",
+    "+6 to Dexterity",
+    "Magic Damage Reduced by 3"
+   ],
+   "why": "FCR, FHR and run speed: the guide's armor from 17 to the reset.",
+   "notes": "Tal Eth from the Normal Countess.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Heavy Gloves of Readiness",
+   "slot": "gloves",
+   "setup": "lvl 26-38 (Nightmare Act 1 shop: magic gloves, belt, boots)",
+   "kind": "magic",
+   "req_level": 15,
+   "base": "Heavy Gloves (Charsi / Gheed in Nightmare)",
+   "stats": [
+    "+10% Increased Attack Speed",
+    "rolls with resistances (Coral, Russet...)"
+   ],
+   "why": "IAS speeds up trap laying; the guide's Nightmare Act 1 shop pick (lightning and fire resistance first).",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Coral Belt of the Mammoth",
+   "slot": "belt",
+   "setup": "lvl 26-38 (Nightmare Act 1 shop: magic gloves, belt, boots)",
+   "kind": "magic",
+   "req_level": 18,
+   "base": "Belt (Charsi / Gheed in Nightmare)",
+   "stats": [
+    "Lightning Resist +21-30%",
+    "+31-40 to Life"
+   ],
+   "why": "Lightning resistance and life; the guide's Nightmare Act 1 shop pick (lightning and fire resistance first).",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Russet Heavy Boots of Haste",
+   "slot": "boots",
+   "setup": "lvl 26-38 (Nightmare Act 1 shop: magic gloves, belt, boots)",
+   "kind": "magic",
+   "req_level": 9,
+   "base": "Heavy Boots (Charsi / Gheed in Nightmare)",
+   "stats": [
+    "+20% Faster Run/Walk",
+    "Fire Resist +11-20%"
+   ],
+   "why": "Run speed and fire resistance; the guide's Nightmare Act 1 shop pick.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Insight",
+   "slot": "merc_weapon",
+   "setup": "lvl 27-38 (Insight on the Act 2 merc)",
+   "kind": "runeword",
+   "req_level": 27,
+   "base": "4-socket polearm, not magic (Partizan in the endgame guide; Voulge, Scythe or Poleaxe from Normal Act 5 / Cow Level / Nightmare)",
+   "stats": [
+    "Level 12-17 Meditation Aura When Equipped",
+    "+35% Faster Cast Rate",
+    "+200-260% Enhanced Damage",
+    "+23% Better Chance of Getting Magic Items"
+   ],
+   "why": "Meditation aura (mana) for the trap spam; the endgame guide's Starter merc carries an Insight Partizan.",
+   "notes": "Ral Tir Tal Sol.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Death's Hand",
+   "slot": "gloves",
+   "setup": "alternative",
+   "kind": "set",
+   "req_level": 6,
+   "base": "Leather Gloves (no Str)",
+   "stats": [
+    "Poison Resist +50%",
+    "Poison Length Reduced by 75%",
+    "(2 items) +30% Increased Attack Speed"
+   ],
+   "why": "With Death's Guard: +30% IAS, All Resistances +15 and Cannot Be Frozen; use it with Ancients' Pledge.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Magefist",
+   "slot": "gloves",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 23,
+   "base": "Light Gauntlets (45 Str)",
+   "stats": [
+    "+20% Faster Cast Rate",
+    "Regenerate Mana 25%",
+    "+1 to Fire Skills",
+    "Adds 1-6 Fire Damage",
+    "+10 Defense",
+    "+20-30% Enhanced Defense"
+   ],
+   "why": "+1 to Fire Skills (Fire Blast, Wake of Fire) and FCR while using the fire traps.",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Death's Guard",
+   "slot": "belt",
+   "setup": "alternative",
+   "kind": "set",
+   "req_level": 6,
+   "base": "Sash (no Str)",
+   "stats": [
+    "+20 Defense",
+    "Cannot Be Frozen",
+    "(2 items) All Resistances +15"
+   ],
+   "why": "Cannot Be Frozen; with Death's Hand +30% IAS and All Resistances +15.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Hsarus' Iron Heel",
+   "slot": "boots",
+   "setup": "alternative",
+   "kind": "set",
+   "req_level": 3,
+   "base": "Chain Boots (30 Str)",
+   "stats": [
+    "+20% Faster Run/Walk",
+    "Fire Resist +25%",
+    "(2 items) +10 to Dexterity"
+   ],
+   "why": "Run speed and fire resistance; a very common drop.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Sander's Riprap",
+   "slot": "boots",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 20,
+   "base": "Heavy Boots (18 Str)",
+   "stats": [
+    "+40% Faster Run/Walk",
+    "+100 to Attack Rating",
+    "+5 to Strength",
+    "+10 to Dexterity"
+   ],
+   "why": "+40% run speed; a very common drop.",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Twitchthroe",
+   "slot": "body",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 16,
+   "base": "Studded Leather (27 Str)",
+   "stats": [
+    "+20% Increased Attack Speed",
+    "+20% Faster Hit Recovery",
+    "25% Increased Chance of Blocking",
+    "+10 to Strength",
+    "+10 to Dexterity",
+    "+25 Defense"
+   ],
+   "why": "IAS, FHR and 25% block: extremely strong for an early block build.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Skin of the Vipermagi",
+   "slot": "body",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 29,
+   "base": "Serpentskin Armor (43 Str)",
+   "stats": [
+    "+120% Enhanced Defense",
+    "All Resistances +20-35",
+    "+30% Faster Cast Rate",
+    "Magic Damage Reduced by 9-13",
+    "+1 to All Skills"
+   ],
+   "why": "+1 to All Skills, FCR and All Resistances.",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Smoke",
+   "slot": "body",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 37,
+   "base": "2-socket body armor, not magic",
+   "stats": [
+    "All Resistances +50",
+    "+20% Faster Hit Recovery",
+    "+75% Enhanced Defense",
+    "+250 Defense vs. Missile",
+    "Level 6 Weaken (18 Charges)"
+   ],
+   "why": "All Resistances +50 for cheap.",
+   "rank_in_slot": 4
+  },
+  {
+   "name": "Ground",
+   "slot": "helm",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 35,
+   "base": "3-socket helm, not magic",
+   "stats": [
+    "Increase Maximum Life 5%",
+    "+75-100% Enhanced Defense",
+    "Lightning Resist +40-60% (with Ort)",
+    "+10-15% Lightning Absorb",
+    "+20% Faster Hit Recovery (Shael)",
+    "+10 to Vitality (Io)"
+   ],
+   "why": "Lightning resistance and absorb (patch 2.6 helm runeword) if lightning damage hurts; Shael Io Ort from the Nightmare Countess.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Temper",
+   "slot": "helm",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 35,
+   "base": "3-socket helm, not magic",
+   "stats": [
+    "Increase Maximum Life 5%",
+    "+75-100% Enhanced Defense",
+    "Fire Resist +40-60%",
+    "10-15% Fire Absorb",
+    "+20% Faster Hit Recovery",
+    "+10 to Vitality"
+   ],
+   "why": "Fire resistance and absorb for you or the merc.",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Splendor",
+   "slot": "offhand",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 37,
+   "base": "2-socket shield, not magic",
+   "stats": [
+    "+1 to All Skills",
+    "+10% Faster Cast Rate",
+    "+20% Faster Block Rate",
+    "+60-100% Enhanced Defense",
+    "+10 to Energy",
+    "Regenerate Mana 15%",
+    "50% Extra Gold from Monsters",
+    "20% Better Chance of Getting Magic Items",
+    "+3 to Light Radius"
+   ],
+   "why": "+1 to All Skills and FCR if the resistances come from elsewhere than Ancients' Pledge.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "The Eye of Etlich",
+   "slot": "amulet",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 15,
+   "base": "Amulet",
+   "stats": [
+    "+1 to All Skills",
+    "3-7% Life Stolen per Hit",
+    "Adds 1-2 to 3-5 Cold Damage",
+    "+10-40 Defense vs. Missile",
+    "+1-5 to Light Radius"
+   ],
+   "why": "+1 to All Skills and life steal; a rare amulet with +Assassin or +Trap skills is better.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "The Stone of Jordan",
+   "slot": "ring",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 29,
+   "base": "Ring",
+   "stats": [
+    "+20 to Mana",
+    "Increase Maximum Mana 25%",
+    "+1 to All Skills",
+    "Adds 1-12 Lightning Damage"
+   ],
+   "why": "+1 to All Skills: expensive, but scales every trap.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "The Stone of Jordan",
+   "slot": "ring2",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 29,
+   "base": "Ring",
+   "stats": [
+    "+20 to Mana",
+    "Increase Maximum Mana 25%",
+    "+1 to All Skills",
+    "Adds 1-12 Lightning Damage"
+   ],
+   "why": "+1 to All Skills: expensive, but scales every trap.",
+   "rank_in_slot": 1
+  }
+ ],
+ "charms": [],
+ "recipes": [
+  {
+   "name": "Stealth",
+   "kind": "runeword",
+   "inputs": [
+    "Tal",
+    "Eth"
+   ],
+   "result": "Stealth (Body Armor)",
+   "req": {
+    "level": 17,
+    "sockets": 2,
+    "allowed_bases": [
+     "Body Armor"
+    ]
+   },
+   "notes": "Runes from the Normal Countess (Black Marsh waypoint, Forgotten Tower)."
+  },
+  {
+   "name": "Leaf",
+   "kind": "runeword",
+   "inputs": [
+    "Tir",
+    "Ral"
+   ],
+   "result": "Leaf (Staves)",
+   "req": {
+    "level": 19,
+    "sockets": 2,
+    "allowed_bases": [
+     "Staves"
+    ]
+   },
+   "notes": "Runes from the Normal Countess.",
+   "bases_in_guide": [
+    "Short Staff"
+   ]
+  },
+  {
+   "name": "Ancients' Pledge",
+   "kind": "runeword",
+   "inputs": [
+    "Ral",
+    "Ort",
+    "Tal"
+   ],
+   "result": "Ancients' Pledge (Shields)",
+   "req": {
+    "level": 21,
+    "sockets": 3,
+    "allowed_bases": [
+     "Shields"
+    ]
+   },
+   "notes": "Runes from the Act 5 Rescue on Mount Arreat quest; stash it until the Spirit sword.",
+   "bases_in_guide": [
+    "Large Shield",
+    "Kite Shield"
+   ]
+  },
+  {
+   "name": "Larzuk socket quest: the Spirit sword",
+   "kind": "socket",
+   "quest": "Siege on Harrogath",
+   "inputs": [
+    "white Crystal Sword or Broad Sword from the Secret Cow Level"
+   ],
+   "result": "4 sockets (the most a Normal Cow Level sword's item level allows)",
+   "req": "Act 5 Siege on Harrogath reward (Normal)",
+   "notes": "The guide's use of the Normal reward: a 4-socket base for Spirit."
+  },
+  {
+   "name": "Spirit",
+   "kind": "runeword",
+   "inputs": [
+    "Tal",
+    "Thul",
+    "Ort",
+    "Amn"
+   ],
+   "result": "Spirit (Swords / Shields)",
+   "req": {
+    "level": 25,
+    "sockets": 4,
+    "allowed_bases": [
+     "Swords"
+    ]
+   },
+   "notes": "Runes from the Nightmare Countess.",
+   "bases_in_guide": [
+    "Crystal Sword",
+    "Broad Sword"
+   ]
+  },
+  {
+   "name": "Lore",
+   "kind": "runeword",
+   "inputs": [
+    "Ort",
+    "Sol"
+   ],
+   "result": "Lore (Helms)",
+   "req": {
+    "level": 27,
+    "sockets": 2,
+    "allowed_bases": [
+     "Helms"
+    ]
+   },
+   "notes": "Runes from the Nightmare Countess.",
+   "bases_in_guide": [
+    "Cap"
+   ]
+  },
+  {
+   "name": "Insight",
+   "kind": "runeword",
+   "inputs": [
+    "Ral",
+    "Tir",
+    "Tal",
+    "Sol"
+   ],
+   "result": "Insight (Polearms / Staves / Missile weapons)",
+   "req": {
+    "level": 27,
+    "sockets": 4,
+    "allowed_bases": [
+     "Polearms"
+    ]
+   },
+   "notes": "Merc weapon.",
+   "bases_in_guide": [
+    "Partizan"
+   ]
+  },
+  {
+   "name": "Recharge Lower Resist / Teleport charges",
+   "kind": "cube",
+   "inputs": [
+    "1 Ort Rune",
+    "1 Chipped Gem (any)",
+    "the Wand of Lower Resistance or Battle Staff of Teleportation"
+   ],
+   "result": "the same item, repaired with its charges full",
+   "req": "Horadric Cube",
+   "notes": "The leveling guide's tip: keep a few Chipped Gems and Ort Runes in the stash; recharge the wand before the Ancients and Act bosses."
+  }
+ ],
+ "act_tips": [
+  {
+   "range": "lvl 13-20 (Normal Act 1-3)",
+   "tips": [
+    "Levels 1-13 by Tristram runs; then farm the Normal Countess (Black Marsh waypoint, Forgotten Tower) for Tal, Eth, Tir, Ral (+1-2 Ral for a gemmed helm) before Andariel.",
+    "Check Charsi for a 2-socket body armor and 2-socket helmets (not magic), Akara for a 2-socket Short Staff (Leaf), Farah for a belt and a 3-socket Large / Kite Shield (Ancients' Pledge).",
+    "Wake of Fire struggles in the Maggot Lair and Arcane Sanctuary: traps in the middle of narrow corridors, Fire Blast on the stairs.",
+    "Stealth at 17, Leaf at 19; be at least level 19-20 at the end of Act 3."
+   ]
+  },
+  {
+   "range": "lvl 20-26 (Normal Act 3-5)",
+   "tips": [
+    "At 20-23 shop a Battle Staff of Teleportation from Ormus (only staves with a red background: level 24); re-enter Kurast Docks through a town portal to refresh his stock. Swap it on at 24.",
+    "Hire an Act 2 merc after entering Act 4, with a Pike from Halbu (Grand Vizier of Chaos, Colenzo on the first Baal wave).",
+    "Kill Izual for the skill points before Diablo; Act 5 quests 1 and 2: the socket reward and the Ancients' Pledge runes.",
+    "After Baal: the Secret Cow Level for a Crystal Sword / Broad Sword (Spirit base, Larzuk's socket reward), then the Baal waves to 26 before Nightmare."
+   ]
+  },
+  {
+   "range": "lvl 26-38 (Nightmare Act 1-3)",
+   "tips": [
+    "Shop Heavy Gloves of Readiness, a Coral Belt of the Mammoth and Russet Heavy Boots of Haste (or similar: IAS, run speed, lightning and fire resistance first) at the start of Nightmare.",
+    "Farm the Nightmare Countess for Tal, Thul, 2 Ort, Amn, Sol: Spirit sword and Lore; more Ort to recharge the staff and wand.",
+    "At 30-35 shop a Wand of Lower Resistance from Akara or Drognan (red-background wands); use Lower Resist on Act bosses from 36.",
+    "Reset into Lightning Sentry at 38, before Act 4 Nightmare (the Trapsin stage)."
+   ]
+  }
+ ]
+}

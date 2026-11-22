@@ -1,0 +1,460 @@
+{
+    "name": "Trapsin",
+    "rules": [
+        {
+            "name": "1. Show All - Dis Act 2",
+            "enabled": false,
+            "ruleType": "show",
+            "filterEtherealSocketed": true,
+            "equipmentRarity": [
+                "rare",
+                "lowQuality",
+                "set",
+                "unique",
+                "magic",
+                "hiQuality",
+                "normal"
+            ],
+            "equipmentQuality": [
+                "normal",
+                "exceptional",
+                "elite"
+            ],
+            "equipmentCategory": [
+                "acce",
+                "armo",
+                "weap"
+            ],
+            "itemCategory": [
+                "misc"
+            ],
+            "goldFilterValue": 1
+        },
+        {
+            "name": "2. All Potions - Dis NM",
+            "enabled": false,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "itemCode": [
+                "hp2",
+                "mp3",
+                "mp4",
+                "hp5",
+                "hp1",
+                "hp4",
+                "mp1",
+                "mp5",
+                "mp2",
+                "hp3"
+            ]
+        },
+        {
+            "name": "3. Keys Scrolls - Dis NM",
+            "enabled": false,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "itemCategory": [
+                "scrlt",
+                "keysr"
+            ]
+        },
+        {
+            "name": "4. Socketed Armor - Dis Hell",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": true,
+            "equipmentQuality": [
+                "normal",
+                "exceptional",
+                "elite"
+            ],
+            "equipmentCategory": [
+                "armor",
+                "shlds",
+                "barbh",
+                "helms",
+                "druid",
+                "circl"
+            ]
+        },
+        {
+            "name": "5. Socketed Weap - Dis Hell",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": true,
+            "equipmentQuality": [
+                "normal",
+                "exceptional",
+                "elite"
+            ],
+            "equipmentCategory": [
+                "amazo",
+                "poles",
+                "bows",
+                "xbows",
+                "maces",
+                "stave",
+                "spear",
+                "axes",
+                "sword"
+            ]
+        },
+        {
+            "name": "6. Magic Jewelry - Dis Hell",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "equipmentRarity": [
+                "magic"
+            ],
+            "equipmentCategory": [
+                "rings",
+                "amule"
+            ]
+        },
+        {
+            "name": "7. Rare Class - Dis Endgame",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "equipmentRarity": [
+                "rare"
+            ],
+            "equipmentCategory": [
+                "amazo",
+                "druid"
+            ]
+        },
+        {
+            "name": "8. Runes Ubers TZ Absolutes",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "itemCategory": [
+                "runes",
+                "uberm",
+                "terrt",
+                "absol"
+            ]
+        },
+        {
+            "name": "9. All Gems and Skulls",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "itemCode": [
+                "gpw",
+                "gsw",
+                "glb",
+                "gfv",
+                "gfw",
+                "gfr",
+                "skf",
+                "glg",
+                "gfy",
+                "gpg",
+                "skl",
+                "gzv",
+                "gfb",
+                "gpr",
+                "gpy",
+                "gly",
+                "gsv",
+                "gcg",
+                "gfg",
+                "gpb",
+                "gsb",
+                "glw",
+                "gcb",
+                "gcv",
+                "skz",
+                "gsg",
+                "gcy",
+                "gsy",
+                "gsr",
+                "sku",
+                "gcw",
+                "skc",
+                "gcr",
+                "gpv",
+                "glr"
+            ]
+        },
+        {
+            "name": "10. Gold 5000 Plus",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "goldFilterValue": 5000
+        },
+        {
+            "name": "11. Arrows and Bolts",
+            "enabled": false,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "itemCategory": [
+                "ammo"
+            ]
+        },
+        {
+            "name": "12. Rejuv Potions",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "itemCode": [
+                "rvs",
+                "rvl"
+            ]
+        },
+        {
+            "name": "13. Max HP MP Potions",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "itemCode": [
+                "mp5",
+                "hp5"
+            ]
+        },
+        {
+            "name": "14. All Uniques",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "equipmentRarity": [
+                "unique"
+            ]
+        },
+        {
+            "name": "15. All Sets",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "equipmentRarity": [
+                "set"
+            ]
+        },
+        {
+            "name": "16. All Charms",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "equipmentCategory": [
+                "charm"
+            ]
+        },
+        {
+            "name": "17. All Jewels",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "equipmentCategory": [
+                "jewel"
+            ]
+        },
+        {
+            "name": "18. Rare Rings Amulets",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "equipmentRarity": [
+                "rare"
+            ],
+            "equipmentCategory": [
+                "rings",
+                "amule"
+            ]
+        },
+        {
+            "name": "19. Rare Gloves Boots Belts",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "equipmentRarity": [
+                "rare"
+            ],
+            "equipmentCategory": [
+                "glove",
+                "belts",
+                "boots",
+                "druid",
+                "circl"
+            ],
+            "equipmentItemCode": [
+                "7gs",
+                "9cr",
+                "7wa",
+                "7fb",
+                "7gd",
+                "7cr",
+                "7gm",
+                "72a",
+                "crs"
+            ]
+        },
+        {
+            "name": "20. Magic Orbs Helms Wands",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": false,
+            "equipmentRarity": [
+                "magic"
+            ],
+            "equipmentItemCode": [
+                "drd",
+                "dr8",
+                "ba7",
+                "lgl",
+                "tgl",
+                "dr7",
+                "ci2",
+                "bad",
+                "uui",
+                "drf",
+                "vgl",
+                "ci3",
+                "uvg",
+                "xmg",
+                "ulg",
+                "umg",
+                "uit",
+                "xlg",
+                "utu",
+                "uea",
+                "ba9",
+                "dr6",
+                "dre",
+                "baa",
+                "dr9",
+                "ba8",
+                "xtg",
+                "dra",
+                "bac",
+                "baf",
+                "urs",
+                "utp",
+                "ula",
+                "ba6",
+                "mgl",
+                "bae",
+                "xvg",
+                "utg",
+                "drb",
+                "bab",
+                "drc",
+                "9tw",
+                "9lw",
+                "7tw",
+                "7lw"
+            ]
+        },
+        {
+            "name": "21. Elite Socketed Armor",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": true,
+            "equipmentRarity": [
+                "hiQuality",
+                "normal"
+            ],
+            "equipmentItemCode": [
+                "ush",
+                "dr8",
+                "drd",
+                "ba9",
+                "ba7",
+                "dr6",
+                "dre",
+                "baa",
+                "dr9",
+                "ba8",
+                "uhm",
+                "dra",
+                "usk",
+                "bac",
+                "dr7",
+                "ci2",
+                "baf",
+                "urs",
+                "bad",
+                "utp",
+                "uui",
+                "drf",
+                "ula",
+                "ci3",
+                "ba6",
+                "uar",
+                "bae",
+                "uit",
+                "drb",
+                "uh9",
+                "bab",
+                "drc",
+                "utu",
+                "uea"
+            ]
+        },
+        {
+            "name": "22. Elite Socketed Weapons",
+            "enabled": true,
+            "ruleType": "show",
+            "filterEtherealSocketed": true,
+            "equipmentRarity": [
+                "hiQuality",
+                "normal"
+            ],
+            "equipmentItemCode": [
+                "scy",
+                "7bt",
+                "7wc",
+                "6lw",
+                "7s8",
+                "7wa",
+                "7pa",
+                "amc",
+                "amb",
+                "7gd",
+                "72a",
+                "7gs",
+                "7fb",
+                "7cr",
+                "7gm",
+                "7vo",
+                "crs",
+                "6ws",
+                "7h7",
+                "9tw",
+                "9lw"
+            ]
+        },
+        {
+            "name": "23. Hide All - Never Disable",
+            "enabled": true,
+            "ruleType": "hide",
+            "filterEtherealSocketed": true,
+            "equipmentRarity": [
+                "rare",
+                "lowQuality",
+                "unique",
+                "set",
+                "magic",
+                "hiQuality",
+                "normal"
+            ],
+            "equipmentQuality": [
+                "normal",
+                "exceptional",
+                "elite"
+            ],
+            "equipmentCategory": [
+                "acce",
+                "armo",
+                "weap"
+            ],
+            "itemCategory": [
+                "misc"
+            ],
+            "goldFilterValue": 100000
+        }
+    ]
+}

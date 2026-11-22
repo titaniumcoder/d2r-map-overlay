@@ -274,6 +274,78 @@ mod tests {
     use super::*;
     use anyhow::{Context, Result};
 
+    fn shipped(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../playstyles")
+            .join(name)
+    }
+
+    #[test]
+    fn the_assassin_follows_the_trapsin_and_the_druid_keeps_for_her() -> Result<()> {
+        let files = Files {
+            shipped: Some(shipped("summoner-fury")),
+            others: vec![("trapsin".to_owned(), shipped("trapsin"))],
+            quiet: true,
+            ..Files::default()
+        };
+        let playstyle = ConfigDriven::load(&files);
+        let fixture = include_str!("../../../tests/fixtures/flayer-marks-snapshot.json");
+        let druid: Snapshot = serde_json::from_str(fixture).context("parsing fixture")?;
+        let none = Played::new();
+        let at = |level: u8| -> Result<_> {
+            let mut snap: Snapshot = serde_json::from_str(fixture)?;
+            snap.player.class = 6;
+            "Trapper".clone_into(&mut snap.player.name);
+            snap.player.char_level = Some(level);
+            let evaluation = playstyle.evaluate(&snap, None, &none);
+            let stage = evaluation.extra.stage.map(|s| s.slug.to_owned());
+            let name = evaluation.extra.config.name.clone();
+            Ok((stage, evaluation.wants.playstyle, name))
+        };
+        let trapsin = "Fire Wake Assassin → Trapsin".to_owned();
+        assert_eq!(
+            at(20)?,
+            (
+                Some("fire wake assassin".to_owned()),
+                "trapsin".to_owned(),
+                trapsin.clone()
+            )
+        );
+        assert_eq!(
+            at(38)?,
+            (Some("trapsin".to_owned()), "trapsin".to_owned(), trapsin)
+        );
+        let summoner = playstyle.evaluate(&druid, None, &none);
+        assert_eq!(
+            (
+                summoner.extra.stage.map(|s| s.slug),
+                summoner.wants.playstyle.as_str()
+            ),
+            (Some("summoner druid"), "summoner-fury")
+        );
+        // The druid's stash plan wants the trapsin's farm list, and more once she was played.
+        let alone = ConfigDriven::load(&Files {
+            others: Vec::new(),
+            ..files
+        });
+        let without = alone.evaluate(&druid, None, &none).wants.wants;
+        assert_ne!(summoner.wants.wants, without, "the trapsin farm list");
+        let played = Played::from([(
+            "trapper".to_owned(),
+            d2r_core::played::Entry {
+                name: "Trapper".to_owned(),
+                t: 1,
+                class: Some(6),
+                stage: Some("trapsin".to_owned()),
+                level: Some(50),
+                worn: Vec::new(),
+            },
+        )]);
+        let with_her = playstyle.evaluate(&druid, None, &played).wants.wants;
+        assert_ne!(with_her, summoner.wants.wants, "her build's own pieces");
+        Ok(())
+    }
+
     #[test]
     fn ground_drops_get_keep_farm_and_trade_marks() -> Result<()> {
         use d2r_core::guidance::MarkKind;
@@ -283,9 +355,7 @@ mod tests {
             serde_json::from_str(include_str!("../../../tests/fixtures/flayer-marks-snapshot.json"))
                 .context("parsing fixture")?;
         let playstyle = ConfigDriven::load(&Files {
-            shipped: Some(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury"),
-            ),
+            shipped: Some(shipped("summoner-fury")),
             quiet: true,
             ..Files::default()
         });

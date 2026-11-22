@@ -1,0 +1,1752 @@
+{
+ "build": "Lightning Sentry / Death Sentry Assassin (Trapsin; Maxroll Season 16 Lightning Sentry Assassin Endgame Build Guide), from the skill reset at 38",
+ "source_url": "https://maxroll.gg/d2/guides/lightning-sentry-assassin",
+ "guide_updated": "2026-11-13",
+ "author": "Teo1904 (Maxroll); the reset at 38 from the same author's Assassin Leveling guide",
+ "setup_legend": {
+  "standard": "The guide's Standard setup: 2x Cunning Greater Talons of Quickness (+3 Traps, 40% IAS) with Rainbow Facets, Griffon's Eye, Enigma (Mage Plate), Magefist, Arachnid Mesh, Mara's Kaleidoscope, 2x The Stone of Jordan, rare boots; the Act 2 Defensive (Holy Freeze) merc with Infinity (Thresher), Fortitude (Sacred Armor), Andariel's Visage.",
+  "starter": "The guide's Starter setup = the leveling gear she resets with (Spirit sword, Ancients' Pledge, Lore, Stealth, Insight Partizan on the merc), Temper / Ground / Hearth helms and the Wand of Lower Resistance (and the Battle Staff of Teleportation until Enigma) on the swap.",
+  "alternative": "Every other slot lists the guide's Gear Options (unique / set / runeword; rare, crafted and the other magic picks have no build-file form); the Magic Find setup's pieces (Heart of the Oak Flail, Spirit Monarch, Harlequin Crest, Skullder's Ire, Chance Guards, War Traveler, Nagelring) fold as alternatives with a note. Unique charms are in the charm wishlist."
+ },
+ "stat_source": "Maxroll Season 16 guide text (skills, setups, Gear Options, gameplay); item stats and required levels from blizzhackers/d2data (uniqueitems.json, setitems.json, runes.json + misc.json rune levels, magicprefix/suffix.json).",
+ "targets": {
+  "skill_order": "Reset at 38 (43 points): Lightning Sentry 15, Charged Bolt Sentry 10, Death Sentry 9, Burst of Speed 3, Cloak of Shadows 1, Mind Blast 1 and the prerequisites. Then 1 point each in Fade and Weapon Block, and max Lightning Sentry, Shock Web, Charged Bolt Sentry, Death Sentry, Fire Blast in that order (the Standard setup); the last point to Weapon Block, Wake of Fire or Shadow Master. 110 points at 99.",
+  "traps": "Lay 5 Lightning Sentries on one spot so they focus one target; once the first monsters die, 1-2 Death Sentries explode the corpses (fire + physical). Baal waves: 4 Lightning Sentries beside the spawn, 1 Death Sentry far enough away to keep its charges for corpse explosions.",
+  "lightning_resistance": "Patch 2.6: -x% enemy lightning resistance on gear applies to the traps: Griffon's Eye, lightning Rainbow Facets in every socket, Crescent Moon on the swap right after laying traps, the merc's Infinity (Conviction).",
+  "immunes": "Lower Resist from the Wand of Lower Resistance until Infinity; Crack of the Heavens sunders lightning immunity; Fire Blast for lightning and physical immunes; Death Sentry and the merc for the rest, or skip them."
+ },
+ "merc": {
+  "acts": [
+   2
+  ],
+  "type": "Act 2 Desert Mercenary, Defensive (Holy Freeze, hired in Nightmare): Insight Partizan to start, then Infinity (ethereal Thresher), Fortitude (Sacred Armor) and Andariel's Visage",
+  "why": "The merc deals with what is immune to the traps; Infinity's Conviction lowers resistances and breaks lightning immunity for the traps too (the guide: the Trapsin needs it to be fully functional)."
+ },
+ "skill_plan": {
+  "entries": [
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "38",
+    "skill": "Fire Blast",
+    "points": 1,
+    "note": "Skill reset at Akara: 43 points (37 levels + 6 quest points), the leveling guide's allocation; Fire Blast is the prerequisite of Shock Web."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "38",
+    "skill": "Shock Web",
+    "points": 1,
+    "note": "Prerequisite of Charged Bolt Sentry."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "38",
+    "skill": "Charged Bolt Sentry",
+    "points": 10,
+    "note": "Prerequisite of Lightning Sentry and its synergy."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "38",
+    "skill": "Lightning Sentry",
+    "points": 15,
+    "main_skill": "Lightning Sentry",
+    "note": "5 traps stacked on one spot."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "38",
+    "skill": "Death Sentry",
+    "points": 9,
+    "note": "Corpse explosions (fire + physical) after the first kills."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "38",
+    "skill": "Claw Mastery",
+    "points": 1,
+    "note": "Prerequisite of Burst of Speed."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "38",
+    "skill": "Burst of Speed",
+    "points": 3,
+    "note": "Run and trap-laying speed; keep it up."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "38",
+    "skill": "Psychic Hammer",
+    "points": 1,
+    "note": "Prerequisite of Cloak of Shadows."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "38",
+    "skill": "Cloak of Shadows",
+    "points": 1,
+    "note": "Blinds ranged monsters."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "38",
+    "skill": "Mind Blast",
+    "points": 1,
+    "note": "Stuns and converts; 43 points in total."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "39",
+    "skill": "Fade",
+    "points": 1,
+    "note": "The endgame guide's 1-point skills: Fade (resistances, damage reduction) instead of Burst of Speed when resistances are short."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "Izual (Nightmare)",
+    "skill": "Lightning Sentry",
+    "points": 2,
+    "note": "Quest points."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "40",
+    "skill": "Weapon Block",
+    "points": 1,
+    "note": "1 point (blocks only while dual-wielding claws)."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "41-43",
+    "skill": "Lightning Sentry",
+    "points": 3,
+    "note": "Lightning Sentry 20; then the endgame guide's order: Shock Web, Charged Bolt Sentry, Death Sentry, Fire Blast."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "44-60",
+    "skill": "Shock Web",
+    "points": 17,
+    "note": "Synergy of Lightning Sentry."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "Den of Evil (Hell)",
+    "skill": "Shock Web",
+    "points": 1,
+    "note": "Quest point."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "Radament (Hell)",
+    "skill": "Shock Web",
+    "points": 1,
+    "note": "Quest point; Shock Web 20."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "61-70",
+    "skill": "Charged Bolt Sentry",
+    "points": 10,
+    "note": "Charged Bolt Sentry 20 (synergy)."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "Izual (Hell)",
+    "skill": "Death Sentry",
+    "points": 2,
+    "note": "Quest points."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "71-79",
+    "skill": "Death Sentry",
+    "points": 9,
+    "note": "Death Sentry 20."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "80-98",
+    "skill": "Fire Blast",
+    "points": 19,
+    "note": "Fire Blast 20: fire damage for lightning immunes."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "99",
+    "skill": "Weapon Block",
+    "points": 1,
+    "note": "The last point (110 = 98 levels + 12 quest points): Weapon Block, Wake of Fire or Shadow Master per the guide."
+   }
+  ]
+ },
+ "items": [
+  {
+   "name": "Cunning Greater Talons of Quickness",
+   "slot": "weapon",
+   "setup": "standard",
+   "kind": "magic",
+   "req_level": 45,
+   "base": "Greater Talons (assassin claw, level 37, 79 Str / 79 Dex) or Greater Claws (33, 76 / 76): the lowest requirements; Anya sells them in Nightmare / Hell (Act 5)",
+   "stats": [
+    "+3 to Traps (Assassin Only)",
+    "+40% Increased Attack Speed",
+    "Claw automods: up to +3 to Lightning Sentry or Death Sentry",
+    "2 sockets for Rainbow Facets (Larzuk: 50/50 for 2)"
+   ],
+   "why": "The Standard setup dual-wields two: +3 Traps each (+6 Lightning Sentry with the automods), 40% IAS for trap laying, and Weapon Block; it sacrifices one FCR breakpoint for the damage.",
+   "notes": "Socket both with Rainbow Facets (lightning); Larzuk's reward gives 2 sockets half the time.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Crescent Moon",
+   "slot": "weapon",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 47,
+   "base": "Phase Blade (25 Str / 136 Dex) with 3 sockets, not magic; any 3-socket axe, sword or polearm",
+   "stats": [
+    "-35% to Enemy Lightning Resistance",
+    "10% Chance to cast level 17 Chain Lightning on striking",
+    "7% Chance to cast level 13 Static Field on striking",
+    "+20% Increased Attack Speed (Shael)",
+    "+180-220% Enhanced Damage",
+    "Ignore Target's Defense",
+    "+9-11 Magic Absorb",
+    "25% Chance of Open Wounds (Um)",
+    "+2 to Mana after each Kill (Tir)",
+    "Level 18 Summon Spirit Wolf (30 Charges)"
+   ],
+   "why": "-35% enemy lightning resistance; the guide's min-max swap right after laying traps (Phase Blade is its fastest base).",
+   "notes": "Shael Um Tir.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Heart of the Oak",
+   "slot": "weapon",
+   "setup": "magic_find",
+   "kind": "runeword",
+   "req_level": 55,
+   "base": "Flail (41 Str / 35 Dex) with 4 sockets, not magic (one-handed: the shield stays)",
+   "stats": [
+    "+3 to All Skills",
+    "+40% Faster Cast Rate",
+    "All Resistances +30-40",
+    "Replenish Life +20",
+    "+15% Maximum Mana",
+    "Level 4 Oak Sage (25 Charges)",
+    "Level 14 Raven (60 Charges)"
+   ],
+   "why": "The Magic Find setup's weapon: +3 to All Skills and 40% FCR toward the 102% breakpoint.",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Wizardspike",
+   "slot": "weapon",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 61,
+   "base": "Bone Knife (dagger, 38 Str / 75 Dex)",
+   "stats": [
+    "+2 to Mana per Character Level",
+    "Regenerate Mana 15%",
+    "Increase Maximum Mana 15%",
+    "All Resistances +75",
+    "Indestructible",
+    "+50% Faster Cast Rate"
+   ],
+   "why": "FCR and All Resistances +75 in one hand.",
+   "rank_in_slot": 4
+  },
+  {
+   "name": "Bartuc's Cut-Throat",
+   "slot": "weapon",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 42,
+   "base": "Greater Talons (assassin claw, 79 Str / 79 Dex)",
+   "stats": [
+    "+2 to Assassin Skill Levels",
+    "+1 to Martial Arts (Assassin Only)",
+    "+30% Faster Hit Recovery",
+    "+150-200% Enhanced Damage",
+    "+25-50 to Maximum Damage",
+    "+20% Bonus to Attack Rating",
+    "5-9% Life Stolen per Hit",
+    "+20 to Strength",
+    "+20 to Dexterity"
+   ],
+   "why": "+2 to Assassin skills on a claw.",
+   "rank_in_slot": 5
+  },
+  {
+   "name": "Suicide Branch",
+   "slot": "weapon",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 33,
+   "base": "Burnt Wand (wand, 25 Str)",
+   "stats": [
+    "Attacker Takes Damage of 25",
+    "+50% Faster Cast Rate",
+    "All Resistances +10",
+    "Increase Maximum Mana 10%",
+    "+40 to Life",
+    "+1 to All Skills"
+   ],
+   "why": "+1 to All Skills, 50% FCR in a wand.",
+   "rank_in_slot": 6
+  },
+  {
+   "name": "Spirit",
+   "slot": "weapon",
+   "setup": "starter",
+   "kind": "runeword",
+   "req_level": 25,
+   "base": "Crystal Sword or Broad Sword with 4 sockets, not magic",
+   "stats": [
+    "+2 to All Skills",
+    "+25-35% Faster Cast Rate",
+    "+55% Faster Hit Recovery",
+    "+89-112 to Mana",
+    "+22 to Vitality",
+    "+250 Defense vs. Missile",
+    "+3-8 Magic Absorb"
+   ],
+   "why": "The leveling guide's Spirit sword: the weapon she resets with, until the claws (level 45).",
+   "rank_in_slot": 7
+  },
+  {
+   "name": "Plague",
+   "slot": "weapon",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 67,
+   "base": "Greater Talons / Greater Claws (or a sword / dagger) with 3 sockets, not magic",
+   "stats": [
+    "+1-2 to All Skills",
+    "Level 13-17 Cleansing Aura When Equipped",
+    "20% Chance to cast level 12 Lower Resist when struck",
+    "25% Chance to cast level 15 Poison Nova on striking",
+    "-23% to Enemy Poison Resistance",
+    "+220-320% Enhanced Damage",
+    "+0.375% Deadly Strike per Character Level",
+    "+20% Increased Attack Speed (Shael)",
+    "25% Chance of Open Wounds (Um)"
+   ],
+   "why": "+1-2 to All Skills and Cleansing on a claw.",
+   "notes": "Cham Shael Um.",
+   "rank_in_slot": 8
+  },
+  {
+   "name": "Cunning Greater Talons of Quickness",
+   "slot": "offhand",
+   "setup": "standard",
+   "kind": "magic",
+   "req_level": 45,
+   "base": "Greater Talons (assassin claw, level 37, 79 Str / 79 Dex) or Greater Claws (33, 76 / 76): the lowest requirements; Anya sells them in Nightmare / Hell (Act 5)",
+   "stats": [
+    "+3 to Traps (Assassin Only)",
+    "+40% Increased Attack Speed",
+    "Claw automods: up to +3 to Lightning Sentry or Death Sentry",
+    "2 sockets for Rainbow Facets (Larzuk: 50/50 for 2)"
+   ],
+   "why": "The Standard setup dual-wields two: +3 Traps each (+6 Lightning Sentry with the automods), 40% IAS for trap laying, and Weapon Block; it sacrifices one FCR breakpoint for the damage.",
+   "notes": "Socket both with Rainbow Facets (lightning); Larzuk's reward gives 2 sockets half the time.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Ancients' Pledge",
+   "slot": "offhand",
+   "setup": "starter",
+   "kind": "runeword",
+   "req_level": 21,
+   "base": "Large Shield or Kite Shield with 3 sockets, not magic",
+   "stats": [
+    "+50% Enhanced Defense",
+    "Cold Resist +30%",
+    "All Resistances +13",
+    "10% Damage Taken Goes To Mana"
+   ],
+   "why": "The leveling guide's shield: kept with the Spirit sword until the claws.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Plague",
+   "slot": "offhand",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 67,
+   "base": "Greater Talons / Greater Claws with 3 sockets, not magic",
+   "stats": [
+    "+1-2 to All Skills",
+    "Level 13-17 Cleansing Aura When Equipped",
+    "20% Chance to cast level 12 Lower Resist when struck",
+    "25% Chance to cast level 15 Poison Nova on striking",
+    "-23% to Enemy Poison Resistance",
+    "+220-320% Enhanced Damage",
+    "+0.375% Deadly Strike per Character Level",
+    "+20% Increased Attack Speed (Shael)",
+    "25% Chance of Open Wounds (Um)"
+   ],
+   "why": "+1-2 to All Skills and Cleansing on the second claw.",
+   "notes": "Cham Shael Um.",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Spirit",
+   "slot": "offhand",
+   "setup": "magic_find",
+   "kind": "runeword",
+   "req_level": 25,
+   "base": "Monarch (156 Str) with 4 sockets, not magic (or any 4-socket non-class shield)",
+   "stats": [
+    "+2 to All Skills",
+    "+25-35% Faster Cast Rate",
+    "+55% Faster Hit Recovery",
+    "+89-112 to Mana",
+    "+22 to Vitality",
+    "+250 Defense vs. Missile",
+    "+3-8 Magic Absorb"
+   ],
+   "why": "Spirit Monarch: the Magic Find setup's shield and the off-hand of the Call to Arms swap.",
+   "rank_in_slot": 9
+  },
+  {
+   "name": "Stormshield",
+   "slot": "offhand",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 73,
+   "base": "Monarch (156 Str)",
+   "stats": [
+    "+3.75 Defense per Character Level",
+    "Damage Reduced by 35%",
+    "+30 to Strength",
+    "Indestructible",
+    "+35% Faster Block Rate",
+    "Lightning Resist +25%",
+    "25% Increased Chance of Blocking",
+    "Cold Resist +60%",
+    "Attacker Takes Lightning Damage of 10"
+   ],
+   "why": "Damage Reduced by 35% and max block.",
+   "rank_in_slot": 10
+  },
+  {
+   "name": "Rhyme",
+   "slot": "offhand",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 29,
+   "base": "2-socket shield, not magic (the guide: Bone Shield)",
+   "stats": [
+    "+40% Faster Block Rate",
+    "20% Increased Chance of Blocking",
+    "All Resistances +25",
+    "Cannot Be Frozen",
+    "50% Extra Gold from Monsters",
+    "25% Better Chance of Getting Magic Items",
+    "Regenerate Mana 15%"
+   ],
+   "why": "Cannot Be Frozen and All Resistances +25 in a Bone Shield.",
+   "rank_in_slot": 11
+  },
+  {
+   "name": "Lidless Wall",
+   "slot": "offhand",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 41,
+   "base": "Grim Shield (58 Str)",
+   "stats": [
+    "+1 to All Skills",
+    "+20% Faster Cast Rate",
+    "+80-130% Enhanced Defense",
+    "+10 to Energy",
+    "Increase Maximum Mana 10%",
+    "+3-5 to Mana after each Kill",
+    "+1 to Light Radius"
+   ],
+   "why": "+1 to All Skills, 20% FCR.",
+   "rank_in_slot": 12
+  },
+  {
+   "name": "Call to Arms",
+   "slot": "swap",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 57,
+   "base": "5-socket weapon, not magic (the guide: Crystal Sword; one-handed, with Spirit Monarch on the off-hand swap)",
+   "stats": [
+    "+1 to All Skills",
+    "+2-6 to Battle Command",
+    "+1-6 to Battle Orders",
+    "+1-4 to Battle Cry"
+   ],
+   "why": "Battle Command twice, then Battle Orders at the start of each run (the guide's Late-Game).",
+   "notes": "Amn Ral Mal Ist Ohm.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Crescent Moon",
+   "slot": "swap",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 47,
+   "base": "Phase Blade with 3 sockets, not magic",
+   "stats": [
+    "-35% to Enemy Lightning Resistance",
+    "10% Chance to cast level 17 Chain Lightning on striking",
+    "7% Chance to cast level 13 Static Field on striking",
+    "+20% Increased Attack Speed (Shael)",
+    "+180-220% Enhanced Damage",
+    "Ignore Target's Defense",
+    "+9-11 Magic Absorb",
+    "25% Chance of Open Wounds (Um)",
+    "+2 to Mana after each Kill (Tir)",
+    "Level 18 Summon Spirit Wolf (30 Charges)"
+   ],
+   "why": "Swap to it right after laying the Lightning Sentries: -35% enemy lightning resistance on every trap hit (the guide's MIN-MAX tech).",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Wand of Lower Resistance",
+   "slot": "swap",
+   "setup": "starter",
+   "kind": "magic",
+   "req_level": 36,
+   "base": "Bone Wand of Lower Resistance (Drognan, Act 2 Nightmare)",
+   "stats": [
+    "Lower Resist (charges)",
+    "breaks lightning immunes"
+   ],
+   "why": "Lower Resist on lightning immunes and tanky monsters until Infinity (the Starter setup's one must-have).",
+   "notes": "Recharge with Ort + a chipped gem in the cube.",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Battle Staff of Teleportation",
+   "slot": "swap",
+   "setup": "starter",
+   "kind": "magic",
+   "req_level": 24,
+   "base": "Battle Staff (Ormus)",
+   "stats": [
+    "Teleport (charges)",
+    "two-handed staff: on the swap only"
+   ],
+   "why": "Teleport charges until Enigma.",
+   "rank_in_slot": 4
+  },
+  {
+   "name": "Griffon's Eye",
+   "slot": "helm",
+   "setup": "standard",
+   "kind": "unique",
+   "req_level": 76,
+   "base": "Diadem (circlet, no Str), 1 socket for a Rainbow Facet (Larzuk)",
+   "stats": [
+    "+1 to All Skills",
+    "+25% Faster Cast Rate",
+    "-15-20% to Enemy Lightning Resistance",
+    "+10-15% to Lightning Skill Damage",
+    "+100-200 Defense"
+   ],
+   "why": "-15-20% enemy lightning resistance (applies to traps since patch 2.6), +10-15% lightning damage, 25% FCR; socket a Rainbow Facet.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Harlequin Crest",
+   "slot": "helm",
+   "setup": "magic_find",
+   "kind": "unique",
+   "req_level": 62,
+   "base": "Shako (50 Str)",
+   "stats": [
+    "+2 to All Skills",
+    "+1.5 to Life per Character Level",
+    "+1.5 to Mana per Character Level",
+    "50% Better Chance of Getting Magic Items",
+    "Damage Reduced by 10%",
+    "+2 to Strength",
+    "+2 to Dexterity",
+    "+2 to Vitality",
+    "+2 to Energy"
+   ],
+   "why": "The Magic Find setup's helm: +2 to All Skills, MF, life and mana.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Crown of Ages",
+   "slot": "helm",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 82,
+   "base": "Corona (174 Str)",
+   "stats": [
+    "+30% Faster Hit Recovery",
+    "All Resistances +20-30",
+    "+1 to All Skills",
+    "+100-150 Defense",
+    "Indestructible",
+    "Damage Reduced by 10-15%",
+    "+50% Enhanced Defense",
+    "Socketed (1-2)"
+   ],
+   "why": "+1 to All Skills, FHR, All Resistances, Damage Reduced; 2 sockets.",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Lore",
+   "slot": "helm",
+   "setup": "starter",
+   "kind": "runeword",
+   "req_level": 27,
+   "base": "2-socket helm, not magic",
+   "stats": [
+    "+1 to All Skills",
+    "+10 to Energy",
+    "+2 to Light Radius",
+    "+2 to Mana after each Kill"
+   ],
+   "why": "The leveling guide's helm, kept from the reset until Griffon's Eye.",
+   "rank_in_slot": 4
+  },
+  {
+   "name": "Tarnhelm",
+   "slot": "helm",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 15,
+   "base": "Skull Cap (15 Str)",
+   "stats": [
+    "75% Extra Gold from Monsters",
+    "25-50% Better Chance of Getting Magic Items",
+    "+1 to All Skills"
+   ],
+   "why": "+1 to All Skills and MF, cheap.",
+   "rank_in_slot": 5
+  },
+  {
+   "name": "Peasant Crown",
+   "slot": "helm",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 28,
+   "base": "War Hat (20 Str)",
+   "stats": [
+    "+20 to Energy",
+    "+20 to Vitality",
+    "+1 to All Skills",
+    "+15% Faster Run/Walk",
+    "Replenish Life +6-12",
+    "+100% Enhanced Defense"
+   ],
+   "why": "+1 to All Skills, run speed and Vitality, cheap.",
+   "rank_in_slot": 6
+  },
+  {
+   "name": "Rockstopper",
+   "slot": "helm",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 31,
+   "base": "Sallet (43 Str)",
+   "stats": [
+    "Lightning Resist +20-40%",
+    "Damage Reduced by 10%",
+    "+30% Faster Hit Recovery",
+    "+160-220% Enhanced Defense",
+    "Fire Resist +20-50%",
+    "Cold Resist +20-40%",
+    "+15 to Vitality"
+   ],
+   "why": "Elemental resistances, Damage Reduced and FHR.",
+   "rank_in_slot": 7
+  },
+  {
+   "name": "Ground",
+   "slot": "helm",
+   "setup": "starter",
+   "kind": "runeword",
+   "req_level": 35,
+   "base": "3-socket helm, not magic",
+   "stats": [
+    "Increase Maximum Life 5%",
+    "+75-100% Enhanced Defense",
+    "Lightning Resist +40-60% (with Ort)",
+    "+10-15% Lightning Absorb",
+    "+20% Faster Hit Recovery (Shael)",
+    "+10 to Vitality (Io)"
+   ],
+   "why": "Lightning resistance and absorb: the Starter setup's helm if lightning damage hurts.",
+   "rank_in_slot": 8
+  },
+  {
+   "name": "Temper",
+   "slot": "helm",
+   "setup": "starter",
+   "kind": "runeword",
+   "req_level": 35,
+   "base": "3-socket helm, not magic",
+   "stats": [
+    "Increase Maximum Life 5%",
+    "+75-100% Enhanced Defense",
+    "Fire Resist +40-60%",
+    "10-15% Fire Absorb",
+    "+20% Faster Hit Recovery",
+    "+10 to Vitality"
+   ],
+   "why": "Fire resistance and absorb: the Starter setup's helm if fire damage hurts.",
+   "rank_in_slot": 9
+  },
+  {
+   "name": "Hearth",
+   "slot": "helm",
+   "setup": "starter",
+   "kind": "runeword",
+   "req_level": 35,
+   "base": "3-socket helm, not magic",
+   "stats": [
+    "Increase Maximum Life 5%",
+    "+75-100% Enhanced Defense",
+    "Cold Resist +40-60%",
+    "10-15% Cold Absorb",
+    "Cannot Be Frozen",
+    "+20% Faster Hit Recovery",
+    "+10 to Vitality"
+   ],
+   "why": "Cold resistance, absorb and Cannot Be Frozen (keeps the trap-laying speed).",
+   "rank_in_slot": 10
+  },
+  {
+   "name": "Hellwarden's Will",
+   "slot": "helm",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 50,
+   "base": "Death Mask (55 Str)",
+   "stats": [
+    "+1 to All Skills",
+    "+20% Faster Cast Rate",
+    "+20% Increased Attack Speed",
+    "-5-8% to Enemy Fire Resistance",
+    "-5-8% to Enemy Magic Resistance",
+    "+150-215% Enhanced Defense",
+    "+4-6 to Mana after each Kill"
+   ],
+   "why": "+1 to All Skills, 20% FCR and IAS (Reign of the Warlock unique).",
+   "rank_in_slot": 11
+  },
+  {
+   "name": "Veil of Steel",
+   "slot": "helm",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 73,
+   "base": "Spired Helm (192 Str)",
+   "stats": [
+    "All Resistances +50",
+    "+60% Enhanced Defense",
+    "+15 to Strength",
+    "+15 to Vitality",
+    "-4 to Light Radius",
+    "Increase Maximum Durability 20%",
+    "+140 Defense",
+    "+2 to All Skills",
+    "Damage Reduced by 15-25%",
+    "Magic Resist +20-40%"
+   ],
+   "why": "All Resistances +50.",
+   "rank_in_slot": 12
+  },
+  {
+   "name": "Coven",
+   "slot": "helm",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 51,
+   "base": "3-socket helm, not magic",
+   "stats": [
+    "+1 to All Skills",
+    "+20% Faster Cast Rate",
+    "+30-50% Enhanced Defense",
+    "26-40% Better Chance of Getting Magic Items (with Ist)",
+    "+1-5 Life after each Kill",
+    "5% Chance to cast level 10 Sigil Lethargy when struck",
+    "Fire Resist +30% (Ral)",
+    "+10 to Vitality (Io)"
+   ],
+   "why": "+1 to All Skills, 20% FCR and MF (Reign of the Warlock runeword).",
+   "notes": "Ist Ral Io.",
+   "rank_in_slot": 13
+  },
+  {
+   "name": "Enigma",
+   "slot": "body",
+   "setup": "standard",
+   "kind": "runeword",
+   "req_level": 65,
+   "base": "3-socket body armor, not magic (the guide: Mage Plate, 55 Str)",
+   "stats": [
+    "+2 to All Skills",
+    "+45% Faster Run/Walk",
+    "+1 to Teleport",
+    "+750-775 Defense",
+    "+0.75 to Strength per character level",
+    "+14 Life after each Kill",
+    "1% Better Chance of Getting Magic Items per character level"
+   ],
+   "why": "+2 to All Skills, Teleport and run speed (Mage Plate in the guide: the lowest Strength).",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Treachery",
+   "slot": "body",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 43,
+   "base": "3-socket body armor",
+   "stats": [
+    "25% Chance to cast level 15 Venom on striking",
+    "5% Chance to cast level 15 Fade when struck",
+    "+2 to Assassin Skill Levels",
+    "+45% Increased Attack Speed",
+    "+20% Faster Hit Recovery",
+    "Cold Resist +30%",
+    "50% Extra Gold from Monsters"
+   ],
+   "why": "+2 to Assassin skills and IAS; its Fade proc overwrites Burst of Speed (the leveling guide's warning).",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Smoke",
+   "slot": "body",
+   "setup": "alternative",
+   "kind": "runeword",
+   "req_level": 37,
+   "base": "2-socket body armor, not magic (the guide: Studded Leather)",
+   "stats": [
+    "All Resistances +50",
+    "+20% Faster Hit Recovery",
+    "+75% Enhanced Defense",
+    "+250 Defense vs. Missile",
+    "Level 6 Weaken (18 Charges)"
+   ],
+   "why": "All Resistances +50 (the guide: Studded Leather).",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Skin of the Vipermagi",
+   "slot": "body",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 29,
+   "base": "Serpentskin Armor (43 Str)",
+   "stats": [
+    "+120% Enhanced Defense",
+    "All Resistances +20-35",
+    "+30% Faster Cast Rate",
+    "Magic Damage Reduced by 9-13",
+    "+1 to All Skills"
+   ],
+   "why": "+1 to All Skills, FCR, All Resistances.",
+   "rank_in_slot": 4
+  },
+  {
+   "name": "Skullder's Ire",
+   "slot": "body",
+   "setup": "magic_find",
+   "kind": "unique",
+   "req_level": 42,
+   "base": "Russet Armor (97 Str)",
+   "stats": [
+    "+1 to All Skills",
+    "+1.25% Better Chance of Getting Magic Items per Character Level",
+    "+160-200% Enhanced Defense",
+    "Increase Maximum Durability 60%",
+    "Magic Damage Reduced by 10",
+    "Repairs 1 Durability in 5 Seconds"
+   ],
+   "why": "The Magic Find setup's armor: +1 to All Skills and MF per level.",
+   "rank_in_slot": 5
+  },
+  {
+   "name": "Stealth",
+   "slot": "body",
+   "setup": "starter",
+   "kind": "runeword",
+   "req_level": 17,
+   "base": "2-socket body armor, not magic",
+   "stats": [
+    "+25% Faster Run/Walk",
+    "+25% Faster Cast Rate",
+    "+25% Faster Hit Recovery",
+    "+6 to Dexterity",
+    "Magic Damage Reduced by 3"
+   ],
+   "why": "The leveling guide's armor, kept from the reset until Enigma.",
+   "rank_in_slot": 6
+  },
+  {
+   "name": "Silks of the Victor",
+   "slot": "body",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 28,
+   "base": "Ancient Armor (100 Str)",
+   "stats": [
+    "5% Mana Stolen per Hit",
+    "+1 to All Skills",
+    "+2 to Light Radius",
+    "+100-120% Enhanced Defense",
+    "+20% Faster Run/Walk",
+    "+30% Increased Attack Speed",
+    "+50-100% Enhanced Damage",
+    "15% Better Chance of Getting Magic Items"
+   ],
+   "why": "+1 to All Skills and mana leech (Reign of the Warlock).",
+   "rank_in_slot": 7
+  },
+  {
+   "name": "Magefist",
+   "slot": "gloves",
+   "setup": "standard",
+   "kind": "unique",
+   "req_level": 23,
+   "base": "Light Gauntlets (45 Str)",
+   "stats": [
+    "+20% Faster Cast Rate",
+    "Regenerate Mana 25%",
+    "+1 to Fire Skills",
+    "Adds 1-6 Fire Damage",
+    "+10 Defense",
+    "+20-30% Enhanced Defense"
+   ],
+   "why": "FCR and +1 to Fire Skills (Fire Blast, Death Sentry's level); with Griffon's Eye and Arachnid Mesh the 65% FCR breakpoint.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Trang-Oul's Claws",
+   "slot": "gloves",
+   "setup": "alternative",
+   "kind": "set",
+   "req_level": 45,
+   "base": "Heavy Bracers (58 Str)",
+   "stats": [
+    "+30 Defense",
+    "+20% Faster Cast Rate",
+    "Cold Resist +30%",
+    "+2 to Curses (Necromancer Only)",
+    "(4 items) +25% to Poison Skill Damage"
+   ],
+   "why": "20% FCR and cold resistance (its +2 Curses are a necromancer's).",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Chance Guards",
+   "slot": "gloves",
+   "setup": "magic_find",
+   "kind": "unique",
+   "req_level": 15,
+   "base": "Chain Gloves (25 Str)",
+   "stats": [
+    "200% Extra Gold from Monsters",
+    "25-40% Better Chance of Getting Magic Items",
+    "+25 to Attack Rating",
+    "+15 Defense",
+    "+2 to Light Radius",
+    "+20-30% Enhanced Defense"
+   ],
+   "why": "The Magic Find setup's gloves.",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Arachnid Mesh",
+   "slot": "belt",
+   "setup": "standard",
+   "kind": "unique",
+   "req_level": 80,
+   "base": "Spiderweb Sash (50 Str)",
+   "stats": [
+    "+1 to All Skills",
+    "+20% Faster Cast Rate",
+    "Increase Maximum Mana 5%",
+    "Slows Target by 10%",
+    "Level 3 Venom (11 Charges)",
+    "+90-120% Enhanced Defense"
+   ],
+   "why": "+1 to All Skills and 20% FCR.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Goldwrap",
+   "slot": "belt",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 27,
+   "base": "Heavy Belt (45 Str)",
+   "stats": [
+    "30% Better Chance of Getting Magic Items",
+    "+2 to Light Radius",
+    "+25 Defense",
+    "+10% Increased Attack Speed",
+    "+40-60% Enhanced Defense",
+    "50-80% Extra Gold from Monsters"
+   ],
+   "why": "IAS and MF.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "String of Ears",
+   "slot": "belt",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 29,
+   "base": "Demonhide Sash (20 Str)",
+   "stats": [
+    "Physical Damage Taken Reduced by 10-15%",
+    "Magic Damage Reduced by 10-15",
+    "6-8% Life Stolen per Hit",
+    "+150-180% Enhanced Defense"
+   ],
+   "why": "Damage Reduced and life leech.",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Verdungo's Hearty Cord",
+   "slot": "belt",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 63,
+   "base": "Mithril Coil (106 Str)",
+   "stats": [
+    "+30-40 to Vitality",
+    "Physical Damage Taken Reduced by 10-15%",
+    "+10% Faster Hit Recovery",
+    "Replenish Life +10-13",
+    "+100-120 Maximum Stamina",
+    "+90-140% Enhanced Defense"
+   ],
+   "why": "Vitality, FHR and Damage Reduced.",
+   "rank_in_slot": 4
+  },
+  {
+   "name": "Gheed's Wager",
+   "slot": "belt",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 71,
+   "base": "Troll Belt (151 Str)",
+   "stats": [
+    "+10-20% Faster Cast Rate",
+    "+10-20% Faster Hit Recovery",
+    "+10-20% Faster Run/Walk",
+    "+90-150% Enhanced Defense",
+    "-3-7% to Enemy Magic Resistance",
+    "All Resistances +5-15",
+    "44-75% Extra Gold from Monsters"
+   ],
+   "why": "FCR, FHR, run speed and MF (Reign of the Warlock).",
+   "rank_in_slot": 5
+  },
+  {
+   "name": "Aldur's Advance",
+   "slot": "boots",
+   "setup": "alternative",
+   "kind": "set",
+   "req_level": 45,
+   "base": "Battle Boots (95 Str)",
+   "stats": [
+    "Indestructible",
+    "Heal Stamina Plus 32%",
+    "+50 to Life",
+    "10% Damage Taken Goes To Mana",
+    "+40% Faster Run/Walk",
+    "+180 Maximum Stamina",
+    "Fire Resist +40-50%",
+    "(2 items) +15 to Dexterity",
+    "(3 items) +15 to Dexterity",
+    "(4 items) +15 to Dexterity"
+   ],
+   "why": "Run speed, life and fire resistance; the Standard setup wears rare boots to balance resistances.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "War Traveler",
+   "slot": "boots",
+   "setup": "magic_find",
+   "kind": "unique",
+   "req_level": 42,
+   "base": "Battle Boots (95 Str)",
+   "stats": [
+    "30-50% Better Chance of Getting Magic Items",
+    "+10 to Strength",
+    "+10 to Vitality",
+    "Adds 15-25 Damage",
+    "+25% Faster Run/Walk",
+    "Attacker Takes Damage of 5-10"
+   ],
+   "why": "The Magic Find setup's boots.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Waterwalk",
+   "slot": "boots",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 32,
+   "base": "Sharkskin Boots (47 Str)",
+   "stats": [
+    "+100 Defense vs. Missile",
+    "+20% Faster Run/Walk",
+    "+15 to Dexterity",
+    "+180-210% Enhanced Defense",
+    "+45-65 to Life",
+    "+40 Maximum Stamina",
+    "+5% to Maximum Fire Resist",
+    "Heal Stamina Plus 50%"
+   ],
+   "why": "Run speed, life and Dexterity.",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Natalya's Soul",
+   "slot": "boots",
+   "setup": "alternative",
+   "kind": "set",
+   "req_level": 25,
+   "base": "Mesh Boots (65 Str)",
+   "stats": [
+    "+75-125 Defense",
+    "+40% Faster Run/Walk",
+    "Heal Stamina Plus 0.25% per Character Level",
+    "Increase Maximum Durability 50%",
+    "Cold Resist +15-25%",
+    "Lightning Resist +15-25%"
+   ],
+   "why": "Run speed and resistances.",
+   "rank_in_slot": 4
+  },
+  {
+   "name": "Sandstorm Trek",
+   "slot": "boots",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 64,
+   "base": "Scarabshell Boots (91 Str)",
+   "stats": [
+    "+20% Faster Hit Recovery",
+    "+20% Faster Run/Walk",
+    "+10-15 to Strength",
+    "+10-15 to Vitality",
+    "Poison Resist +40-70%",
+    "+140-170% Enhanced Defense"
+   ],
+   "why": "FHR, run speed, Strength and Vitality.",
+   "rank_in_slot": 5
+  },
+  {
+   "name": "Mara's Kaleidoscope",
+   "slot": "amulet",
+   "setup": "standard",
+   "kind": "unique",
+   "req_level": 67,
+   "base": "Amulet",
+   "stats": [
+    "+2 to All Skills",
+    "All Resistances +20-30",
+    "+5 to all Attributes"
+   ],
+   "why": "+2 to All Skills and All Resistances; a +Trap skills amulet with FCR is the alternative.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "The Stone of Jordan",
+   "slot": "ring",
+   "setup": "standard",
+   "kind": "unique",
+   "req_level": 29,
+   "base": "Ring",
+   "stats": [
+    "+20 to Mana",
+    "Increase Maximum Mana 25%",
+    "+1 to All Skills",
+    "Adds 1-12 Lightning Damage"
+   ],
+   "why": "+1 to All Skills; one in each ring slot.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Bul-Kathos' Wedding Band",
+   "slot": "ring",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 58,
+   "base": "Ring",
+   "stats": [
+    "+0.5 to Life per Character Level",
+    "+1 to All Skills",
+    "3-5% Life Stolen per Hit",
+    "+50 Maximum Stamina"
+   ],
+   "why": "+1 to All Skills, life and life leech.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Nagelring",
+   "slot": "ring",
+   "setup": "magic_find",
+   "kind": "unique",
+   "req_level": 7,
+   "base": "Ring",
+   "stats": [
+    "+50-75 to Attack Rating",
+    "15-30% Better Chance of Getting Magic Items",
+    "Magic Damage Reduced by 3",
+    "Attacker Takes Damage of 3"
+   ],
+   "why": "MF (with Fortuitous rings in the Magic Find setup).",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Opalvein",
+   "slot": "ring",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 50,
+   "base": "Ring",
+   "stats": [
+    "2% Chance to cast level 15 Flame Wave on attack",
+    "Magic damage rolls a random element (Reign of the Warlock property)",
+    "+10% Faster Cast Rate",
+    "All Resistances +6-8",
+    "+1-3 Life after each Kill",
+    "+1-3 to Mana after each Kill"
+   ],
+   "why": "FCR (Reign of the Warlock ring).",
+   "rank_in_slot": 4
+  },
+  {
+   "name": "Sling",
+   "slot": "ring",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 50,
+   "base": "Ring",
+   "stats": [
+    "+1 to Town Portal",
+    "+10% Faster Cast Rate",
+    "-3-5% to Enemy Magic Resistance",
+    "+10-15 to Energy",
+    "Slows Target by 15%",
+    "10-20% Better Chance of Getting Magic Items"
+   ],
+   "why": "FCR (Reign of the Warlock ring).",
+   "rank_in_slot": 5
+  },
+  {
+   "name": "The Stone of Jordan",
+   "slot": "ring2",
+   "setup": "standard",
+   "kind": "unique",
+   "req_level": 29,
+   "base": "Ring",
+   "stats": [
+    "+20 to Mana",
+    "Increase Maximum Mana 25%",
+    "+1 to All Skills",
+    "Adds 1-12 Lightning Damage"
+   ],
+   "why": "+1 to All Skills; one in each ring slot.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Bul-Kathos' Wedding Band",
+   "slot": "ring2",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 58,
+   "base": "Ring",
+   "stats": [
+    "+0.5 to Life per Character Level",
+    "+1 to All Skills",
+    "3-5% Life Stolen per Hit",
+    "+50 Maximum Stamina"
+   ],
+   "why": "+1 to All Skills, life and life leech.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Nagelring",
+   "slot": "ring2",
+   "setup": "magic_find",
+   "kind": "unique",
+   "req_level": 7,
+   "base": "Ring",
+   "stats": [
+    "+50-75 to Attack Rating",
+    "15-30% Better Chance of Getting Magic Items",
+    "Magic Damage Reduced by 3",
+    "Attacker Takes Damage of 3"
+   ],
+   "why": "MF (with Fortuitous rings in the Magic Find setup).",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Opalvein",
+   "slot": "ring2",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 50,
+   "base": "Ring",
+   "stats": [
+    "2% Chance to cast level 15 Flame Wave on attack",
+    "Magic damage rolls a random element (Reign of the Warlock property)",
+    "+10% Faster Cast Rate",
+    "All Resistances +6-8",
+    "+1-3 Life after each Kill",
+    "+1-3 to Mana after each Kill"
+   ],
+   "why": "FCR (Reign of the Warlock ring).",
+   "rank_in_slot": 4
+  },
+  {
+   "name": "Sling",
+   "slot": "ring2",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 50,
+   "base": "Ring",
+   "stats": [
+    "+1 to Town Portal",
+    "+10% Faster Cast Rate",
+    "-3-5% to Enemy Magic Resistance",
+    "+10-15 to Energy",
+    "Slows Target by 15%",
+    "10-20% Better Chance of Getting Magic Items"
+   ],
+   "why": "FCR (Reign of the Warlock ring).",
+   "rank_in_slot": 5
+  },
+  {
+   "name": "Rainbow Facet",
+   "slot": "jewel",
+   "setup": "standard",
+   "kind": "unique",
+   "req_level": 49,
+   "base": "Jewel (unique)",
+   "stats": [
+    "Lightning version: -3-5% to Enemy Lightning Resistance",
+    "+3-5% to Lightning Skill Damage",
+    "100% Chance to cast level 41 Nova when you Die, or level 37 Charged Bolt when you Level-up"
+   ],
+   "why": "The lightning Rainbow Facet: -3-5% enemy lightning resistance on every trap hit; as many as the sockets allow (2 per claw, 1 in Griffon's Eye).",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Infinity",
+   "slot": "merc_weapon",
+   "setup": "standard",
+   "kind": "runeword",
+   "req_level": 63,
+   "base": "ethereal Thresher (Act 2 merc polearm) with 4 sockets, not magic",
+   "stats": [
+    "Level 12 Conviction Aura When Equipped",
+    "50% Chance to cast level 20 Chain Lightning when you Kill an Enemy",
+    "-45-55% to Enemy Lightning Resistance",
+    "+255-325% Enhanced Damage",
+    "+35% Faster Run/Walk",
+    "+0.5 to Vitality per Character Level",
+    "40% Chance of Crushing Blow (Ber, Ber)",
+    "Prevent Monster Heal (Mal)",
+    "30% Better Chance of Getting Magic Items (Ist)",
+    "Level 21 Cyclone Armor (30 Charges)"
+   ],
+   "why": "Conviction lowers every monster's resistances and breaks lightning immunity: the guide says the Trapsin needs it to be fully functional.",
+   "notes": "Ber Mal Ber Ist.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Insight",
+   "slot": "merc_weapon",
+   "setup": "starter",
+   "kind": "runeword",
+   "req_level": 27,
+   "base": "4-socket polearm, not magic (the guide: Partizan)",
+   "stats": [
+    "Level 12-17 Meditation Aura When Equipped",
+    "+35% Faster Cast Rate",
+    "+200-260% Enhanced Damage",
+    "+23% Better Chance of Getting Magic Items"
+   ],
+   "why": "The Starter merc's weapon (Insight Partizan): Meditation for mana.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Fortitude",
+   "slot": "merc_body",
+   "setup": "standard",
+   "kind": "runeword",
+   "req_level": 59,
+   "base": "4-socket body armor, not magic (the guide: Sacred Armor)",
+   "stats": [
+    "+300% Enhanced Damage",
+    "+200% Enhanced Defense",
+    "+25% Faster Cast Rate",
+    "+1-1.5 Life per character level",
+    "All Resistances +25-30",
+    "12% Damage Taken Goes To Mana",
+    "20% Chance to cast level 15 Chilling Armor when struck"
+   ],
+   "why": "Damage and resistances so the merc kills what is immune to the traps.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Andariel's Visage",
+   "slot": "merc_helm",
+   "setup": "standard",
+   "kind": "unique",
+   "req_level": 83,
+   "base": "Demonhead (102 Str)",
+   "stats": [
+    "+2 to All Skills",
+    "+20% Increased Attack Speed",
+    "8-10% Life Stolen per Hit",
+    "+25-30 to Strength",
+    "+100-150% Enhanced Defense",
+    "Poison Resist +70%",
+    "+10% to Maximum Poison Resist",
+    "Fire Resist -30%",
+    "15% Chance to cast level 15 Poison Nova when struck",
+    "Level 3 Venom (20 Charges)"
+   ],
+   "why": "+20% IAS and life leech: with Infinity and Fortitude the merc kills anything immune to the traps.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Crack of the Heavens",
+   "slot": "charm",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 75,
+   "base": "Grand Charm",
+   "stats": [
+    "Monster Lightning Immunity is Sundered",
+    "Lightning Resist -70-90%"
+   ],
+   "why": "Sunders lightning immunity: the traps hit every monster.",
+   "rank_in_slot": 1
+  },
+  {
+   "name": "Annihilus",
+   "slot": "charm",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 70,
+   "base": "Small Charm",
+   "stats": [
+    "+1 to All Skills",
+    "+10-20 to all Attributes",
+    "All Resistances +10-20",
+    "+5-10% to Experience Gained"
+   ],
+   "why": "+1 to All Skills, attributes, resistances.",
+   "rank_in_slot": 2
+  },
+  {
+   "name": "Hellfire Torch",
+   "slot": "charm",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 75,
+   "base": "Large Charm",
+   "stats": [
+    "+3 to one class's Skill Levels (rolled class)",
+    "+10-20 to all Attributes",
+    "All Resistances +10-20",
+    "+8 to Light Radius",
+    "5% Chance to cast level 10 Firestorm on striking",
+    "Level 30 Hydra (10 Charges)"
+   ],
+   "why": "+3 to Assassin skills (an assassin torch only).",
+   "rank_in_slot": 3
+  },
+  {
+   "name": "Gheed's Fortune",
+   "slot": "charm",
+   "setup": "alternative",
+   "kind": "unique",
+   "req_level": 62,
+   "base": "Grand Charm",
+   "stats": [
+    "20-40% Better Chance of Getting Magic Items",
+    "80-160% Extra Gold from Monsters",
+    "Reduces all Vendor Prices 10-15%"
+   ],
+   "why": "MF and gold.",
+   "rank_in_slot": 4
+  }
+ ],
+ "charms": [
+  {
+   "name": "Crack of the Heavens",
+   "unique": true,
+   "why": "Lightning sunder charm (level 75): lightning immunity is sundered so the traps hit everything."
+  },
+  {
+   "name": "Annihilus",
+   "unique": true
+  },
+  {
+   "name": "Hellfire Torch",
+   "unique": true,
+   "stats": [
+    {
+     "stat": "class_skills",
+     "min": 3
+    }
+   ],
+   "why": "Only an assassin Hellfire Torch (+3 Assassin skills) counts; another class's torch is a trade good."
+  },
+  {
+   "name": "Gheed's Fortune",
+   "unique": true
+  },
+  {
+   "name": "Traps skiller",
+   "size": "grand",
+   "count": 8,
+   "stats": [
+    {
+     "stat": "skill_tab",
+     "tab": "Traps",
+     "min": 1
+    }
+   ],
+   "why": "+1 to Traps (Entrapping): every sentry and Fire Blast; one with life (of Vita, 36+) is the one to aim for."
+  },
+  {
+   "name": "Fire resistance large charm",
+   "size": "large",
+   "count": 1,
+   "stats": [
+    {
+     "stat": "fire_res",
+     "min": 13
+    }
+   ],
+   "why": "Ruby Large Charm (13-15 fire resistance): the guide's resistance balance."
+  },
+  {
+   "name": "Resistance and life small charm",
+   "size": "small",
+   "count": 2,
+   "stats": [
+    {
+     "stat": "all_res",
+     "min": 3
+    },
+    {
+     "stat": "life",
+     "min": 16
+    }
+   ],
+   "why": "Shimmering Small Charm of Vita: All Resistances +3-5 and 16-20 life."
+  },
+  {
+   "name": "MF small charm",
+   "size": "small",
+   "count": 2,
+   "stats": [
+    {
+     "stat": "mf",
+     "min": 6
+    }
+   ],
+   "why": "Ruby / Sapphire Small Charm of Good Luck (6-7% MF with fire or cold resistance): the Magic Find setup."
+  }
+ ],
+ "recipes": [
+  {
+   "name": "Enigma",
+   "kind": "runeword",
+   "inputs": [
+    "Jah",
+    "Ith",
+    "Ber"
+   ],
+   "result": "Enigma (Body Armor)",
+   "req": {
+    "level": 65,
+    "sockets": 3,
+    "allowed_bases": [
+     "Body Armor"
+    ]
+   },
+   "notes": "The guide's base: Mage Plate (55 Str).",
+   "bases_in_guide": [
+    "Mage Plate"
+   ]
+  },
+  {
+   "name": "Infinity",
+   "kind": "runeword",
+   "inputs": [
+    "Ber",
+    "Mal",
+    "Ber",
+    "Ist"
+   ],
+   "result": "Infinity (Polearms / Spears)",
+   "req": {
+    "level": 63,
+    "sockets": 4,
+    "allowed_bases": [
+     "Polearms",
+     "Spears"
+    ]
+   },
+   "notes": "Merc weapon; an ethereal Thresher in the guide.",
+   "bases_in_guide": [
+    "Thresher"
+   ]
+  },
+  {
+   "name": "Fortitude",
+   "kind": "runeword",
+   "inputs": [
+    "El",
+    "Sol",
+    "Dol",
+    "Lo"
+   ],
+   "result": "Fortitude (Weapons / Body Armor)",
+   "req": {
+    "level": 59,
+    "sockets": 4,
+    "allowed_bases": [
+     "Body Armor"
+    ]
+   },
+   "notes": "Merc armor.",
+   "bases_in_guide": [
+    "Sacred Armor"
+   ]
+  },
+  {
+   "name": "Call to Arms",
+   "kind": "runeword",
+   "inputs": [
+    "Amn",
+    "Ral",
+    "Mal",
+    "Ist",
+    "Ohm"
+   ],
+   "result": "Call to Arms (Weapons)",
+   "req": {
+    "level": 57,
+    "sockets": 5,
+    "allowed_bases": [
+     "Weapons"
+    ]
+   },
+   "notes": "Swap weapon.",
+   "bases_in_guide": [
+    "Crystal Sword"
+   ]
+  },
+  {
+   "name": "Crescent Moon",
+   "kind": "runeword",
+   "inputs": [
+    "Shael",
+    "Um",
+    "Tir"
+   ],
+   "result": "Crescent Moon (Axes / Swords / Polearms)",
+   "req": {
+    "level": 47,
+    "sockets": 3,
+    "allowed_bases": [
+     "Axes",
+     "Swords",
+     "Polearms"
+    ]
+   },
+   "notes": "Swap weapon (the MIN-MAX tech); Phase Blade is its fastest base.",
+   "bases_in_guide": [
+    "Phase Blade"
+   ]
+  },
+  {
+   "name": "Spirit",
+   "kind": "runeword",
+   "inputs": [
+    "Tal",
+    "Thul",
+    "Ort",
+    "Amn"
+   ],
+   "result": "Spirit (Swords / Shields)",
+   "req": {
+    "level": 25,
+    "sockets": 4,
+    "allowed_bases": [
+     "Shields"
+    ]
+   },
+   "notes": "Spirit Monarch: the off-hand of the Call to Arms swap and the Magic Find setup's shield.",
+   "bases_in_guide": [
+    "Monarch"
+   ]
+  },
+  {
+   "name": "Larzuk socket quest: the claws",
+   "kind": "socket",
+   "quest": "Siege on Harrogath",
+   "inputs": [
+    "Cunning Greater Talons of Quickness (magic)"
+   ],
+   "result": "1 or 2 sockets (50/50 for a magic item), for Rainbow Facets",
+   "req": "Act 5 Siege on Harrogath reward (Nightmare or Hell)",
+   "notes": "The guide's use of the reward: 2 sockets in the shopped claws (Anya, Nightmare / Hell)."
+  },
+  {
+   "name": "Recharge Lower Resist / Teleport charges",
+   "kind": "cube",
+   "inputs": [
+    "1 Ort Rune",
+    "1 Chipped Gem (any)",
+    "the Wand of Lower Resistance or Battle Staff of Teleportation"
+   ],
+   "result": "the same item, repaired with its charges full",
+   "req": "Horadric Cube",
+   "notes": "The leveling guide's tip: keep a few Chipped Gems and Ort Runes in the stash; recharge the wand before the Ancients and Act bosses."
+  }
+ ],
+ "act_tips": [
+  {
+   "range": "lvl 38-45 (Nightmare Act 4 on, after the reset)",
+   "tips": [
+    "Reset at Akara at 38 before Act 4 Nightmare (the switch note's allocation).",
+    "5 Lightning Sentries on one spot, then 2-3 Death Sentries once the first monsters die; Cloak of Shadows / Mind Blast for crowd control; keep Burst of Speed up.",
+    "Lower Resist (the wand) on tanky and lightning-immune monsters until the first corpses; skip what Death Sentry can't kill (Teleport past the Maggot Lair and parts of Act 3).",
+    "Chaos Sanctuary: Grand Vizier of Chaos is always lightning immune; drag corpses onto immune seal bosses and blow them up, or reset the area.",
+    "The Ancients: drop 1-2 inventories of potions in the arena, recharge the wand, reset Ancients with Magic Resistant / Lightning Enchanted / Spectral Hit; kill Talic and Korlic first, fight Madawc around a pillar with Lower Resist."
+   ]
+  },
+  {
+   "range": "lvl 45-99 (Hell / endgame)",
+   "tips": [
+    "From 45: two Cunning Greater Talons of Quickness (+3 Traps) from Anya in Nightmare / Hell, socketed by Larzuk (50/50 for 2) with lightning Rainbow Facets.",
+    "Start runs with Battle Command twice and Battle Orders from Call to Arms, then the swap with the most +skills for Burst of Speed.",
+    "MIN-MAX: swap to Crescent Moon right after laying the Lightning Sentries and stay there until the traps are done.",
+    "Keep the merc close to the fight for Infinity's Conviction; Fire Blast on lightning and physical immunes; Fade instead of Burst of Speed to cap resistances."
+   ]
+  }
+ ]
+}

@@ -1,0 +1,51 @@
+# Farm list: gear to collect with any character for a planned build (agent-authored).
+# An entry is "found" while a copy is on the character currently played (inventory, cube,
+# personal stash, worn) and "done" once enough copies sit in the shared stash.
+# Runewords also mark their missing runes on the dashboard's rune list.
+# Hot-reloaded like the build files.
+# Optional per entry: merc = true (for the mercenary of the group's build: its merc_act,
+# Act 2 by default) and slot = "weapon" / "shield" /
+# "helm" / "body" / ...: they steer a runeword's natural-socket base hint; note = "..." is
+# shown with the entry.
+# kind = "rolled" is any item of its slot carrying every stat in needs (skill names, as an
+# oskill or as charges): done once one is in the shared stash, found while the character has
+# one (worn, inventory, cube, personal stash). An entry needing Teleport is hidden once
+# Enigma is held (Enigma gives Teleport).
+
+# The leveling stage's runewords and its two charge items (the guide shops both: a Battle Staff
+# of Teleportation from Ormus at 20-23, a Wand of Lower Resistance from Akara / Drognan at
+# 30-35); the Trapsin keeps the staff until Enigma and the wand until Infinity.
+[[farm]]
+for = "Fire Wake Assassin"
+items = [
+  { name = "Teleport staff", kind = "rolled", slot = "weapon", needs = ["Teleport"], note = "Battle Staff of Teleportation on the swap, until Enigma" },
+  { name = "Lower Resist wand", kind = "rolled", slot = "weapon", needs = ["Lower Resist"], note = "Wand of Lower Resistance on the swap: lightning immunes until Infinity" },
+  { name = "Stealth", kind = "runeword", slot = "body" },
+  { name = "Leaf", kind = "runeword", slot = "weapon" },
+  { name = "Ancients' Pledge", kind = "runeword", slot = "shield" },
+  { name = "Spirit", kind = "runeword", slot = "weapon" },
+  { name = "Lore", kind = "runeword", slot = "helm" },
+  { name = "Insight", kind = "runeword", merc = true, slot = "weapon" },
+]
+
+# The Trapsin's Standard setup (Maxroll's Lightning Sentry guide), farmed from the start: the
+# core pieces, the merc's, the swap and the lightning Rainbow Facets for the sockets. The two
+# Cunning Greater Talons of Quickness (+3 Traps claws) are magic: shopped from Anya, not listed.
+[[farm]]
+for = "Trapsin"
+items = [
+  { name = "Griffon's Eye", kind = "unique" },
+  { name = "Enigma", kind = "runeword", slot = "body" },
+  { name = "Magefist", kind = "unique" },
+  { name = "Arachnid Mesh", kind = "unique" },
+  { name = "Mara's Kaleidoscope", kind = "unique" },
+  { name = "The Stone of Jordan", kind = "unique", count = 2 },
+  { name = "Rainbow Facet", kind = "unique", count = 5, note = "lightning ones: 2 per claw, 1 in Griffon's Eye" },
+  { name = "Infinity", kind = "runeword", merc = true, slot = "weapon" },
+  { name = "Fortitude", kind = "runeword", merc = true, slot = "body" },
+  { name = "Andariel's Visage", kind = "unique", merc = true },
+  { name = "Call to Arms", kind = "runeword", slot = "weapon" },
+  { name = "Spirit", kind = "runeword", slot = "shield", note = "Spirit Monarch: the off-hand of the Call to Arms swap" },
+  { name = "Crescent Moon", kind = "runeword", slot = "weapon", note = "swap after laying traps" },
+  { name = "Aldur's Advance", kind = "set" },
+]

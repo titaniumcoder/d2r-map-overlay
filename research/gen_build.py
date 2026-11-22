@@ -6,9 +6,9 @@ Usage:
                                      [--prerequisites NEXT.json]
 
 SOURCE is a .source.json path or a bare stem (`summoner-druid`), which means
-playstyles/summoner-fury/builds/<stem>.source.json in the repo. OUT defaults to <stem>.toml in
-that same folder: the shipped playstyle (a copy in ~/.config/d2r-map-overlay/playstyle/builds/
-overrides it per file).
+playstyles/<playstyle>/builds/<stem>.source.json in the repo, <playstyle> being the stem's
+BUILDS `playstyle` (default `summoner-fury`). OUT defaults to <stem>.toml next to SOURCE: the
+shipped playstyle (a copy in ~/.config/d2r-map-overlay/playstyle/builds/ overrides it per file).
 
 Deterministic: the same inputs give the same file byte for byte, so it can be re-run whenever
 the research JSON changes. Per-build settings (display name, class, damages, stage chain)
@@ -101,11 +101,41 @@ BUILDS = {
         # handed"); the swap (Harmony) is out of form and keeps its bow.
         weapon_rule=dict(two_handed=True, melee=True),
     ),
+    # The trapsin playstyle (user request, 2026-11-22: "leveling as fire wake (ignore the first 13
+    # levels of the build, I do them with tristram runs) and then we just go to trapsin once we
+    # hit level 38 or so, nothing else"): Maxroll's Season 16 Assassin Leveling guide from level
+    # 13, then its Lightning Sentry endgame guide. No switch_requires: the level alone switches.
+    "fire-wake-assassin": dict(
+        name="Fire Wake Assassin", cls="assassin", damages=["fire"], default=True,
+        playstyle="trapsin", next="trapsin", switch_level=38, auto_switch=True,
+        notes="Fire Blast / Wake of Fire leveling (Maxroll Season 16 Assassin Leveling guide) from level 13: levels 1-13 come from Tristram runs, so the skill plan and gear start at 13 with the guide's points up to 13. Stealth, Leaf, then Spirit + Ancients' Pledge and Lore from Nightmare; a Battle Staff of Teleportation and a Wand of Lower Resistance on the swap. Skill reset into the Trapsin (next stage) at 38.",
+        respec_note=("at level 38 (the guide: \"The respec assumes that you are Level 38. This is the earliest Level at which you should do it\"; "
+                     "its summary says at the start of Act 4 Nightmare, from level 36): Akara's free reset into Lightning Sentry: "
+                     "Lightning Sentry 15, Charged Bolt Sentry 10, Death Sentry 9, Burst of Speed 3, Cloak of Shadows 1, Mind Blast 1 "
+                     "and the prerequisites Fire Blast, Shock Web, Psychic Hammer, Claw Mastery 1 each = 43 points (37 levels + 6 quest "
+                     "points: Normal Den of Evil, Radament, Izual, Nightmare Den of Evil, Radament). Keep Spirit, Ancients' Pledge, Lore, "
+                     "Stealth and both swap staves/wands"),
+    ),
+    "trapsin": dict(
+        name="Trapsin", cls="assassin", damages=["lightning", "fire"], playstyle="trapsin",
+        notes="Lightning Sentry / Death Sentry Assassin (Maxroll Season 16 endgame guide) from the skill reset at 38; standard = the guide's Standard setup (2x Cunning Greater Talons of Quickness with Rainbow Facets, Griffon's Eye, Enigma, Magefist, Arachnid Mesh, Mara's Kaleidoscope, 2x The Stone of Jordan; the Act 2 Holy Freeze merc with Infinity, Fortitude, Andariel's Visage), starter = the leveling gear she resets with (Spirit, Lore, Stealth, Insight on the merc); every other slot lists the guide's Gear Options as alternatives.",
+        # No weapon_rule: the trapsin keeps her off-hand (a second claw or a shield), so the rule
+        # that fits would be "one-handed", which WeaponRule can't say; two_handed would be wrong,
+        # and melee changes nothing for her weapon-slot runewords (none takes a bow).
+    ),
 }
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# The shipped playstyle's build folder: the default for a bare SOURCE stem and for OUT.
-BUILDS_DIR = os.path.normpath(os.path.join(HERE, "..", "playstyles", "summoner-fury", "builds"))
+# The playstyle folder of a build without a BUILDS `playstyle` key.
+DEFAULT_PLAYSTYLE = "summoner-fury"
+
+
+def builds_dir(stem):
+    """The build folder of the shipped playstyle a bare SOURCE stem belongs to."""
+    playstyle = BUILDS.get(stem, {}).get("playstyle", DEFAULT_PLAYSTYLE)
+    return os.path.normpath(os.path.join(HERE, "..", "playstyles", playstyle, "builds"))
+
+
 CLASS_IDS = {"amazon": 0, "sorceress": 1, "necromancer": 2, "paladin": 3, "barbarian": 4,
              "druid": 5, "assassin": 6, "warlock": 7}
 SLOTMAP = {"ring": "ring1"}
@@ -340,7 +370,7 @@ def keep_target(line):
 
 
 def targets_generic(d):
-    """Short target lines from a druid guide's `targets` (hardcore-only parts left out)."""
+    """Short target lines from a build source's `targets` (hardcore-only parts left out)."""
     t = d.get("targets") or {}
     out = []
     for key, v in t.items():
@@ -413,9 +443,9 @@ def main(argv):
         sys.exit(__doc__)
     src = args[0]
     if not src.endswith(".json"):
-        src = os.path.join(BUILDS_DIR, src + ".source.json")
+        src = os.path.join(builds_dir(src), src + ".source.json")
     stem = os.path.basename(src).removesuffix(".json").removesuffix(".source")
-    out = args[1] if len(args) == 2 else os.path.join(BUILDS_DIR, stem + ".toml")
+    out = args[1] if len(args) == 2 else os.path.join(os.path.dirname(os.path.abspath(src)), stem + ".toml")
     cfg = BUILDS[stem]
     d = json.load(open(src, encoding="utf-8"))
     known = class_skills(cfg["cls"])

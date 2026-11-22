@@ -1,0 +1,6 @@
+# The route's bosses: the farm list's "where:" line names those that drop a missing entry in
+# the played difficulty (besides the level-85 areas). Hot-reloaded; copy to
+# ~/.config/d2r-map-overlay/playstyle/route.toml to change it.
+# The leveling guide farms the Countess (Normal and Nightmare runes); the Trapsin clears the
+# Chaos Sanctuary (Diablo) and Baal's Throne well, and Andariel / Mephisto are quick act bosses.
+bosses = ["The Countess", "Andariel", "Mephisto", "Diablo", "Baal"]
