@@ -657,6 +657,7 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   is EMPTY (count 0) with its affixes in the next list (the reader must not stop at an empty list).
 - [x] Stat comparison ("▲ better" in the Vendor panel): implemented 2026-11-18; NOT yet verified live
   (store items' stat chains, player str/dex stats).
+- In game: the worthwhile store items in the UI-marks box (see "In-game UI marks").
 - [x] Vendor panel: implemented 2026-11-18; verified live the same day on Fara (A2): ~65 store items decoded to sensible magic names ("Bronze Double Axe of Maiming", "Helm of the Jackal", "Shimmering Large Shield of Deflecting"), store affix words sit at the same offsets as owned items.
 
 ## Build definitions and BiS selection (2026-11-17)
@@ -926,6 +927,32 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   terminate action) writes a byte to a socket pair the calloop loop watches; each byte toggles and
   logs `SIGUSR1: map hidden|shown`. Hotkey: `pkill -USR1 -x d2r-map-overlay` (comm is exactly the
   15-char name); suggested binding SUPER+CTRL+M (SUPER+SHIFT+M is Omarchy's Music), see README.
+
+## In-game UI marks (user decision 2026-11-22)
+- User: what helps while trading shows IN GAME, not on the dashboard ("I want to see it marked
+  in game somehow, not on the external webapp"). Vendor: both a frame in the vendor grid AND a
+  small text box listing the worthwhile items, no explanations ("just show it both so I can test
+  what I like more").
+- Layer: a second click-through layer surface (`d2r-ui-marks`) over the whole output (anchored
+  to all four edges, size from the compositor's configure, exclusive zone -1), so surface px are
+  screen px. Shown while there are marks, in towns too; hidden without focus or a game and by
+  SIGUSR1 together with the map. The overlay thread draws `ui_marks::UiMarks` itself at the
+  configured size (`Msg::UiMarks`; live sends it only when it changes).
+- `UiMarks` = `frames: Vec<(Rect, Rgba)>` (screen rectangles, 2 px outline) + `lines` (the text
+  box). Frames are empty until the grids are calibrated.
+- Vendor box (`ui_marks::vendor`, from the Vendor panel's `ShopNote`s): build pieces, "better"
+  than worn, runeword bases the builds want (green), then coin-tier valuables matches (gold: trade
+  S/A, e.g. +3 wands/scepters/orbs/daggers), one short line each (the game's name, "Nos" for a
+  socketed base), identical lines once, at most 8 with "+N more". A store item is judged as an
+  identified ground drop (`marks::shop_marks`: sockets from stat 194, its read stats). Dark box
+  `ui_marks::BOX_TOP` = 12 px below the top, centred: the vendor window is the left half, the
+  inventory the right. Position not yet checked live.
+- [x] Step 1: layer surface, vendor text box (2026-11-22). Not yet seen live.
+- [ ] Calibration screenshots (vendor window open, stash open, at the user's resolution) → tune
+  `BOX_TOP`; vendor grid cell rectangles → frames around the worthwhile store items (needs each
+  store item's grid x/y read from `ItemData`/the item path, not read yet).
+- [ ] Stash-open detection → stash grid frames: sell / move / keep per item (the stash plan's
+  actions), same layer.
 
 ## Permissions
 Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each release build the user runs
