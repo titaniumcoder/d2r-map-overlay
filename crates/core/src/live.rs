@@ -16,7 +16,7 @@ use crate::reader::{Attach, GameReader};
 use crate::session::Session;
 use ab_glyph::FontVec;
 
-use crate::{config, cows, game_file, info, journal, played, quest_log, render, web};
+use crate::{buff_strip, buffs, config, cows, game_file, info, journal, played, quest_log, render, web};
 
 const TICK: Duration = Duration::from_millis(200);
 const RETRY: Duration = Duration::from_secs(2);
@@ -251,6 +251,7 @@ fn follow_game<P: Playstyle>(
     // The game shows only the current difficulty's quests; this remembers the others.
     let mut quest_memory = quest_log::Memory::open(quest_log::default_path());
     let mut dedup = Dedup::default();
+    let mut strip = Strip::default();
     // The previous tick's wants, by player unit id: the drop marks are needed before the
     // session merge that the evaluation needs, so keep marks run one tick late.
     let mut wants = (None, P::Wants::default());
@@ -294,11 +295,17 @@ fn follow_game<P: Playstyle>(
                 saver.tick(&mut session, Instant::now());
                 publish_web(&snap, &*playstyle, &evaluation, w, quests);
                 record_stash_cache(&update, journal);
+                if let Some(msg) = strip.tick(Instant::now(), &snap.player, update.new_game, info::font()) {
+                    send(tx, msg)?;
+                }
                 if let Some(msg) = tick_msg(&mut dedup, snap, evaluation.guidance, (w, h), info::font()) {
                     send(tx, msg)?;
                 }
             }
             Err(e) => {
+                if let Some(msg) = strip.clear() {
+                    send(tx, msg)?;
+                }
                 if !reader.is_alive() {
                     cow_stats.flush();
                     return Ok(());
@@ -359,6 +366,49 @@ fn tick_msg(
     }
 }
 
+/// The timed-buff strip: the tracker and the entries on screen, so an unchanged strip isn't sent
+/// again.
+#[derive(Debug, Default)]
+struct Strip {
+    tracker: buffs::Tracker,
+    /// Text and running-out flag of each entry shown.
+    shown: Vec<(String, bool)>,
+}
+
+impl Strip {
+    fn tick(
+        &mut self,
+        now: Instant,
+        player: &game::Player,
+        new_game: bool,
+        font: Option<&FontVec>,
+    ) -> Option<Msg> {
+        if new_game {
+            self.tracker.new_game();
+        }
+        if let Some(states) = &player.states {
+            self.tracker.observe(now, states, player.newest_state.as_ref());
+        }
+        self.show(&self.tracker.entries(now), font)
+    }
+
+    /// Without a game nothing tells how a buff ended, so its clock is dropped unlearned.
+    fn clear(&mut self) -> Option<Msg> {
+        self.tracker.new_game();
+        self.show(&[], None)
+    }
+
+    /// `None` if `entries` look like the ones on screen.
+    fn show(&mut self, entries: &[buffs::Entry], font: Option<&FontVec>) -> Option<Msg> {
+        let look: Vec<(String, bool)> = entries.iter().map(|e| (e.text(), e.running_out())).collect();
+        if look == self.shown {
+            return None;
+        }
+        self.shown = look;
+        Some(Msg::Buffs(font.and_then(|f| buff_strip::render(entries, f))))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Hidden {
     Town,
@@ -414,6 +464,65 @@ mod tests {
             res_lightning: 10,
             res_poison: 75,
         }
+    }
+
+    #[test]
+    fn the_strip_is_sent_when_it_changes_and_cleared_without_a_game() -> Result<()> {
+        let mut player = fixture()?.player;
+        let t0 = Instant::now();
+        let mut strip = Strip::default();
+        let font = info::font();
+        assert!(
+            strip.tick(t0, &player, false, font).is_none(),
+            "no buffs, nothing sent"
+        );
+        player.states = Some(vec![137]);
+        assert!(matches!(
+            strip.tick(t0, &player, false, font),
+            Some(Msg::Buffs(_))
+        ));
+        assert!(
+            strip
+                .tick(t0 + Duration::from_millis(200), &player, false, font)
+                .is_none(),
+            "same second left"
+        );
+        assert!(matches!(
+            strip.tick(t0 + Duration::from_secs(1), &player, false, font),
+            Some(Msg::Buffs(_))
+        ));
+        player.states = None;
+        assert!(
+            strip
+                .tick(t0 + Duration::from_secs(1), &player, false, font)
+                .is_none(),
+            "an unread tick keeps the buffs"
+        );
+        assert!(matches!(strip.clear(), Some(Msg::Buffs(None))));
+        assert!(strip.clear().is_none(), "cleared once");
+        Ok(())
+    }
+
+    #[test]
+    fn a_new_game_drops_the_running_buffs_unlearned() -> Result<()> {
+        let mut player = fixture()?.player;
+        let t0 = Instant::now();
+        let mut strip = Strip::default();
+        player.states = Some(vec![32]);
+        assert!(strip.tick(t0, &player, false, None).is_some());
+        player.states = Some(Vec::new());
+        assert!(matches!(
+            strip.tick(t0 + Duration::from_secs(20), &player, true, None),
+            Some(Msg::Buffs(None))
+        ));
+        player.states = Some(vec![32]);
+        strip.tick(t0 + Duration::from_secs(30), &player, false, None);
+        assert_eq!(
+            strip.shown,
+            [("BO".to_owned(), false)],
+            "no length learned from the cut-short run"
+        );
+        Ok(())
     }
 
     #[test]
