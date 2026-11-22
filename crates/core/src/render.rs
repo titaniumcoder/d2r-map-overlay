@@ -12,7 +12,7 @@ use tiny_skia::{
 use crate::game::{Bounds, Monster, Preset, PresetKind, Room, RoomRect, Snapshot};
 use crate::guidance::Tier;
 use crate::guidance::{Action, Advice, Side};
-use crate::guidance::{Guidance, Mark, MarkKind, Marks};
+use crate::guidance::{Category, Guidance, Mark, MarkKind, Marks};
 use crate::items::{CharmSize, DropKind, GemColour};
 use crate::offsets::monster_data;
 use crate::{info, session, tombs, xp};
@@ -492,6 +492,16 @@ const FARM_STAR: f32 = 3.5;
 /// stroke and the star on it.
 const DROP_LABEL_PX: f32 = 11.0;
 const DROP_LABEL_CLEAR: f32 = 3.0;
+/// The lowest trade tier whose drops get the gold coin ([`high_value`]): worth a lot sold to
+/// other players (user request, 2026-11-22: "a gold symbol for something that has a high selling
+/// value"; there is no vendor price model, the valuables tier stands in for it).
+const COIN_MIN_TIER: Tier = Tier::A;
+/// The gold coin on a high-value drop's ring: radius in px, sitting on the ring at its upper
+/// left (the farm star sits at the upper right), gold with a darker rim.
+const COIN_RADIUS: f32 = 3.0;
+const COIN_GOLD: Rgba = [255, 205, 40, 255];
+const COIN_RIM: Rgba = [140, 90, 0, 255];
+const COIN_RIM_WIDTH: f32 = 1.5;
 /// Live elites: the dot and the superunique and boss skulls.
 const ELITE_RED: Rgba = [230, 30, 30, 255];
 /// Skull icons: the dark outline is stroked under the fill, so about 1 px of it shows around the
@@ -595,12 +605,14 @@ pub enum Marker {
     /// An item on the ground worth picking up.
     Drop(DropKind),
     /// A mark around the drop marker of `kind` ([`crate::guidance::Mark`]): a ring in the
-    /// colour of its [`RingLook`], dashed when the match is uncertain. Drawn after all drop
-    /// markers, so no drop hides a ring.
+    /// colour of its [`RingLook`], dashed when the match is uncertain, with a gold coin on it
+    /// when the drop sells for a lot ([`high_value`]). Drawn after all drop markers, so no drop
+    /// hides a ring.
     Ring {
         kind: DropKind,
         look: RingLook,
         uncertain: bool,
+        coin: bool,
     },
 }
 
@@ -1142,6 +1154,7 @@ fn markers_with(snap: &Snapshot, marks: &Marks, rules: &[LandmarkRule]) -> Vec<(
                 kind: d.kind,
                 look: RingLook::of(mark),
                 uncertain: mark.uncertain,
+                coin: high_value(mark),
             };
             Some((ring, f64::from(d.x), f64::from(d.y)))
         }))
@@ -1319,11 +1332,8 @@ fn render_rules(
             draw_suspected(&mut pm, font, &dot, cx, cy);
         } else if shape == Shape::Worm || marker == Marker::Orifice {
             draw_figure(&mut pm, marker, &dot, colour, (cx, cy, size));
-        } else if let Marker::Ring { look, uncertain, .. } = marker {
-            draw_ring(&mut pm, &dot, colour, uncertain);
-            if look == RingLook::Farm {
-                draw_farm_star(&mut pm, (cx, cy, size), colour);
-            }
+        } else if let Marker::Ring { .. } = marker {
+            draw_mark_ring(&mut pm, marker, &dot, (cx, cy, size));
         } else if marker == Marker::Well {
             draw_well(&mut pm, &dot, colour);
         } else if let Marker::Shrine(_) = marker {
@@ -1438,17 +1448,11 @@ fn drop_tags<'a>(view: View, snap: &Snapshot, marks: &'a Marks) -> Vec<DropTag<'
         .iter()
         .filter_map(|d| {
             let mark = marks.get(&d.id).filter(|m| !m.label.is_empty())?;
-            let look = RingLook::of(mark);
-            let ring = Marker::Ring {
-                kind: d.kind,
-                look,
-                uncertain: mark.uncertain,
-            };
             Some(DropTag {
                 text: &mark.label,
-                look,
+                look: RingLook::of(mark),
                 at: view.to_screen(f64::from(d.x), f64::from(d.y)),
-                clear: ring.style().1 + DROP_LABEL_CLEAR,
+                clear: Marker::Drop(d.kind).style().1 + RING_GAP + DROP_LABEL_CLEAR,
             })
         })
         .collect();
@@ -1737,6 +1741,49 @@ fn draw_farm_star(pm: &mut Pixmap, (cx, cy, size): (f32, f32, f32), colour: Rgba
         None,
     );
     solid(pm, &star, colour);
+}
+
+/// A drop's mark: the `ring` ([`draw_ring`]) along `circle` of radius `size` around (`cx`,
+/// `cy`), with the farm star and the gold coin on it where they apply.
+fn draw_mark_ring(pm: &mut Pixmap, ring: Marker, circle: &Path, (cx, cy, size): (f32, f32, f32)) {
+    let Marker::Ring {
+        look,
+        uncertain,
+        coin,
+        ..
+    } = ring
+    else {
+        return;
+    };
+    let colour = look.colour();
+    draw_ring(pm, circle, colour, uncertain);
+    if look == RingLook::Farm {
+        draw_farm_star(pm, (cx, cy, size), colour);
+    }
+    if coin {
+        draw_coin(pm, (cx, cy, size));
+    }
+}
+
+/// Whether a marked drop sells for a lot to other players: a trade-category valuables match of
+/// at least [`COIN_MIN_TIER`] (a twink base is for the player's own characters).
+fn high_value(mark: &Mark) -> bool {
+    matches!(mark.trade, Some((tier, Category::Trade)) if tier >= COIN_MIN_TIER)
+}
+
+/// The gold coin on the ring of radius `size` around (`cx`, `cy`), at its upper left: a gold
+/// disc with a darker rim.
+fn draw_coin(pm: &mut Pixmap, (cx, cy, size): (f32, f32, f32)) {
+    let at = size * std::f32::consts::FRAC_1_SQRT_2;
+    let Some(coin) = PathBuilder::from_circle(cx - at, cy - at, COIN_RADIUS) else {
+        return;
+    };
+    solid(pm, &coin, COIN_GOLD);
+    let rim = Stroke {
+        width: COIN_RIM_WIDTH,
+        ..Stroke::default()
+    };
+    pm.stroke_path(&coin, &paint(COIN_RIM), &rim, Transform::identity(), None);
 }
 
 /// A well: the hollow `circle` in `colour` on a wider dark ring, so it reads on any background.
@@ -2925,7 +2972,8 @@ mod tests {
                 Marker::Ring {
                     kind: DropKind::Base,
                     look: RingLook::Trade(Tier::A),
-                    uncertain: false
+                    uncertain: false,
+                    coin: true,
                 },
             ]
         );
@@ -2970,7 +3018,8 @@ mod tests {
             let at = v.to_screen(x, 30.0);
             let radius = Marker::Drop(kind).style().1 + RING_GAP;
             let hits = ring_hits(&pm, at, radius, colour, 72)?;
-            assert!(hits >= 68, "solid {colour:?} ring at x {x}: {hits}/72");
+            // S and A rings carry the gold coin over about an eighth of them.
+            assert!(hits >= 58, "solid {colour:?} ring at x {x}: {hits}/72");
             // Inside the gap between marker and ring: not ring-coloured.
             let inside = ring_hits(&pm, at, radius - 2.5, colour, 72)?;
             assert!(inside <= 4, "ring colour inside the ring at x {x}: {inside}");
@@ -3017,6 +3066,50 @@ mod tests {
             Marker::Drop(DropKind::Set).style().0,
             "apart from set diamonds"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn high_value_trade_rings_carry_a_gold_coin() -> Result<()> {
+        let mut snap = empty_snapshot(5, 115);
+        snap.level.rooms = vec![room(0, 0, false), room(60, 0, true)];
+        let mut twink = highlighted(DropKind::Base, 140, RingLook::Trade(Tier::S), false);
+        twink.1.1.trade = Some((Tier::S, Category::Twink));
+        let marks: Marks;
+        (snap.drops, marks) = [
+            highlighted(DropKind::Unique, 20, RingLook::Trade(Tier::S), false),
+            highlighted(DropKind::Base, 60, RingLook::Trade(Tier::A), true),
+            highlighted(DropKind::Base, 100, RingLook::Trade(Tier::B), false),
+            twink,
+        ]
+        .into_iter()
+        .unzip();
+        let (w, h) = (400, 400);
+        let guidance = Guidance {
+            marks,
+            ..Guidance::default()
+        };
+        let pm = render_with(&snap, &guidance, w, h, None)?;
+        let v = View::fit(level_bounds(&snap), w, h);
+        for (x, kind, coin) in [
+            (20.0, DropKind::Unique, true),
+            (60.0, DropKind::Base, true),
+            (100.0, DropKind::Base, false),
+            (140.0, DropKind::Base, false),
+        ] {
+            let at = v.to_screen(x, 30.0);
+            let d = (Marker::Drop(kind).style().1 + RING_GAP) * std::f32::consts::FRAC_1_SQRT_2;
+            let upper_left = (at.0 - d, at.1 - d);
+            // The rim tells the coin apart from the B ring's yellow, which passes there too.
+            let rim = ring_hits(&pm, upper_left, COIN_RADIUS, COIN_RIM, 24)?;
+            if coin {
+                let gold = ring_hits(&pm, upper_left, 1.0, COIN_GOLD, 12)?;
+                assert!(gold >= 10, "gold coin at x {x}: {gold}/12");
+                assert!(rim >= 18, "darker rim at x {x}: {rim}/24");
+            } else {
+                assert!(rim <= 2, "no coin at x {x}: {rim}/24 rim");
+            }
+        }
         Ok(())
     }
 
