@@ -14,6 +14,7 @@ use crate::overlay::Msg;
 use crate::playstyle::{EvaluationOf, Files, Playstyle};
 use crate::reader::{Attach, GameReader};
 use crate::session::Session;
+use crate::ui_marks::{self, UiMarks};
 use ab_glyph::FontVec;
 
 use crate::{config, cows, game_file, info, journal, played, render, web};
@@ -83,7 +84,10 @@ pub fn run<P: Playstyle + 'static>(
         // `follow_game` reloads on its own; resync so the same change isn't reloaded twice.
         watched = Watched::now(config_path.as_deref(), files);
         web::clear_live();
-        if follow.and_then(|()| send(tx, Msg::Hide)).is_err() {
+        let hidden = follow
+            .and_then(|()| send(tx, Msg::Hide))
+            .and_then(|()| send(tx, Msg::UiMarks(UiMarks::default())));
+        if hidden.is_err() {
             return;
         }
         eprintln!("D2R (pid {pid}) exited");
@@ -164,14 +168,15 @@ fn reload_config(config: &mut config::Config, path: &Path) {
     }
 }
 
-/// Publishes the dashboard JSON and the gear state the config page annotates from.
+/// Publishes the dashboard JSON and the gear state the config page annotates from; returns the
+/// in-game UI marks, which share the Vendor panel's notes.
 fn publish_web<'a, P: Playstyle>(
     snap: &game::Snapshot,
     playstyle: &'a P,
     evaluation: &'a EvaluationOf<'_, P>,
     width: u32,
     quests: &[u16],
-) {
+) -> UiMarks {
     let blocks = render::text_blocks(snap, &evaluation.guidance, width, info::font());
     web::publish_gear(web::GearInfo {
         worn: game::worn_names(&snap.equipped_items),
@@ -180,7 +185,7 @@ fn publish_web<'a, P: Playstyle>(
         equipped: snap.equipped.clone(),
         merc_equipped: snap.merc_equipped.clone(),
     });
-    publish_dashboard(snap, playstyle, evaluation, &blocks, quests);
+    publish_dashboard(snap, playstyle, evaluation, &blocks, quests)
 }
 
 fn publish_dashboard<'a, P: Playstyle>(
@@ -189,7 +194,7 @@ fn publish_dashboard<'a, P: Playstyle>(
     evaluation: &'a EvaluationOf<'_, P>,
     blocks: &render::TextBlocks,
     quests: &[u16],
-) {
+) -> UiMarks {
     let info = web::LiveInfo {
         player_name: &snap.player.name,
         class: snap.player.class,
@@ -216,7 +221,13 @@ fn publish_dashboard<'a, P: Playstyle>(
         marks: &evaluation.guidance.marks,
         updated_at: now_secs(),
     };
-    web::publish_live(web::live_json(&info, playstyle.panels(evaluation, &info)));
+    let panels = playstyle.panels(evaluation, &info);
+    let marks = snap
+        .shop
+        .as_ref()
+        .map_or_else(UiMarks::default, |shop| ui_marks::vendor(shop, &panels.shop));
+    web::publish_live(web::live_json(&info, panels));
+    marks
 }
 
 /// Snapshots at [`TICK`] until the process exits; `Err` if the UI is gone.
@@ -249,6 +260,7 @@ fn follow_game<P: Playstyle>(
             .map_or_else(played::Played::new, |dir| played::seed_from_saves(&dir))
     });
     let mut dedup = Dedup::default();
+    let mut shown_marks = UiMarks::default();
     // The previous tick's wants, by player unit id: the drop marks are needed before the
     // session merge that the evaluation needs, so keep marks run one tick late.
     let mut wants = (None, P::Wants::default());
@@ -288,7 +300,10 @@ fn follow_game<P: Playstyle>(
                 cow_stats.record(&update, session.cow_kills());
                 saver.tick(&mut session, Instant::now());
                 // The panels judge the trade window's items by the wants too.
-                publish_web(&snap, &*playstyle, &evaluation, w, quests);
+                let marks = publish_web(&snap, &*playstyle, &evaluation, w, quests);
+                if let Some(msg) = marks_msg(&mut shown_marks, marks) {
+                    send(tx, msg)?;
+                }
                 wants = (Some(snap.player.id), std::mem::take(&mut evaluation.wants));
                 record_stash_cache(&update, journal);
                 if let Some(msg) = tick_msg(&mut dedup, snap, evaluation.guidance, (w, h), info::font()) {
@@ -302,6 +317,9 @@ fn follow_game<P: Playstyle>(
                 }
                 web::clear_live();
                 reader.forget_quests();
+                if let Some(msg) = marks_msg(&mut shown_marks, UiMarks::default()) {
+                    send(tx, msg)?;
+                }
                 if dedup.hide(Hidden::NoGame) {
                     eprintln!("no game state (menu or loading?): {e:#}");
                     send(tx, Msg::Hide)?;
@@ -354,6 +372,15 @@ fn tick_msg(
             None
         }
     }
+}
+
+/// `None` if `marks` are the ones on screen.
+fn marks_msg(shown: &mut UiMarks, marks: UiMarks) -> Option<Msg> {
+    if *shown == marks {
+        return None;
+    }
+    *shown = marks.clone();
+    Some(Msg::UiMarks(marks))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -411,6 +438,28 @@ mod tests {
             res_lightning: 10,
             res_poison: 75,
         }
+    }
+
+    #[test]
+    fn ui_marks_are_sent_when_they_change() {
+        let mut shown = UiMarks::default();
+        assert!(
+            marks_msg(&mut shown, UiMarks::default()).is_none(),
+            "nothing shown, nothing sent"
+        );
+        let wand = UiMarks {
+            frames: Vec::new(),
+            lines: vec![ui_marks::Line {
+                text: "Wand".into(),
+                colour: ui_marks::MONEY,
+            }],
+        };
+        assert!(matches!(marks_msg(&mut shown, wand.clone()), Some(Msg::UiMarks(m)) if m == wand));
+        assert!(marks_msg(&mut shown, wand).is_none(), "the same window again");
+        assert!(
+            matches!(marks_msg(&mut shown, UiMarks::default()), Some(Msg::UiMarks(m)) if m.is_empty()),
+            "the window closed"
+        );
     }
 
     #[test]
