@@ -1,57 +1,5 @@
-//! Where each of the player's items belongs (user rule, 2026-11-20): shared-stash pages 1–2
-//! hold what the player keeps for their own builds, pages 3–4 what is kept for trading, page 5
-//! is the player's own "ignore page" ([`IGNORED_PAGE`]), and the rest is sold or given away.
-//! Playstyle logic (`PLAN.md`, plugin refactor step 5).
-//!
-//! The items judged are the inventory, cube and personal stash ([`Snapshot::owned_items`]) and
-//! the shared stash's normal pages 1–4 ([`Snapshot::stash`], session-cached); the gems / runes /
-//! materials tab and page 5 are left alone (page 5's items get no verdict, nothing is moved
-//! there, but they still count as held: a runeword there drops its base need). Each item gets
-//! one [`Action`]:
-//! - **Keep · own**: a piece of the active build or a later stage (`BiS` slots, extras,
-//!   `switch_requires`) or of the farm list, as many copies as needed beyond the worn ones;
-//!   and one white base per runeword need (the runeword's base type, exactly its socket count,
-//!   usable by the wearer: the player class or the mercenary of the build's act, one-handed
-//!   where the wearer has only one hand free), the best one held
-//!   ([`base_rank`]: damage or defense first). Fine on pages 1–2 and in the personal stash;
-//!   in the inventory or cube it is a Move to 1–2 (user rule, 2026-11-20).
-//! - **Keep · trade**: what the valuables rules rate S or A ([`valuables::keep_tiers`]): trade
-//!   goods, valuable uniques and sets, good bases; but a white base of a twink A rule only as a
-//!   base need (own), else it is sold ([`trade_worthy`]). A base that is trade-worthy goes to
-//!   trade, never own. Belongs on pages 3–4.
-//! - **Move**: a keeper in the wrong place: an own item on pages 3–4, in the inventory or in the
-//!   cube; a trade item anywhere but pages 3–4. The dashboard shows the place in red.
-//! - **Sell**: a white base nobody needs (another copy of an own-use base, a worse base for a
-//!   runeword whose better base is held, a plain base on a trade page) and a unique or set no rule wants ([`valuables::verdict`]).
-//! - **Give away**: a unique or set only a B rule wants, and the extra copies of a keep-one
-//!   item (Sigon's pieces).
-//!
-//! Magic, rare and crafted items (jewels and charms too; user request, 2026-11-20) go to
-//! trade when a rule rates them so; else they are scored for the build ([`crate::gear_score`],
-//! [`Scoring`]): kept for own use when unidentified (not judgeable yet), when they score at
-//! least [`NEAR_WORN`] of what is worn in their slot, or when their affixes alone are worth
-//! [`NOTABLE`] (skills, FCR, resistances …); a charm or jewel when it scores at all. The
-//! mercenary's gear has no stats in the snapshot, so a base it can wear (helm, body, its act's
-//! weapon) that fails the player's test is kept unscored. The rest is sold, with the reason.
-//! Two hard rules come first (user rules, 2026-11-20): a weapon whose type no build of the
-//! stage chain uses ([`build_weapon_types`]: axes, daggers, javelins, claws, orbs … for the
-//! druid) is sold as "not a build weapon", identified or not (the merc's weapons excepted); identified boots without faster run/walk are sold as "no run speed".
-//! Right after the weapon-type rule (and before the trade rules): an identified magic / rare /
-//! crafted item giving Teleport (oskill or charges) is Keep · own with the reason "Teleport"
-//! while the player has no Enigma of its own (user, 2026-11-20; [`keeps_teleport`],
-//! [`gear_score::teleport_wanted`]); with one it is scored like any other. A Teleport weapon
-//! of a type no build uses is still sold as "not a build weapon".
-//! On the map nothing changes: a ground drop's stats aren't read before pickup.
-//! **Stow** (user rule, 2026-11-22): D2R's stash window has its own Gems, Materials and Runes
-//! tabs, and the game sorts every stackable into one by type ([`stash::tab_of`]): gems and
-//! skulls, runes, and the materials (uber keys, organs, essences, token, Standard of Heroes,
-//! statues, worldstone shards, Colossal Jewel upgrade materials, rejuvenation potions). Such an
-//! item anywhere else (inventory, cube, personal stash, pages 1–4) is moved to its tab, before
-//! any other rule: never to a trade page, never sold. Rejuvenation potions in the inventory
-//! stay (they are drunk from there). What already sits in those tabs is not judged; it counts
-//! as held (the recipes' runes and gems, `web::recipes::materials_of`).
-//! Charms in the inventory (they work there), finished runewords that aren't build pieces,
-//! quest items and anything else no rule speaks about get no action.
+//! Keep / move / stow / sell / give-away verdicts for the player's items: shared pages 1–2 are
+//! own, 3–4 trade, 5 ignored. The rules are in `PLAN.md` ("Item places: sell / move / keep").
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -59,7 +7,7 @@ use std::collections::BTreeMap;
 pub use d2r_core::guidance::{Action, Advice, Side, Spot};
 
 use crate::config::{Bis, Build};
-use crate::config::{FarmKind, Settings};
+use crate::config::{FarmGroup, FarmKind, Settings};
 use crate::gear_score::{self, Piece, Profile};
 use crate::valuables::{self, Tier, Verdict};
 use crate::web::farm::{FarmStatus, farm_status};
@@ -71,14 +19,13 @@ use d2r_core::names::same_name;
 use d2r_core::offsets::item_data;
 use d2r_core::runewords_data::{self, Runeword};
 use d2r_core::socket_bases::{self, MercAct, Wearer};
-use d2r_core::stash::{self, StashTab, TabKind};
+use d2r_core::stash::{self, Holdings, StashTab, TabKind};
 
 /// The last shared-stash page for the player's own items; the pages after it are for trade.
 const LAST_OWN_PAGE: u8 = 2;
 
-/// The shared-stash page the plan ignores (user rule, 2026-11-20: "things i keep around for
-/// stupidity"): its items get no verdict and nothing is moved there. They still count as held
-/// ([`Snapshot::holdings`]), so a runeword there still drops its base need.
+/// The player's "ignore page": its items get no verdict and nothing moves there, but they still
+/// count as held ([`Snapshot::holdings`]).
 const IGNORED_PAGE: u8 = 5;
 
 /// The side a shared page is for; `None` on the character and on the ignored page.
@@ -95,23 +42,22 @@ const fn page_side(spot: Spot) -> Option<Side> {
 pub struct Held {
     pub item: ItemDrop,
     pub spot: Spot,
-    /// Unique/set name, runeword name (shared pages only: the reader names those from their
-    /// runes) or base name with `eth` and sockets ([`valuables::display_name`]).
     pub name: String,
 }
 
-/// The items of `snap` the plan judges: the inventory, cube and personal-stash items of
-/// [`Snapshot::owned_items`] and every item on the shared stash's normal pages
-/// ([`Snapshot::stash`], which the session keeps after the tab units vanish; the shared items
-/// of `owned_items` are only the live ones and carry no page). The materials tab is left out.
+/// The items of `snap` the plan judges: carried and personal-stash items, and every item on the
+/// shared stash's normal pages (session-cached: the live shared items carry no page).
 #[must_use]
 pub fn held(snap: &Snapshot) -> Vec<Held> {
     held_from(&snap.owned_items, &snap.stash)
 }
 
-/// [`held`] over the owned items and the shared-stash tabs.
 fn held_from(owned: &[(ItemDrop, Place)], tabs: &[StashTab]) -> Vec<Held> {
-    let carried = owned.iter().filter_map(|(item, place)| {
+    carried(owned).chain(on_pages(tabs)).collect()
+}
+
+fn carried(owned: &[(ItemDrop, Place)]) -> impl Iterator<Item = Held> + '_ {
+    owned.iter().filter_map(|(item, place)| {
         let spot = match place {
             Place::Inventory => Spot::Inventory,
             Place::Cube => Spot::Cube,
@@ -123,9 +69,11 @@ fn held_from(owned: &[(ItemDrop, Place)], tabs: &[StashTab]) -> Vec<Held> {
             spot,
             name: label(item, valuables::display_name(item)),
         })
-    });
-    let shared = tabs
-        .iter()
+    })
+}
+
+fn on_pages(tabs: &[StashTab]) -> impl Iterator<Item = Held> + '_ {
+    tabs.iter()
         .filter_map(|tab| match tab.kind {
             TabKind::Page(n) => Some((n, &tab.items)),
             TabKind::Materials => None,
@@ -140,8 +88,7 @@ fn held_from(owned: &[(ItemDrop, Place)], tabs: &[StashTab]) -> Vec<Held> {
                     name,
                 }
             })
-        });
-    carried.chain(shared).collect()
+        })
 }
 
 /// `name` with the quality in front for a magic, rare or crafted item ("Rare Ring"; their
@@ -156,19 +103,48 @@ fn label(item: &ItemDrop, name: String) -> String {
     format!("{quality} {name}")
 }
 
-/// What the magic / rare scoring needs: the build's [`Profile`], the player's worn items
-/// `(body slot, code, stats)` and the weapon types the builds use ([`build_weapon_types`]).
+/// What the magic / rare scoring needs.
 #[derive(Debug, Clone, Default)]
 pub struct Scoring {
     pub profile: Profile,
+    /// `(body slot, code, stats)` of each worn item.
     pub worn: Vec<(u8, Option<String>, Vec<ItemStat>)>,
-    /// items.txt weapon types (`swor`, `staf`, …); empty = no builds known, every type judged.
+    /// items.txt weapon types the builds use ([`build_weapon_types`]); empty: every type passes.
     pub weapon_types: Vec<&'static str>,
-    /// The mercenary acts of the chain's builds ([`Build::merc_acts`]); empty = Act 2.
+    /// The mercenary acts of the chain's builds; empty means Act 2.
     pub merc_acts: Vec<MercAct>,
 }
 
 impl Scoring {
+    /// The scoring for `snap`'s character and the builds of the stage `chain`
+    /// ([`Settings::stage_chain`]). Level, strength and dexterity are left out: keeping an item
+    /// doesn't need it wearable today.
+    #[must_use]
+    pub fn new(snap: &Snapshot, config: &Settings, chain: &[String]) -> Self {
+        let class = snap.player.class;
+        let builds: Vec<&Build> = chain_builds(config, chain).collect();
+        let weapon = worn_weapon_kind(snap);
+        Self {
+            profile: Profile {
+                class,
+                level: None,
+                strength: None,
+                dexterity: None,
+                skills: planned_skills(snap, &builds, class),
+                weapon,
+                caster: gear_score::is_caster(class, weapon),
+                teleport: gear_score::teleport_wanted(&snap.holdings()),
+            },
+            worn: snap
+                .equipped_items
+                .iter()
+                .map(|e| (e.body, e.code.clone(), e.stats.clone()))
+                .collect(),
+            weapon_types: build_weapon_types(builds.iter().copied(), class),
+            merc_acts: merc_acts_of(&builds),
+        }
+    }
+
     /// Whether a mercenary of the chain could wear base `code` ([`socket_bases::merc_wears`]).
     fn merc_wears(&self, code: &str) -> bool {
         if self.merc_acts.is_empty() {
@@ -178,50 +154,79 @@ impl Scoring {
             .iter()
             .any(|&act| socket_bases::merc_wears(code, act))
     }
+
+    fn worn_pieces(&self) -> Vec<(u8, Piece<'_>)> {
+        self.worn
+            .iter()
+            .map(|(body, code, stats)| {
+                (
+                    *body,
+                    Piece {
+                        code: code.as_deref(),
+                        stats,
+                    },
+                )
+            })
+            .collect()
+    }
 }
 
-/// The items.txt types of the weapons `builds` use (user rule, 2026-11-20: "druids barely use
-/// javelins"): the weapon-slot bases of every piece in a weapon, swap or offhand slot and of
-/// the single-item `switch_requires` groups. A unique or set piece gives its own base's type; a
-/// runeword every weapon base that can carry it for the build's class (`class` when the build
-/// names none, [`socket_bases::carries`]). A `switch_requires` group with alternatives counts
-/// not at all: its runewords (Breath of the Dying, Hustle, Eternity …) allow almost any weapon,
-/// and its uniques (Rune Master, The Jade Tan Do, Tomb Reaver) are wanted by name, not their
-/// base type (user rule, 2026-11-20: "a rare axe or dagger is useless to this druid").
-/// Mercenary slots are left out: its weapons have their own rule ([`socket_bases::merc_wears`]).
-/// A runeword in a weapon or swap slot that no weapon base can carry for the class (an
-/// unknown class, a runeword of another class's weapons) leaves the set incomplete: the rule
-/// is off then (empty), rather than selling the weapons that piece stands for.
+fn build_def<'a>(config: &'a Settings, name: &str) -> Option<&'a Build> {
+    config.build_defs.get(&name.to_lowercase())
+}
+
+fn chain_builds<'a>(config: &'a Settings, chain: &'a [String]) -> impl Iterator<Item = &'a Build> {
+    chain.iter().filter_map(|name| build_def(config, name))
+}
+
+fn worn_weapon_kind(snap: &Snapshot) -> Option<&'static str> {
+    snap.equipped_items
+        .iter()
+        .find(|e| e.body == 4)
+        .and_then(|e| d2r_core::bases_data::base(e.code.as_deref()?))
+        .map(|b| b.kind)
+}
+
+/// The character's allocated skills plus every skill the `builds` plan for `class`.
+fn planned_skills(snap: &Snapshot, builds: &[&Build], class: u32) -> Vec<u16> {
+    let mut skills: Vec<u16> = snap.skills.points.iter().map(|&(id, _)| id).collect();
+    for target in builds.iter().flat_map(|b| &b.skill_plan) {
+        let planned = d2r_core::skills_data::SKILLS
+            .iter()
+            .find(|s| u32::from(s.class) == class && same_name(s.name, &target.skill));
+        if let Some(s) = planned
+            && !skills.contains(&s.id)
+        {
+            skills.push(s.id);
+        }
+    }
+    skills
+}
+
+fn merc_acts_of(builds: &[&Build]) -> Vec<MercAct> {
+    let mut acts: Vec<MercAct> = Vec::new();
+    for &act in builds.iter().flat_map(|b| &b.merc_acts) {
+        if !acts.contains(&act) {
+            acts.push(act);
+        }
+    }
+    acts
+}
+
+/// The items.txt types of the weapons `builds` use (a unique or set piece: its base; a
+/// runeword: every weapon base the class can carry it in). Empty, so the rule is off, when a
+/// weapon or swap runeword has no such base: a partial set would sell legitimate weapons.
 fn build_weapon_types<'a>(builds: impl Iterator<Item = &'a Build>, class: u32) -> Vec<&'static str> {
     let mut types: Vec<&'static str> = Vec::new();
     for build in builds {
         let wearer = Wearer::Player(build.class.unwrap_or(class));
-        // (piece, in the weapon or swap slot): only there must a runeword have carriers.
-        let held = build
-            .slots
-            .iter()
-            .filter_map(|(slot, pieces)| match slot_body(slot) {
-                Some(body @ (4 | 5)) => Some((body == 4, pieces)),
-                _ => None,
-            })
-            .flat_map(|(weapon, pieces)| pieces.iter().map(move |p| (p, weapon)));
-        let switch = build
-            .switch_requires
-            .iter()
-            .filter(|g| g.any.len() == 1)
-            .flat_map(|g| &g.any)
-            .map(|p| (p, false));
-        for (entry, weapon_slot) in held.chain(switch) {
+        for (entry, weapon_slot) in weapon_type_pieces(build) {
             let name = piece_name(entry);
-            let carriers = |word| {
-                d2r_core::bases_data::SOCKETABLE
-                    .iter()
-                    .map(|row| row.0)
-                    .filter(|code| socket_bases::carries(word, code, wearer, Some(4)))
-                    .collect()
-            };
             let word = runewords_data::lookup(name);
-            let codes: Vec<&str> = word.map_or_else(|| d2r_core::names::named_base_codes(name), carriers);
+            let codes = word.map_or_else(
+                || d2r_core::names::named_base_codes(name),
+                |word| weapon_carriers(word, wearer),
+            );
             if weapon_slot && word.is_some() && codes.is_empty() {
                 return Vec::new();
             }
@@ -236,65 +241,34 @@ fn build_weapon_types<'a>(builds: impl Iterator<Item = &'a Build>, class: u32) -
     types
 }
 
-impl Scoring {
-    /// The scoring for `snap`'s character: its class, its allocated skills plus the skill plans
-    /// of every build in the stage `chain` (by name, [`Settings::stage_chain`]), the worn
-    /// weapon's kind, the chain's weapon types ([`build_weapon_types`]). Level, strength and dexterity are left out: keeping an item doesn't
-    /// need it wearable today.
-    #[must_use]
-    pub fn new(snap: &Snapshot, config: &Settings, chain: &[String]) -> Self {
-        let class = snap.player.class;
-        let mut skills: Vec<u16> = snap.skills.points.iter().map(|&(id, _)| id).collect();
-        let builds = || {
-            chain
-                .iter()
-                .filter_map(|name| config.build_defs.get(&name.to_lowercase()))
-        };
-        let plans = builds().flat_map(|b| &b.skill_plan);
-        for target in plans {
-            let planned = d2r_core::skills_data::SKILLS
-                .iter()
-                .find(|s| u32::from(s.class) == class && same_name(s.name, &target.skill));
-            if let Some(s) = planned
-                && !skills.contains(&s.id)
-            {
-                skills.push(s.id);
-            }
-        }
-        let weapon = snap
-            .equipped_items
-            .iter()
-            .find(|e| e.body == 4)
-            .and_then(|e| d2r_core::bases_data::base(e.code.as_deref()?))
-            .map(|b| b.kind);
-        Self {
-            profile: Profile {
-                class,
-                level: None,
-                strength: None,
-                dexterity: None,
-                skills,
-                weapon,
-                caster: gear_score::is_caster(class, weapon),
-                teleport: gear_score::teleport_wanted(&snap.holdings()),
-            },
-            worn: snap
-                .equipped_items
-                .iter()
-                .map(|e| (e.body, e.code.clone(), e.stats.clone()))
-                .collect(),
-            weapon_types: build_weapon_types(builds(), class),
-            merc_acts: {
-                let mut acts: Vec<MercAct> = Vec::new();
-                for &act in builds().flat_map(|b| &b.merc_acts) {
-                    if !acts.contains(&act) {
-                        acts.push(act);
-                    }
-                }
-                acts
-            },
-        }
-    }
+/// The pieces that decide a build's weapon types, each with whether it sits in the weapon or
+/// swap slot: the weapon, swap and offhand slots and the single-item `switch_requires` groups.
+/// Groups with alternatives allow almost any weapon; mercenary weapons have their own rule.
+fn weapon_type_pieces(build: &Build) -> impl Iterator<Item = (&String, bool)> {
+    let slots = build
+        .slots
+        .iter()
+        .filter_map(|(slot, pieces)| match slot_body(slot) {
+            Some(body @ (4 | 5)) => Some((body == 4, pieces)),
+            _ => None,
+        })
+        .flat_map(|(weapon, pieces)| pieces.iter().map(move |p| (p, weapon)));
+    let switch = build
+        .switch_requires
+        .iter()
+        .filter(|g| g.any.len() == 1)
+        .flat_map(|g| &g.any)
+        .map(|p| (p, false));
+    slots.chain(switch)
+}
+
+/// The socketable bases `wearer` can carry runeword `word` in as a weapon.
+fn weapon_carriers(word: &'static Runeword, wearer: Wearer) -> Vec<&'static str> {
+    d2r_core::bases_data::SOCKETABLE
+        .iter()
+        .map(|row| row.0)
+        .filter(|code| socket_bases::carries(word, code, wearer, Some(4)))
+        .collect()
 }
 
 /// A magic / rare item is kept when it scores at least this share of what is worn in its slot.
@@ -304,11 +278,8 @@ pub const NEAR_WORN: f64 = 0.8;
 /// planned +skill, +1 class skill, 20 resistance or life, 20 caster FCR.
 pub const NOTABLE: f64 = 20.0;
 
-/// Whether `item` is a must-keep for its Teleport (user, 2026-11-20: "an amulet with teleport
-/// on it ... very high for the summoner until he gets enigma. for the fury too"): an identified
-/// magic, rare or crafted item giving Teleport as an oskill or charges
-/// ([`gear_score::grants_skill`]) while no Enigma is held ([`Profile::teleport`]); but not a
-/// weapon no build uses ([`off_build_weapon`]: it is still sold).
+/// Whether `item` is kept for its Teleport (oskill or charges) while no Enigma is held; a
+/// weapon no build uses is still sold.
 fn keeps_teleport(item: &ItemDrop, scoring: &Scoring) -> bool {
     scoring.profile.teleport
         && d2r_core::game::magic_or_better(item.quality)
@@ -317,9 +288,7 @@ fn keeps_teleport(item: &ItemDrop, scoring: &Scoring) -> bool {
         && !off_build_weapon(item, scoring)
 }
 
-/// A weapon of a type no build uses (user rule, 2026-11-20): sold, identified or not (no point
-/// identifying it). The mercenary's weapons (its act's: polearms and spears for Act 2, never
-/// javelins) keep the other rules.
+/// A weapon of a type no build uses, identified or not; the mercenary's weapons excepted.
 fn off_build_weapon(item: &ItemDrop, scoring: &Scoring) -> bool {
     let code = item.code.as_deref();
     code.and_then(d2r_core::bases_data::base).is_some_and(|b| {
@@ -330,9 +299,8 @@ fn off_build_weapon(item: &ItemDrop, scoring: &Scoring) -> bool {
     })
 }
 
-/// The own-use verdict on a magic, rare or crafted item no trade rule wants: `Ok(reason)` keep
-/// (`Some("Teleport")` for a Teleport item, [`keeps_teleport`]; it beats every rule after the
-/// weapon type), `Err(reason)` sell.
+/// The own-use verdict on a magic, rare or crafted item no trade rule wants: `Ok(reason)` keep,
+/// `Err(reason)` sell.
 fn judge(item: &ItemDrop, scoring: &Scoring) -> Result<Option<&'static str>, &'static str> {
     if off_build_weapon(item, scoring) {
         return Err("not a build weapon");
@@ -340,53 +308,55 @@ fn judge(item: &ItemDrop, scoring: &Scoring) -> Result<Option<&'static str>, &'s
     if keeps_teleport(item, scoring) {
         return Ok(Some("Teleport"));
     }
-    let code = item.code.as_deref();
-    let base = code.and_then(d2r_core::bases_data::base);
-    let merc = code.is_some_and(|c| scoring.merc_wears(c));
-    // Unidentified, or stats unread (a real magic / rare item always has affix stats): it
-    // can't be judged yet.
-    if item.flags & item_data::FLAG_IDENTIFIED == 0 || item.stats.is_empty() {
+    if !judgeable(item) {
         return Ok(None);
     }
-    // Boots without faster run/walk (user rule, 2026-11-20: "a must on the boots"), whatever
-    // else they roll.
-    if base.is_some_and(|b| b.slot == 9) && !item.stats.iter().any(|s| s.id == stat::FRW && s.value > 0) {
+    if boots_without_run_speed(item) {
         return Err("no run speed");
     }
+    score_verdict(item, scoring).map(|()| None)
+}
+
+/// Identified with its stats read (a real magic / rare item always has affix stats).
+const fn judgeable(item: &ItemDrop) -> bool {
+    item.flags & item_data::FLAG_IDENTIFIED != 0 && !item.stats.is_empty()
+}
+
+fn boots_without_run_speed(item: &ItemDrop) -> bool {
+    let boots = item
+        .code
+        .as_deref()
+        .and_then(d2r_core::bases_data::base)
+        .is_some_and(|b| b.slot == 9);
+    boots && !item.stats.iter().any(|s| s.id == stat::FRW && s.value > 0)
+}
+
+/// The [`gear_score`] part of [`judge`]: `Ok` keep, `Err(reason)` sell.
+fn score_verdict(item: &ItemDrop, scoring: &Scoring) -> Result<(), &'static str> {
+    const NO_STATS: &str = "no build stats";
     let who = &scoring.profile;
+    let code = item.code.as_deref();
     let piece = Piece {
-        code: item.code.as_deref(),
+        code,
         stats: &item.stats,
     };
     let (total, affixes) = gear_score::scores(piece, who);
-    let no_stats = "no build stats";
-    if matches!(item.kind, DropKind::Charm { .. }) || item.code.as_deref() == Some("jew") {
-        return if total > 0.0 { Ok(None) } else { Err(no_stats) };
+    if matches!(item.kind, DropKind::Charm { .. }) || code == Some("jew") {
+        return if total > 0.0 { Ok(()) } else { Err(NO_STATS) };
     }
-    let worn: Vec<(u8, Piece<'_>)> = scoring
-        .worn
-        .iter()
-        .map(|(body, code, stats)| {
-            (
-                *body,
-                Piece {
-                    code: code.as_deref(),
-                    stats,
-                },
-            )
-        })
-        .collect();
-    match gear_score::replaced_score(piece, &worn, who) {
-        Some(old) if (total > 0.0 && total >= NEAR_WORN * old) || affixes >= NOTABLE => Ok(None),
-        _ if merc => Ok(None),
+    let merc = code.is_some_and(|c| scoring.merc_wears(c));
+    match gear_score::replaced_score(piece, &scoring.worn_pieces(), who) {
+        Some(old) if (total > 0.0 && total >= NEAR_WORN * old) || affixes >= NOTABLE => Ok(()),
+        // The mercenary's gear has no stats in the snapshot: what it can wear stays unscored.
+        _ if merc => Ok(()),
         Some(_) if affixes > 0.0 => Err("worse than worn"),
-        Some(_) => Err(no_stats),
-        // Another class's item, or a shield beside a two-hander; no base known: keep.
-        None => match item.code.as_deref().and_then(d2r_core::bases_data::base) {
+        Some(_) => Err(NO_STATS),
+        // Nothing to compare with: another class's item, a shield beside a two-hander, or no base.
+        None => match code.and_then(d2r_core::bases_data::base) {
             Some(base) if base.class.is_some_and(|c| u32::from(c) != who.class) => Err("other class"),
-            Some(_) if affixes >= NOTABLE => Ok(None),
-            Some(_) => Err(no_stats),
-            None => Ok(None),
+            Some(_) if affixes >= NOTABLE => Ok(()),
+            Some(_) => Err(NO_STATS),
+            None => Ok(()),
         },
     }
 }
@@ -398,13 +368,11 @@ struct BaseNeed {
     word: &'static Runeword,
     wearer: Wearer,
     slot: Option<u8>,
-    /// A second wearer the same copy can go to: an alternative mercenary's (a build's second
-    /// `merc_acts` entry) for a runeword someone else wants too ([`Needs::share`]).
+    /// An alternative mercenary the same copy is swapped to ([`Needs::share`]).
     also: Option<Wearer>,
 }
 
 impl BaseNeed {
-    /// Its wearers: `wearer`, then `also`.
     fn wearers(&self) -> impl Iterator<Item = Wearer> {
         std::iter::once(self.wearer).chain(self.also)
     }
@@ -470,8 +438,7 @@ impl Needs {
         true
     }
 
-    /// Every piece of build `slots` (slot name → pieces) and a base for each runeword in it
-    /// ([`Needs::slot_bases`]).
+    /// Every piece of build `slots` (slot name → pieces) and a base for each runeword in it.
     fn slots(&mut self, slots: &BTreeMap<String, Vec<String>>, wearer: Wearer) {
         for entry in slots.values().flatten() {
             self.piece(entry, 1);
@@ -480,9 +447,7 @@ impl Needs {
     }
 
     /// A base for each runeword in build `slots` (only runeword `only` when set) for `wearer`;
-    /// whether there was any. The player's weapon slot of a stage with off-hand pieces wants a
-    /// one-handed base (user rule, 2026-11-20: a druid can't hold a Zweihander and a shield):
-    /// [`Wearer::PlayerWithOffhand`]. The swap slot keeps both hands (Harmony is a bow).
+    /// whether there was any. A weapon beside off-hand pieces must be one-handed; `swap` isn't.
     fn slot_bases(
         &mut self,
         slots: &BTreeMap<String, Vec<String>>,
@@ -506,8 +471,7 @@ impl Needs {
         any
     }
 
-    /// Every piece of mercenary `slots` and a base for each runeword in it
-    /// ([`Needs::merc_bases`]).
+    /// Every piece of mercenary `slots` and a base for each runeword in it.
     fn merc_slots(
         &mut self,
         slots: &BTreeMap<String, Vec<String>>,
@@ -521,7 +485,7 @@ impl Needs {
     }
 
     /// A base for each runeword in mercenary `slots` (only runeword `only` when set) of
-    /// `build` ([`Needs::merc_base`]); whether there was any.
+    /// `build`; whether there was any.
     fn merc_bases(
         &mut self,
         slots: &BTreeMap<String, Vec<String>>,
@@ -541,10 +505,8 @@ impl Needs {
     }
 
     /// Wants a base for mercenary piece `entry` in `slot` if it names a runeword; whether it
-    /// does. The wearer is the mercenary of `build`'s act that can carry it
-    /// ([`Build::merc_wearer`]; Act 2 without a build). A need of an alternative act (not the
-    /// build's first: Harmony for the Act 1 rogue of `merc_acts = [2, 1]`) goes to `spare`
-    /// for [`Needs::share`].
+    /// does. The wearer is the mercenary of `build`'s act that can carry it (Act 2 without a
+    /// build); a need of an alternative act goes to `spare` for [`Needs::share`].
     fn merc_base(
         &mut self,
         entry: &str,
@@ -568,24 +530,12 @@ impl Needs {
         true
     }
 
-    /// Adds the alternative mercenaries' needs (`spare`, [`Needs::merc_base`]). One that a
-    /// need of the same runeword already covers (the same slot, else any slot) adds no second
-    /// base: one copy is swapped between them (user, 2026-11-20: Harmony on the druid's weapon
-    /// swap, or on the Act 1 rogue in Normal or for its buff; never both at once). That need
-    /// then also takes a base only the alternative mercenary can use (an amazon bow).
+    /// Adds the alternative mercenaries' needs (`spare`). One that a need of the same runeword
+    /// already covers adds no second base (one copy is swapped between them); that need then
+    /// also takes the bases only the alternative mercenary can use.
     fn share(&mut self, spare: Vec<BaseNeed>) {
         for need in spare {
-            // The same slot first: a slot-less need of a placed runeword is dropped later.
-            let at = |slot_less: bool| {
-                move |n: &BaseNeed| {
-                    n.word.name == need.word.name && (n.slot == need.slot || (slot_less && n.slot.is_none()))
-                }
-            };
-            let same = match self.bases.iter().position(at(false)) {
-                Some(i) => Some(i),
-                None => self.bases.iter().position(at(true)),
-            };
-            match same.and_then(|i| self.bases.get_mut(i)) {
+            match self.same_word_need(&need).and_then(|i| self.bases.get_mut(i)) {
                 Some(n) => {
                     if n.wearer != need.wearer && n.also.is_none() {
                         n.also = Some(need.wearer);
@@ -596,22 +546,23 @@ impl Needs {
         }
     }
 
-    /// The player's own needs: the resolved `bis` (the current stage, or the character's
-    /// inline slots), every build of the stage `chain` (the current stage and the later ones,
-    /// by name: [`Settings::stage_chain`]) with its slots, extras and `switch_requires`, and the
-    /// whole farm list. A player piece is for class `class` (a farm group's: its build's class);
-    /// a mercenary one for the mercenary of its build's act that can carry it
-    /// ([`Build::merc_wearer`]; Act 2 for an inline `bis` without a build file), where an
-    /// alternative mercenary's runeword shares the need of the same runeword
-    /// ([`Needs::share`]). A farm runeword its group's build places in its
-    /// own slots takes that build's base needs (the second Lawbringer is the Act 5 merc's
-    /// one-handed sword), not a looser one for any slot. Copies `worn` by the character or its
-    /// mercenary need no stash copy, and each runeword copy `owns` counts (worn, carried,
-    /// stashed, the mercenary's) drops one base need of that runeword.
-    ///
-    /// A `switch_requires` group with alternatives (any one of twenty Cannot Be Frozen items)
-    /// wants each alternative as a piece but no base for its runewords: that would keep a base
-    /// for every alternative runeword.
+    /// The need of `need`'s runeword in the same slot, else a slot-less one.
+    fn same_word_need(&self, need: &BaseNeed) -> Option<usize> {
+        let at = |slot_less: bool| {
+            move |n: &BaseNeed| {
+                n.word.name == need.word.name && (n.slot == need.slot || (slot_less && n.slot.is_none()))
+            }
+        };
+        self.bases
+            .iter()
+            .position(at(false))
+            .or_else(|| self.bases.iter().position(at(true)))
+    }
+
+    /// The player's own needs from the resolved `bis`, every build of the stage `chain`
+    /// ([`Settings::stage_chain`]) and the farm list; a player piece is for `class` unless its
+    /// build names one. Pieces `worn` by the character or its mercenary need no stash copy,
+    /// and each runeword copy `owns` counts drops one base need of that runeword.
     #[must_use]
     pub fn from_config(
         config: &Settings,
@@ -623,76 +574,100 @@ impl Needs {
     ) -> Self {
         let mut needs = Self::default();
         let mut spare = Vec::new();
-        let def = |build: &str| config.build_defs.get(&build.to_lowercase());
         if let Some(bis) = bis {
             needs.slots(&bis.slots, Wearer::Player(class));
-            needs.merc_slots(&bis.merc_slots, def(&bis.build), &mut spare);
+            needs.merc_slots(&bis.merc_slots, build_def(config, &bis.build), &mut spare);
         }
-        for build in chain
-            .iter()
-            .filter_map(|name| config.build_defs.get(&name.to_lowercase()))
-        {
-            let player = Wearer::Player(build.class.unwrap_or(class));
-            needs.slots(&build.slots, player);
-            needs.merc_slots(&build.merc_slots, Some(build), &mut spare);
-            for entry in build.extras.values().flatten() {
-                needs.piece(entry, 1);
-                needs.base(entry, player, None);
-            }
-            for group in &build.switch_requires {
-                for item in &group.any {
-                    needs.piece(item, if group.any.len() == 1 { group.count } else { 1 });
-                    if group.any.len() == 1 {
-                        needs.base(item, player, None);
-                    }
-                }
-            }
+        for build in chain_builds(config, chain) {
+            needs.build(build, class, &mut spare);
         }
         for group in &config.farm {
-            let target = config.build_defs.get(&group.target.to_lowercase());
-            let farm_class = target.and_then(|b| b.class).unwrap_or(class);
-            // A rolled entry names no item: the magic / rare judge keeps its copies
-            // ([`keeps_teleport`]).
-            for item in group.items.iter().filter(|i| i.kind != FarmKind::Rolled) {
-                needs.piece(&item.name, item.count);
-                if let Some(build) = target {
-                    let player = Wearer::Player(farm_class);
-                    let placed = needs.slot_bases(&build.slots, player, Some(&item.name));
-                    let merc_placed =
-                        needs.merc_bases(&build.merc_slots, Some(build), Some(&item.name), &mut spare);
-                    if placed || merc_placed {
-                        continue;
-                    }
-                }
-                let slot = item.slot.map(crate::config::FarmSlot::body);
-                if item.merc {
-                    needs.merc_base(&item.name, target, slot, &mut spare);
-                } else {
-                    needs.base(&item.name, Wearer::Player(farm_class), slot);
+            needs.farm_group(group, build_def(config, &group.target), class, &mut spare);
+        }
+        needs.share(spare);
+        needs.drop_slotless_placed();
+        needs.subtract_worn(worn);
+        needs.drop_made_bases(owns);
+        needs
+    }
+
+    /// The slots, extras and `switch_requires` of `build`. A group with alternatives wants each
+    /// as a piece but no base: that would keep a base for every alternative runeword.
+    fn build(&mut self, build: &Build, class: u32, spare: &mut Vec<BaseNeed>) {
+        let player = Wearer::Player(build.class.unwrap_or(class));
+        self.slots(&build.slots, player);
+        self.merc_slots(&build.merc_slots, Some(build), spare);
+        for entry in build.extras.values().flatten() {
+            self.piece(entry, 1);
+            self.base(entry, player, None);
+        }
+        for group in &build.switch_requires {
+            let single = group.any.len() == 1;
+            for item in &group.any {
+                self.piece(item, if single { group.count } else { 1 });
+                if single {
+                    self.base(item, player, None);
                 }
             }
         }
-        needs.share(spare);
-        // A runeword a build places in a slot wants its base for that slot (and hands); a
-        // slot-less want of it (a `switch_requires` condition such as "2x Lawbringer", a farm
-        // entry without a slot) adds no looser need that a two-hander could fill.
-        let placed: Vec<&str> = needs
+    }
+
+    /// The named items of farm `group`. A runeword its `target` build places takes that
+    /// build's base needs, else one from the entry's own slot and wearer.
+    fn farm_group(
+        &mut self,
+        group: &FarmGroup,
+        target: Option<&Build>,
+        class: u32,
+        spare: &mut Vec<BaseNeed>,
+    ) {
+        let player = Wearer::Player(target.and_then(|b| b.class).unwrap_or(class));
+        // A rolled entry names no item: the magic / rare judge keeps its copies.
+        for item in group.items.iter().filter(|i| i.kind != FarmKind::Rolled) {
+            self.piece(&item.name, item.count);
+            if target.is_some_and(|build| self.placed_by(build, player, &item.name, spare)) {
+                continue;
+            }
+            let slot = item.slot.map(crate::config::FarmSlot::body);
+            if item.merc {
+                self.merc_base(&item.name, target, slot, spare);
+            } else {
+                self.base(&item.name, player, slot);
+            }
+        }
+    }
+
+    /// Wants the bases `build` places runeword `name` in, for the player and the mercenary;
+    /// whether it places it anywhere.
+    fn placed_by(&mut self, build: &Build, player: Wearer, name: &str, spare: &mut Vec<BaseNeed>) -> bool {
+        let placed = self.slot_bases(&build.slots, player, Some(name));
+        let merc_placed = self.merc_bases(&build.merc_slots, Some(build), Some(name), spare);
+        placed || merc_placed
+    }
+
+    /// Drops the slot-less needs of a runeword some build places in a slot: a two-hander could
+    /// fill them where the slot wants one hand.
+    fn drop_slotless_placed(&mut self) {
+        let placed: Vec<&str> = self
             .bases
             .iter()
             .filter(|n| n.slot.is_some())
             .map(|n| n.word.name)
             .collect();
-        needs
-            .bases
+        self.bases
             .retain(|n| n.slot.is_some() || !placed.contains(&n.word.name));
-        for (name, count) in &mut needs.pieces {
+    }
+
+    fn subtract_worn(&mut self, worn: &[String]) {
+        for (name, count) in &mut self.pieces {
             let on = worn.iter().filter(|w| same_name(w, name)).count();
             *count = count.saturating_sub(u32::try_from(on).unwrap_or(u32::MAX));
         }
-        // A base is only the start until the runeword exists: each copy held (worn, carried,
-        // stashed, the merc's) drops one base need of that runeword, in order.
+    }
+
+    fn drop_made_bases(&mut self, owns: &dyn Fn(&str) -> u32) {
         let mut held: Vec<(&str, u32)> = Vec::new();
-        needs.bases.retain(|need| {
+        self.bases.retain(|need| {
             let name = need.word.name;
             if !held.iter().any(|(n, _)| *n == name) {
                 held.push((name, owns(name)));
@@ -705,7 +680,6 @@ impl Needs {
                 _ => true,
             }
         });
-        needs
     }
 }
 
@@ -716,12 +690,8 @@ pub fn plain_base(item: &ItemDrop) -> bool {
         && item.code.as_deref().is_some_and(socket_bases::socketable)
 }
 
-/// What the valuables rules keep for trade: a certain S or A match, or an uncertain S (an
-/// unidentified unique on a valuable base); an uncertain A (a magic grand charm whose stats
-/// decide) is no keeper. A white base matching only a twink A rule (a plain Bill 4os for the
-/// merc's Insight) is gear for the player's own characters, not worth trading (user rule,
-/// 2026-11-20): kept only when it fills a base need ([`assign_bases`]), else sold. Twink A
-/// items that aren't bases (Sigon's set, keep one) still go to trade.
+/// What the valuables rules keep for trade: a certain S or A match, or an uncertain S. A white
+/// base matching only a twink A rule is own gear, not a trade good.
 fn trade_worthy(item: &ItemDrop) -> bool {
     let mut tiers = valuables::keep_tiers();
     if plain_base(item) {
@@ -733,18 +703,14 @@ fn trade_worthy(item: &ItemDrop) -> bool {
 /// [`base_rank`]'s key: power, grade, requirement (lower is better).
 type Rank = (u32, u8, Reverse<u32>);
 
-/// How good a runeword base is, better is greater (user rule, 2026-11-20: a better base for the
-/// same runeword replaces the kept one): the base damage (min + max, [`weapons_data::damage`])
-/// of a weapon or the maximum base defense of an armor, helm or shield
-/// ([`socket_bases::max_defense`]); then superior or ethereal over normal over low quality;
-/// then the lower strength + dexterity requirement. A need open to both weapons and armor
-/// (Fortitude without a slot) compares damage with defense: rare, and either base works.
+/// How good a runeword base is, better is greater: base damage (weapons) or maximum defense
+/// (armor), then superior or ethereal over normal over low, then the lower str + dex requirement.
 fn base_rank(item: &ItemDrop) -> Rank {
     let code = item.code.as_deref().unwrap_or_default();
     let raw = d2r_core::weapons_data::damage(code)
         .or_else(|| socket_bases::max_defense(code).map(u32::from))
         .unwrap_or(0);
-    // Ethereal bases have +50% base damage / defense in game, so an eth base competes with that.
+    // Ethereal bases have +50% base damage / defense in game.
     let power = if item.ethereal {
         raw.saturating_mul(3) / 2
     } else {
@@ -769,9 +735,9 @@ fn fills(need: &BaseNeed, base: &ItemDrop) -> bool {
         })
 }
 
-/// The stash tab `h` belongs in when it is a gem, rune or material ([`stash::tab_of`]); `None`
-/// for anything else, for anything in the cube (a recipe in progress) and for a rejuvenation
-/// potion in the inventory (drunk from there).
+/// The stash tab `h` belongs in when it is a gem, rune or material; `None` for anything else,
+/// in the cube (a recipe in progress), and for a rejuvenation potion in the inventory (drunk
+/// from there).
 fn stow(h: &Held) -> Option<Tab> {
     let code = h.item.code.as_deref()?;
     let potion = matches!(code, "rvs" | "rvl");
@@ -779,9 +745,7 @@ fn stow(h: &Held) -> Option<Tab> {
 }
 
 /// An item the plan leaves alone: charms in the inventory (they work there), finished
-/// runewords that aren't a build piece, and gems, runes and materials that [`stow`] doesn't
-/// move (in the cube, an inventory rejuv, or a gem or rune without a code): they are never
-/// judged by the trade or sell rules.
+/// runewords that aren't a build piece, and gems, runes and materials [`stow`] doesn't move.
 fn left_alone(h: &Held) -> bool {
     let stackable = h.item.code.as_deref().and_then(stash::tab_of).is_some();
     if stackable || matches!(h.item.kind, DropKind::Gem(_) | DropKind::Rune(_)) {
@@ -795,8 +759,7 @@ fn left_alone(h: &Held) -> bool {
 }
 
 /// Keep for `side` where the item is, or move it there. Own items belong on pages 1–2 or in
-/// the personal stash; one in the inventory or cube is in the wrong place too (user rule,
-/// 2026-11-20: "if something is at the wrong place (inv, stash)": move it to 1–2).
+/// the personal stash.
 const fn keep_or_move(side: Side, spot: Spot) -> Action {
     match (spot, page_side(spot), side) {
         (Spot::Stash, _, Side::Own)
@@ -806,10 +769,8 @@ const fn keep_or_move(side: Side, spot: Spot) -> Action {
     }
 }
 
-/// The indices of `items`, best place for `side` first (then in input order): for own items
-/// pages 1–2, then the personal stash, the inventory and cube, the trade pages; for trade items
-/// the trade pages, then pages 1–2, the personal stash, the cube and the inventory. Items on
-/// the ignored page ([`IGNORED_PAGE`]) are left out: nothing about them is decided.
+/// The indices of `items`, best place for `side` first (then in input order), without the
+/// ignored page's.
 fn by_preference(items: &[Held], side: Side) -> Vec<usize> {
     let rank = |spot: Spot| match (side, page_side(spot), spot) {
         (Side::Own, Some(Side::Own), _) | (Side::Trade, Some(Side::Trade), _) => 0,
@@ -825,10 +786,8 @@ fn by_preference(items: &[Held], side: Side) -> Vec<usize> {
     order
 }
 
-/// The item plan of `snap`'s character ([`held`], [`plan`]): needs from the resolved `bis`,
-/// the stage `chain` ([`Settings::stage_chain`]) and the farm list, minus the copies the
-/// character and its mercenary wear; magic / rare items scored for the chain's builds. With it
-/// what a ground drop would still add ([`Wants`], the map's keep and farm marks).
+/// The item plan of `snap`'s character ([`plan`]) for the resolved `bis`, the stage `chain` and
+/// the farm list, and what a ground drop would still add ([`Wants`]).
 #[must_use]
 pub fn for_snapshot(
     snap: &Snapshot,
@@ -844,31 +803,29 @@ pub fn for_snapshot(
     let owns = |name: &str| holdings.count(name);
     let needs = Needs::from_config(config, chain, bis, snap.player.class, &worn, &owns);
     let (advice, mut wants) = plan(&held(snap), &needs, &Scoring::new(snap, config, chain));
-    // A farm-list unique or set nobody holds yet (the farm panel's "missing").
-    let missing = |name: &str| {
-        config.farm.iter().flat_map(|g| &g.items).any(|item| {
-            matches!(item.kind, FarmKind::Unique | FarmKind::Set) && same_name(&item.name, name) && {
-                let (stashed, carried) = holdings.copies(&item.name, item.kind.item_kind());
-                farm_status(item.count, stashed, carried) == FarmStatus::Missing
-            }
-        })
-    };
     for piece in &mut wants.pieces {
-        piece.farm = missing(&piece.name);
+        piece.farm = farm_missing(config, &holdings, &piece.name);
     }
     (advice, wants)
 }
 
-/// What a ground drop would add to the item plan ([`for_snapshot`]), computed once per
-/// evaluation and asked per drop and tick ([`crate::marks`]): a base for an open
-/// runeword need better than the one kept for it, a unique or set build piece still wanted.
-/// Magic and rare drops are not judged: their stats aren't known before pickup.
+/// Whether `name` is a farm-list unique or set nobody holds yet (the farm panel's "missing").
+fn farm_missing(config: &Settings, holdings: &Holdings<'_>, name: &str) -> bool {
+    config.farm.iter().flat_map(|g| &g.items).any(|item| {
+        matches!(item.kind, FarmKind::Unique | FarmKind::Set) && same_name(&item.name, name) && {
+            let (stashed, carried) = holdings.copies(&item.name, item.kind.item_kind());
+            farm_status(item.count, stashed, carried) == FarmStatus::Missing
+        }
+    })
+}
+
+/// What a ground drop would add to the item plan: a better base for an open runeword need, or
+/// a unique or set build piece still wanted. Magic and rare drops' stats aren't known before
+/// pickup.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Wants {
-    /// Every runeword base need with the rank of the base the plan keeps for it (`None`: none
-    /// held).
+    /// Every runeword base need with the rank of the base kept for it.
     bases: Vec<(BaseNeed, Option<Rank>)>,
-    /// The unique and set build pieces with copies still wanted.
     pieces: Vec<WantedPiece>,
 }
 
@@ -876,18 +833,40 @@ pub struct Wants {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WantedPiece {
     name: String,
-    /// Quality and base code of each unique / set row of that name ([`d2r_core::names::named_bases_cached`]):
-    /// what an unidentified copy looks like.
+    /// Quality and base code of each row of that name: what an unidentified copy looks like.
     bases: &'static [(u32, &'static str)],
-    /// A still-missing farm-list entry ([`farm_status`]).
+    /// A still-missing farm-list entry.
     farm: bool,
 }
 
 impl Wants {
-    /// The wanted piece `drop` is: `(rule, farm entry, uncertain)`. An identified unique or
-    /// set by its name (the rule is the name); an unidentified one (no name yet) by its quality
-    /// and base code, uncertain: the rule names every wanted piece on that base with a "?"
-    /// ("Raven Frost? / Nagelring?"), the farm entries only when any is one.
+    /// The wants left after the plan kept the bases `kept` (per need) and left `wanted` copies
+    /// (per piece); farm flags unset.
+    fn left(items: &[Held], needs: &Needs, kept: Vec<Option<usize>>, wanted: &[u32]) -> Self {
+        Self {
+            bases: needs
+                .bases
+                .iter()
+                .zip(kept)
+                .map(|(need, k)| (*need, k.and_then(|i| items.get(i)).map(|h| base_rank(&h.item))))
+                .collect(),
+            pieces: needs
+                .pieces
+                .iter()
+                .zip(wanted)
+                .filter(|&((name, _), &left)| left > 0 && runewords_data::lookup(name).is_none())
+                .map(|((name, _), _)| WantedPiece {
+                    name: name.clone(),
+                    bases: d2r_core::names::named_bases_cached(name),
+                    farm: false,
+                })
+                .collect(),
+        }
+    }
+
+    /// The wanted piece `drop` is: `(rule, farm entry, uncertain)`. An unidentified one matches
+    /// by quality and base code, uncertain: the rule names every wanted piece on that base with
+    /// a "?" ("Raven Frost? / Nagelring?"), only the farm entries when any is one.
     #[must_use]
     pub fn piece(&self, drop: &ItemDrop) -> Option<(String, bool, bool)> {
         if !matches!(drop.quality, item_data::QUALITY_UNIQUE | item_data::QUALITY_SET) {
@@ -914,9 +893,8 @@ impl Wants {
         (!names.is_empty()).then(|| (names.join(" / "), farm, true))
     }
 
-    /// The runeword whose open base need `drop` fills ([`fills`]: exactly its sockets, which
-    /// on a ground drop are natural ones) better than the base kept for it ([`base_rank`]),
-    /// `None` for anything else. A trade-worthy base is no own base ([`trade_worthy`]).
+    /// The runeword whose open base need `drop` fills better than the base kept for it; a
+    /// trade-worthy base is no own base.
     #[must_use]
     pub fn base(&self, drop: &ItemDrop) -> Option<&'static str> {
         if !plain_base(drop) {
@@ -933,7 +911,7 @@ impl Wants {
 }
 
 /// The reason a plain base is sold: "two-handed" when it would fill a runeword need but for
-/// its hands (user request, 2026-11-20: a Zweihander for a dual-wielding merc), else none.
+/// its hands, else none.
 fn base_sell_reason(base: &ItemDrop, needs: &Needs) -> Option<&'static str> {
     let code = base.code.as_deref()?;
     needs
@@ -950,11 +928,39 @@ fn base_sell_reason(base: &ItemDrop, needs: &Needs) -> Option<&'static str> {
 /// An item's action with the reason of a scored sell.
 type Decided = (Action, Option<&'static str>);
 
+/// Keeps the copies of build pieces still wanted, best placed first; they win over trade.
+/// Returns the copies left wanted per piece and the keep-one names kept.
+fn keep_build_pieces(
+    items: &[Held],
+    needs: &Needs,
+    order: &[usize],
+    actions: &mut [Option<Decided>],
+) -> (Vec<u32>, Vec<&'static str>) {
+    let mut kept_one: Vec<&str> = Vec::new();
+    let mut wanted: Vec<u32> = needs.pieces.iter().map(|&(_, c)| c).collect();
+    for &i in order {
+        let (Some(h), Some(slot)) = (items.get(i), actions.get_mut(i)) else {
+            continue;
+        };
+        let named =
+            valuables::unique_set_name(&h.item).is_some() || h.item.flags & item_data::FLAG_RUNEWORD != 0;
+        let left = needs
+            .pieces
+            .iter()
+            .position(|(n, _)| same_name(n, &h.name))
+            .and_then(|p| wanted.get_mut(p));
+        if let (true, Some(left @ 1..)) = (named, left) {
+            *left -= 1;
+            *slot = Some((keep_or_move(Side::Own, h.spot), None));
+            kept_one.extend(valuables::keep_one_name(&h.item));
+        }
+    }
+    (wanted, kept_one)
+}
+
 /// One base per runeword need, the needs with the fewest fitting bases first (a base that fits
-/// two needs must not starve the narrower one), each taking its best free base ([`base_rank`];
-/// on a tie the best placed, `order`, [`by_preference`]). The other bases are sold by [`plan`],
-/// a worse one already kept on pages 1–2 included. A trade-worthy base is left for the trade
-/// side.
+/// two needs must not starve the narrower one), each taking its best free base (on a tie the
+/// best placed, `order`). A trade-worthy base is left for the trade side.
 fn assign_bases(
     items: &[Held],
     needs: &Needs,
@@ -1002,91 +1008,43 @@ fn assign_bases(
     kept
 }
 
-/// The action for each of `items` (see the module docs), merged into dashboard lines and
-/// sorted by action, then name, then spot.
-/// With them the [`Wants`] left after the plan (farm flags unset: [`for_snapshot`] sets them).
-#[must_use]
-pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> (Vec<Advice>, Wants) {
-    let mut actions: Vec<Option<Decided>> = vec![None; items.len()];
-    let own_order = by_preference(items, Side::Own);
-    // Build pieces first: they win over trade (the player needs them). A keep-one item kept
-    // here counts as its one copy.
-    let mut kept_one: Vec<&str> = Vec::new();
-    let mut wanted: Vec<u32> = needs.pieces.iter().map(|&(_, c)| c).collect();
-    for &i in &own_order {
-        let (Some(h), Some(slot)) = (items.get(i), actions.get_mut(i)) else {
-            continue;
-        };
-        let named =
-            valuables::unique_set_name(&h.item).is_some() || h.item.flags & item_data::FLAG_RUNEWORD != 0;
-        let left = needs
-            .pieces
-            .iter()
-            .position(|(n, _)| same_name(n, &h.name))
-            .and_then(|p| wanted.get_mut(p));
-        if let (true, Some(left @ 1..)) = (named, left) {
-            *left -= 1;
-            *slot = Some((keep_or_move(Side::Own, h.spot), None));
-            kept_one.extend(valuables::keep_one_name(&h.item));
-        }
+/// The action for an item that is no build piece or kept base.
+fn decide_rest(
+    h: &Held,
+    needs: &Needs,
+    scoring: &Scoring,
+    kept_one: &mut Vec<&'static str>,
+) -> Option<Decided> {
+    if let Some(tab) = stow(h) {
+        return Some((Action::Stow(tab), None));
     }
-    let kept = assign_bases(items, needs, &own_order, &mut actions);
-    let wants = Wants {
-        bases: needs
-            .bases
-            .iter()
-            .zip(kept)
-            .map(|(need, k)| (*need, k.and_then(|i| items.get(i)).map(|h| base_rank(&h.item))))
-            .collect(),
-        pieces: needs
-            .pieces
-            .iter()
-            .zip(&wanted)
-            .filter(|&((name, _), &left)| left > 0 && runewords_data::lookup(name).is_none())
-            .map(|((name, _), _)| WantedPiece {
-                name: name.clone(),
-                bases: d2r_core::names::named_bases_cached(name),
-                farm: false,
-            })
-            .collect(),
-    };
-    // The rest: trade, sell or give away. A keep-one item keeps its copy best placed for trade.
-    for i in by_preference(items, Side::Trade) {
-        let (Some(h), Some(slot)) = (items.get(i), actions.get_mut(i)) else {
-            continue;
-        };
-        if slot.is_some() || left_alone(h) {
-            continue;
-        }
-        // A gem, rune or material goes to its tab before any other rule; a Teleport item is
-        // own gear before any trade rule ([`keeps_teleport`]).
-        let action = if let Some(tab) = stow(h) {
-            Some(Action::Stow(tab))
-        } else if trade_worthy(&h.item) && !keeps_teleport(&h.item, scoring) {
-            match valuables::keep_one_name(&h.item) {
-                Some(name) if kept_one.contains(&name) => Some(Action::GiveAway),
-                one => {
-                    kept_one.extend(one);
-                    Some(keep_or_move(Side::Trade, h.spot))
-                }
+    if trade_worthy(&h.item) && !keeps_teleport(&h.item, scoring) {
+        let action = match valuables::keep_one_name(&h.item) {
+            Some(name) if kept_one.contains(&name) => Action::GiveAway,
+            one => {
+                kept_one.extend(one);
+                keep_or_move(Side::Trade, h.spot)
             }
-        } else if plain_base(&h.item) {
-            *slot = Some((Action::Sell, base_sell_reason(&h.item, needs)));
-            continue;
-        } else if d2r_core::game::magic_or_better(h.item.quality) {
-            *slot = Some(match judge(&h.item, scoring) {
-                Ok(reason) => (keep_or_move(Side::Own, h.spot), reason),
-                Err(reason) => (Action::Sell, Some(reason)),
-            });
-            continue;
-        } else {
-            valuables::verdict(&h.item).map(|v| match v {
-                Verdict::Sell => Action::Sell,
-                Verdict::GiveAway => Action::GiveAway,
-            })
         };
-        *slot = action.map(|a| (a, None));
+        return Some((action, None));
     }
+    if plain_base(&h.item) {
+        return Some((Action::Sell, base_sell_reason(&h.item, needs)));
+    }
+    if d2r_core::game::magic_or_better(h.item.quality) {
+        return Some(match judge(&h.item, scoring) {
+            Ok(reason) => (keep_or_move(Side::Own, h.spot), reason),
+            Err(reason) => (Action::Sell, Some(reason)),
+        });
+    }
+    let action = match valuables::verdict(&h.item)? {
+        Verdict::Sell => Action::Sell,
+        Verdict::GiveAway => Action::GiveAway,
+    };
+    Some((action, None))
+}
+
+fn merge_advice(items: &[Held], actions: Vec<Option<Decided>>) -> Vec<Advice> {
     let mut out: Vec<Advice> = Vec::new();
     for (h, action) in items.iter().zip(actions) {
         let Some((action, reason)) = action else { continue };
@@ -1110,7 +1068,27 @@ pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> (Vec<Advice>, W
             .then_with(|| a.name.cmp(&b.name))
             .then(a.spot.cmp(&b.spot))
     });
-    (out, wants)
+    out
+}
+
+/// The action for each of `items` as dashboard lines, and the [`Wants`] left after it (farm
+/// flags unset: [`for_snapshot`] sets them).
+#[must_use]
+pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> (Vec<Advice>, Wants) {
+    let mut actions: Vec<Option<Decided>> = vec![None; items.len()];
+    let own_order = by_preference(items, Side::Own);
+    let (wanted, mut kept_one) = keep_build_pieces(items, needs, &own_order, &mut actions);
+    let kept = assign_bases(items, needs, &own_order, &mut actions);
+    let wants = Wants::left(items, needs, kept, &wanted);
+    for i in by_preference(items, Side::Trade) {
+        let (Some(h), Some(slot)) = (items.get(i), actions.get_mut(i)) else {
+            continue;
+        };
+        if slot.is_none() && !left_alone(h) {
+            *slot = decide_rest(h, needs, scoring, &mut kept_one);
+        }
+    }
+    (merge_advice(items, actions), wants)
 }
 
 #[cfg(test)]
@@ -1203,9 +1181,7 @@ mod tests {
 
     #[test]
     fn a_trade_base_on_page_1_moves_to_the_trade_pages() {
-        // eth 4os Colossus Voulge: an S twink base, worth trading even though the merc could
-        // use it. Crystal Sword 4os is only A twink: one copy is the Spirit base, the other
-        // isn't worth trading and is sold.
+        // Eth 4os Colossus Voulge is S twink (trade); Crystal Sword 4os only A twink (own or sold).
         let mut voulge = base("7vo", 4);
         voulge.ethereal = true;
         let mut needs = Needs::default();
@@ -1255,8 +1231,7 @@ mod tests {
 
     #[test]
     fn a_twink_a_base_is_no_trade_good() {
-        // Bill / Poleaxe 4os match "Polearms 4os (any tier)", A twink: gear for the player's
-        // own characters. With Insight held they are sold, not moved to the trade pages.
+        // Bill / Poleaxe 4os are A twink: with Insight held they are sold, not traded.
         let items = [
             at(base("9vo", 4), Spot::Page(1)),
             at(base("pax", 4), Spot::Page(4)),
@@ -1375,8 +1350,7 @@ mod tests {
 
     #[test]
     fn the_better_base_for_a_runeword_wins() {
-        // Spirit: Broad Sword (7–14) beats Crystal Sword (5–15) on average damage, even
-        // from a trade page against a sword already kept on page 1.
+        // Broad Sword (7–14) beats Crystal Sword (5–15), even from a trade page.
         let mut spirit = Needs::default();
         spirit.base("Spirit", DRUID, Some(4));
         let swords = [
@@ -1458,8 +1432,7 @@ mod tests {
             vec![row("Gravenspine", Spot::Inventory, Action::Sell, 1)]
         );
         needs.piece("Gravenspine@31", 1);
-        // Kept, but the inventory (or cube) is the wrong place: moved to 1–2. The personal
-        // stash is as good as pages 1–2.
+        // The inventory is the wrong place; the personal stash is as good as pages 1–2.
         assert_eq!(
             rows(&[at(grave(), Spot::Inventory)], &needs),
             vec![row("Gravenspine", Spot::Inventory, Action::Move(Side::Own), 1)]
@@ -1495,8 +1468,7 @@ mod tests {
 
     #[test]
     fn valuable_uniques_and_sets_are_kept_for_trade() {
-        // Harlequin Crest (S); Sigon's Visor (A twink, keep one: the second copy is a give-away);
-        // Magefist (B only): give away.
+        // Shako is S; Sigon's Visor is keep-one; Magefist is B only.
         let visor = || named("ghm", 5, 36);
         let items = [
             at(named("uap", 7, 248), Spot::Inventory),
@@ -1839,8 +1811,6 @@ mod tests {
         assert_eq!(rows(&items, &harmony_needs()), vec![]);
     }
 
-    /// User report, 2026-11-22: a Key of Terror was sent to the trade pages, but the game has a
-    /// Materials tab for it (and Gems and Runes tabs).
     #[test]
     fn gems_runes_and_materials_go_to_their_stash_tab() {
         let mut vex = base("r26", 0);
@@ -1851,13 +1821,12 @@ mod tests {
             at(base("pk1", 0), Spot::Inventory),
             at(base("pk1", 0), Spot::Page(3)),
             at(base("mbr", 0), Spot::Page(1)),
-            // In the cube (a recipe in progress) it stays, and no other rule judges it.
+            // A recipe in progress: no advice.
             at(base("xa2", 0), Spot::Cube),
             at(base("rvl", 0), Spot::Stash),
             at(vex.clone(), Spot::Page(1)),
             at(vex, Spot::Inventory),
             at(gem, Spot::Page(4)),
-            // The ignored page stays ignored.
             at(base("pk2", 0), Spot::Page(IGNORED_PAGE)),
         ];
         assert_eq!(
@@ -2060,8 +2029,7 @@ mod tests {
 
     #[test]
     fn a_keep_one_piece_kept_for_own_use_is_its_one_copy() {
-        // Sigon's Visor (A twink, keep one) as a build piece: the page-1 copy is the player's,
-        // the page-3 copy a give-away (not a second trade keeper).
+        // Sigon's Visor is keep-one: the own copy counts, so the trade-page copy is a give-away.
         let visor = || named("ghm", 5, 36);
         let mut needs = Needs::default();
         needs.piece("Sigon's Visor@6", 1);
@@ -2077,8 +2045,7 @@ mod tests {
 
     #[test]
     fn the_narrowest_base_need_picks_first() {
-        // Crescent Moon takes axes or swords, Lawbringer swords only (3 sockets each). The sword
-        // on page 1 is the better-placed base for both; Lawbringer, with one choice, gets it.
+        // Crescent Moon takes axes or swords, Lawbringer only swords: Lawbringer gets the sword.
         let mut needs = Needs::default();
         needs.base("Crescent Moon", DRUID, None);
         needs.base("Lawbringer", DRUID, None);
@@ -2212,9 +2179,7 @@ mod tests {
             "javelins sold even with druid skills or unidentified; swords judged normally; \
              the merc's spear keeps its rule"
         );
-        // An alternatives group counts not at all, neither its uniques (Tomb Reaver: a
-        // polearm) nor a runeword open to any weapon (Breath of the Dying); a single required
-        // runeword (Harmony: bows, crossbows) counts in full.
+        // An alternatives group (Tomb Reaver, Breath of the Dying) counts not at all; Harmony alone does.
         let fury = Build {
             class: Some(5),
             switch_requires: vec![
@@ -2232,8 +2197,7 @@ mod tests {
             ..Build::default()
         };
         assert_eq!(build_weapon_types([&fury].into_iter(), 5), ["bow", "xbow"]);
-        // A weapon-slot runeword no base can carry for the class (an unknown class, here a
-        // claw runeword for a druid) turns the rule off instead of selling everything but swords.
+        // A weapon-slot runeword the class can't carry (a claw runeword) turns the rule off.
         for (class, label) in [(None, "druid"), (Some(99), "unknown class")] {
             let partial = Build {
                 class,
@@ -2302,8 +2266,7 @@ mod tests {
         })
     }
 
-    /// The needs of a druid on the shipped Summoner → Fury chain at stage `bis_build`, holding
-    /// no copy of anything.
+    /// The needs of a druid holding nothing, on the shipped chain at stage `bis_build`.
     fn shipped_needs(config: &Settings, bis_build: &str) -> anyhow::Result<Needs> {
         let def = config
             .build_defs
@@ -2355,9 +2318,7 @@ mod tests {
                 .filter(|n| n.word.name == "Lawbringer")
                 .map(|n| (n.wearer, n.slot))
                 .collect();
-            // Both are the dual-wielding Act 5 merc's (off-hand and weapon; the druid fights
-            // two-handed); the farm entry and the summoner's "2x Lawbringer" switch condition
-            // add no looser third one.
+            // Both are the dual-wielding Act 5 merc's; "2x Lawbringer" adds no slot-less third.
             assert_eq!(
                 lawbringer,
                 vec![
@@ -2384,8 +2345,7 @@ mod tests {
                 "{stage}"
             );
         }
-        // The Fury has no off-hand: its own weapon-slot runewords keep both hands (the farm
-        // list's summoner entries, Spirit and Heart of the Oak beside a shield, don't).
+        // The Fury has no off-hand: its weapon-slot runewords keep both hands.
         let bis = Bis {
             build: fury.name.clone(),
             slots: fury.slots.clone(),
@@ -2406,8 +2366,7 @@ mod tests {
     fn one_harmony_base_serves_the_druid_swap_and_the_act1_rogue() -> anyhow::Result<()> {
         let config = shipped();
         let needs = shipped_needs(&config, "summoner druid")?;
-        // The Fury's swap Harmony and the summoner's Act 1 rogue Harmony are one need: one
-        // copy is swapped between them.
+        // The Fury's swap Harmony and the rogue's Harmony are one need.
         let harmony: Vec<_> = needs
             .bases
             .iter()
@@ -2417,8 +2376,7 @@ mod tests {
         assert_eq!(harmony, vec![(DRUID, Some(4), Some(Wearer::Merc(MercAct::Act1)))]);
         let own = Action::Keep(Side::Own);
         let mine = |n: &str, action| (n.to_owned(), Spot::Page(1), action, 1);
-        // A 4os Hunter's Bow is kept for Harmony; so is a 4os Stag Bow, an amazon bow
-        // only the rogue can use.
+        // A Stag Bow is an amazon bow: only the rogue can use it.
         assert_eq!(
             rows(&[at(base("hbw", 4), Spot::Page(1))], &needs),
             vec![mine("Hunter's Bow 4os", own)]
@@ -2427,7 +2385,7 @@ mod tests {
             rows(&[at(base("am1", 4), Spot::Page(1))], &needs),
             vec![mine("Stag Bow 4os", own)]
         );
-        // Both held: one Harmony, one base (the stronger amazon bow; a 4os Matriarchal Bow would go to trade); the other is sold.
+        // Both held: one Harmony, one base (the stronger one).
         assert_eq!(
             rows(
                 &[
@@ -2438,8 +2396,7 @@ mod tests {
             ),
             vec![mine("Hunter's Bow 4os", Action::Sell), mine("Stag Bow 4os", own)]
         );
-        // On the Fury stage alone (Act 5 merc only) the amazon bow is no base: the druid
-        // can't use it.
+        // The Fury stage alone has no rogue: the amazon bow is no base.
         let fury = config
             .build_defs
             .get("fury druid")
@@ -2483,10 +2440,7 @@ mod tests {
 
     #[test]
     fn live_two_broad_swords_kept_and_the_zweihander_sold_as_two_handed() -> anyhow::Result<()> {
-        // The live stash (2026-11-20): two Broad Sword 3os on page 2, a Zweihander 3os in the
-        // inventory, no Lawbringer held. Regression (2026-11-20): the shipped build files must
-        // load (a field the parser rejected dropped every build, and both swords were sold);
-        // the Fury in the chain has the Act 5 merc.
+        // The shipped build files must load, or every build drops and both swords are sold.
         let config = shipped();
         assert_eq!(
             config.build_defs.get("fury druid").map(|b| b.merc_acts.clone()),
@@ -2500,8 +2454,7 @@ mod tests {
         ];
         let own = Action::Keep(Side::Own);
         let mine = |n: &str, spot, action, reason, count| (n.to_owned(), spot, action, reason, count);
-        // Both Broad Swords kept (the Act 5 merc's two Lawbringer bases), merged into one line;
-        // no 3-socket need of the builds takes a two-handed base.
+        // The Act 5 merc's two Lawbringer bases; no 3-socket need takes a two-hander.
         assert_eq!(
             reasoned(&items, &needs),
             vec![
