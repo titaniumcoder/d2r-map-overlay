@@ -5,7 +5,7 @@
   "author": "agent-computed from the game data, not from a guide",
   "setup_legend": {
     "standard": "USER CHOICE (the farm list's Fury Druid core): Ribcracker, Fortitude, Jalal's Mane, Laying of Hands, Raven Frost; for the merc 2x Lawbringer, Smoke, Bulwark. The druid always fights two-handed for full damage, never one-handed and never with a shield (user, 2026-11-20); both Lawbringers are the Act 5 merc's dual-wield swords until something better turns up (very endgame). Bulwark (helm) and Smoke (body armor) are merc gear: Jalal's Mane is the druid's helm, and Smoke is always the merc's. Jalal's Mane and Raven Frost are already worn by the summoner before the reset; the druid wears Stealth until Fortitude.",
-    "alternative": "User's endgame options (Enigma, Duress, Dracul's Grasp, String of Ears, Verdungo's Hearty Cord, Gore Rider, War Traveler, Atma's Scarab, The Cat's Eye, Highlord's Wrath, Harmony), ranked below the core pick in the same slot; belt, boots and amulet have no core pick and are ranked by value for a werewolf Fury. Call to Arms + Phoenix on the swap is a late option the user isn't sure helps a Fury."
+    "alternative": "User's endgame options (Enigma, Duress, Dracul's Grasp, String of Ears, Verdungo's Hearty Cord, Gore Rider, War Traveler, Atma's Scarab, The Cat's Eye, Highlord's Wrath, Harmony), ranked below the core pick in the same slot; belt, boots and amulet have no core pick and are ranked by value for a werewolf Fury. Call to Arms + Phoenix on the swap is a late option the user isn't sure helps a Fury. Rings: ring1 after Raven Frost and ring2 list the Maxroll Fury Druid guide's unique/set rings (Nature's Peace, Dwarf Star, Wisp Projector, Nagelring, Manald Heal, Angelic Halo); one copy each is wanted, whichever ring slot it fills."
   },
   "stat_source": "Numbers computed from the D2R game tables (blizzhackers/d2data JSON, current with the Warlock class): skill formulas/params from skills.json + skilldesc.json, runewords from runes.json + misc.json, bases/WSM from weapons.json, uniques/sets from uniqueitems.json/setitems.json, life-steal divisors from difficultylevels.json. Attack frames: werewolf A1 = 13 frames at speed 256 (animdata.d2 entry 40A1HTH, classic d2exp.mpq) with the attack-speed formulas from maxroll's Attack Speed resource (primary and shapeshift equations, faster one wins since patch 2.4). Not from a build guide.",
   "targets": {
@@ -269,6 +269,214 @@
       "why": "Cannot Be Frozen and AR for a melee wolf.",
       "notes": "Not needed once Eternity is worn (Eternity is Cannot Be Frozen).",
       "rank_in_slot": 1
+    },
+    {
+      "name": "Nature's Peace",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 69,
+      "base": "Ring",
+      "stats": [
+        "Slain Monsters Rest in Peace",
+        "Prevent Monster Heal",
+        "Damage Reduced by 7-11",
+        "Poison Resist +20-30%",
+        "Level 5 Oak Sage (27 Charges)"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: Slain Monsters Rest in Peace (no corpses for Nihlathak or shamans to use), Prevent Monster Heal and flat damage reduction.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Dwarf Star",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 45,
+      "base": "Ring",
+      "stats": [
+        "+40 to Life",
+        "15% Fire Absorb",
+        "Magic Damage Reduced by 12-15",
+        "100% Extra Gold from Monsters",
+        "+40 Maximum Stamina",
+        "Heal Stamina Plus 15%"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: life, fire absorb and magic damage reduction for a melee wolf in Hell (user, 2026-11-22: was on the sell list with one ring slot).",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Wisp Projector",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 76,
+      "base": "Ring",
+      "stats": [
+        "10% Chance to cast level 16 Lightning on striking",
+        "10-20% Lightning Absorb",
+        "10-20% Better Chance of Getting Magic Items",
+        "Level 2 Oak Sage (15 Charges)",
+        "Level 5 Heart of Wolverine (13 Charges)",
+        "Level 7 Spirit of Barbs (11 Charges)"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: lightning absorb and magic find; the Lightning procs on Fury's hits.",
+      "rank_in_slot": 4
+    },
+    {
+      "name": "Nagelring",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 7,
+      "base": "Ring",
+      "stats": [
+        "+50-75 to Attack Rating",
+        "15-30% Better Chance of Getting Magic Items",
+        "Magic Damage Reduced by 3",
+        "Attacker Takes Damage of 3"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: cheap attack rating and magic find.",
+      "rank_in_slot": 5
+    },
+    {
+      "name": "Manald Heal",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 15,
+      "base": "Ring",
+      "stats": [
+        "4-7% Mana Stolen per Hit",
+        "Replenish Life +5-8",
+        "Regenerate Mana 20%",
+        "+20 to Life",
+        "+10% Faster Cast Rate"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: mana leech and regeneration for Fury's mana cost.",
+      "notes": "Stats of the Season 15 rework (d2data row, ladder season 15).",
+      "rank_in_slot": 6
+    },
+    {
+      "name": "Angelic Halo",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "set",
+      "req_level": 12,
+      "base": "Ring (Angelic Raiment)",
+      "stats": [
+        "Replenish Life +6",
+        "+20 to Life",
+        "(2 items) +12 to Attack Rating per Character Level",
+        "(3 items) 50% Better Chance of Getting Magic Items"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: with Angelic Wings (2 items) +12 attack rating per character level; listed last here because the build's amulets are not Angelic Wings.",
+      "notes": "Stats of the Season 15 rework (d2data row, ladder season 15).",
+      "rank_in_slot": 7
+    },
+    {
+      "name": "Nature's Peace",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 69,
+      "base": "Ring",
+      "stats": [
+        "Slain Monsters Rest in Peace",
+        "Prevent Monster Heal",
+        "Damage Reduced by 7-11",
+        "Poison Resist +20-30%",
+        "Level 5 Oak Sage (27 Charges)"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: Slain Monsters Rest in Peace (no corpses for Nihlathak or shamans to use), Prevent Monster Heal and flat damage reduction.",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Dwarf Star",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 45,
+      "base": "Ring",
+      "stats": [
+        "+40 to Life",
+        "15% Fire Absorb",
+        "Magic Damage Reduced by 12-15",
+        "100% Extra Gold from Monsters",
+        "+40 Maximum Stamina",
+        "Heal Stamina Plus 15%"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: life, fire absorb and magic damage reduction for a melee wolf in Hell (user, 2026-11-22: was on the sell list with one ring slot).",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Wisp Projector",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 76,
+      "base": "Ring",
+      "stats": [
+        "10% Chance to cast level 16 Lightning on striking",
+        "10-20% Lightning Absorb",
+        "10-20% Better Chance of Getting Magic Items",
+        "Level 2 Oak Sage (15 Charges)",
+        "Level 5 Heart of Wolverine (13 Charges)",
+        "Level 7 Spirit of Barbs (11 Charges)"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: lightning absorb and magic find; the Lightning procs on Fury's hits.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Nagelring",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 7,
+      "base": "Ring",
+      "stats": [
+        "+50-75 to Attack Rating",
+        "15-30% Better Chance of Getting Magic Items",
+        "Magic Damage Reduced by 3",
+        "Attacker Takes Damage of 3"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: cheap attack rating and magic find.",
+      "rank_in_slot": 4
+    },
+    {
+      "name": "Manald Heal",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 15,
+      "base": "Ring",
+      "stats": [
+        "4-7% Mana Stolen per Hit",
+        "Replenish Life +5-8",
+        "Regenerate Mana 20%",
+        "+20 to Life",
+        "+10% Faster Cast Rate"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: mana leech and regeneration for Fury's mana cost.",
+      "notes": "Stats of the Season 15 rework (d2data row, ladder season 15).",
+      "rank_in_slot": 5
+    },
+    {
+      "name": "Angelic Halo",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "set",
+      "req_level": 12,
+      "base": "Ring (Angelic Raiment)",
+      "stats": [
+        "Replenish Life +6",
+        "+20 to Life",
+        "(2 items) +12 to Attack Rating per Character Level",
+        "(3 items) 50% Better Chance of Getting Magic Items"
+      ],
+      "why": "Maxroll Fury Druid guide, rings list: with Angelic Wings (2 items) +12 attack rating per character level; listed last here because the build's amulets are not Angelic Wings.",
+      "notes": "Stats of the Season 15 rework (d2data row, ladder season 15).",
+      "rank_in_slot": 6
     },
     {
       "name": "Lawbringer",

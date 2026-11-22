@@ -51,7 +51,8 @@ gloves = ["Laying of Hands@63", "Dracul's Grasp@76"]
 belt = ["Verdungo's Hearty Cord@63", "String of Ears@29"]
 boots = ["Gore Rider@47", "War Traveler@42"]
 amulet = ["Highlord's Wrath@65", "Atma's Scarab@60", "The Cat's Eye@50"]
-ring1 = ["Raven Frost@45"]
+ring1 = ["Raven Frost@45", "Nature's Peace@69", "Dwarf Star@45", "Wisp Projector@76", "Nagelring@7", "Manald Heal@15", "Angelic Halo@12"]
+ring2 = ["Nature's Peace@69", "Dwarf Star@45", "Wisp Projector@76", "Nagelring@7", "Manald Heal@15", "Angelic Halo@12"]
 
 [merc_slots]
 body = ["Smoke@37"]
@@ -98,6 +99,13 @@ base = "Ring"
 why = "Cannot Be Frozen and AR for a melee wolf."
 notes = "Not needed once Eternity is worn (Eternity is Cannot Be Frozen)."
 stats = ["Cannot Be Frozen", "+150-250 to Attack Rating", "+15-20 to Dexterity", "Adds 15-45 Cold Damage", "20% Cold Absorb", "+40 to Mana"]
+
+[pieces."Nature's Peace"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Fury Druid guide, rings list: Slain Monsters Rest in Peace (no corpses for Nihlathak or shamans to use), Prevent Monster Heal and flat damage reduction."
+stats = ["Slain Monsters Rest in Peace", "Prevent Monster Heal", "Damage Reduced by 7-11", "Poison Resist +20-30%", "Level 5 Oak Sage (27 Charges)"]
 
 [pieces."Lawbringer"]
 kind = "runeword"
@@ -160,6 +168,13 @@ why = "Fastest on its own (calculation 2026-11-20: eth Champion Axe = 100%, the 
 notes = "Vex Hel El Eld Zod Eth."
 stats = ["50% Chance to cast level 20 Poison Nova when you Kill an Enemy", "Indestructible", "+60% Increased Attack Speed", "+350-400% Enhanced Damage", "-25% Target Defense", "+50 to Attack Rating", "+200% Damage to Undead", "7% Mana Stolen per Hit", "12-15% Life Stolen per Hit", "Prevent Monster Heal", "+30 to All Attributes", "+1 to Light Radius", "Requirements -20%"]
 
+[pieces."Dwarf Star"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Fury Druid guide, rings list: life, fire absorb and magic damage reduction for a melee wolf in Hell (user, 2026-11-22: was on the sell list with one ring slot)."
+stats = ["+40 to Life", "15% Fire Absorb", "Magic Damage Reduced by 12-15", "100% Extra Gold from Monsters", "+40 Maximum Stamina", "Heal Stamina Plus 15%"]
+
 [pieces."Enigma"]
 kind = "runeword"
 setup = "alternative"
@@ -211,12 +226,26 @@ base = "Quarterstaff (two-handed staff, 25 Str, WSM 0)"
 why = "Weapon IAS counts undiminished in the shapeshift formula: 5-frame attacks from Werewolf 3, the fastest of all candidates."
 stats = ["+200-300% Enhanced Damage", "Adds 30-65 Damage", "50% Chance of Crushing Blow", "+50% Increased Attack Speed", "+50% Faster Hit Recovery", "+100% Enhanced Defense", "+100 Defense", "+15 to Dexterity"]
 
+[pieces."Wisp Projector"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Fury Druid guide, rings list: lightning absorb and magic find; the Lightning procs on Fury's hits."
+stats = ["10% Chance to cast level 16 Lightning on striking", "10-20% Lightning Absorb", "10-20% Better Chance of Getting Magic Items", "Level 2 Oak Sage (15 Charges)", "Level 5 Heart of Wolverine (13 Charges)", "Level 7 Spirit of Barbs (11 Charges)"]
+
 [pieces."The Cat's Eye"]
 kind = "unique"
 setup = "alternative"
 base = "Amulet"
 why = "Third: only speed and defense; the IAS doesn't matter for Ribcracker (5 frames already)."
 stats = ["+20% Increased Attack Speed", "+30% Faster Run/Walk", "+25 to Dexterity", "+100 Defense", "+100 Defense vs. Missile"]
+
+[pieces."Nagelring"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Fury Druid guide, rings list: cheap attack rating and magic find."
+stats = ["+50-75 to Attack Rating", "15-30% Better Chance of Getting Magic Items", "Magic Damage Reduced by 3", "Attacker Takes Damage of 3"]
 
 [pieces."Duress"]
 kind = "runeword"
@@ -232,6 +261,22 @@ setup = "alternative"
 base = "2-socket body armor"
 why = "Worn by the summoner already, until Fortitude (Smoke is the merc's armor)."
 stats = ["+25% Faster Run/Walk", "+25% Faster Cast Rate", "+25% Faster Hit Recovery", "+6 to Dexterity", "Magic Damage Reduced by 3"]
+
+[pieces."Manald Heal"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Fury Druid guide, rings list: mana leech and regeneration for Fury's mana cost."
+notes = "Stats of the Season 15 rework (d2data row, ladder season 15)."
+stats = ["4-7% Mana Stolen per Hit", "Replenish Life +5-8", "Regenerate Mana 20%", "+20 to Life", "+10% Faster Cast Rate"]
+
+[pieces."Angelic Halo"]
+kind = "set"
+setup = "alternative"
+base = "Ring (Angelic Raiment)"
+why = "Maxroll Fury Druid guide, rings list: with Angelic Wings (2 items) +12 attack rating per character level; listed last here because the build's amulets are not Angelic Wings."
+notes = "Stats of the Season 15 rework (d2data row, ladder season 15)."
+stats = ["Replenish Life +6", "+20 to Life", "(2 items) +12 to Attack Rating per Character Level", "(3 items) 50% Better Chance of Getting Magic Items"]
 
 [[recipes]]
 name = "Smoke"

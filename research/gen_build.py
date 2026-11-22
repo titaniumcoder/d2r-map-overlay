@@ -98,7 +98,7 @@ CLASS_IDS = {"amazon": 0, "sorceress": 1, "necromancer": 2, "paladin": 3, "barba
              "druid": 5, "assassin": 6, "warlock": 7}
 SLOTMAP = {"ring": "ring1"}
 EXTRA = {"charm": "charms", "jewel": "jewels", "rune": "runes"}
-ORDER = ["weapon", "offhand", "swap", "helm", "body", "gloves", "belt", "boots", "amulet", "ring1"]
+ORDER = ["weapon", "offhand", "swap", "helm", "body", "gloves", "belt", "boots", "amulet", "ring1", "ring2"]
 MAX_POINTS = 20
 # Known guide-text errors, fixed deterministically (build, level, skill) -> skill.
 FIXES = {

@@ -1745,7 +1745,7 @@ mod tests {
             judged(
                 &[
                     unid("wnd"),
-                    unid("dr8"),
+                    unid("9kr"),
                     at(junk, Spot::Inventory),
                     at(plus3, Spot::Page(1))
                 ],
@@ -1765,7 +1765,27 @@ mod tests {
                     None
                 ),
             ],
-            "the unidentified wand and pelt: no advice; identified, the +3 rules decide"
+            "the unidentified wand and dagger: no advice; identified, the +3 rules decide"
+        );
+    }
+
+    #[test]
+    fn a_magic_amazon_spear_is_no_money_item() {
+        let unid = |code: &str| {
+            let mut d = rolled(code, QUALITY_MAGIC, &[]);
+            d.flags = 0;
+            at(d, Spot::Inventory)
+        };
+        let plus3 = rolled("am3", QUALITY_MAGIC, &[(stat::SKILL_TAB, 0, 3)]);
+        assert_eq!(
+            judged(&[unid("am3"), at(plus3, Spot::Inventory)], &summoner()),
+            vec![(
+                "Magic Maiden Spear".to_owned(),
+                Spot::Inventory,
+                Action::Sell,
+                Some("not a build weapon")
+            )],
+            "unidentified or +3 to an Amazon tab: no trade keep (vendors pay little)"
         );
     }
 
@@ -2399,6 +2419,44 @@ mod tests {
             .map(|n| n.wearer)
             .collect();
         assert_eq!(swap, vec![DRUID, DRUID]);
+        Ok(())
+    }
+
+    #[test]
+    fn fury_rings_of_either_slot_are_kept_one_copy_each() -> anyhow::Result<()> {
+        // The shipped Fury lists the guide's rings in ring1 (after Raven Frost) and ring2: a
+        // ring named in both slots is still one wanted copy, and each held one is kept.
+        let needs = shipped_needs(&shipped(), "fury druid")?;
+        let rings = [
+            ("Raven Frost", item_data::QUALITY_UNIQUE, 275),
+            ("Nature's Peace", item_data::QUALITY_UNIQUE, 300),
+            ("Dwarf Star", item_data::QUALITY_UNIQUE, 274),
+            ("Wisp Projector", item_data::QUALITY_UNIQUE, 319),
+            ("Nagelring", item_data::QUALITY_UNIQUE, 120),
+            ("Manald Heal", item_data::QUALITY_UNIQUE, 121),
+            ("Angelic Halo", item_data::QUALITY_SET, 52),
+        ];
+        for (name, quality, index) in rings {
+            let wanted: Vec<u32> = needs
+                .pieces
+                .iter()
+                .filter(|(n, _)| same_name(n, name))
+                .map(|&(_, c)| c)
+                .collect();
+            assert_eq!(wanted, vec![1], "{name}");
+            assert_eq!(
+                rows(&[at(named("rin", quality, index), Spot::Page(2))], &needs),
+                vec![row(name, Spot::Page(2), Action::Keep(Side::Own), 1)]
+            );
+        }
+        // One copy wanted: a second Dwarf Star is not kept for own use.
+        let star = || named("rin", item_data::QUALITY_UNIQUE, 274);
+        let plan = rows(&[at(star(), Spot::Page(1)), at(star(), Spot::Page(2))], &needs);
+        let own = plan
+            .iter()
+            .filter(|r| matches!(r.2, Action::Keep(Side::Own)))
+            .count();
+        assert_eq!(own, 1, "{plan:?}");
         Ok(())
     }
 

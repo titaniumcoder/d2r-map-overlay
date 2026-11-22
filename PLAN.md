@@ -728,6 +728,21 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   Frozen, so Raven Frost is not needed once it is worn (Raven Frost's note); the summoner's
   `switch_requires` "Cannot Be Frozen" group already listed Eternity (the Fury stage has no
   `switch_requires`).
+- **Fury rings (user, 2026-11-22: "my fury druid guide ... has a whole list of rings")**: the
+  Maxroll Fury Druid guide's unique/set rings are in the Fury build: ring1 = Raven Frost, then
+  Nature's Peace, Dwarf Star, Wisp Projector, Nagelring, Manald Heal, Angelic Halo; ring2 = the
+  same six (`gen_build.py` takes slot `ring2`; stats from d2data uniqueitems / setitems.json).
+  Angelic Halo is last, not second as in the guide: its 2-piece bonus needs Angelic Wings, which
+  no Fury amulet slot lists. A ring named in both slots is one wanted copy (`Needs::piece` takes
+  the max, not the sum), so a held copy of either list is "keep own" and a second copy is not
+  (`fury_rings_of_either_slot_are_kept_one_copy_each`); the gear grid and the upgrade list
+  already deduplicate both ring slots into one Ring column. **Open: rare and Blood-crafted
+  rings** (the guide's first four ring picks; wanted affixes: Slain Monsters Rest in Peace, AR,
+  min damage, mana/life steal, attributes, life, resists, absorbs, DR, MDR, Cannot Be Frozen,
+  MF) have no build-file form: a build piece is a named unique/set/runeword/magic item and a
+  farm `kind = "rolled"` entry only matches skill `needs`. Until then a rare or crafted ring is
+  judged by `gear_score` against the worse worn ring (kept within `NEAR_WORN` of it or with
+  notable affixes, else sold "worse than worn" / "no build stats"), not by the guide's affix list.
 - **Upgrades + chime**: `upgrades` in the live JSON = owned/stash pieces of the current stage wearable now
   and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
   are all owned. The page chimes (WebAudio, 🔔 toggle) when a key appears that this character hasn't had.
