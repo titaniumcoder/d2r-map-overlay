@@ -1,5 +1,5 @@
 //! The shipped `playstyles/trapsin/` folder parses without warnings: the Fire Wake Assassin →
-//! Trapsin chain, its farm list, route and loot filter name.
+//! Trapsin chain (natural-socket bases only), its farm list, route and loot filter.
 
 use std::path::{Path, PathBuf};
 
@@ -106,5 +106,66 @@ fn farm_list_and_route_parse_without_warnings() -> Result<()> {
         route.bosses,
         ["The Countess", "Andariel", "Mephisto", "Diablo", "Baal"]
     );
+    Ok(())
+}
+
+#[test]
+fn builds_use_natural_socket_bases_only() -> Result<()> {
+    // User decision 2026-11-22: no Larzuk for the assassin either, with no exception.
+    for stem in ["fire-wake-assassin", "trapsin"] {
+        let (_, def) = build(stem)?;
+        for recipe in &def.recipes {
+            ensure!(
+                recipe.kind != "socket" && recipe.quest != "Siege on Harrogath",
+                "{stem}: socket quest recipe {:?}",
+                recipe.name
+            );
+        }
+        let text = read(&format!("builds/{stem}.toml"))?;
+        ensure!(!text.to_lowercase().contains("larzuk"), "{stem}: mentions Larzuk");
+    }
+    Ok(())
+}
+
+/// The enabled show rule of `rarity` whose `equipmentItemCode` holds every code of `codes`,
+/// ahead of the filter's last rule (the catch-all hide).
+fn shown(filter: &serde_json::Value, rarity: &str, codes: &[&str]) -> Result<String> {
+    let rules = filter
+        .get("rules")
+        .and_then(serde_json::Value::as_array)
+        .context("rules")?;
+    let (last, rules) = rules.split_last().context("no rules")?;
+    ensure!(last.get("ruleType") == Some(&serde_json::json!("hide")));
+    let has = |rule: &serde_json::Value, key: &str, value: &str| {
+        rule.get(key)
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(value)))
+    };
+    rules
+        .iter()
+        .find(|r| {
+            r.get("enabled") == Some(&serde_json::json!(true))
+                && r.get("ruleType") == Some(&serde_json::json!("show"))
+                && has(r, "equipmentRarity", rarity)
+                && codes.iter().all(|c| has(r, "equipmentItemCode", c))
+        })
+        .and_then(|r| r.get("name").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .with_context(|| format!("no {rarity} show rule for {codes:?}"))
+}
+
+#[test]
+fn loot_filter_shows_rare_claws_and_magic_circlets() -> Result<()> {
+    let filter: serde_json::Value = serde_json::from_str(&read("loot-filter.json")?)?;
+    // Every assassin claw / katar base (items.txt types h2h, h2h2).
+    let claws: Vec<&str> = d2r_core::bases_data::BASES
+        .iter()
+        .filter(|row| row.2.starts_with("h2h"))
+        .map(|row| row.0)
+        .collect();
+    assert_eq!(claws.len(), 21, "{claws:?}");
+    shown(&filter, "rare", &claws)?;
+    shown(&filter, "magic", &["ci0", "ci1", "ci2", "ci3"])?;
+    shown(&filter, "magic", &["9tw", "9lw", "7tw", "7lw"])?;
     Ok(())
 }

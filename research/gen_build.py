@@ -118,7 +118,7 @@ BUILDS = {
     ),
     "trapsin": dict(
         name="Trapsin", cls="assassin", damages=["lightning", "fire"], playstyle="trapsin",
-        notes="Lightning Sentry / Death Sentry Assassin (Maxroll Season 16 endgame guide) from the skill reset at 38; standard = the guide's Standard setup (2x Cunning Greater Talons of Quickness with Rainbow Facets, Griffon's Eye, Enigma, Magefist, Arachnid Mesh, Mara's Kaleidoscope, 2x The Stone of Jordan; the Act 2 Holy Freeze merc with Infinity, Fortitude, Andariel's Visage), starter = the leveling gear she resets with (Spirit, Lore, Stealth, Insight on the merc); every other slot lists the guide's Gear Options as alternatives.",
+        notes="Lightning Sentry / Death Sentry Assassin (Maxroll Season 16 endgame guide) from the skill reset at 38; standard = the guide's Standard setup (2x Cunning Greater Talons of Quickness, unsocketed: natural-socket bases only, no socket quest; Griffon's Eye, Enigma, Magefist, Arachnid Mesh, Mara's Kaleidoscope, 2x The Stone of Jordan; the Act 2 Holy Freeze merc with Infinity, Fortitude, Andariel's Visage), starter = the leveling gear she resets with (Spirit, Lore, Stealth, Insight on the merc); every other slot lists the guide's Gear Options as alternatives.",
         # No weapon_rule: the trapsin keeps her off-hand (a second claw or a shield), so the rule
         # that fits would be "one-handed", which WeaponRule can't say; two_handed would be wrong,
         # and melee changes nothing for her weapon-slot runewords (none takes a bow).

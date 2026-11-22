@@ -4,7 +4,7 @@
  "guide_updated": "2026-11-13",
  "author": "Teo1904 (Maxroll); the reset at 38 from the same author's Assassin Leveling guide",
  "setup_legend": {
-  "standard": "The guide's Standard setup: 2x Cunning Greater Talons of Quickness (+3 Traps, 40% IAS) with Rainbow Facets, Griffon's Eye, Enigma (Mage Plate), Magefist, Arachnid Mesh, Mara's Kaleidoscope, 2x The Stone of Jordan, rare boots; the Act 2 Defensive (Holy Freeze) merc with Infinity (Thresher), Fortitude (Sacred Armor), Andariel's Visage.",
+  "standard": "The guide's Standard setup: 2x Cunning Greater Talons of Quickness (+3 Traps, 40% IAS; the guide socket-quests Rainbow Facets into them, this build keeps them unsocketed: natural-socket bases only), Griffon's Eye, Enigma (Mage Plate), Magefist, Arachnid Mesh, Mara's Kaleidoscope, 2x The Stone of Jordan, rare boots; the Act 2 Defensive (Holy Freeze) merc with Infinity (Thresher), Fortitude (Sacred Armor), Andariel's Visage.",
   "starter": "The guide's Starter setup = the leveling gear she resets with (Spirit sword, Ancients' Pledge, Lore, Stealth, Insight Partizan on the merc), Temper / Ground / Hearth helms and the Wand of Lower Resistance (and the Battle Staff of Teleportation until Enigma) on the swap.",
   "alternative": "Every other slot lists the guide's Gear Options (unique / set / runeword; rare, crafted and the other magic picks have no build-file form); the Magic Find setup's pieces (Heart of the Oak Flail, Spirit Monarch, Harlequin Crest, Skullder's Ire, Chance Guards, War Traveler, Nagelring) fold as alternatives with a note. Unique charms are in the charm wishlist."
  },
@@ -12,7 +12,7 @@
  "targets": {
   "skill_order": "Reset at 38 (43 points): Lightning Sentry 15, Charged Bolt Sentry 10, Death Sentry 9, Burst of Speed 3, Cloak of Shadows 1, Mind Blast 1 and the prerequisites. Then 1 point each in Fade and Weapon Block, and max Lightning Sentry, Shock Web, Charged Bolt Sentry, Death Sentry, Fire Blast in that order (the Standard setup); the last point to Weapon Block, Wake of Fire or Shadow Master. 110 points at 99.",
   "traps": "Lay 5 Lightning Sentries on one spot so they focus one target; once the first monsters die, 1-2 Death Sentries explode the corpses (fire + physical). Baal waves: 4 Lightning Sentries beside the spawn, 1 Death Sentry far enough away to keep its charges for corpse explosions.",
-  "lightning_resistance": "Patch 2.6: -x% enemy lightning resistance on gear applies to the traps: Griffon's Eye, lightning Rainbow Facets in every socket, Crescent Moon on the swap right after laying traps, the merc's Infinity (Conviction).",
+  "lightning_resistance": "Patch 2.6: -x% enemy lightning resistance on gear applies to the traps: Griffon's Eye, Crescent Moon on the swap right after laying traps, the merc's Infinity (Conviction).",
   "immunes": "Lower Resist from the Wand of Lower Resistance until Infinity; Crack of the Heavens sunders lightning immunity; Fire Blast for lightning and physical immunes; Death Sentry and the merc for the rest, or skip them."
  },
  "merc": {
@@ -192,11 +192,10 @@
    "stats": [
     "+3 to Traps (Assassin Only)",
     "+40% Increased Attack Speed",
-    "Claw automods: up to +3 to Lightning Sentry or Death Sentry",
-    "2 sockets for Rainbow Facets (Larzuk: 50/50 for 2)"
+    "Claw automods: up to +3 to Lightning Sentry or Death Sentry"
    ],
    "why": "The Standard setup dual-wields two: +3 Traps each (+6 Lightning Sentry with the automods), 40% IAS for trap laying, and Weapon Block; it sacrifices one FCR breakpoint for the damage.",
-   "notes": "Socket both with Rainbow Facets (lightning); Larzuk's reward gives 2 sockets half the time.",
+   "notes": "Unsocketed: a magic item gets sockets only from a socket prefix (Artisan's, Jeweler's), which would replace Cunning, and there is no socket quest (natural-socket bases only), so no Rainbow Facets.",
    "rank_in_slot": 1
   },
   {
@@ -205,7 +204,7 @@
    "setup": "alternative",
    "kind": "runeword",
    "req_level": 47,
-   "base": "Phase Blade (25 Str / 136 Dex) with 3 sockets, not magic; any 3-socket axe, sword or polearm",
+   "base": "Phase Blade (25 Str / 136 Dex) that dropped with 3 sockets, not magic; any 3-socket axe, sword or polearm",
    "stats": [
     "-35% to Enemy Lightning Resistance",
     "10% Chance to cast level 17 Chain Lightning on striking",
@@ -228,7 +227,7 @@
    "setup": "magic_find",
    "kind": "runeword",
    "req_level": 55,
-   "base": "Flail (41 Str / 35 Dex) with 4 sockets, not magic (one-handed: the shield stays)",
+   "base": "Flail (41 Str / 35 Dex) that dropped with 4 sockets, not magic (one-handed: the shield stays)",
    "stats": [
     "+3 to All Skills",
     "+40% Faster Cast Rate",
@@ -304,7 +303,7 @@
    "setup": "starter",
    "kind": "runeword",
    "req_level": 25,
-   "base": "Crystal Sword or Broad Sword with 4 sockets, not magic",
+   "base": "Crystal Sword or Broad Sword that dropped with 4 sockets, not magic",
    "stats": [
     "+2 to All Skills",
     "+25-35% Faster Cast Rate",
@@ -323,7 +322,7 @@
    "setup": "alternative",
    "kind": "runeword",
    "req_level": 67,
-   "base": "Greater Talons / Greater Claws (or a sword / dagger) with 3 sockets, not magic",
+   "base": "Greater Talons / Greater Claws (or a sword / dagger) that dropped with 3 sockets, not magic",
    "stats": [
     "+1-2 to All Skills",
     "Level 13-17 Cleansing Aura When Equipped",
@@ -349,11 +348,10 @@
    "stats": [
     "+3 to Traps (Assassin Only)",
     "+40% Increased Attack Speed",
-    "Claw automods: up to +3 to Lightning Sentry or Death Sentry",
-    "2 sockets for Rainbow Facets (Larzuk: 50/50 for 2)"
+    "Claw automods: up to +3 to Lightning Sentry or Death Sentry"
    ],
    "why": "The Standard setup dual-wields two: +3 Traps each (+6 Lightning Sentry with the automods), 40% IAS for trap laying, and Weapon Block; it sacrifices one FCR breakpoint for the damage.",
-   "notes": "Socket both with Rainbow Facets (lightning); Larzuk's reward gives 2 sockets half the time.",
+   "notes": "Unsocketed: a magic item gets sockets only from a socket prefix (Artisan's, Jeweler's), which would replace Cunning, and there is no socket quest (natural-socket bases only), so no Rainbow Facets.",
    "rank_in_slot": 1
   },
   {
@@ -362,7 +360,7 @@
    "setup": "starter",
    "kind": "runeword",
    "req_level": 21,
-   "base": "Large Shield or Kite Shield with 3 sockets, not magic",
+   "base": "Large Shield or Kite Shield that dropped with 3 sockets, not magic",
    "stats": [
     "+50% Enhanced Defense",
     "Cold Resist +30%",
@@ -378,7 +376,7 @@
    "setup": "alternative",
    "kind": "runeword",
    "req_level": 67,
-   "base": "Greater Talons / Greater Claws with 3 sockets, not magic",
+   "base": "Greater Talons / Greater Claws that dropped with 3 sockets, not magic",
    "stats": [
     "+1-2 to All Skills",
     "Level 13-17 Cleansing Aura When Equipped",
@@ -400,7 +398,7 @@
    "setup": "magic_find",
    "kind": "runeword",
    "req_level": 25,
-   "base": "Monarch (156 Str) with 4 sockets, not magic (or any 4-socket non-class shield)",
+   "base": "Monarch (156 Str) that dropped with 4 sockets, not magic (or any 4-socket non-class shield)",
    "stats": [
     "+2 to All Skills",
     "+25-35% Faster Cast Rate",
@@ -495,7 +493,7 @@
    "setup": "alternative",
    "kind": "runeword",
    "req_level": 47,
-   "base": "Phase Blade with 3 sockets, not magic",
+   "base": "Phase Blade that dropped with 3 sockets, not magic",
    "stats": [
     "-35% to Enemy Lightning Resistance",
     "10% Chance to cast level 17 Chain Lightning on striking",
@@ -546,7 +544,7 @@
    "setup": "standard",
    "kind": "unique",
    "req_level": 76,
-   "base": "Diadem (circlet, no Str), 1 socket for a Rainbow Facet (Larzuk)",
+   "base": "Diadem (circlet, no Str); uniques drop without sockets and there is no socket quest, so no Rainbow Facet",
    "stats": [
     "+1 to All Skills",
     "+25% Faster Cast Rate",
@@ -554,7 +552,7 @@
     "+10-15% to Lightning Skill Damage",
     "+100-200 Defense"
    ],
-   "why": "-15-20% enemy lightning resistance (applies to traps since patch 2.6), +10-15% lightning damage, 25% FCR; socket a Rainbow Facet.",
+   "why": "-15-20% enemy lightning resistance (applies to traps since patch 2.6), +10-15% lightning damage, 25% FCR.",
    "rank_in_slot": 1
   },
   {
@@ -1332,27 +1330,12 @@
    "rank_in_slot": 5
   },
   {
-   "name": "Rainbow Facet",
-   "slot": "jewel",
-   "setup": "standard",
-   "kind": "unique",
-   "req_level": 49,
-   "base": "Jewel (unique)",
-   "stats": [
-    "Lightning version: -3-5% to Enemy Lightning Resistance",
-    "+3-5% to Lightning Skill Damage",
-    "100% Chance to cast level 41 Nova when you Die, or level 37 Charged Bolt when you Level-up"
-   ],
-   "why": "The lightning Rainbow Facet: -3-5% enemy lightning resistance on every trap hit; as many as the sockets allow (2 per claw, 1 in Griffon's Eye).",
-   "rank_in_slot": 1
-  },
-  {
    "name": "Infinity",
    "slot": "merc_weapon",
    "setup": "standard",
    "kind": "runeword",
    "req_level": 63,
-   "base": "ethereal Thresher (Act 2 merc polearm) with 4 sockets, not magic",
+   "base": "ethereal Thresher (Act 2 merc polearm) that dropped with 4 sockets, not magic",
    "stats": [
     "Level 12 Conviction Aura When Equipped",
     "50% Chance to cast level 20 Chain Lightning when you Kill an Enemy",
@@ -1705,17 +1688,6 @@
    ]
   },
   {
-   "name": "Larzuk socket quest: the claws",
-   "kind": "socket",
-   "quest": "Siege on Harrogath",
-   "inputs": [
-    "Cunning Greater Talons of Quickness (magic)"
-   ],
-   "result": "1 or 2 sockets (50/50 for a magic item), for Rainbow Facets",
-   "req": "Act 5 Siege on Harrogath reward (Nightmare or Hell)",
-   "notes": "The guide's use of the reward: 2 sockets in the shopped claws (Anya, Nightmare / Hell)."
-  },
-  {
    "name": "Recharge Lower Resist / Teleport charges",
    "kind": "cube",
    "inputs": [
@@ -1742,7 +1714,7 @@
   {
    "range": "lvl 45-99 (Hell / endgame)",
    "tips": [
-    "From 45: two Cunning Greater Talons of Quickness (+3 Traps) from Anya in Nightmare / Hell, socketed by Larzuk (50/50 for 2) with lightning Rainbow Facets.",
+    "From 45: two Cunning Greater Talons of Quickness (+3 Traps) from Anya in Nightmare / Hell, unsocketed (no socket quest).",
     "Start runs with Battle Command twice and Battle Orders from Call to Arms, then the swap with the most +skills for Burst of Speed.",
     "MIN-MAX: swap to Crescent Moon right after laying the Lightning Sentries and stay there until the traps are done.",
     "Keep the merc close to the fight for Infinity's Conviction; Fire Blast on lightning and physical immunes; Fade instead of Burst of Speed to cap resistances."

@@ -68,15 +68,15 @@ weapon = ["Insight@27"]
 [pieces."Spirit"]
 kind = "runeword"
 setup = "lvl 26-38"
-base = "Crystal Sword (43 Str) or Broad Sword (48 Str, up to 48 Str needed at 26) with 4 sockets: from the Secret Cow Level, socketed by Larzuk (Act 5 Normal Siege on Harrogath reward)"
+base = "sword that dropped with 4 sockets: Crystal Sword (43 Str) or Broad Sword (48 Str, up to 48 Str needed at 26), from item level 26 (Normal Act 5 / Secret Cow Level / Nightmare)"
 why = "+2 to All Skills, FCR and mana; with Ancients' Pledge the guide's Nightmare setup until the reset (it stays on the Trapsin until the claws)."
-notes = "Tal Thul Ort Amn from the Nightmare Countess."
+notes = "Tal Thul Ort Amn from the Nightmare Countess. No socket quest (natural-socket bases only): swords drop with at most 3 sockets up to item level 25, 4 up to 40; a Broad Sword holds at most 4, a Crystal Sword above item level 40 can roll 5-6."
 stats = ["+2 to All Skills", "+25-35% Faster Cast Rate", "+55% Faster Hit Recovery", "+89-112 to Mana", "+22 to Vitality", "+250 Defense vs. Missile", "+3-8 Magic Absorb"]
 
 [pieces."Ancients' Pledge"]
 kind = "runeword"
 setup = "lvl 26-38"
-base = "Large Shield (34 Str) or Kite Shield (47 Str, better for run speed) with 3 sockets, not magic (Farah)"
+base = "Large Shield (34 Str) or Kite Shield (47 Str, better for run speed) that dropped with 3 sockets, not magic (Farah)"
 why = "Resistances for Nightmare; made in Normal Act 5 and stashed until the Spirit sword (Leaf is two-handed)."
 notes = "Ral Ort Tal (the Act 5 Rescue on Mount Arreat quest runes)."
 stats = ["+50% Enhanced Defense", "Cold Resist +30%", "All Resistances +13", "10% Damage Taken Goes To Mana"]
@@ -266,15 +266,6 @@ req = "character level 21; 3 sockets"
 notes = "Runes from the Act 5 Rescue on Mount Arreat quest; stash it until the Spirit sword."
 
 [[recipes]]
-name = "Larzuk socket quest: the Spirit sword"
-kind = "socket"
-inputs = ["white Crystal Sword or Broad Sword from the Secret Cow Level"]
-result = "4 sockets (the most a Normal Cow Level sword's item level allows)"
-req = "Act 5 Siege on Harrogath reward (Normal)"
-notes = "The guide's use of the Normal reward: a 4-socket base for Spirit."
-quest = "Siege on Harrogath"
-
-[[recipes]]
 name = "Spirit"
 kind = "runeword"
 inputs = ["Tal", "Thul", "Ort", "Amn", "non-magic Swords with exactly 4 sockets (guide: Crystal Sword, Broad Sword)"]
@@ -332,11 +323,11 @@ text = "Hire an Act 2 merc after entering Act 4, with a Pike from Halbu (Grand V
 
 [[tips]]
 levels = "20-26"
-text = "Kill Izual for the skill points before Diablo; Act 5 quests 1 and 2: the socket reward and the Ancients' Pledge runes."
+text = "Kill Izual for the skill points before Diablo; Act 5 quest 2: the Ancients' Pledge runes (no socket quest: natural-socket bases only)."
 
 [[tips]]
 levels = "20-26"
-text = "After Baal: the Secret Cow Level for a Crystal Sword / Broad Sword (Spirit base, Larzuk's socket reward), then the Baal waves to 26 before Nightmare."
+text = "After Baal: the Secret Cow Level for a Crystal Sword / Broad Sword that dropped with 4 sockets (Spirit base), then the Baal waves to 26 before Nightmare."
 
 [[tips]]
 levels = "26-38"

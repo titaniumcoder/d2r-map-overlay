@@ -29,8 +29,9 @@ items = [
 ]
 
 # The Trapsin's Standard setup (Maxroll's Lightning Sentry guide), farmed from the start: the
-# core pieces, the merc's, the swap and the lightning Rainbow Facets for the sockets. The two
-# Cunning Greater Talons of Quickness (+3 Traps claws) are magic: shopped from Anya, not listed.
+# core pieces, the merc's and the swap. The two Cunning Greater Talons of Quickness (+3 Traps
+# claws) are magic: shopped from Anya, not listed. No Rainbow Facets: natural-socket bases only
+# (no socket quest), and neither the magic claws nor Griffon's Eye drop with sockets.
 [[farm]]
 for = "Trapsin"
 items = [
@@ -40,7 +41,6 @@ items = [
   { name = "Arachnid Mesh", kind = "unique" },
   { name = "Mara's Kaleidoscope", kind = "unique" },
   { name = "The Stone of Jordan", kind = "unique", count = 2 },
-  { name = "Rainbow Facet", kind = "unique", count = 5, note = "lightning ones: 2 per claw, 1 in Griffon's Eye" },
   { name = "Infinity", kind = "runeword", merc = true, slot = "weapon" },
   { name = "Fortitude", kind = "runeword", merc = true, slot = "body" },
   { name = "Andariel's Visage", kind = "unique", merc = true },

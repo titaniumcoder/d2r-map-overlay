@@ -1749,10 +1749,19 @@ gear farming immediately starts the same as with the fury druid. think of it as 
   was empty). Loot filter: the druid's, renamed "Trapsin", magic and socketed claws shown.
 - Open (Trapsin): no one-handed `WeaponRule` (a two-handed staff counts as a Heart of the Oak base);
   no swap off-hand slot (Spirit Monarch sits in `offhand`); rolled farm entries can't ask for
-  "+3 Traps" claws or skillers (only oskills / charges); Rainbow Facet variants share one name;
+  "+3 Traps" claws or skillers (only oskills / charges);
   "Crescent Moon" is a runeword and a unique amulet; magic leveling pieces are display only;
-  the filter shows no rare claws or magic circlets (ci0/ci1); `gear_score::is_caster` treats a
-  trapsin with claws as a fighter (charm keeps, vendor verdicts).
+  `gear_score::is_caster` treats a trapsin with claws as a fighter (charm keeps, vendor verdicts).
+- [x] **User decisions (2026-11-22)**: no Larzuk for the assassin either, no exception (the
+  guide's endgame only socket-quests its two +3 Traps claws for Rainbow Facets): both build
+  sources lose their Larzuk recipes and tips, every runeword base is one that dropped with its
+  sockets (the Spirit sword: a 4-socket Crystal / Broad Sword from item level 26, Cow Level or
+  Nightmare), the claws and Griffon's Eye stay unsocketed, so the Rainbow Facet left the
+  Trapsin's jewels and farm list (the Facet variants open point is moot). The skill reset at 38
+  and the Nightmare Den of Evil point into Fire Blast stay. Loot filter: rare claws (all 21
+  claw / katar codes, rule 19's item codes) and magic Circlet / Coronet (ci0/ci1, rule 20)
+  shown. Tests: `tests/trapsin_files.rs` (no socket-quest recipe or Larzuk in the trapsin
+  builds; the filter's enabled show rules hold those codes ahead of the final hide).
 
 ## Stash-plan anomalies (found 2026-11-22; fixed the same day by user decision)
 User decided 2026-11-22: fix these four; guide alternatives keep their bases ("the bases are

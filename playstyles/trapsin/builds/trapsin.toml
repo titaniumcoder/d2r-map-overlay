@@ -5,8 +5,8 @@
 # leveling stage, 'lvl a-b'), everything else folds as alternative.
 name = "Trapsin"
 damages = ["lightning", "fire"]
-notes = "Lightning Sentry / Death Sentry Assassin (Maxroll Season 16 endgame guide) from the skill reset at 38; standard = the guide's Standard setup (2x Cunning Greater Talons of Quickness with Rainbow Facets, Griffon's Eye, Enigma, Magefist, Arachnid Mesh, Mara's Kaleidoscope, 2x The Stone of Jordan; the Act 2 Holy Freeze merc with Infinity, Fortitude, Andariel's Visage), starter = the leveling gear she resets with (Spirit, Lore, Stealth, Insight on the merc); every other slot lists the guide's Gear Options as alternatives."
-targets = ["Skill order: Reset at 38 (43 points): Lightning Sentry 15, Charged Bolt Sentry 10, Death Sentry 9, Burst of Speed 3, Cloak of Shadows 1, Mind Blast 1 and the prerequisites. Then 1 point each in Fade and Weapon Block, and max Lightning Sentry, Shock Web, Charged Bolt Sentry, Death Sentry, Fire Blast in that order (the Standard setup); the last point to Weapon Block, Wake of Fire or Shadow Master. 110 points at 99.", "Traps: Lay 5 Lightning Sentries on one spot so they focus one target; once the first monsters die, 1-2 Death Sentries explode the corpses (fire + physical). Baal waves: 4 Lightning Sentries beside the spawn, 1 Death Sentry far enough away to keep its charges for corpse explosions.", "Lightning resistance: Patch 2.6: -x% enemy lightning resistance on gear applies to the traps: Griffon's Eye, lightning Rainbow Facets in every socket, Crescent Moon on the swap right after laying traps, the merc's Infinity (Conviction).", "Immunes: Lower Resist from the Wand of Lower Resistance until Infinity; Crack of the Heavens sunders lightning immunity; Fire Blast for lightning and physical immunes; Death Sentry and the merc for the rest, or skip them.", "Merc: Act 2 Desert Mercenary, Defensive (Holy Freeze, hired in Nightmare): Insight Partizan to start, then Infinity (ethereal Thresher), Fortitude (Sacred Armor) and Andariel's Visage — The merc deals with what is immune to the traps; Infinity's Conviction lowers resistances and breaks lightning immunity for the traps too (the guide: the Trapsin needs it to be fully functional)."]
+notes = "Lightning Sentry / Death Sentry Assassin (Maxroll Season 16 endgame guide) from the skill reset at 38; standard = the guide's Standard setup (2x Cunning Greater Talons of Quickness, unsocketed: natural-socket bases only, no socket quest; Griffon's Eye, Enigma, Magefist, Arachnid Mesh, Mara's Kaleidoscope, 2x The Stone of Jordan; the Act 2 Holy Freeze merc with Infinity, Fortitude, Andariel's Visage), starter = the leveling gear she resets with (Spirit, Lore, Stealth, Insight on the merc); every other slot lists the guide's Gear Options as alternatives."
+targets = ["Skill order: Reset at 38 (43 points): Lightning Sentry 15, Charged Bolt Sentry 10, Death Sentry 9, Burst of Speed 3, Cloak of Shadows 1, Mind Blast 1 and the prerequisites. Then 1 point each in Fade and Weapon Block, and max Lightning Sentry, Shock Web, Charged Bolt Sentry, Death Sentry, Fire Blast in that order (the Standard setup); the last point to Weapon Block, Wake of Fire or Shadow Master. 110 points at 99.", "Traps: Lay 5 Lightning Sentries on one spot so they focus one target; once the first monsters die, 1-2 Death Sentries explode the corpses (fire + physical). Baal waves: 4 Lightning Sentries beside the spawn, 1 Death Sentry far enough away to keep its charges for corpse explosions.", "Lightning resistance: Patch 2.6: -x% enemy lightning resistance on gear applies to the traps: Griffon's Eye, Crescent Moon on the swap right after laying traps, the merc's Infinity (Conviction).", "Immunes: Lower Resist from the Wand of Lower Resistance until Infinity; Crack of the Heavens sunders lightning immunity; Fire Blast for lightning and physical immunes; Death Sentry and the merc for the rest, or skip them.", "Merc: Act 2 Desert Mercenary, Defensive (Holy Freeze, hired in Nightmare): Insight Partizan to start, then Infinity (ethereal Thresher), Fortitude (Sacred Armor) and Andariel's Visage — The merc deals with what is immune to the traps; Infinity's Conviction lowers resistances and breaks lightning immunity for the traps too (the guide: the Trapsin needs it to be fully functional)."]
 class = "assassin"
 merc_acts = [2]
 skill_plan = [
@@ -103,9 +103,6 @@ body = ["Fortitude@59"]
 helm = ["Andariel's Visage@83"]
 weapon = ["Infinity@63", "Insight@27"]
 
-[extras]
-jewels = ["Rainbow Facet@49"]
-
 [[charms]]
 name = "Crack of the Heavens"
 unique = true
@@ -162,8 +159,8 @@ kind = "magic"
 setup = "standard"
 base = "Greater Talons (assassin claw, level 37, 79 Str / 79 Dex) or Greater Claws (33, 76 / 76): the lowest requirements; Anya sells them in Nightmare / Hell (Act 5)"
 why = "The Standard setup dual-wields two: +3 Traps each (+6 Lightning Sentry with the automods), 40% IAS for trap laying, and Weapon Block; it sacrifices one FCR breakpoint for the damage."
-notes = "Socket both with Rainbow Facets (lightning); Larzuk's reward gives 2 sockets half the time."
-stats = ["+3 to Traps (Assassin Only)", "+40% Increased Attack Speed", "Claw automods: up to +3 to Lightning Sentry or Death Sentry", "2 sockets for Rainbow Facets (Larzuk: 50/50 for 2)"]
+notes = "Unsocketed: a magic item gets sockets only from a socket prefix (Artisan's, Jeweler's), which would replace Cunning, and there is no socket quest (natural-socket bases only), so no Rainbow Facets."
+stats = ["+3 to Traps (Assassin Only)", "+40% Increased Attack Speed", "Claw automods: up to +3 to Lightning Sentry or Death Sentry"]
 
 [pieces."Call to Arms"]
 kind = "runeword"
@@ -176,8 +173,8 @@ stats = ["+1 to All Skills", "+2-6 to Battle Command", "+1-6 to Battle Orders", 
 [pieces."Griffon's Eye"]
 kind = "unique"
 setup = "standard"
-base = "Diadem (circlet, no Str), 1 socket for a Rainbow Facet (Larzuk)"
-why = "-15-20% enemy lightning resistance (applies to traps since patch 2.6), +10-15% lightning damage, 25% FCR; socket a Rainbow Facet."
+base = "Diadem (circlet, no Str); uniques drop without sockets and there is no socket quest, so no Rainbow Facet"
+why = "-15-20% enemy lightning resistance (applies to traps since patch 2.6), +10-15% lightning damage, 25% FCR."
 stats = ["+1 to All Skills", "+25% Faster Cast Rate", "-15-20% to Enemy Lightning Resistance", "+10-15% to Lightning Skill Damage", "+100-200 Defense"]
 
 [pieces."Enigma"]
@@ -222,17 +219,10 @@ base = "Ring"
 why = "+1 to All Skills; one in each ring slot."
 stats = ["+20 to Mana", "Increase Maximum Mana 25%", "+1 to All Skills", "Adds 1-12 Lightning Damage"]
 
-[pieces."Rainbow Facet"]
-kind = "unique"
-setup = "standard"
-base = "Jewel (unique)"
-why = "The lightning Rainbow Facet: -3-5% enemy lightning resistance on every trap hit; as many as the sockets allow (2 per claw, 1 in Griffon's Eye)."
-stats = ["Lightning version: -3-5% to Enemy Lightning Resistance", "+3-5% to Lightning Skill Damage", "100% Chance to cast level 41 Nova when you Die, or level 37 Charged Bolt when you Level-up"]
-
 [pieces."Infinity"]
 kind = "runeword"
 setup = "standard"
-base = "ethereal Thresher (Act 2 merc polearm) with 4 sockets, not magic"
+base = "ethereal Thresher (Act 2 merc polearm) that dropped with 4 sockets, not magic"
 why = "Conviction lowers every monster's resistances and breaks lightning immunity: the guide says the Trapsin needs it to be fully functional."
 notes = "Ber Mal Ber Ist."
 stats = ["Level 12 Conviction Aura When Equipped", "50% Chance to cast level 20 Chain Lightning when you Kill an Enemy", "-45-55% to Enemy Lightning Resistance", "+255-325% Enhanced Damage", "+35% Faster Run/Walk", "+0.5 to Vitality per Character Level", "40% Chance of Crushing Blow (Ber, Ber)", "Prevent Monster Heal (Mal)", "30% Better Chance of Getting Magic Items (Ist)", "Level 21 Cyclone Armor (30 Charges)"]
@@ -261,7 +251,7 @@ stats = ["Monster Lightning Immunity is Sundered", "Lightning Resist -70-90%"]
 [pieces."Crescent Moon"]
 kind = "runeword"
 setup = "alternative"
-base = "Phase Blade (25 Str / 136 Dex) with 3 sockets, not magic; any 3-socket axe, sword or polearm"
+base = "Phase Blade (25 Str / 136 Dex) that dropped with 3 sockets, not magic; any 3-socket axe, sword or polearm"
 why = "-35% enemy lightning resistance; the guide's min-max swap right after laying traps (Phase Blade is its fastest base)."
 notes = "Shael Um Tir."
 stats = ["-35% to Enemy Lightning Resistance", "10% Chance to cast level 17 Chain Lightning on striking", "7% Chance to cast level 13 Static Field on striking", "+20% Increased Attack Speed (Shael)", "+180-220% Enhanced Damage", "Ignore Target's Defense", "+9-11 Magic Absorb", "25% Chance of Open Wounds (Um)", "+2 to Mana after each Kill (Tir)", "Level 18 Summon Spirit Wolf (30 Charges)"]
@@ -269,7 +259,7 @@ stats = ["-35% to Enemy Lightning Resistance", "10% Chance to cast level 17 Chai
 [pieces."Ancients' Pledge"]
 kind = "runeword"
 setup = "starter"
-base = "Large Shield or Kite Shield with 3 sockets, not magic"
+base = "Large Shield or Kite Shield that dropped with 3 sockets, not magic"
 why = "The leveling guide's shield: kept with the Spirit sword until the claws."
 stats = ["+50% Enhanced Defense", "Cold Resist +30%", "All Resistances +13", "10% Damage Taken Goes To Mana"]
 
@@ -334,7 +324,7 @@ stats = ["+1 to All Skills", "+10-20 to all Attributes", "All Resistances +10-20
 [pieces."Heart of the Oak"]
 kind = "runeword"
 setup = "alternative"
-base = "Flail (41 Str / 35 Dex) with 4 sockets, not magic (one-handed: the shield stays)"
+base = "Flail (41 Str / 35 Dex) that dropped with 4 sockets, not magic (one-handed: the shield stays)"
 why = "The Magic Find setup's weapon: +3 to All Skills and 40% FCR toward the 102% breakpoint."
 notes = "magic find setup"
 stats = ["+3 to All Skills", "+40% Faster Cast Rate", "All Resistances +30-40", "Replenish Life +20", "+15% Maximum Mana", "Level 4 Oak Sage (25 Charges)", "Level 14 Raven (60 Charges)"]
@@ -342,7 +332,7 @@ stats = ["+3 to All Skills", "+40% Faster Cast Rate", "All Resistances +30-40", 
 [pieces."Plague"]
 kind = "runeword"
 setup = "alternative"
-base = "Greater Talons / Greater Claws with 3 sockets, not magic"
+base = "Greater Talons / Greater Claws that dropped with 3 sockets, not magic"
 why = "+1-2 to All Skills and Cleansing on the second claw."
 notes = "Cham Shael Um."
 stats = ["+1-2 to All Skills", "Level 13-17 Cleansing Aura When Equipped", "20% Chance to cast level 12 Lower Resist when struck", "25% Chance to cast level 15 Poison Nova on striking", "-23% to Enemy Poison Resistance", "+220-320% Enhanced Damage", "+0.375% Deadly Strike per Character Level", "+20% Increased Attack Speed (Shael)", "25% Chance of Open Wounds (Um)"]
@@ -529,7 +519,7 @@ stats = ["+25% Faster Run/Walk", "+25% Faster Cast Rate", "+25% Faster Hit Recov
 [pieces."Spirit"]
 kind = "runeword"
 setup = "starter"
-base = "Crystal Sword or Broad Sword with 4 sockets, not magic"
+base = "Crystal Sword or Broad Sword that dropped with 4 sockets, not magic"
 why = "The leveling guide's Spirit sword: the weapon she resets with, until the claws (level 45)."
 stats = ["+2 to All Skills", "+25-35% Faster Cast Rate", "+55% Faster Hit Recovery", "+89-112 to Mana", "+22 to Vitality", "+250 Defense vs. Missile", "+3-8 Magic Absorb"]
 
@@ -660,15 +650,6 @@ req = "character level 25; 4 sockets"
 notes = "Spirit Monarch: the off-hand of the Call to Arms swap and the Magic Find setup's shield."
 
 [[recipes]]
-name = "Larzuk socket quest: the claws"
-kind = "socket"
-inputs = ["Cunning Greater Talons of Quickness (magic)"]
-result = "1 or 2 sockets (50/50 for a magic item), for Rainbow Facets"
-req = "Act 5 Siege on Harrogath reward (Nightmare or Hell)"
-notes = "The guide's use of the reward: 2 sockets in the shopped claws (Anya, Nightmare / Hell)."
-quest = "Siege on Harrogath"
-
-[[recipes]]
 name = "Recharge Lower Resist / Teleport charges"
 kind = "cube"
 inputs = ["1 Ort Rune", "1 Chipped Gem (any)", "the Wand of Lower Resistance or Battle Staff of Teleportation"]
@@ -698,7 +679,7 @@ text = "The Ancients: drop 1-2 inventories of potions in the arena, recharge the
 
 [[tips]]
 levels = "45-99"
-text = "From 45: two Cunning Greater Talons of Quickness (+3 Traps) from Anya in Nightmare / Hell, socketed by Larzuk (50/50 for 2) with lightning Rainbow Facets."
+text = "From 45: two Cunning Greater Talons of Quickness (+3 Traps) from Anya in Nightmare / Hell, unsocketed (no socket quest)."
 
 [[tips]]
 levels = "45-99"
