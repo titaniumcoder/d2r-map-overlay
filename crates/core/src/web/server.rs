@@ -193,6 +193,7 @@ fn handle<P: Playstyle>(stream: TcpStream, files: &Files) {
             ("POST", "/api/character/delete") => {
                 api_character_delete::<P>(files, &String::from_utf8_lossy(&body))
             }
+            ("POST", "/api/not-needed") => api_not_needed::<P>(files, &String::from_utf8_lossy(&body)),
             _ => respond("404 Not Found", "text/plain", "not found\n"),
         },
     };
@@ -427,6 +428,28 @@ fn api_character_delete<P: Playstyle>(files: &Files, body: &str) -> String {
     respond("200 OK", "application/json", "{\"saved\": true}")
 }
 
+/// `POST /api/not-needed` with `{"build": "<build name>", "name": "<piece>", "needed": bool}`:
+/// marks the piece not needed for that build (`false`) or needed again (`true`). The live
+/// stream shows it after the hot reload.
+fn api_not_needed<P: Playstyle>(files: &Files, body: &str) -> String {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return respond("400 Bad Request", "text/plain", "bad json\n");
+    };
+    let text = |key: &str| {
+        json.get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
+    let (Some(build), Some(name)) = (text("build"), text("name")) else {
+        return respond("400 Bad Request", "text/plain", "build and name required\n");
+    };
+    let Some(needed) = json.get("needed").and_then(serde_json::Value::as_bool) else {
+        return respond("400 Bad Request", "text/plain", "needed must be true or false\n");
+    };
+    save(|| P::set_not_needed(files, build, name, needed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,6 +564,9 @@ mod tests {
     /// The core names no concrete playstyle; the routes under test need none.
     struct NoPlaystyle;
 
+    /// `NoPlaystyle::set_not_needed`'s calls, as `build|piece|needed`.
+    static NOT_NEEDED_CALLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
     impl Playstyle for NoPlaystyle {
         type Wants = ();
         type Extra<'a> = ();
@@ -586,6 +612,14 @@ mod tests {
         }
 
         fn select_build(_: &Files, _: &str, _: Option<&str>) -> Result<()> {
+            Ok(())
+        }
+
+        fn set_not_needed(_: &Files, build: &str, piece: &str, needed: bool) -> Result<()> {
+            NOT_NEEDED_CALLS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(format!("{build}|{piece}|{needed}"));
             Ok(())
         }
 
@@ -677,6 +711,65 @@ mod tests {
         assert!(none.starts_with("HTTP/1.1 404"), "{none}");
         assert!(none.ends_with("no loot filter in this playstyle\n"), "{none}");
         assert!(loot_filter_response(Some(vec![0xff, b'{'])).starts_with("HTTP/1.1 500"));
+        Ok(())
+    }
+
+    fn post(path: &str, body: &str) -> Result<String> {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        let addr = listener.local_addr()?;
+        let server = thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                handle::<NoPlaystyle>(stream, &Files::default());
+            }
+        });
+        let mut client = std::net::TcpStream::connect(addr)?;
+        client.write_all(
+            format!(
+                "POST {path} HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )?;
+        let mut answer = String::new();
+        client.read_to_string(&mut answer)?;
+        server.join().map_err(|_| anyhow!("server thread panicked"))?;
+        Ok(answer)
+    }
+
+    #[test]
+    fn not_needed_takes_build_name_and_flag_and_rejects_the_rest() -> Result<()> {
+        let bad = [
+            "not json",
+            "{}",
+            r#"{"build": "Fury Druid", "needed": false}"#,
+            r#"{"build": " ", "name": "Grief", "needed": false}"#,
+            r#"{"build": "Fury Druid", "name": 3, "needed": false}"#,
+            r#"{"build": "Fury Druid", "name": "Grief"}"#,
+            r#"{"build": "Fury Druid", "name": "Grief", "needed": "no"}"#,
+        ];
+        for body in bad {
+            let answer = post("/api/not-needed", body)?;
+            assert!(answer.starts_with("HTTP/1.1 400"), "{body}: {answer}");
+        }
+        let calls = || {
+            NOT_NEEDED_CALLS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        };
+        assert!(calls().is_empty(), "a bad request saves nothing");
+        let answer = post(
+            "/api/not-needed",
+            r#"{"build": "Fury Druid", "name": " Grief ", "needed": false}"#,
+        )?;
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        assert!(answer.ends_with("{\"saved\": true}"), "{answer}");
+        post(
+            "/api/not-needed",
+            r#"{"build": "Fury Druid", "name": "Grief", "needed": true}"#,
+        )?;
+        assert_eq!(calls(), ["Fury Druid|Grief|false", "Fury Druid|Grief|true"]);
+        assert!(post("/api/not-needed-typo", "{}")?.starts_with("HTTP/1.1 404"));
         Ok(())
     }
 

@@ -70,6 +70,15 @@ pub trait Playstyle {
     where
         Self: Sized;
 
+    /// Marks `piece` of build `build` (its name) not needed (`needed = false`) or needed again.
+    /// The core serialises the calls.
+    ///
+    /// # Errors
+    /// As [`Playstyle::select_build`].
+    fn set_not_needed(files: &Files, build: &str, piece: &str, needed: bool) -> anyhow::Result<()>
+    where
+        Self: Sized;
+
     /// The exact bytes of the in-game loot filter profile the player imports.
     fn loot_filter(files: &Files) -> Option<Vec<u8>>
     where

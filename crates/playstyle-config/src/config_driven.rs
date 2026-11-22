@@ -106,6 +106,10 @@ impl Playstyle for ConfigDriven {
         files::select_build(files, name, build)
     }
 
+    fn set_not_needed(files: &Files, build: &str, piece: &str, needed: bool) -> anyhow::Result<()> {
+        files::set_not_needed(files, build, piece, needed)
+    }
+
     fn loot_filter(files: &Files) -> Option<Vec<u8>> {
         files::loot_filter(files)
     }
