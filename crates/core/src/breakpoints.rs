@@ -1,76 +1,70 @@
-//! The breakpoint guide (user request, 2026-11-17): one dashboard line (shown as chips; no
-//! longer drawn on the overlay) with the character's speed stats and resistances —
-//! - `fcr (frames / current / next)`: the current cast animation in frames, the total FCR, and
-//!   the FCR needed for one frame less (the user's format: "6 fps, 22 current, 28 for 7 fps");
-//! - `fhr (frames / current / next)` the same for hit recovery;
-//! - `res f/c/l/p (difficulty penalty)`: the four resistances from gear with the difficulty
-//!   penalty applied.
+//! The breakpoint guide: one dashboard line with the FCR/FHR frames, current value and next
+//! breakpoint, IAS, and the resistances after the difficulty penalty.
 //!
-//! Frames come from the D2 animation formulas (maxroll.gg/d2/resources/breakpoints-animations,
-//! verified against the classic per-class breakpoint tables by hand): the effective rate is
-//! `floor(stat × 120 / (stat + 120))` (FCR capped at 75), and the animation length is
-//! `ceil(256 × base / floor(speed × (100 + EFCR) / 100) − 1)` for casting and the same with
-//! `(50 + EFHR)` for hit recovery. The per-class bases below reproduce every classic breakpoint
-//! of every class table exactly (the Warlock row assumes necromancer-like values — its
-//! d2runewizard table matches; Druid values are for human form).
+//! Frames follow the D2 animation formulas (maxroll.gg/d2/resources/breakpoints-animations):
+//! `ceil(256 × base / floor(speed × (100 + EFCR) / 100) − 1)` for casting, `50 + EFHR` for hit
+//! recovery. Warlock values are assumed necromancer-like; druid values are for human form.
 
 use crate::game::Player;
 
 /// Cast animation data per class: (casting base, animation speed). The bases are one higher
 /// than maxroll's table lists them (their own FCR tables and the formula agree on these).
+/// Druid rows are human form only; the warlock rows are assumed necromancer-like.
 const CAST: [(u32, u32); 8] = [
     (20, 256), // amazon
     (14, 256), // sorceress
     (16, 256), // necromancer
     (16, 256), // paladin
     (14, 256), // barbarian
-    (15, 208), // druid (human form)
+    (15, 208), // druid
     (17, 256), // assassin
-    (16, 256), // warlock (assumed necromancer-like)
+    (16, 256), // warlock
 ];
 
-/// Hit recovery data per class: (hit base, animation speed).
+/// Hit recovery data per class: (hit base, animation speed); same caveats as [`CAST`].
 const HIT: [(u32, u32); 8] = [
     (6, 256), // amazon
     (8, 256), // sorceress
     (7, 256), // necromancer
     (5, 256), // paladin
     (5, 256), // barbarian
-    (7, 256), // druid (human form)
+    (7, 256), // druid
     (5, 256), // assassin
-    (7, 256), // warlock (assumed necromancer-like)
+    (7, 256), // warlock
 ];
 
-/// The resist difficulty penalty by difficulty id: none in Normal, −40 in Nightmare, −100 in
-/// Hell.
+/// The resist penalty by difficulty id (Normal, Nightmare, Hell).
 const RES_PENALTY: [i32; 3] = [0, 40, 100];
 
-/// Effective FCR: `floor(fcr × 120 / (fcr + 120))`, hard-capped at 75 (nothing above 200 FCR
-/// does anything).
+/// Resistances below this (after the penalty) are shown red.
+const RES_CAP: i32 = 75;
+
+/// FCR above this does nothing (effective FCR is capped at 75).
+const FCR_SEARCH_BOUND: u32 = 200;
+
+/// Upper bound of the next-FHR-breakpoint search.
+const FHR_SEARCH_BOUND: u32 = 480;
+
 const fn efcr(fcr: u32) -> u32 {
     let e = fcr * 120 / (fcr + 120);
     if e > 75 { 75 } else { e }
 }
 
-/// Effective FHR: `floor(fhr × 120 / (fhr + 120))`; uncapped.
 const fn efhr(fhr: u32) -> u32 {
     fhr * 120 / (fhr + 120)
 }
 
-/// The cast animation length in frames for `fcr` total.
 const fn cast_frames(base: u32, speed: u32, fcr: u32) -> u32 {
     let d = speed * (100 + efcr(fcr)) / 100;
     (256 * base - 1) / d
 }
 
-/// The hit recovery animation length in frames for `fhr` total.
 const fn hit_frames(base: u32, speed: u32, fhr: u32) -> u32 {
     let d = speed * (50 + efhr(fhr)) / 100;
     (256 * base - 1) / d
 }
 
-/// The least stat value that shortens the animation by one frame, searched up to a generous
-/// bound; `None` when nothing within it helps any more.
+/// The least stat value up to `bound` that shortens the animation by one frame.
 fn next_threshold(
     current: u32,
     base: u32,
@@ -82,9 +76,8 @@ fn next_threshold(
     (current + 1..=bound).find(|&t| f(base, speed, t) < now)
 }
 
-/// `(frames / current / next)` for one animation; without the third part past the last
-/// breakpoint. A negative total (gear with a negative FCR/FHR) is shown as is, but its frames
-/// and next breakpoint are those of 0: the guide's tables start at 0.
+/// `label (frames / current / next)`, without `next` past the last breakpoint. A negative
+/// total is shown as is but framed as 0.
 fn stat_part(
     label: &str,
     base: u32,
@@ -101,12 +94,8 @@ fn stat_part(
     )
 }
 
-/// The guide band: `fcr (…) · fhr (…) · ias … · res f/c/l/p (penalty)`, each resistance below
-/// 75 (after the difficulty penalty) coloured red (user request, 2026-11-17). `None` without
-/// readable speed stats.
-///
-/// The IAS value is shown even though its frames depend on the weapon's base speed and the
-/// attack skill used (user decision: what to show is not for the overlay to decide).
+/// The guide band: `fcr (…) · fhr (…) · ias … · res f/c/l/p (penalty)`, with resistances
+/// below [`RES_CAP`] red. `None` without readable speed stats or for an unknown class.
 #[must_use]
 pub fn guide_band(player: &Player, difficulty: Option<u8>) -> Option<crate::info::Band> {
     let speed = player.speed.as_ref()?;
@@ -115,27 +104,48 @@ pub fn guide_band(player: &Player, difficulty: Option<u8>) -> Option<crate::info
     let wsm = player.wsm.map_or_else(String::new, |w| format!(" (wsm {w})"));
     let mut text = format!(
         "{} · {} · ias {}{wsm} · res ",
-        stat_part("fcr", cast_base, cast_speed, speed.fcr, 200, cast_frames),
-        stat_part("fhr", hit_base, hit_speed, speed.fhr, 480, hit_frames),
+        stat_part(
+            "fcr",
+            cast_base,
+            cast_speed,
+            speed.fcr,
+            FCR_SEARCH_BOUND,
+            cast_frames
+        ),
+        stat_part(
+            "fhr",
+            hit_base,
+            hit_speed,
+            speed.fhr,
+            FHR_SEARCH_BOUND,
+            hit_frames
+        ),
         speed.ias,
     );
-    let mut spans = Vec::new();
     let penalty = difficulty
         .and_then(|d| RES_PENALTY.get(usize::from(d)).copied())
         .unwrap_or(0);
-    let res = |v: i32| v.saturating_sub(penalty);
-    for (n, value) in [
+    let resists = [
         speed.res_fire,
         speed.res_cold,
         speed.res_lightning,
         speed.res_poison,
     ]
-    .into_iter()
-    .enumerate()
-    {
-        let v = res(value);
-        if v < 75 {
-            // The value's own bytes: ASCII, so the offset is a char boundary.
+    .map(|v| v.saturating_sub(penalty));
+    let spans = push_resists(&mut text, resists);
+    text.push_str(penalty_label(difficulty));
+    Some(crate::info::Band {
+        text,
+        colour: crate::info::GUIDE_TEXT,
+        spans,
+    })
+}
+
+/// Appends `f/c/l/p` to `text` and returns a red span for each value below [`RES_CAP`].
+fn push_resists(text: &mut String, resists: [i32; 4]) -> Vec<(usize, [u8; 4])> {
+    let mut spans = Vec::new();
+    for (n, v) in resists.into_iter().enumerate() {
+        if v < RES_CAP {
             spans.push((text.len(), crate::info::BAD_TEXT));
         }
         text.push_str(&v.to_string());
@@ -143,18 +153,17 @@ pub fn guide_band(player: &Player, difficulty: Option<u8>) -> Option<crate::info
             text.push('/');
         }
     }
-    text.push_str(match difficulty {
+    spans
+}
+
+const fn penalty_label(difficulty: Option<u8>) -> &'static str {
+    match difficulty {
         Some(1) => " (nm −40)",
         Some(2) => " (hell −100)",
         _ => "",
-    });
-    Some(crate::info::Band {
-        text,
-        colour: crate::info::GUIDE_TEXT,
-        spans,
-    })
+    }
 }
-/// The `(base, speed)` pair of `class`, or `None` for an unknown class id.
+
 fn class_data(data: &[(u32, u32)], class: u32) -> Option<(u32, u32)> {
     data.get(usize::try_from(class).ok()?).copied()
 }
@@ -268,11 +277,9 @@ mod tests {
             return Err(anyhow!("no guide band"));
         };
         assert!(band.text.starts_with("fcr (13 / 20 / 30)"), "{}", band.text);
-        // IAS is back in the line (user decision).
         assert!(band.text.contains("ias 0"), "{}", band.text);
         // Resists with no penalty in Normal.
         assert!(band.text.ends_with("res 25/15/25/5"), "{}", band.text);
-        // The test values 25/15/25/5 are all below 75: all four values red already in Normal.
         assert_eq!(band.spans.len(), 4, "all four values red: {band:?}");
         // Nightmare applies −40; all four values drop below 75 and go red.
         let Some(band) = guide_band(&p, Some(1)) else {

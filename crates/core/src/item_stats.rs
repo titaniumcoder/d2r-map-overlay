@@ -1,13 +1,8 @@
-//! An item's stats as the reader delivers them: one [`ItemStat`] per stat-list entry, with the
-//! value made plain, and the itemstatcost.txt ids ([`stat`]) the rest of the program reads.
-//! Scoring them is `d2r_playstyle_config::gear_score`'s job.
+//! An item's stats as the reader delivers them, and the itemstatcost.txt ids the program reads.
 
 use serde::{Deserialize, Serialize};
 
-/// One stat-list entry of an item: `{u16 param (the "layer"), u16 stat id, u32 value}`,
-/// with the value made plain ([`ItemStat::from_raw`]) and whether it is a base value that
-/// ED% scales (from the base list, or a defense/damage total from [`ItemStat::from_totals`])
-/// or a modifier.
+/// One stat-list entry of an item (`{u16 param, u16 stat id, u32 value}`) with a plain value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemStat {
     /// itemstatcost.txt row.
@@ -17,8 +12,7 @@ pub struct ItemStat {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub param: u16,
     pub value: i32,
-    /// A base value (rolled base defense/damage, durability; or an aggregated defense/damage
-    /// total), not a modifier.
+    /// A base value (defense, damage, durability) that ED% scales, not a modifier.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub base: bool,
 }
@@ -32,9 +26,8 @@ const fn is_zero(v: &u16) -> bool {
 }
 
 impl ItemStat {
-    /// The entry from its raw words. Values are signed (the base list's attack-speed stat
-    /// reads `0xFFFFFFFB` = -5 on a Short Bow); life, mana and stamina (ids 6..=11,
-    /// itemstatcost `ValShift` 8) are stored in 1/256 units.
+    /// The entry from its raw words. Values are signed; life, mana and stamina (ids 6..=11,
+    /// `ValShift` 8) are stored in 1/256 units.
     #[must_use]
     pub const fn from_raw(param: u16, id: u16, raw: u32, base: bool) -> Self {
         let value = raw.cast_signed();
@@ -47,14 +40,10 @@ impl ItemStat {
         }
     }
 
-    /// The stats of an item's aggregated array (`(param, id, raw)` entries: base, affixes,
-    /// runeword and socketed runes, each once, ED% already applied; live 2026-11-19: Stoutnail
-    /// 7/12 → 14/24 with its 100% ED, rare boots defense 6 → 7 with 23% ED, ED itself not
-    /// listed), shaped for the score's base × ED% + flat rule so nothing counts twice:
-    /// defense and the damage pairs the item's base list carries (`base_ids`) become `base`
-    /// values; ED% entries are dropped (applied already); a damage stat the base list lacks
-    /// is dropped too (a flat bonus the game writes to every pair: its amount is already in
-    /// the pair the base carries, and keeping it would make a two-hander look one-handed).
+    /// The stats of an item's aggregated array, which already has ED% applied: defense and the
+    /// damage pairs in `base_ids` become base values, ED% entries are dropped, and so are damage
+    /// stats the base lacks (the game writes a flat bonus to every pair; keeping them would make a
+    /// two-hander look one-handed).
     #[must_use]
     pub fn from_totals(entries: &[(u16, u16, u32)], base_ids: &[u16]) -> Vec<Self> {
         const DAMAGE: [u16; 6] = [

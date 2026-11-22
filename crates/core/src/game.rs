@@ -1,7 +1,5 @@
-//! The game state model: one snapshot of what the reader found (player, level layout, presets,
-//! monsters, ground drops, nearby shrines and wells, the player's items), serializable as the
-//! `--dump` JSON. The reader plugin fills it (`d2r_reader_mem::game`); the map, the session, the
-//! journal, the dashboard and the playstyle read it.
+//! The game state model: one snapshot of what the reader found, serializable as the `--dump`
+//! JSON. Optional fields are left out of the JSON when empty so older dumps stay loadable.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -10,15 +8,12 @@ use crate::objects_data::{SHRINE_OBJECTS, WELL_OBJECTS};
 use crate::offsets::{item_data, preset};
 use crate::stash::{self, StashTab};
 
-/// Living desecrated monsters needed to call a level terrorized. Two rather than one, so a
-/// single misread unit can't flip the info line; the player's summons never carry the state.
+/// Living desecrated monsters needed to call a level terrorized; two so one misread unit can't.
 pub const TERROR_MIN_MONSTERS: usize = 2;
 
-/// Level ids of the five towns (levels.txt): Rogue Encampment, Lut Gholein, Kurast Docks,
-/// Pandemonium Fortress, Harrogath.
+/// Level ids of the five towns (levels.txt).
 pub const TOWN_LEVELS: [u32; 5] = [1, 40, 75, 103, 109];
 
-/// True if `level_id` is a town (the overlay is hidden there).
 #[must_use]
 pub fn is_town(level_id: u32) -> bool {
     TOWN_LEVELS.contains(&level_id)
@@ -47,150 +42,102 @@ impl<'de> Deserialize<'de> for Addr {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Snapshot {
     pub player: Player,
-    /// The local player's equipped `(body slot, quality)` pairs: the `BiS` per-slot "already
-    /// better" check.
+    /// The local player's equipped `(body slot, quality)` pairs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub equipped: Vec<(u8, u32)>,
     /// The mercenary's equipped `(body slot, quality)` pairs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub merc_equipped: Vec<(u8, u32)>,
-    /// The player's equipped items, enriched for the dashboard's gear grid: per body slot
-    /// the item code, the runeword flag and the identified unique/set name + row
-    /// ([`Equipped`]). Kept next to [`Snapshot::equipped`], which other code consumes.
+    /// The player's equipped items with code, runeword flag and unique/set name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub equipped_items: Vec<Equipped>,
-    /// Display names of identified unique/set items and named runewords the player owns
-    /// (equipped, carried, cubed, privately stashed): the `BiS` list marks owned pieces with a
-    /// ✓ (the worn ones apart: [`worn_names`]).
+    /// Names of identified uniques/sets and named runewords the player owns (worn ones included).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned_names: Vec<String>,
-    /// One name per runeword copy the player has outside the shared stash (worn, carried,
-    /// cubed, privately stashed) or the mercenary wears (solo games only: see
-    /// [`Snapshot::merc_worn`]), duplicates kept: the Recipes panel
-    /// keeps a runeword recipe until every slot of the stage that wants it can be filled.
+    /// One name per runeword copy outside the shared stash (or worn by the merc), duplicates kept.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runeword_copies: Vec<String>,
-    /// Display names of the identified unique/set items and the runewords the mercenary wears,
-    /// one per item: its uniques/sets count as owned for a stage switch and the farm list
-    /// ([`crate::stash::Holdings`]; its runewords count there through
-    /// [`Snapshot::runeword_copies`]), and every name counts as worn for the farm list's
-    /// hiding rule (`playstyle::web::farm::farm_worn`); none are in [`Snapshot::owned_names`] (the `BiS` ✓ of
-    /// the character's own pieces). Empty when other players are in the game: their mercs'
-    /// gear can't be told from the local player's own merc's (PLAN.md, "Merc gear caveat").
+    /// Names of uniques/sets and runewords the mercenary wears; empty in multiplayer games, where
+    /// other players' mercs can't be told apart (PLAN.md, "Merc gear caveat").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub merc_worn: Vec<String>,
-    /// The shared-stash tabs as read this snapshot. Empty once the tab units vanish (stash UI
-    /// closed); the session keeps the last capture ([`crate::session::Session`]). Left out of
-    /// the JSON when empty, so older dumps stay loadable.
+    /// The shared-stash tabs read this snapshot; empty once the stash UI closes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stash: Vec<StashTab>,
-    /// Display names of the identified unique/set items in [`Snapshot::stash`]: the `BiS` ✓
-    /// for pieces sitting in the shared stash, kept apart from [`Snapshot::owned_names`] so
-    /// the dashboard can show ✓(stash) distinctly.
+    /// Names of the identified uniques/sets in [`Snapshot::stash`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stash_names: Vec<String>,
     pub player_candidates: Vec<Candidate>,
-    /// Which rule picked `player` among `player_candidates`. Left out of the JSON when it is the
-    /// default (first candidate), so older dumps round-trip.
     #[serde(default, skip_serializing_if = "ChosenBy::is_first_candidate")]
     pub player_chosen_by: ChosenBy,
     pub level: Level,
     pub presets: Vec<Preset>,
     pub room_links: Vec<RoomLink>,
-    /// Rooms of other levels in this level's near-room lists (`room2::NEAR`): walk-through
-    /// borders to adjacent levels, which have no tile preset or room tile. Deduplicated; left
-    /// out of the JSON when empty, so older dumps and fixtures stay unchanged.
+    /// Rooms of other levels in this level's near-room lists: walk-through borders, which have no
+    /// tile preset or room tile.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub border_links: Vec<BorderLink>,
     pub monsters: Vec<Monster>,
-    /// Item units lying on the ground (shown or not). Defaults keep older dumps loadable.
+    /// Item units lying on the ground, shown or not.
     #[serde(default)]
     pub ground_items: u32,
-    /// The ground items worth showing: uniques, sets, gems, runes and charms, plus every base
-    /// with a known code. The playstyle keeps only the bases it marks
-    /// (`d2r_playstyle_config::valuables::apply`) before anything draws or records them.
+    /// Ground items worth showing; the playstyle filters the bases before anything draws them.
     #[serde(default)]
     pub drops: Vec<ItemDrop>,
-    /// Shrines near the player (objects are loaded only in range). Live mode keeps only the
-    /// unused ones of the configured types for drawing ([`crate::config::Shrines::retain_shown`]).
-    /// Left out of the JSON when empty, like the fields below.
+    /// Shrines near the player (objects are loaded only in range).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shrines: Vec<Shrine>,
-    /// Wells near the player.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wells: Vec<Well>,
-    /// Operated consumable quest objects near the player (Diablo seals; see
-    /// [`crate::objects::CONSUMABLE_QUEST_OBJECTS`]). The session hides their presets for the game.
+    /// Operated consumable quest objects near the player (Diablo seals).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub operated_objects: Vec<OperatedObject>,
-    /// Items in the player's inventory (shown or not); live-mode only, not in the JSON.
+    /// Items in the player's inventory, shown or not.
     #[serde(skip)]
     pub inventory_items: u32,
-    /// The player's own items with their [`Place`]: every inventory item, and the cube and
-    /// stash items that are identified uniques or sets ([`identified_unique_or_set`]), magic or
-    /// better items with their stats, or white runeword bases (only these are read in full;
-    /// `d2r_reader_mem::game::stored_kept`). The playstyle's keep / sell / give-away lists are computed from
-    /// them (`d2r_playstyle_config::stash_plan::held`). Left out of the JSON when empty;
-    /// older dumps carry the computed lists instead, which are ignored.
+    /// The player's own items: inventory items, plus cube/stash items that are identified
+    /// uniques/sets, magic or better, or white runeword bases (only these are read in full).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owned_items: Vec<(ItemDrop, Place)>,
-    /// The runes and gems the player holds in inventory, cube and stash pages (the shared
-    /// materials tab is in [`Snapshot::stash`]), `(name, count)` ([`stash::held_materials`]):
-    /// the dashboard's recipe ✓. Live-mode only, not in the JSON.
+    /// Runes and gems held in inventory, cube and stash pages, `(name, count)`.
     #[serde(skip)]
     pub held_materials: Vec<(String, u32)>,
-    /// The player's white socketed bases without a runeword ([`stash::white_bases`]): the
-    /// dashboard's recipe base hint. Live-mode only, not in the JSON.
+    /// White socketed bases without a runeword.
     #[serde(skip)]
     pub white_bases: Vec<String>,
-    /// 0 Normal, 1 Nightmare, 2 Hell; `None` if unreadable (and in old fixtures).
+    /// 0 Normal, 1 Nightmare, 2 Hell.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<u8>,
-    /// The real Tal Rasha's Tomb of this game (level 66..=72, [`crate::tombs`]), read in Act 2;
-    /// `None` elsewhere, if unreadable, and in old fixtures. Left out of the JSON when `None`.
+    /// The real Tal Rasha's Tomb level id of this game, read in Act 2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staff_tomb: Option<u32>,
-    /// The level is a Terror Zone ([`is_terrorized`] over the live monsters). The session keeps
-    /// it set for the level for the rest of the game, once seen. Left out of the JSON when false.
+    /// Two or more living desecrated monsters seen (the session keeps it for the level).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub terrorized: bool,
-    /// The cow counter ([`crate::cows`]), set by the session in the Moo Moo Farm only; it
-    /// replaces the monster levels in the info line. Left out of the JSON when `None`.
+    /// The cow counter, set by the session in the Moo Moo Farm only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cows: Option<crate::cows::Tally>,
-    /// Where the player has been in this game's Moo Moo Farm (world tiles, oldest first), set
-    /// by the session there only and drawn as a faint path under the markers. Left out of the
-    /// JSON when empty.
+    /// Where the player has been in this game's Moo Moo Farm (world tiles, oldest first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trail: Vec<(u16, u16)>,
-    /// The player's skill allocation ([`Skills`]); empty when unreadable. Left out of the JSON
-    /// when empty, so older dumps stay loadable.
     #[serde(default, skip_serializing_if = "Skills::is_empty")]
     pub skills: Skills,
-    /// The vendor trade window open right now ([`crate::shop`]); read in towns only. Left
-    /// out of the JSON when `None`.
+    /// The vendor trade window open right now; read in towns only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shop: Option<crate::shop::Shop>,
-    /// The player's raw stat lists for the journal's `buffs` event ([`BuffResearch`]);
-    /// `None` when the player has no readable stat list. Live-mode only, not in the JSON.
     #[serde(skip)]
     pub buff_research: Option<BuffResearch>,
     pub warnings: Vec<String>,
 }
 
-/// The player's skill allocation, read from the skill list ([`crate::offsets::skill`]): the
-/// class skills with hard (allocated) points and the skills on the two mouse buttons. Bonus
-/// levels from gear are not included (the skill nodes don't carry them).
+/// The player's hard skill points and mouse-button skills; gear bonus levels aren't in the nodes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Skills {
-    /// `(skills.txt id, hard points)` of the player's own class skills with points, in list
-    /// order ([`crate::skills_data::SKILLS`] has their tree places).
+    /// `(skills.txt id, hard points)` of the class skills with points, in list order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub points: Vec<(u16, u8)>,
-    /// The skill id on the left mouse button.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub left: Option<u16>,
-    /// The skill id on the right mouse button.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub right: Option<u16>,
 }
@@ -202,15 +149,13 @@ impl Skills {
     }
 }
 
-/// True if at least [`TERROR_MIN_MONSTERS`] living monsters carry the desecrated state.
 #[must_use]
 pub fn is_terrorized(monsters: &[Monster]) -> bool {
     monsters.iter().filter(|m| m.desecrated && !m.is_dead()).count() >= TERROR_MIN_MONSTERS
 }
 
-/// True if state `state` is set in the state bitfield `flags` (see
-/// [`crate::offsets::stat_list::STATE_FLAGS`]: little-endian u32 dwords, bit `n % 32` of dword `n / 32`). A
-/// state past the end of `flags` is clear.
+/// True if `state` is set in the state bitfield `flags`: little-endian u32 dwords, bit
+/// `n % 32` of dword `n / 32`; states past the end are clear.
 #[must_use]
 pub fn has_state(flags: &[u8], state: u32) -> bool {
     let (dwords, _) = flags.as_chunks::<4>();
@@ -220,7 +165,7 @@ pub fn has_state(flags: &[u8], state: u32) -> bool {
         .is_some_and(|&d| u32::from_le_bytes(d) & (1 << (state % 32)) != 0)
 }
 
-/// The states set in the state bitfield `flags` (layout as in [`has_state`]), ascending.
+/// The states set in the state bitfield `flags`, ascending.
 #[must_use]
 pub fn active_states(flags: &[u8]) -> Vec<u32> {
     let (dwords, _) = flags.as_chunks::<4>();
@@ -235,44 +180,32 @@ pub fn active_states(flags: &[u8]) -> Vec<u32> {
         .collect()
 }
 
-/// Raw dump of the player's stat lists for the buff tracker research (the journal's `buffs`
-/// event, PLAN.md "Backlog: buff tracker"): where the buffs' own lists (state id, expiry
-/// frame, Feral Rage stacks, Cyclone Armor absorb) sit is not known yet. Live-mode only.
+/// Raw dump of the player's stat lists for the buff tracker research (journal `buffs` event).
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct BuffResearch {
-    /// The states decoded from the bitfield's second copy
-    /// ([`crate::offsets::stat_list::STATE_FLAGS_COPY`]), to compare with
-    /// [`Player::states`].
+    /// States decoded from the bitfield's second copy (`stat_list::STATE_FLAGS_COPY`).
     pub states_copy: Vec<u32>,
-    /// Every list of the player's chain, from the unit's own list along
-    /// [`crate::offsets::stat_list::NEXT`], in chain order (capped by the reader).
+    /// Every list of the player's chain, in chain order (capped by the reader).
     pub lists: Vec<StatListDump>,
-    /// The top list's aggregated array ([`crate::offsets::stat_list::FULL_ENTRIES`]),
-    /// `(layer, stat id, value)`; empty without one.
+    /// The top list's aggregated array, `(layer, stat id, value)`.
     pub full: Vec<(u16, u16, u32)>,
-    /// True if [`BuffResearch::lists`] stopped at the reader's list cap or byte budget, or a
-    /// list's entries were cut (its `count` is then above its `entries` length).
+    /// The chain or a list's entries were cut at the reader's caps.
     pub truncated: bool,
 }
 
-/// One raw stat list of [`BuffResearch::lists`].
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct StatListDump {
     pub addr: Addr,
     pub owner_type: u32,
     pub owner_id: u32,
     pub flags: u32,
-    /// Hex of the list's first [`crate::offsets::stat_list::DUMP_LEN`] bytes (fewer when
-    /// that read failed: the first [`crate::offsets::stat_list::NEXT`] + 8).
+    /// Hex of the list's first [`crate::offsets::stat_list::DUMP_LEN`] bytes (fewer if unreadable).
     pub head: String,
-    /// The list's own entry count ([`crate::offsets::stat_list::COUNT`]).
     pub count: u64,
-    /// Its `(layer, stat id, value)` entries, at most the reader's per-list cap; empty when
-    /// unreadable.
+    /// `(layer, stat id, value)` entries, at most the reader's per-list cap.
     pub entries: Vec<(u16, u16, u32)>,
 }
 
-/// The difficulty from the raw `ActMisc` value; anything above Hell (2) is unknown.
 #[must_use]
 pub const fn difficulty_from_raw(raw: u16) -> Option<u8> {
     match raw {
@@ -293,63 +226,47 @@ pub struct Player {
     pub x: u16,
     pub y: u16,
     pub level_id: u32,
-    /// The player's act; changes with a new game (and on act travel). `None` in old fixtures.
+    /// The player's act; changes with a new game.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub act: Option<Addr>,
-    /// Character level (stat [`crate::offsets::stat_list::LEVEL`], see [`char_level_from_raw`]); `None` if
-    /// unreadable (and in old fixtures, where it is left out of the JSON).
+    /// Character level, see [`char_level_from_raw`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub char_level: Option<u8>,
-    /// Speed stats and elemental resistances from the player's gear and own stat list, for
-    /// the breakpoint/gear guide (user request, 2026-11-17). `None` with neither gear stats
-    /// nor own resists read.
+    /// Speed stats and resistances from gear and the player's own stat list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<SpeedStats>,
-    /// The equipped weapon's WSM (weapon speed modifier, weapons.txt `speed` column); shown
-    /// next to IAS in the guide (its frames need the weapon speed). `None` without a readable
-    /// weapon or items table. Set in `snapshot`, not kept in the JSON.
+    /// The equipped weapon's weapon speed modifier (weapons.txt `speed`).
     #[serde(skip)]
     pub wsm: Option<i32>,
-    /// Base strength and dexterity (stats [`crate::offsets::stat_list::STRENGTH`] / [`crate::offsets::stat_list::DEXTERITY`]
-    /// of the player's base-only stat list, so without gear bonuses); `None` if unreadable.
-    /// The vendor panel checks store items' requirements against them.
+    /// Base strength and dexterity, without gear bonuses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dexterity: Option<u32>,
-    /// The active states (states.txt ids, ascending) from the player's state bitfield
-    /// ([`crate::offsets::stat_list::STATE_FLAGS`]): the dashboard's Buffs panel
-    /// ([`crate::buffs`]). `None` when unread (no stat list, a failed read: the live reader
-    /// then carries the last read value over, so one bad read neither empties the panel nor
-    /// logs every buff as removed); left out of the JSON when `None`.
+    /// Active states (states.txt ids, ascending); `None` when unread, so the live reader can carry
+    /// the last value over a failed read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub states: Option<Vec<u32>>,
 }
 
-/// The player's speed stats and elemental resistances (stat ids from itemstatcost.txt, summed
-/// over the equipped items' and carried charms' aggregated stat arrays
-/// (`stat_list::FULL_ENTRIES`: base, affixes, runeword and socketed runes/gems); the resists
-/// also include the player's own list (permanent quest resists: Anya's scroll, +10 all per
-/// difficulty); difficulty penalties are NOT included — they are applied when the guide
-/// displays them).
+/// The player's speed stats and elemental resistances summed over equipped items and charms;
+/// resists include permanent quest bonuses but not the difficulty penalty.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SpeedStats {
-    /// `item_fastercastrate` (FCR, %).
+    /// Faster cast rate, %.
     pub fcr: i32,
-    /// `item_fasterattackrate` (IAS, %).
+    /// Increased attack speed, %.
     pub ias: i32,
-    /// `item_fasterhitrecovery` (FHR, %).
+    /// Faster hit recovery, %.
     pub fhr: i32,
-    /// The four elemental resistances as granted by gear (fire, cold, lightning, poison).
-    /// Signed like every field here: gear can carry negative values (e.g. -10 all resistances).
+    /// Gear resistances can be negative.
     pub res_fire: i32,
     pub res_cold: i32,
     pub res_lightning: i32,
     pub res_poison: i32,
 }
 
-/// The character level from the raw stat value: 1..=99, or the same shifted left by 8 (some D2
-/// stats, like life, are stored in 1/256 units). Anything else is unknown.
+/// The character level from the raw stat value: 1..=99, possibly stored shifted left by 8.
 #[must_use]
 pub fn char_level_from_raw(raw: u32) -> Option<u8> {
     let level = if raw > 99 && raw.trailing_zeros() >= 8 {
@@ -363,32 +280,28 @@ pub fn char_level_from_raw(raw: u32) -> Option<u8> {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Candidate {
     pub addr: Addr,
-    /// Unit id; 0 in older dumps (and then left out of the JSON).
+    /// Unit id; 0 in older dumps.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub id: u32,
     pub name: String,
 }
 
-/// How `d2r_reader_mem::game::snapshot` picked the player among the candidates. In a group game the other players'
-/// units are candidates too; the owner of the stash items is the local player.
+/// How the player was picked among the candidates (in group games other players are too).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ChosenBy {
     /// `--player NAME`.
     Name,
-    /// The player chosen on the previous tick (or saved in `game.json`) is still a candidate:
-    /// kept, so a group game's owner vote can't flip the choice and reset the session.
+    /// The previous tick's player is still a candidate; kept so the owner vote can't flip it.
     Previous,
-    /// The majority owner id of the stash items.
+    /// Majority owner id of the stash items.
     StashOwner,
-    /// No stash items (or none of a candidate): the majority owner id of the inventory items.
+    /// Majority owner id of the inventory items.
     InventoryOwner,
-    /// No owner vote matched: the first candidate in unit-table order.
     #[default]
     FirstCandidate,
 }
 
-/// For `skip_serializing_if` (serde passes a reference).
 #[allow(clippy::trivially_copy_pass_by_ref)] // reason: serde's skip_serializing_if signature
 const fn is_zero(n: &u32) -> bool {
     *n == 0
@@ -413,9 +326,7 @@ impl ChosenBy {
 }
 
 impl Snapshot {
-    /// What the account holds, for copy counts ([`crate::stash::Holdings`]): the
-    /// (session-cached) shared stash, the player's own names and runeword copies, and the
-    /// mercenary's worn uniques and sets.
+    /// What the account holds, for copy counts.
     #[must_use]
     pub fn holdings(&self) -> crate::stash::Holdings<'_> {
         crate::stash::Holdings {
@@ -427,8 +338,7 @@ impl Snapshot {
     }
 }
 
-/// Where one of the player's own items is ([`Snapshot::owned_items`]; see `d2r_reader_mem::game::place` for how
-/// page and owner map to it).
+/// Where one of the player's own items is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Place {
@@ -438,9 +348,7 @@ pub enum Place {
     Shared,
 }
 
-/// Cheap pre-check on the raw `ItemData` fields: an identified unique or set item, not a
-/// runeword. Of the cube and stash items only these are read in full (only they can be spare,
-/// `d2r_playstyle_config::valuables::verdict`).
+/// An identified unique or set item that is not a runeword (from raw `ItemData` fields).
 #[must_use]
 pub const fn identified_unique_or_set(quality: u32, flags: u32) -> bool {
     (quality == item_data::QUALITY_UNIQUE || quality == item_data::QUALITY_SET)
@@ -448,9 +356,7 @@ pub const fn identified_unique_or_set(quality: u32, flags: u32) -> bool {
         && flags & item_data::FLAG_RUNEWORD == 0
 }
 
-/// Cheap pre-check on the raw `ItemData` fields: a white (low, normal or superior quality)
-/// item without a runeword. Only its code tells a runeword base from a potion or a rune
-/// (`d2r_reader_mem::game::stored_kept`).
+/// A low, normal or superior quality item without a runeword (from raw `ItemData` fields).
 #[must_use]
 pub const fn maybe_white_base(quality: u32, flags: u32) -> bool {
     quality >= item_data::QUALITY_LOW
@@ -458,8 +364,6 @@ pub const fn maybe_white_base(quality: u32, flags: u32) -> bool {
         && flags & item_data::FLAG_RUNEWORD == 0
 }
 
-/// A magic, rare or crafted item: the player's own ones get their stats read
-/// ([`ItemDrop::stats`]) for the playstyle's keep-or-sell scoring.
 #[must_use]
 pub const fn magic_or_better(quality: u32) -> bool {
     matches!(
@@ -476,7 +380,7 @@ pub struct Level {
     pub rooms: Vec<Room>,
 }
 
-/// World-tile bounding box; `max` is exclusive (room x + w).
+/// World-tile bounding box; `max` is exclusive.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
 pub struct Bounds {
     pub min_x: u32,
@@ -493,13 +397,11 @@ pub struct Room {
     pub w: u32,
     pub h: u32,
     pub loaded: bool,
-    /// The room was loaded at some point in this game, so its preset list was complete then (a
-    /// landmark candidate piece of rooms all seen loaded without the quest object is ruled out:
-    /// [`crate::render::landmarks`]). Set by `Session::apply` for candidate rooms only, never
-    /// read from memory. Omitted from JSON when false, so dumps and fixtures stay unchanged.
+    /// The room was loaded at some point this game, so its preset list was complete then; set by
+    /// the session for landmark candidate rooms only.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub seen_loaded: bool,
-    /// Level-preset id (lvlprest row) of the room; `None` if unreadable (and in old fixtures).
+    /// Level-preset id (lvlprest row).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<u32>,
 }
@@ -534,8 +436,7 @@ pub struct Preset {
     pub txt: u32,
     pub x: u32,
     pub y: u32,
-    /// Tile preset the player entered the level by; set by `Session::apply`, never read from
-    /// memory. Omitted from JSON when false, so dumps and fixtures stay unchanged.
+    /// The tile preset the player entered the level by; set by the session.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub entry: bool,
 }
@@ -563,14 +464,12 @@ pub struct RoomRect {
     pub h: u32,
 }
 
-/// A room of this level next to a room of another level (see [`Snapshot::border_links`]).
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
 pub struct BorderLink {
     pub from_room: RoomRect,
     pub to_level_id: u32,
     pub to_room: RoomRect,
-    /// `to_level_id` is the level the player came from; set by `Session::apply`, never read from
-    /// memory. Omitted from JSON when false.
+    /// `to_level_id` is the level the player came from; set by the session.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub entry: bool,
 }
@@ -585,20 +484,17 @@ pub struct Monster {
     pub y: u16,
     pub flags: u8,
     pub name_seed: u16,
-    /// Owner type/id from the `MonsterData` head (pets/mercs hypothesis, NOT yet verified):
-    /// the local player's id here makes the unit their merc. Journal-logged once per unit id and
-    /// game so the
-    /// offset can be verified live; left out of the JSON when both are zero.
+    /// Owner type/id from the `MonsterData` head; unverified hypothesis that the player's id marks
+    /// their merc.
     #[serde(default, skip_serializing_if = "is_zero", alias = "owner")]
     pub owner_id: u32,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub owner_type: u32,
-    /// Carries [`crate::offsets::state::DESECRATED`] (a Terror Zone monster). Left out of the JSON when false.
+    /// Carries the desecrated state (a Terror Zone monster).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub desecrated: bool,
 }
 
-/// Monster modes of a dead or dying unit.
 const DEAD_MODES: [u32; 2] = [0, 12];
 
 impl Monster {
@@ -608,20 +504,18 @@ impl Monster {
     }
 }
 
-/// A shrine object (txt id in [`SHRINE_OBJECTS`]) with a shrine type in `d2r_reader_mem::game::SHRINE_TYPES`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Shrine {
     /// objects.txt row.
     pub txt: u32,
-    /// Shrine type: the shrines.txt code (`ObjectData` +0x08), 2 health, 12 skill, ...
+    /// shrines.txt code: 2 health, 12 skill, ...
     pub code: u8,
-    /// Already clicked (any unit mode other than [`crate::offsets::object_mode::NEUTRAL`]).
     pub used: bool,
     pub x: u32,
     pub y: u32,
 }
 
-/// A well object (txt id in [`WELL_OBJECTS`]). Wells refill, so used or not doesn't matter.
+/// A well object. Wells refill, so used or not doesn't matter.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Well {
     /// objects.txt row.
@@ -630,8 +524,7 @@ pub struct Well {
     pub y: u32,
 }
 
-/// A consumable quest object (txt id in [`crate::objects::CONSUMABLE_QUEST_OBJECTS`]) that has
-/// been operated (unit mode other than [`crate::offsets::object_mode::NEUTRAL`]).
+/// A consumable quest object that has been operated.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperatedObject {
     /// objects.txt row.
@@ -640,94 +533,74 @@ pub struct OperatedObject {
     pub y: u32,
 }
 
-/// True if objects.txt row `txt` is a shrine (see `research/gen_objects.py`).
 #[must_use]
 pub fn is_shrine_object(txt: u32) -> bool {
     SHRINE_OBJECTS.binary_search(&txt).is_ok()
 }
 
-/// True if objects.txt row `txt` is a well (see `research/gen_objects.py`).
 #[must_use]
 pub fn is_well_object(txt: u32) -> bool {
     WELL_OBJECTS.binary_search(&txt).is_ok()
 }
 
-/// A ground item worth showing (see [`crate::items::classify`]), or a base with a known code (the
-/// playstyle decides which bases to show). The fields after `quality` default so older dumps
-/// stay loadable; older dumps' `highlight` is ignored (marks live in
-/// [`crate::guidance::Marks`]).
+/// A ground item worth showing, or a base with a known code.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ItemDrop {
     pub id: u32,
     /// Item code (`"gcg"`); `None` if the items table is unknown.
     pub code: Option<String>,
     pub kind: DropKind,
-    /// Raw `ItemData` quality (2 normal, 5 set, 7 unique, ...); 0 in snapshots dumped before it existed.
+    /// Raw `ItemData` quality (2 normal, 5 set, 7 unique, ...).
     #[serde(default)]
     pub quality: u32,
-    /// Raw `ItemData` flags (bits mostly unverified; see `item_data::FLAGS`).
+    /// Raw `ItemData` flags (bits mostly unverified).
     #[serde(default)]
     pub flags: u32,
     #[serde(default)]
     pub ethereal: bool,
-    /// Socket count (stat 194); 0 if none or unreadable.
+    /// Socket count (stat 194).
     #[serde(default)]
     pub sockets: u8,
-    /// uniqueitems / setitems row of a unique or set item (`item_data::FILE_INDEX`).
+    /// uniqueitems / setitems row of a unique or set item.
     #[serde(default)]
     pub unique_index: Option<u32>,
-    /// The item's stats (`d2r_reader_mem::game::Reader::item_stats`), read only for the player's own magic, rare
-    /// and crafted items (the playstyle scores them, `d2r_playstyle_config::stash_plan`); empty elsewhere.
+    /// The item's stats, read only for the player's own magic, rare and crafted items.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stats: Vec<crate::item_stats::ItemStat>,
-    /// The first `item_data::HEAD_LEN` bytes of `ItemData` as hex, for checking offsets in the
-    /// journal. Not part of the snapshot JSON.
+    /// The first `item_data::HEAD_LEN` bytes of `ItemData` as hex, for checking offsets.
     #[serde(skip)]
     pub item_data_head: String,
     pub x: u32,
     pub y: u32,
 }
 
-/// One equipped body-slot item of the player, with what the dashboard's gear grid needs:
-/// the quality the old `Snapshot::equipped` pairs carry, plus the item code, the runeword
-/// flag and (for an identified unique/set) its name and table row.
+/// One equipped body-slot item of the player.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Equipped {
-    /// `item_data::BODY` slot (1 helm, 2 amulet, 3 body, 4 weapon, 5 off-hand, 6/7 rings,
-    /// 8 belt, 9 boots, 10 gloves).
+    /// Body slot: 1 helm, 2 amulet, 3 body, 4 weapon, 5 off-hand, 6/7 rings, 8 belt, 9 boots,
+    /// 10 gloves.
     pub body: u8,
     /// Raw `ItemData` quality (2 normal, 4 magic, 5 set, 7 unique, ...).
     pub quality: u32,
-    /// 4-char item code ("uap"); `None` if the items table wasn't found yet.
+    /// 4-char item code ("uap").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
-    /// Display name of an identified unique/set item (the `names::unique_set_name_parts`
-    /// identity path) or of a runeword (its socketed runes in socket order,
-    /// [`stash::runeword_by_runes`]); `None` otherwise (unidentified, magic, rare, base).
+    /// Name of an identified unique/set or of a runeword recognised by its socketed runes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// uniqueitems/setitems row (`item_data::FILE_INDEX`) of a named unique/set. Kept only
-    /// with a `name`: the index is only filled once the item is identified, so without a
-    /// name it is not trusted (see `item_data::FILE_INDEX`).
+    /// uniqueitems/setitems row; kept only with a `name`, since it is unreliable before identify.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_index: Option<u32>,
-    /// `ItemData::FLAGS` runeword bit ([`item_data::FLAG_RUNEWORD`], live-verified).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub runeword: bool,
-    /// The item's full stat entries (`d2r_reader_mem::game::Reader::item_stats`: base, affixes, runeword, sockets):
-    /// what the vendor panel compares store items against (`d2r_playstyle_config::gear_score`).
+    /// The item's full stat entries: base, affixes, runeword, sockets.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stats: Vec<crate::item_stats::ItemStat>,
 }
 
 impl Equipped {
-    /// The item's required character level, as far as the reader can know it:
-    /// - an identified unique/set: the exact `lvl req` of its table row;
-    /// - a named runeword: the higher of its runes' `levelreq` and its base's `levelreq`
-    ///   (exact); an unnamed one (runes unreadable or unmatched): `None`;
-    /// - everything else (normal, magic, rare, crafted, ...): its BASE item's `levelreq`
-    ///   (armor/weapons tables). APPROXIMATION: affixes can raise a magic/rare/crafted
-    ///   item's real requirement above the base one.
+    /// The item's required level: exact for uniques, sets and named runewords (`None` for an
+    /// unnamed runeword), otherwise the base's `levelreq`, which ignores affix requirements.
     #[must_use]
     pub fn required_level(&self) -> Option<u32> {
         use crate::item_levels_data;
@@ -749,16 +622,14 @@ impl Equipped {
         }
     }
 
-    /// The base item's `levelreq` (armor or weapons table); `None` for an unknown code.
+    /// The base item's `levelreq`.
     fn base_level(&self) -> Option<u32> {
         let code = self.code.as_deref()?;
         crate::item_levels_data::armor_level(code).or_else(|| crate::weapons_data::level(code))
     }
 }
 
-/// The names of the worn items that have one (identified unique/set, named runeword): the
-/// `BiS` ✓ of a piece the character wears ([`crate::info::Tick::Worn`]), as opposed to one it
-/// merely owns ([`Snapshot::owned_names`], which includes the worn ones).
+/// The names of the worn items that have one (identified unique/set, named runeword).
 #[must_use]
 pub fn worn_names(items: &[Equipped]) -> Vec<String> {
     items.iter().filter_map(|e| e.name.clone()).collect()

@@ -1,15 +1,13 @@
-//! The open vendor trade window: the store items hanging off a vendor NPC's inventory
-//! (read by `game::Reader::shop`), named from their base and magic affixes and matched
-//! against the build's pieces.
+//! The open vendor trade window: store items named from their base and magic affixes and
+//! matched against the build's pieces.
 
 use crate::offsets::item_data;
 use crate::{affixes_data, item_levels_data, weapons_data};
 use serde::{Deserialize, Serialize};
 
-/// The trade window that is open right now.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Shop {
-    /// The vendor's monstats row (monster unit txt).
+    /// The vendor's monstats row.
     pub npc_txt: u32,
     /// The vendor's English name; `None` for an NPC not in `affixes_data::VENDORS`.
     pub npc: Option<String>,
@@ -17,49 +15,35 @@ pub struct Shop {
     pub items: Vec<ShopItem>,
 }
 
-/// One item for sale.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShopItem {
     /// The 3-character item code; `None` without the items table.
     pub code: Option<String>,
     /// `item_data::QUALITY` (2 normal, 3 superior, 4 magic, …).
     pub quality: u32,
-    /// The store tab (`item_data::PAGE`): 0 armor, 1 and 2 weapons, 3 misc (live, Ormus).
+    /// The store tab: 0 armor, 1 and 2 weapons, 3 misc.
     pub page: u8,
     /// The base item's English name (the item code when unknown).
     pub base: String,
-    /// The magic prefix's English name (magic items only).
     pub prefix: Option<String>,
-    /// The magic suffix's English name (magic items only).
     pub suffix: Option<String>,
     /// The name as the game shows it: `prefix base suffix`.
     pub name: String,
-    /// max(base `levelreq`, prefix `levelreq`, suffix `levelreq`); `None` when the base is
-    /// unknown and no affix sets one.
+    /// The highest `levelreq` of base and affixes.
     pub req_level: Option<u32>,
-    /// The item's stat entries (`game::Reader::item_stats`), for the comparison with the
-    /// worn gear (`d2r_playstyle_config::gear_score`); empty when unread.
+    /// The item's stat entries, for the comparison with the worn gear; empty when unread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stats: Vec<crate::item_stats::ItemStat>,
 }
 
-/// Names a store item from its code, quality, store tab and raw affix ids
-/// (`item_data::MAGIC_PREFIX` / `MAGIC_SUFFIX`, 0 = none; prefix ids are pre-shifted in
-/// `affixes_data::PREFIXES`). Only magic items are decoded;
-/// any other quality is shown by its base name.
+/// Names a store item from its code, quality, store tab and raw affix ids (0 = none); only
+/// magic items get their affixes decoded.
 #[must_use]
 pub fn shop_item(code: Option<&str>, quality: u32, page: u8, prefix_id: u16, suffix_id: u16) -> ShopItem {
     let (base_level, base) = code.map_or((None, None), base_of);
     let magic = quality == item_data::QUALITY_MAGIC;
-    // Id 0 is taken as "no affix". Live 2026-11-18: 9 store items "… of Health" were named with
-    // their suffix and none of 1312 magic store items came out affix-less, so "of Health" does
-    // not read 0.
-    let prefix = (magic && prefix_id != 0)
-        .then(|| affixes_data::prefix(prefix_id))
-        .flatten();
-    let suffix = (magic && suffix_id != 0)
-        .then(|| affixes_data::suffix(suffix_id))
-        .flatten();
+    let prefix = magic_affix(magic, prefix_id, affixes_data::prefix);
+    let suffix = magic_affix(magic, suffix_id, affixes_data::suffix);
     let req_level = [base_level, prefix.map(|p| p.1), suffix.map(|s| s.1)]
         .into_iter()
         .flatten()
@@ -83,6 +67,15 @@ pub fn shop_item(code: Option<&str>, quality: u32, page: u8, prefix_id: u16, suf
     }
 }
 
+/// A magic item's affix by raw id; id 0 means none (no magic store item reads 0 live).
+fn magic_affix(
+    magic: bool,
+    id: u16,
+    lookup: fn(u16) -> Option<(&'static str, u32)>,
+) -> Option<(&'static str, u32)> {
+    (magic && id != 0).then(|| lookup(id)).flatten()
+}
+
 /// The base item's (`levelreq`, English name) from the armor, weapons or misc table.
 fn base_of(code: &str) -> (Option<u32>, Option<&'static str>) {
     if let Some(name) = item_levels_data::armor_name(code) {
@@ -94,10 +87,9 @@ fn base_of(code: &str) -> (Option<u32>, Option<&'static str>) {
     affixes_data::misc(code).map_or((None, None), |(lvl, name)| (Some(lvl), Some(name)))
 }
 
-/// Whether `item` is the build piece named `piece` (a bare piece name, see
-/// [`crate::info::piece_name`]): the piece names the item's base plus any of its affixes, so
-/// "Coral Heavy Gloves" matches Coral Heavy Gloves of Frost, "Sash" any sash, but "Russet
-/// Heavy Boots of Haste" needs both affixes. Names compare with [`crate::names::same_name`].
+/// Whether `item` is the build piece named `piece`: its base plus any of its affixes, so
+/// "Coral Heavy Gloves" matches Coral Heavy Gloves of Frost but "Russet Heavy Boots of Haste"
+/// needs both affixes.
 #[must_use]
 pub fn matches(item: &ShopItem, piece: &str) -> bool {
     let base = item.base.as_str();
@@ -116,8 +108,7 @@ pub fn matches(item: &ShopItem, piece: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Memory id of a magic prefix by name and level requirement (the table has several rows
-    /// per name).
+    /// Memory id of a magic prefix by name and level requirement.
     fn prefix_id(name: &str, lvl: u32) -> u16 {
         affixes_data::PREFIXES
             .iter()
@@ -127,7 +118,7 @@ mod tests {
 
     #[test]
     fn decodes_magic_affixes_and_required_level() {
-        // Live 2026-11-18: an owned Battle Staff of Teleportation had suffix id 532.
+        // An owned Battle Staff of Teleportation had suffix id 532 live.
         let staff = shop_item(Some("bst"), 4, 1, 0, 532);
         assert_eq!(staff.name, "Battle Staff of Teleportation");
         assert_eq!(staff.suffix.as_deref(), Some("of Teleportation"));
@@ -138,7 +129,6 @@ mod tests {
         );
 
         let coral = prefix_id("Coral", 13);
-        // Prefix ids are shifted past the suffixes: 785 + the magicprefix row.
         assert!(coral > 785, "prefix ids are shifted");
         let gloves = shop_item(Some("vgl"), 4, 0, coral, 0);
         assert_eq!(gloves.name, "Coral Heavy Gloves");

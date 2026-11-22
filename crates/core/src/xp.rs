@@ -1,46 +1,29 @@
-//! How much experience an area's monsters give a character: the D2 level-difference rule, used to
-//! grey out area names on the map that give (almost) none (user request, 2026-11-18).
-//!
-//! Source: Arreat Summit, <https://classic.battle.net/diablo2exp/basics/experience.shtml>; exact
-//! factors in 256ths from <https://d2r-experience-calculator.pages.dev/calculations> (they round
-//! to the Arreat percentages). No D2R patch up to Reign of the Warlock is known to change them.
-//!
-//! - Monster at most 5 levels from the character: 100%.
-//! - Monster 6–10+ levels below: 81 / 62 / 43 / 24 / 5% (any character level).
-//! - Monster above, character below level 25: 6–10+ levels above give 88 / 68 / 36 / 15 / 2%.
-//!   This is what makes Act 5 Normal (monster level 24+) worthless up to clvl 15 (9+ levels
-//!   below the monsters: 15% or less). There is no separate Act 5 rule.
-//! - Monster above, character level 25 or more: `clvl / mlvl`, from the first level of difference.
-//!
-//! The clvl 70+ penalty (976/1024 at 70 down to 5/1024 at 99) is left out on purpose: it is the
-//! same factor in every area, so it says nothing about where to go, and from clvl 86 on (below
-//! 25%) it would grey every area.
+//! The D2 experience level-difference rule (Arreat Summit; factors in 256ths from
+//! d2r-experience-calculator.pages.dev), used to grey out map area names that give almost none.
 
 use crate::info::TOWNS;
 use crate::levels_data::LEVELS;
 
-/// An area whose experience factor ([`multiplier`]) is below this gives "no or very little
-/// experience" and its name is drawn grey; at or above it, white. 0.25 keeps a monster 9 levels
-/// below (24%) and 9 above a low character (15%) grey, 8 levels either way (43% / 36%) white.
+/// Areas whose experience factor is below this are drawn grey: 9 levels below (24%) or above a
+/// low character (15%) is grey, 8 levels either way (43% / 36%) white.
 pub const LOW_XP: f64 = 0.25;
 
 /// Below this character level, monsters above give the fixed table; from it on, `clvl / mlvl`.
 const SCALED_FROM: u8 = 25;
 
-/// Factor in 256ths for a monster `n` = 6..=10 levels below the character (index `n − 6`; more
-/// than 10 counts as 10).
+/// Factor in 256ths for a monster 6..=10+ levels below the character.
 const BELOW: [u32; 5] = [207, 159, 110, 61, 13];
-/// Factor in 256ths for a monster `n` = 6..=10 levels above a character below [`SCALED_FROM`].
+/// Factor in 256ths for a monster 6..=10+ levels above a character below [`SCALED_FROM`].
 const ABOVE_LOW_CLVL: [u32; 5] = [225, 174, 92, 38, 5];
 
-/// The share (0..=1) of a monster's base experience a character of `clvl` gets for killing one of
-/// `mlvl`, without party and clvl 70+ factors.
+/// The share (0..=1) of a monster's base experience a character of `clvl` gets for one of
+/// `mlvl`. The clvl 70+ penalty is left out: it is the same in every area, so it can't rank them.
 #[must_use]
 pub fn multiplier(clvl: u8, mlvl: u8) -> f64 {
-    // Index into the 6..=10 tables; differences beyond 10 clamp to the last entry.
-    let step = |diff: u8| usize::from(diff.min(10) - 6);
-    let in_256ths =
-        |table: &[u32; 5], diff: u8| f64::from(table.get(step(diff)).copied().unwrap_or(256)) / 256.0;
+    let clamped_index = |diff: u8| usize::from(diff.min(10) - 6);
+    let in_256ths = |table: &[u32; 5], diff: u8| {
+        f64::from(table.get(clamped_index(diff)).copied().unwrap_or(256)) / 256.0
+    };
     if clvl >= mlvl {
         match clvl - mlvl {
             0..=5 => 1.0,
@@ -56,9 +39,8 @@ pub fn multiplier(clvl: u8, mlvl: u8) -> f64 {
     }
 }
 
-/// True if the area `level_id` gives a character of `clvl` in `difficulty` (0 Normal … 2 Hell)
-/// almost no experience ([`multiplier`] of its monster level below [`LOW_XP`]). False when
-/// anything is unknown and for areas without monsters (towns, monster level 0).
+/// True if area `level_id` gives a character of `clvl` almost no experience. False when
+/// anything is unknown and for areas without monsters.
 #[must_use]
 pub fn is_low(level_id: u32, difficulty: Option<u8>, clvl: Option<u8>) -> bool {
     let (Some(d), Some(clvl)) = (difficulty, clvl) else {

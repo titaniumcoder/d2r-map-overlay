@@ -1,9 +1,5 @@
-//! Ground drops worth showing (unique, set, gems, runes, charms, valuable bases) and the game's
-//! item-code table.
-//!
-//! An item unit only carries its items.txt row (`unit::TXT`); the 4-character item code
-//! (`gcg `, `r01 `) lives in the game's items table, an array on the heap whose address differs
-//! per run. [`find_table`] locates it by scanning anonymous memory once per process.
+//! Ground drops worth showing, and locating the game's item-code table: an item unit carries
+//! only its items.txt row, and the table holding the codes sits at a per-run heap address.
 
 use std::ops::Range;
 use std::time::Instant;
@@ -14,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::offsets::{item_data, items_txt};
 use crate::reader::ReadMem;
 
-/// Gem colour (skulls count as a gem colour here: they drop and are drawn like gems).
+/// Gem colour; skulls count as one (they drop and are drawn like gems).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GemColour {
@@ -28,7 +24,6 @@ pub enum GemColour {
 }
 
 impl GemColour {
-    /// The in-game name of the colour (`"Amethyst"`, …, `"Skull"`).
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -56,14 +51,12 @@ pub enum CharmSize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DropKind {
-    /// Any other item, shown only because a valuables rule matches it (e.g. a white 4os
-    /// Crystal Sword; see `d2r_playstyle_config::valuables`).
+    /// Any other item, shown only because a playstyle valuables rule matches it.
     Base,
     Gem(GemColour),
     /// Rune number 1 (El) ..= 33 (Zod).
     Rune(u8),
     /// A charm of any quality; `unique` (Annihilus, Torch, Gheed's) keeps the unique colour.
-    /// JSON: `{"charm":{"size":"grand"}}`, plus `"unique":true` for a unique one.
     Charm {
         size: CharmSize,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -116,9 +109,7 @@ const GEMS: [([u8; 3], GemColour); 35] = {
     ]
 };
 
-/// A gem's or skull's colour and grade (0 chipped, 1 flawed, 2 normal, 3 flawless, 4
-/// perfect) by its 4-byte code; `None` for anything else. [`GEMS`] lists five grades per colour
-/// in that order.
+/// A gem's or skull's colour and grade (0 chipped .. 4 perfect) by its 4-byte code.
 #[must_use]
 pub fn gem(code: [u8; 4]) -> Option<(GemColour, u8)> {
     let [a, b, c, b' '] = code else { return None };
@@ -145,8 +136,7 @@ const CHARMS: [([u8; 3], CharmSize); 3] = [
     (*b"cm3", CharmSize::Grand),
 ];
 
-/// The kind of a gem, skull, rune or charm by its 4-byte code (3 letters + space); `None`
-/// otherwise. A charm comes back as not unique: only [`classify`] knows the quality.
+/// The kind of a gem, skull, rune or charm by its 4-byte code; charms come back non-unique.
 #[must_use]
 pub fn code_kind(code: [u8; 4]) -> Option<DropKind> {
     let [a, b, c, b' '] = code else { return None };
@@ -165,9 +155,8 @@ pub fn code_kind(code: [u8; 4]) -> Option<DropKind> {
     None
 }
 
-/// Whether a ground item is shown: a charm of any quality first (so a unique charm stays a
-/// charm), then unique or set by quality (any base), else gem/rune by code.
-/// `code` is `None` if the items table wasn't found; then only unique and set items are shown.
+/// Whether a ground item is shown: charms first (a unique charm stays a charm), then unique
+/// or set by quality, else gem/rune by code.
 pub fn classify(quality: u32, code: Option<[u8; 4]>) -> Option<DropKind> {
     let kind = code.and_then(code_kind);
     if let Some(DropKind::Charm { size, .. }) = kind {
@@ -208,7 +197,6 @@ const CHUNK: u64 = 8 << 20;
 /// Consecutive chunks overlap by a code minus one byte, so a code across a border is still seen.
 const OVERLAP: u64 = 3;
 
-/// Result of a table scan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scan {
     /// Address of row 0's record, if found.
@@ -217,13 +205,11 @@ pub struct Scan {
     pub scanned: u64,
 }
 
-/// Searches `regions` (the platform's readable anonymous memory,
-/// `d2r_reader_mem::Platform::heap_regions`) for the items table.
+/// Searches the readable anonymous memory `regions` for the items table.
 pub fn find_table(mem: &impl ReadMem, regions: &[Range<u64>]) -> Scan {
     scan(mem, regions, CHUNK)
 }
 
-/// [`find_table`] with a configurable read size (tests use a tiny one to cross chunk borders).
 fn scan(mem: &impl ReadMem, regions: &[Range<u64>], chunk: u64) -> Scan {
     let finder = memmem::Finder::new(&SIGNATURE[0]);
     let mut buf = vec![0u8; usize::try_from(chunk).unwrap_or(0)];
@@ -268,8 +254,7 @@ fn is_table(mem: &impl ReadMem, base: u64) -> bool {
     })
 }
 
-/// Finds the items table in `regions` and logs the result and the time it took.
-/// `None` (logged) if it can't be found: then only unique and set drops are shown.
+/// Finds the items table and logs the result and the time it took.
 pub fn locate(mem: &impl ReadMem, regions: &[Range<u64>]) -> Option<u64> {
     let started = Instant::now();
     let Scan { base, scanned } = find_table(mem, regions);
@@ -464,8 +449,7 @@ mod tests {
         let decoy = table_bytes(6, &[(0, b"hax "), (1, b"axe "), (2, b"3ax ")]);
         regions.push(region(0x10_0000, decoy.len()));
         mem.add(0x10_0000, decoy);
-        // 2. Listed but unreadable: skipped. (Which mappings are listed at all is the
-        // platform's choice: `process::heap_regions`.)
+        // 2. Listed but unreadable: skipped.
         regions.push(region(0x30_0000, 0x1000));
         // 3. The table, at an odd address inside an anonymous region, after some bytes.
         let mut rows = signature_rows();

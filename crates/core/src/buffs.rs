@@ -1,14 +1,5 @@
-//! The buff tracker (PLAN.md, "Backlog: buff tracker"): which of the player's active states
-//! ([`crate::game::Player::states`]) the dashboard's Buffs panel shows, and how.
-//!
-//! [`BUFFS`] is the curated set with display names: good states first (the druid's own, the
-//! barbarian warcries, auras received, shrines, potions), then bad ones (curses and effects
-//! on the player). Any other active state is shown muted by its states.txt name
-//! ([`crate::states_data::STATES`]), so a live session shows what else turns up; [`HIDDEN`]
-//! are the per-hit / per-cast internals that would only flicker.
-//!
-//! Stacks (Feral Rage) and time left are not read yet: [`Line`] carries them as `None` until
-//! the buff's own stat list and the game's frame counter are known.
+//! The buff tracker: which of the player's active states the dashboard's Buffs panel shows,
+//! curated ones by display name, any other by its states.txt name.
 
 use serde::Serialize;
 
@@ -23,8 +14,7 @@ pub enum Kind {
     Other,
 }
 
-/// One curated state: its id (states.txt `*ID`, the state bit), states.txt `state` name (a test
-/// checks it against the generated table) and the name shown.
+/// One curated state: states.txt id (the state bit), states.txt `state` name and display name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Buff {
     pub state: u32,
@@ -67,8 +57,7 @@ pub const BUFFS: &[Buff] = &[
     good(32, "battleorders", "Battle Orders"),
     good(51, "battlecommand", "Battle Command"),
     good(26, "shout", "Shout"),
-    // Auras received (mercenary, runewords, a paladin). Holy Freeze, Holy Fire, Holy Shock
-    // and Conviction are offensive auras: their state may sit on the caster only.
+    // Auras received; offensive ones (Holy Freeze/Fire/Shock, Conviction) may sit on the caster.
     good(33, "might", "Might"),
     good(43, "holywind", "Holy Freeze"),
     good(35, "holyfire", "Holy Fire"),
@@ -106,8 +95,7 @@ pub const BUFFS: &[Buff] = &[
     good(179, "thawing", "Thawing potion"),
     good(178, "antidote", "Antidote potion"),
     good(180, "staminapot", "Stamina potion"),
-    // Curses on the player. Life Tap is the player's good curse on monsters; cast on the
-    // player it heals the monsters hitting them, so it counts as bad here.
+    // Curses on the player (Life Tap there heals the monsters hitting them).
     bad(9, "amplifydamage", "Amplify Damage"),
     bad(60, "decrepify", "Decrepify"),
     bad(61, "lowerresist", "Lower Resist"),
@@ -128,32 +116,27 @@ pub const BUFFS: &[Buff] = &[
     bad(189, "desecrated", "Desecrated (Terror Zone)"),
 ];
 
-/// Internal states set per hit, cast or step (`justhit`, `skilldelay`, `cooldown`,
-/// `skill_move`, `just_portaled`, `skill_channeling`): not shown, and their changes don't
-/// write a journal `buffs` event (they would on nearly every tick in a fight).
+/// Internal per-hit/cast/step states (`justhit`, `skilldelay`, `cooldown`, `skill_move`,
+/// `just_portaled`, `skill_channeling`): hidden and not journaled, as they flicker every tick.
 pub const HIDDEN: &[u32] = &[18, 86, 102, 121, 185, 216];
 
-/// `states` without the [`HIDDEN`] ones: the set whose changes count (journal `buffs` event,
-/// the reader's research dump).
+/// `states` without the [`HIDDEN`] ones.
 #[must_use]
 pub fn shown(states: &[u32]) -> Vec<u32> {
     states.iter().copied().filter(|id| !HIDDEN.contains(id)).collect()
 }
 
-/// The states.txt name of state `id`; `None` past the table's end.
 #[must_use]
 pub fn state_name(id: u32) -> Option<&'static str> {
     STATES.get(usize::try_from(id).ok()?).copied()
 }
 
-/// The curated entry of state `id`, if it has one.
 #[must_use]
 pub fn buff(id: u32) -> Option<&'static Buff> {
     BUFFS.iter().find(|b| b.state == id)
 }
 
-/// One line of the Buffs panel. `stacks` and `seconds_left` are `None` until the reader can
-/// read them (the buff's own stat list and the game frame counter; see PLAN.md).
+/// One line of the Buffs panel. Stacks and time left aren't read yet, so they stay `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Line {
     pub state: u32,
@@ -163,8 +146,8 @@ pub struct Line {
     pub seconds_left: Option<u32>,
 }
 
-/// The panel lines for the active `states`: the good ones in [`BUFFS`] order, then the bad
-/// ones in [`BUFFS`] order, then any other non-[`HIDDEN`] state by id as `state <id> <name>`.
+/// The panel lines for the active `states`: good, then bad, in [`BUFFS`] order, then any
+/// other non-hidden state by id.
 #[must_use]
 pub fn lines(states: &[u32]) -> Vec<Line> {
     let curated = |kind| {
@@ -229,8 +212,7 @@ mod tests {
 
     #[test]
     fn lines_order_good_bad_other() {
-        // Unsorted input with a curse, two buffs, an unknown state, a hidden one and a
-        // duplicate.
+        // Unsorted, with a curse, two buffs, an unknown, a hidden and a duplicate state.
         let l = lines(&[61, 165, 86, 32, 120, 7, 165]);
         let got: Vec<(u32, &str, Kind)> = l.iter().map(|l| (l.state, l.name.as_str(), l.kind)).collect();
         assert_eq!(

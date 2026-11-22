@@ -1,12 +1,5 @@
-//! How well the current character's build fits the area: the info line's monster-level part
-//! turns red where too many monster types are immune to the build's damage and, from
-//! Nightmare on, green where none is immune to its primary damage (user request, 2026-11-15).
-//!
-//! The build is the character's damage types, primary first, from the playstyle (the config
-//! playstyle's `Settings::damages_for_player`: its `[builds]` entry, else the current guide
-//! stage's `damages`, else its class's). The area's immunities are the generated
-//! `levels_data::IMMUNITIES` table: per level and difficulty, the distinct monster types that spawn and how many are immune
-//! (resist >= 100) to each damage type.
+//! How well the build's damage types fit the area, from the generated per-level, per-difficulty
+//! counts of monster types immune (resist >= 100) to each damage type.
 
 use crate::info::TOWNS;
 use crate::levels_data::{AreaImmunities, IMMUNITIES};
@@ -51,12 +44,10 @@ impl Damage {
         Self::ALL.into_iter().find(|d| d.name() == wanted)
     }
 
-    /// Index into an `IMMUNITIES` count array: the declaration order.
     const fn index(self) -> usize {
         self as usize
     }
 
-    /// Bit of this type in an `IMMUNITIES` immunity mask.
     const fn bit(self) -> u8 {
         1 << self as u8
     }
@@ -65,10 +56,9 @@ impl Damage {
 /// How the area suits the build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Rating {
-    /// A town, no build, neither good nor bad, or good in Normal: the usual colour.
+    /// A town, no build, neither good nor bad, or good in Normal.
     #[default]
     Neutral,
-    /// Red: see [`BAD_PRIMARY_SHARE`].
     Bad,
     /// Green: no monster type is immune to the primary damage.
     Good,
@@ -81,11 +71,8 @@ pub const BAD_UNCOVERED_SHARE: f64 = 0.0;
 /// Good up to this share of types immune to the primary damage (i.e. none).
 pub const GOOD_PRIMARY_SHARE: f64 = 0.0;
 
-/// Rates level `level_id` in `difficulty` (0 Normal, 1 Nightmare, 2 Hell) for `build` (primary
-/// damage first). Neutral for an unknown difficulty or level, in towns, in areas without
-/// monsters and without a build. Normal is rated too (the table has its rows: nearly no
-/// immunes, one poison-immune type in the Bloody Foothills), but only [`Rating::Bad`] counts
-/// there: nearly every Normal area would be "good", which says nothing.
+/// Rates level `level_id` in `difficulty` for `build` (primary damage first). In Normal only
+/// [`Rating::Bad`] counts: nearly every Normal area would be "good", which says nothing.
 #[must_use]
 pub fn rate(level_id: u32, difficulty: Option<u8>, build: &[Damage]) -> Rating {
     let Some(&primary) = build.first() else {
@@ -100,8 +87,6 @@ pub fn rate(level_id: u32, difficulty: Option<u8>, build: &[Damage]) -> Rating {
     }
 }
 
-/// The `IMMUNITIES` entry of `level_id` in `difficulty`; `None` for an unknown level or
-/// difficulty and in towns.
 fn area_immunities(level_id: u32, difficulty: Option<u8>) -> Option<AreaImmunities> {
     let d = usize::from(difficulty?);
     if TOWNS.contains(&level_id) {
@@ -114,14 +99,14 @@ fn area_immunities(level_id: u32, difficulty: Option<u8>) -> Option<AreaImmuniti
         .copied()
 }
 
-/// [`rate`] on one `IMMUNITIES` entry: `types` monster types, `immune` per damage type, the
-/// immunity bitmask of each immune type in `masks`.
+/// [`rate`] on one `IMMUNITIES` entry: `types` monster types, `immune` counts per damage type,
+/// one immunity bitmask per immune type in `masks`.
 fn rate_counts(types: u8, immune: [u8; 6], masks: &[u8], primary: Damage, build: &[Damage]) -> Rating {
     if types == 0 {
         return Rating::Neutral;
     }
     let share = |n: usize| {
-        // At most 20 types (10 spawn columns, plus 10 unique ones in Normal): never saturates.
+        // At most 20 types per area, so the count never saturates.
         let n = u8::try_from(n).unwrap_or(u8::MAX);
         f64::from(n) / f64::from(types)
     };
@@ -154,8 +139,7 @@ mod tests {
     #[test]
     fn generated_table_has_known_immunities() {
         assert!(IMMUNITIES.len() > 130, "one row per level");
-        // City of the Damned (106), Nightmare: 7 types, one lightning immune (bighead5, ResLi(N)
-        // 100); none in Normal.
+        // City of the Damned, Nightmare: 7 types, one lightning immune; none in Normal.
         let [normal, nightmare, hell] = row(106);
         assert_eq!(normal.1, [0; 6]);
         assert_eq!((nightmare.0, nightmare.1), (7, [0, 0, 0, 1, 0, 0]));
