@@ -10,7 +10,8 @@
     "setups": "'setup' is the stage the piece is first worn in. Stash pieces were read from the overlay's shared-stash view on 2026-11-19.",
     "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)": "Grizzly to 20 by 51 (+10% damage to every wolf and the bear per point). Hire the Nightmare Act 2 Might merc. Jalal's Mane, Raven Frost and String of Ears are worn now and stay on after the Fury respec. Smoke is merc gear (the merc's armor); the druid keeps Stealth for its Faster Cast Rate.",
     "lvl 60-75 (Hell: Spirit Wolf 20, Heart of Wolverine)": "Spirit Wolf to 20 by 60 (with the Hell Den of Evil point) (+25% attack rating for Dire Wolves and the Grizzly per point), then Heart of Wolverine to 20 by 75 (+7% damage and +7% attack rating per point for you, the merc and every pet: +153% damage, +158% attack rating at 20). From 75 with the switch gear (Cannot Be Frozen item, powerful weapon, Harmony, 2x Lawbringer for the merc, Smoke, life-leech merc helm) the Fury switch is possible (optional).",
-    "lvl 75-99 (Hell endgame: Ravens to 20)": "Without the switch the summoner goes on to 99: Ravens 20 by 90, then only the last 9 reserve points go to Arctic Blast 1 (prerequisite) and Cyclone Armor 8 (absorbs 124 fire/cold/lightning damage per cast). Endgame summoner gear: Heart of the Oak, Jalal's Mane, Enigma, Mara's Kaleidoscope, Arachnid Mesh."
+    "lvl 75-99 (Hell endgame: Ravens to 20)": "Without the switch the summoner goes on to 99: Ravens 20 by 90, then only the last 9 reserve points go to Arctic Blast 1 (prerequisite) and Cyclone Armor 8 (absorbs 124 fire/cold/lightning damage per cast). Endgame summoner gear: Heart of the Oak, Jalal's Mane, Enigma, Mara's Kaleidoscope, Arachnid Mesh.",
+    "alternative": "The Maxroll Summon Druid guide's Gear Options (user, 2026-11-22: \"did you do it for the summoner druid too?\"): its unique/set/runeword pieces of every slot after this build's own stage pieces, one-handed weapons and shields included (the summoner fights with sword and shield), the weapon-swap list, both ring slots (ring2 lists the same rings) and its unique charms in the extras; no rare, crafted, magic or plain socketed entries (no build-file form). Merc (user: \"can we get that for the mercs too\"): the guide's Act 2 Might merc pieces (The Reaper's Toll, Hustle, Fortitude, Treachery, Guillaume's Face) after Insight, Smoke and Bulwark. One copy each is wanted."
   },
   "stat_source": "All numbers are computed from the D2R game tables (blizzhackers/d2data JSON, current with the Warlock class): skill requirements, petmax/HP/damage/synergy formulas from skills.json and skilldesc.json, runeword runes/types/levels from runes.json + misc.json (rune levelreq), base requirements and socket limits from weapons.json/armor.json/itemtypes.json, unique/set stats from uniqueitems.json/setitems.json, merc auras from hireling.json. Not from a build guide.",
   "targets": {
@@ -452,6 +453,69 @@
       "rank_in_slot": 3
     },
     {
+      "name": "Stormshield",
+      "slot": "offhand",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 73,
+      "base": "Monarch (156 Str)",
+      "stats": [
+        "+3.75 Defense per Character Level",
+        "Damage Reduced by 35%",
+        "+30 to Strength",
+        "Indestructible",
+        "+35% Faster Block Rate",
+        "Lightning Resist +25%",
+        "25% Increased Chance of Blocking",
+        "Cold Resist +60%",
+        "Attacker Takes Lightning Damage of 10"
+      ],
+      "why": "Maxroll Summon Druid guide, off-hands list: 35% damage reduction, block and resistances (the guide: also on the off-hand swap).",
+      "rank_in_slot": 4
+    },
+    {
+      "name": "Sanctuary",
+      "slot": "offhand",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 49,
+      "base": "3-socket shield (non-class; druids can't use paladin shields)",
+      "stats": [
+        "20% Increased Chance of Blocking",
+        "+20% Faster Block Rate",
+        "+130-160% Enhanced Defense",
+        "+250 Defense vs. Missile",
+        "All Resistances +50-70",
+        "+20% Faster Hit Recovery",
+        "Level 12 Slow Missiles (60 Charges)",
+        "+20 to Dexterity",
+        "Magic Damage Reduced by 7"
+      ],
+      "why": "Maxroll Summon Druid guide, off-hands list: Faster block, block chance and all resistances.",
+      "notes": "Ko Ko Mal.",
+      "rank_in_slot": 5
+    },
+    {
+      "name": "Rhyme",
+      "slot": "offhand",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 29,
+      "base": "2-socket shield (non-class)",
+      "stats": [
+        "+40% Faster Block Rate",
+        "20% Increased Chance of Blocking",
+        "All Resistances +25",
+        "Cannot Be Frozen",
+        "50% Extra Gold from Monsters",
+        "25% Better Chance of Getting Magic Items",
+        "Regenerate Mana 15%"
+      ],
+      "why": "Maxroll Summon Druid guide, off-hands list: Cannot Be Frozen, magic find and resistances on cheap runes.",
+      "notes": "Shael Eth.",
+      "rank_in_slot": 6
+    },
+    {
       "name": "Jalal's Mane",
       "slot": "helm",
       "setup": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
@@ -473,6 +537,164 @@
       "rank_in_slot": 0
     },
     {
+      "name": "Harlequin Crest",
+      "slot": "helm",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 62,
+      "base": "Shako (50 Str)",
+      "stats": [
+        "+2 to All Skills",
+        "+1.5 to Life per Character Level",
+        "+1.5 to Mana per Character Level",
+        "50% Better Chance of Getting Magic Items",
+        "Damage Reduced by 10%",
+        "+2 to Strength",
+        "+2 to Dexterity",
+        "+2 to Vitality",
+        "+2 to Energy"
+      ],
+      "why": "Maxroll Summon Druid guide, helmets list: +2 all skills, life / mana per level and 50% magic find.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Crown of Ages",
+      "slot": "helm",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 82,
+      "base": "Corona (174 Str)",
+      "stats": [
+        "+30% Faster Hit Recovery",
+        "All Resistances +20-30",
+        "+1 to All Skills",
+        "+100-150 Defense",
+        "Indestructible",
+        "Damage Reduced by 10-15%",
+        "+50% Enhanced Defense",
+        "Socketed (1-2)"
+      ],
+      "why": "Maxroll Summon Druid guide, helmets list: +1 all skills, damage reduction, all resistances and up to 2 sockets.",
+      "rank_in_slot": 4
+    },
+    {
+      "name": "Ravenlore",
+      "slot": "helm",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 74,
+      "base": "Sky Spirit (druid pelt, 113 Str)",
+      "stats": [
+        "+120-150% Enhanced Defense",
+        "All Resistances +15-25",
+        "+3 to Elemental Skills (Druid Only)",
+        "+20-30 to Energy",
+        "-10-20% to Enemy Fire Resistance",
+        "+7 to Raven"
+      ],
+      "why": "Maxroll Summon Druid guide, helmets list: +7 Raven and +3 Elemental Skills: the guide's Raven helm.",
+      "rank_in_slot": 5
+    },
+    {
+      "name": "Aldur's Stony Gaze",
+      "slot": "helm",
+      "setup": "alternative",
+      "kind": "set",
+      "req_level": 36,
+      "base": "Hunter's Guise (druid pelt, 56 Str)",
+      "stats": [
+        "+90 Defense",
+        "Regenerate Mana 17%",
+        "+5 to Light Radius",
+        "+25% Faster Hit Recovery",
+        "Cold Resist +40-50%",
+        "Socketed (2)",
+        "(2 items) +15 to Energy",
+        "(3 items) +15 to Energy",
+        "(4 items) +15 to Energy"
+      ],
+      "why": "Maxroll Summon Druid guide, helmets list: Druid pelt with 25% FHR, mana regeneration and cold resist; Aldur's Watchtower bonuses with Aldur's Advance, Deception and Rhythm.",
+      "notes": "Set Aldur's Watchtower; partners: Aldur's Advance, Aldur's Deception, Aldur's Gauntlet.",
+      "rank_in_slot": 6
+    },
+    {
+      "name": "Metamorphosis",
+      "slot": "helm",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 67,
+      "base": "3-socket helm or druid pelt",
+      "stats": [
+        "100% Chance to cast level 1 Mark of the Bear on striking",
+        "100% Chance to cast level 1 Mark of the Wolf on striking",
+        "+5 to Shape Shifting Skills (Druid Only)",
+        "+50-80% Enhanced Defense",
+        "All Resistances +10",
+        "25% Chance of Crushing Blow",
+        "+10 to Vitality",
+        "Cannot Be Frozen",
+        "+10 to Strength"
+      ],
+      "why": "Maxroll Summon Druid guide, helmets list: Mark of the Wolf / Mark of the Bear and +5 Shape Shifting (the guide's Ubers helm).",
+      "notes": "Io Cham Fal.",
+      "rank_in_slot": 7
+    },
+    {
+      "name": "Tarnhelm",
+      "slot": "helm",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 15,
+      "base": "Skull Cap (15 Str)",
+      "stats": [
+        "75% Extra Gold from Monsters",
+        "25-50% Better Chance of Getting Magic Items",
+        "+1 to All Skills"
+      ],
+      "why": "Maxroll Summon Druid guide, helmets list: +1 all skills and 25-50% magic find on a cheap helm.",
+      "rank_in_slot": 8
+    },
+    {
+      "name": "Peasant Crown",
+      "slot": "helm",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 28,
+      "base": "War Hat (20 Str)",
+      "stats": [
+        "+20 to Energy",
+        "+20 to Vitality",
+        "+1 to All Skills",
+        "+15% Faster Run/Walk",
+        "Replenish Life +6-12",
+        "+100% Enhanced Defense"
+      ],
+      "why": "Maxroll Summon Druid guide, helmets list: +1 all skills, faster run/walk and Vitality / Energy (Reign of the Warlock rework).",
+      "rank_in_slot": 9
+    },
+    {
+      "name": "Veil of Steel",
+      "slot": "helm",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 73,
+      "base": "Spired Helm (192 Str)",
+      "stats": [
+        "All Resistances +50",
+        "+60% Enhanced Defense",
+        "+15 to Strength",
+        "+15 to Vitality",
+        "-4 to Light Radius",
+        "Increase Maximum Durability 20%",
+        "+140 Defense",
+        "+2 to All Skills",
+        "Damage Reduced by 15-25%",
+        "Magic Resist +20-40%"
+      ],
+      "why": "Maxroll Summon Druid guide, helmets list: +2 all skills, 50 all resistances and 15-25% damage reduction (added to the guide on 2026-11-13).",
+      "rank_in_slot": 10
+    },
+    {
       "name": "Smoke",
       "slot": "merc_body",
       "setup": "lvl 37-99 (Nightmare on: the merc keeps it to the end)",
@@ -489,6 +711,46 @@
       "why": "Merc armor: +50 all resistances against Nightmare's -40 and Hell's -100 penalty (difficultylevels.json) for the Might merc; Smoke is always merc gear and stays on the merc in the Fury stage.",
       "notes": "Nef Lum: missing Lum.",
       "rank_in_slot": 1
+    },
+    {
+      "name": "Fortitude",
+      "slot": "merc_body",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 59,
+      "base": "4-socket body armor",
+      "stats": [
+        "+300% Enhanced Damage",
+        "+200% Enhanced Defense",
+        "+25% Faster Cast Rate",
+        "+1-1.5 Life per character level",
+        "All Resistances +25-30",
+        "12% Damage Taken Goes To Mana",
+        "20% Chance to cast level 15 Chilling Armor when struck"
+      ],
+      "why": "Maxroll Summon Druid guide, mercenary: Standard / Ubers variants: +300% enhanced damage for the merc and all resistances.",
+      "notes": "El Sol Dol Lo.",
+      "rank_in_slot": 102
+    },
+    {
+      "name": "Treachery",
+      "slot": "merc_body",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 43,
+      "base": "3-socket body armor",
+      "stats": [
+        "25% Chance to cast level 15 Venom on striking",
+        "5% Chance to cast level 15 Fade when struck",
+        "+2 to Assassin Skill Levels",
+        "+45% Increased Attack Speed",
+        "+20% Faster Hit Recovery",
+        "Cold Resist +30%",
+        "50% Extra Gold from Monsters"
+      ],
+      "why": "Maxroll Summon Druid guide, mercenary: Magic Find variant: 45% IAS for the 75% IAS breakpoint (9-frame Jab) and Fade when struck.",
+      "notes": "Shael Thul Lem.",
+      "rank_in_slot": 103
     },
     {
       "name": "Bulwark",
@@ -508,6 +770,24 @@
       "rank_in_slot": 1
     },
     {
+      "name": "Guillaume's Face",
+      "slot": "merc_helm",
+      "setup": "alternative",
+      "kind": "set",
+      "req_level": 34,
+      "base": "Winged Helm (115 Str)",
+      "stats": [
+        "+120% Enhanced Defense",
+        "+30% Faster Hit Recovery",
+        "35% Chance of Crushing Blow",
+        "15% Deadly Strike",
+        "+15 to Strength"
+      ],
+      "why": "Maxroll Summon Druid guide, mercenary: Standard / Magic Find / Ubers variants: crushing blow, deadly strike and 30% FHR.",
+      "notes": "Set Orphan's Call; partners: Magnus' Skin, Wihtstan's Guard, Wilhelm's Pride.",
+      "rank_in_slot": 102
+    },
+    {
       "name": "Bloodfist",
       "slot": "gloves",
       "setup": "lvl 40-60 (Nightmare: Grizzly to 20, Might merc)",
@@ -523,6 +803,60 @@
       ],
       "why": "Survivability: 30% FHR and +40 life (Laying of Hands replaces it only after a Fury switch).",
       "rank_in_slot": 1
+    },
+    {
+      "name": "Trang-Oul's Claws",
+      "slot": "gloves",
+      "setup": "alternative",
+      "kind": "set",
+      "req_level": 45,
+      "base": "Heavy Bracers (58 Str)",
+      "stats": [
+        "+30 Defense",
+        "+20% Faster Cast Rate",
+        "Cold Resist +30%",
+        "+2 to Curses (Necromancer Only)",
+        "(4 items) +25% to Poison Skill Damage"
+      ],
+      "why": "Maxroll Summon Druid guide, gloves list: 20% FCR and cold resist.",
+      "notes": "Set Trang-Oul's Avatar; partners: Trang-Oul's Girth, Trang-Oul's Guise, Trang-Oul's Scales, Trang-Oul's Wing.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Magefist",
+      "slot": "gloves",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 23,
+      "base": "Light Gauntlets (45 Str)",
+      "stats": [
+        "+20% Faster Cast Rate",
+        "Regenerate Mana 25%",
+        "+1 to Fire Skills",
+        "Adds 1-6 Fire Damage",
+        "+10 Defense",
+        "+20-30% Enhanced Defense"
+      ],
+      "why": "Maxroll Summon Druid guide, gloves list: 20% FCR and mana regeneration.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Chance Guards",
+      "slot": "gloves",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 15,
+      "base": "Chain Gloves (25 Str)",
+      "stats": [
+        "200% Extra Gold from Monsters",
+        "25-40% Better Chance of Getting Magic Items",
+        "+25 to Attack Rating",
+        "+15 Defense",
+        "+2 to Light Radius",
+        "+20-30% Enhanced Defense"
+      ],
+      "why": "Maxroll Summon Druid guide, gloves list: Magic and gold find.",
+      "rank_in_slot": 4
     },
     {
       "name": "String of Ears",
@@ -571,6 +905,126 @@
       ],
       "why": "Cannot Be Frozen keeps the summoner moving in Hell; one Cannot Be Frozen item is required before the Fury switch (switch_requires).",
       "rank_in_slot": 0
+    },
+    {
+      "name": "The Stone of Jordan",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 29,
+      "base": "Ring",
+      "stats": [
+        "+20 to Mana",
+        "Increase Maximum Mana 25%",
+        "+1 to All Skills",
+        "Adds 1-12 Lightning Damage"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: +1 all skills and maximum mana.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Bul-Kathos' Wedding Band",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 58,
+      "base": "Ring",
+      "stats": [
+        "+0.5 to Life per Character Level",
+        "+1 to All Skills",
+        "3-5% Life Stolen per Hit",
+        "+50 Maximum Stamina"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: +1 all skills, life and life steal.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Nagelring",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 7,
+      "base": "Ring",
+      "stats": [
+        "+50-75 to Attack Rating",
+        "15-30% Better Chance of Getting Magic Items",
+        "Magic Damage Reduced by 3",
+        "Attacker Takes Damage of 3"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: Cheap magic find and attack rating.",
+      "rank_in_slot": 4
+    },
+    {
+      "name": "Wisp Projector",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 76,
+      "base": "Ring",
+      "stats": [
+        "10% Chance to cast level 16 Lightning on striking",
+        "10-20% Lightning Absorb",
+        "10-20% Better Chance of Getting Magic Items",
+        "Level 2 Oak Sage (15 Charges)",
+        "Level 5 Heart of Wolverine (13 Charges)",
+        "Level 7 Spirit of Barbs (11 Charges)"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: Lightning absorb and magic find.",
+      "rank_in_slot": 5
+    },
+    {
+      "name": "Dwarf Star",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 45,
+      "base": "Ring",
+      "stats": [
+        "+40 to Life",
+        "15% Fire Absorb",
+        "Magic Damage Reduced by 12-15",
+        "100% Extra Gold from Monsters",
+        "+40 Maximum Stamina",
+        "Heal Stamina Plus 15%"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: Life, fire absorb and magic damage reduction.",
+      "rank_in_slot": 6
+    },
+    {
+      "name": "Opalvein",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 50,
+      "base": "Ring",
+      "stats": [
+        "2% Chance to cast level 15 Flame Wave on attack",
+        "Magic damage rolls a random element (Reign of the Warlock property)",
+        "+10% Faster Cast Rate",
+        "All Resistances +6-8",
+        "+1-3 Life after each Kill",
+        "+1-3 to Mana after each Kill"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: 10% FCR and all resistances (Reign of the Warlock ring).",
+      "rank_in_slot": 7
+    },
+    {
+      "name": "Sling",
+      "slot": "ring",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 50,
+      "base": "Ring",
+      "stats": [
+        "+1 to Town Portal",
+        "+10% Faster Cast Rate",
+        "-3-5% to Enemy Magic Resistance",
+        "+10-15 to Energy",
+        "Slows Target by 15%",
+        "10-20% Better Chance of Getting Magic Items"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: 10% FCR, Energy and magic find (Reign of the Warlock ring).",
+      "rank_in_slot": 8
     },
     {
       "name": "The Battlebranch",
@@ -628,6 +1082,45 @@
       "rank_in_slot": 4
     },
     {
+      "name": "The Reaper's Toll",
+      "slot": "merc_weapon",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 75,
+      "base": "Thresher (polearm, 152 Str / 118 Dex)",
+      "stats": [
+        "+190-240% Enhanced Damage",
+        "33% Chance to cast level 1 Decrepify on striking",
+        "Ignore Target's Defense",
+        "11-15% Life Stolen per Hit",
+        "Requirements -25%",
+        "33% Deadly Strike",
+        "Adds 4-44 Cold Damage"
+      ],
+      "why": "Maxroll Summon Druid guide, mercenary: Standard / Magic Find / Ubers variants: Decrepify on striking (-50% enemy physical resistance for the zoo); 9-frame Jab with Treachery or Fortitude and Guillaume's Face.",
+      "rank_in_slot": 105
+    },
+    {
+      "name": "Hustle (weapon)",
+      "slot": "merc_weapon",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 39,
+      "base": "3-socket polearm (Act 2 merc), e.g. Voulge, Scythe, Poleaxe",
+      "stats": [
+        "5% Chance to cast level 1 Quickness on striking",
+        "+30% Increased Attack Speed",
+        "+180-200% Enhanced Damage",
+        "Level 1 Fanaticism Aura When Equipped",
+        "+10 to Dexterity",
+        "+50 to Attack Rating against Undead",
+        "+75% Damage to Undead"
+      ],
+      "why": "Maxroll Summon Druid guide, mercenary: Starter variant: Level 1 Fanaticism Aura for the zoo.",
+      "notes": "Shael Ko Eld.",
+      "rank_in_slot": 106
+    },
+    {
       "name": "Heart of the Oak",
       "slot": "weapon",
       "setup": "lvl 75-99 (Hell endgame: Ravens to 20)",
@@ -646,6 +1139,123 @@
       "why": "+3 to every summon (one more than Spirit) and +30-40 all resistances.",
       "notes": "Ko Vex Pul Thul: Thul in the stash; Ko, Vex and Pul missing.",
       "rank_in_slot": 0
+    },
+    {
+      "name": "Beast",
+      "slot": "weapon",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 63,
+      "base": "5-socket one-handed axe, hammer or scepter (beside the shield), e.g. War Scepter (55 Str), Divine Scepter, Caduceus",
+      "stats": [
+        "+40% Increased Attack Speed",
+        "Level 9 Fanaticism Aura When Equipped",
+        "+240-270% Enhanced Damage",
+        "+25-40 to Strength",
+        "Level 13 Summon Grizzly (5 Charges)",
+        "+3 to Werebear",
+        "+3 to Shape Shifting",
+        "20% Chance of Crushing Blow",
+        "+2 to Mana after each Kill",
+        "25% Chance of Open Wounds",
+        "Prevent Monster Heal",
+        "+10 to Energy"
+      ],
+      "why": "Maxroll Summon Druid guide, weapons list: the guide's Ubers weapon: Level 9 Fanaticism Aura for the whole zoo and +3 Werebear / Shape Shifting.",
+      "notes": "Ber Tir Um Mal Lum.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Suicide Branch",
+      "slot": "weapon",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 33,
+      "base": "Burnt Wand (wand, 25 Str)",
+      "stats": [
+        "Attacker Takes Damage of 25",
+        "+50% Faster Cast Rate",
+        "All Resistances +10",
+        "Increase Maximum Mana 10%",
+        "+40 to Life",
+        "+1 to All Skills"
+      ],
+      "why": "Maxroll Summon Druid guide, weapons list: +1 all skills and 50% FCR one-handed.",
+      "rank_in_slot": 4
+    },
+    {
+      "name": "Wizardspike",
+      "slot": "weapon",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 61,
+      "base": "Bone Knife (dagger, 38 Str / 75 Dex)",
+      "stats": [
+        "+2 to Mana per Character Level",
+        "Regenerate Mana 15%",
+        "Increase Maximum Mana 15%",
+        "All Resistances +75",
+        "Indestructible",
+        "+50% Faster Cast Rate"
+      ],
+      "why": "Maxroll Summon Druid guide, weapons list: 50% FCR, all resistances and mana (the guide: weapon-swap FCR under Battle Orders).",
+      "rank_in_slot": 5
+    },
+    {
+      "name": "Aldur's Rhythm",
+      "slot": "weapon",
+      "setup": "alternative",
+      "kind": "set",
+      "req_level": 42,
+      "base": "Jagged Star (mace, 74 Str)",
+      "stats": [
+        "Adds 40-62 Damage",
+        "Adds 50-75 Lightning Damage",
+        "10% Life Stolen per Hit",
+        "+30% Increased Attack Speed",
+        "+200% Damage to Demons",
+        "5% Mana Stolen per Hit",
+        "Socketed (2-5)",
+        "(2 items) +15 to Strength",
+        "(3 items) +15 to Strength",
+        "(4 items) +15 to Strength"
+      ],
+      "why": "Maxroll Summon Druid guide, weapons list: Life / mana steal and IAS; with more of Aldur's Watchtower its set bonuses.",
+      "notes": "Set Aldur's Watchtower; partners: Aldur's Advance, Aldur's Deception, Aldur's Gauntlet, Aldur's Stony Gaze.",
+      "rank_in_slot": 6
+    },
+    {
+      "name": "Blade of Ali Baba",
+      "slot": "weapon",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 35,
+      "base": "Tulwar (sword, 70 Str / 42 Dex); the guide fills its 2 sockets with Ist",
+      "stats": [
+        "+2.5% Extra Gold from Monsters per Character Level",
+        "+1% Better Chance of Getting Magic Items per Character Level",
+        "+15 to Mana",
+        "+60-120% Enhanced Damage",
+        "+5-15 to Dexterity"
+      ],
+      "why": "Maxroll Summon Druid guide, weapons list: Magic and gold find per level (the guide's Magic Find weapon with 2x Ist).",
+      "rank_in_slot": 7
+    },
+    {
+      "name": "Gull",
+      "slot": "weapon",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 4,
+      "base": "Dagger (no Str)",
+      "stats": [
+        "+1 to Minimum Damage",
+        "+15 to Maximum Damage",
+        "100% Better Chance of Getting Magic Items",
+        "-5 to Mana"
+      ],
+      "why": "Maxroll Summon Druid guide, weapons list: 100% magic find on a cheap dagger (Magic Find variant).",
+      "rank_in_slot": 8
     },
     {
       "name": "Enigma",
@@ -668,6 +1278,158 @@
       "rank_in_slot": 0
     },
     {
+      "name": "Skullder's Ire",
+      "slot": "body",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 42,
+      "base": "Russet Armor (97 Str)",
+      "stats": [
+        "+1 to All Skills",
+        "+1.25% Better Chance of Getting Magic Items per Character Level",
+        "+160-200% Enhanced Defense",
+        "Increase Maximum Durability 60%",
+        "Magic Damage Reduced by 10",
+        "Repairs 1 Durability in 5 Seconds"
+      ],
+      "why": "Maxroll Summon Druid guide, body armors list: +1 all skills and magic find per level.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Skin of the Vipermagi",
+      "slot": "body",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 29,
+      "base": "Serpentskin Armor (43 Str)",
+      "stats": [
+        "+120% Enhanced Defense",
+        "All Resistances +20-35",
+        "+30% Faster Cast Rate",
+        "Magic Damage Reduced by 9-13",
+        "+1 to All Skills"
+      ],
+      "why": "Maxroll Summon Druid guide, body armors list: +1 all skills, 30% FCR and all resistances.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Aldur's Deception",
+      "slot": "body",
+      "setup": "alternative",
+      "kind": "set",
+      "req_level": 76,
+      "base": "Shadow Plate (230 Str)",
+      "stats": [
+        "+300 Defense",
+        "+1 to Shape Shifting Skills (Druid Only)",
+        "+20 to Strength",
+        "+15 to Dexterity",
+        "Lightning Resist +40-50%",
+        "Requirements -50%",
+        "+1 to Elemental Skills (Druid Only)",
+        "(2 items) +15 to Vitality",
+        "(3 items) +15 to Vitality",
+        "(4 items) +15 to Vitality"
+      ],
+      "why": "Maxroll Summon Druid guide, body armors list: +1 Elemental / Shape Shifting, resistances; Aldur's Watchtower set bonuses.",
+      "notes": "Set Aldur's Watchtower; partners: Aldur's Advance, Aldur's Gauntlet, Aldur's Stony Gaze.",
+      "rank_in_slot": 4
+    },
+    {
+      "name": "Arkaine's Valor",
+      "slot": "body",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 85,
+      "base": "Balrog Skin (165 Str)",
+      "stats": [
+        "+150-180% Enhanced Defense",
+        "+30% Faster Hit Recovery",
+        "+1-2 to All Skills",
+        "Damage Reduced by 10-15",
+        "+0.5 to Vitality per Character Level"
+      ],
+      "why": "Maxroll Summon Druid guide, body armors list: +1-2 all skills, 30% FHR and damage reduction.",
+      "rank_in_slot": 5
+    },
+    {
+      "name": "Rain",
+      "slot": "body",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 49,
+      "base": "3-socket body armor",
+      "stats": [
+        "5% Chance to cast level 15 Twister on striking",
+        "5% Chance to cast level 15 Cyclone Armor when struck",
+        "+2 to Druid Skill Levels",
+        "+100-150 to Mana",
+        "Lightning Resist +30%",
+        "Magic Damage Reduced by 7",
+        "15% Damage Taken Goes To Mana"
+      ],
+      "why": "Maxroll Summon Druid guide, body armors list: Druid runeword: +1 druid skills, Cyclone Armor charges and resistances.",
+      "notes": "Ort Mal Ith.",
+      "rank_in_slot": 6
+    },
+    {
+      "name": "Wealth",
+      "slot": "body",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 43,
+      "base": "3-socket body armor",
+      "stats": [
+        "300% Extra Gold from Monsters",
+        "100% Better Chance of Getting Magic Items",
+        "+10 to Dexterity",
+        "+2 to Mana after each Kill"
+      ],
+      "why": "Maxroll Summon Druid guide, body armors list: 100% magic find and 300% gold find (Magic Find variant).",
+      "notes": "Lem Ko Tir.",
+      "rank_in_slot": 7
+    },
+    {
+      "name": "Treachery",
+      "slot": "body",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 43,
+      "base": "3-socket body armor",
+      "stats": [
+        "25% Chance to cast level 15 Venom on striking",
+        "5% Chance to cast level 15 Fade when struck",
+        "+2 to Assassin Skill Levels",
+        "+45% Increased Attack Speed",
+        "+20% Faster Hit Recovery",
+        "Cold Resist +30%",
+        "50% Extra Gold from Monsters"
+      ],
+      "why": "Maxroll Summon Druid guide, body armors list: Pre-buff Fade for damage reduction and resistances before Ubers (the guide's note 1).",
+      "notes": "Shael Thul Lem.",
+      "rank_in_slot": 8
+    },
+    {
+      "name": "Silks of the Victor",
+      "slot": "body",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 28,
+      "base": "Ancient Armor (100 Str)",
+      "stats": [
+        "5% Mana Stolen per Hit",
+        "+1 to All Skills",
+        "+2 to Light Radius",
+        "+100-120% Enhanced Defense",
+        "+20% Faster Run/Walk",
+        "+30% Increased Attack Speed",
+        "+50-100% Enhanced Damage",
+        "15% Better Chance of Getting Magic Items"
+      ],
+      "why": "Maxroll Summon Druid guide, body armors list: +1 all skills, faster run/walk and mana steal (added to the guide on 2026-11-13).",
+      "rank_in_slot": 9
+    },
+    {
       "name": "Mara's Kaleidoscope",
       "slot": "amulet",
       "setup": "lvl 75-99 (Hell endgame: Ravens to 20)",
@@ -681,6 +1443,23 @@
       ],
       "why": "+2 to every summon and +20-30 all resistances.",
       "rank_in_slot": 0
+    },
+    {
+      "name": "Metalgrid",
+      "slot": "amulet",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 81,
+      "base": "Amulet",
+      "stats": [
+        "+300-350 Defense",
+        "All Resistances +25-35",
+        "+400-450 to Attack Rating",
+        "Level 22 Iron Golem (11 Charges)",
+        "Level 12 Iron Maiden (20 Charges)"
+      ],
+      "why": "Maxroll Summon Druid guide, amulets list: 25-35 all resistances and Iron Golem charges.",
+      "rank_in_slot": 1
     },
     {
       "name": "Arachnid Mesh",
@@ -701,6 +1480,82 @@
       "rank_in_slot": 0
     },
     {
+      "name": "Goldwrap",
+      "slot": "belt",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 27,
+      "base": "Heavy Belt (45 Str); the guide lists it in a Battle Belt (upgraded)",
+      "stats": [
+        "30% Better Chance of Getting Magic Items",
+        "+2 to Light Radius",
+        "+25 Defense",
+        "+10% Increased Attack Speed",
+        "+40-60% Enhanced Defense",
+        "50-80% Extra Gold from Monsters"
+      ],
+      "why": "Maxroll Summon Druid guide, belts list: Magic and gold find with 10% IAS.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Verdungo's Hearty Cord",
+      "slot": "belt",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 63,
+      "base": "Mithril Coil (106 Str)",
+      "stats": [
+        "+30-40 to Vitality",
+        "Physical Damage Taken Reduced by 10-15%",
+        "+10% Faster Hit Recovery",
+        "Replenish Life +10-13",
+        "+100-120 Maximum Stamina",
+        "+90-140% Enhanced Defense"
+      ],
+      "why": "Maxroll Summon Druid guide, belts list: Vitality, damage reduction and FHR.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Thundergod's Vigor",
+      "slot": "belt",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 47,
+      "base": "War Belt (110 Str)",
+      "stats": [
+        "5% Chance to cast level 7 Fist of the Heavens when struck",
+        "Adds 1-50 Lightning Damage",
+        "+10% to Maximum Lightning Resist",
+        "+20 Lightning Absorb",
+        "+160-200% Enhanced Defense",
+        "+20 to Vitality",
+        "+20 to Strength",
+        "+3 to Lightning Strike",
+        "+3 to Lightning Fury"
+      ],
+      "why": "Maxroll Summon Druid guide, belts list: +10% maximum lightning resist and lightning absorb.",
+      "rank_in_slot": 4
+    },
+    {
+      "name": "Gheed's Wager",
+      "slot": "belt",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 71,
+      "base": "Troll Belt (151 Str)",
+      "stats": [
+        "+10-20% Faster Cast Rate",
+        "+10-20% Faster Hit Recovery",
+        "+10-20% Faster Run/Walk",
+        "+90-150% Enhanced Defense",
+        "-3-7% to Enemy Magic Resistance",
+        "All Resistances +5-15",
+        "44-75% Extra Gold from Monsters"
+      ],
+      "why": "Maxroll Summon Druid guide, belts list: FHR, faster run/walk, all resistances and gold find.",
+      "rank_in_slot": 5
+    },
+    {
       "name": "Sandstorm Trek",
       "slot": "boots",
       "setup": "lvl 75-99 (Hell endgame: Ravens to 20)",
@@ -717,6 +1572,325 @@
       ],
       "why": "Survivability: FHR, Vitality and Strength (for the Monarch) over Sigon's Sabot.",
       "rank_in_slot": 0
+    },
+    {
+      "name": "War Traveler",
+      "slot": "boots",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 42,
+      "base": "Battle Boots (95 Str)",
+      "stats": [
+        "30-50% Better Chance of Getting Magic Items",
+        "+10 to Strength",
+        "+10 to Vitality",
+        "Adds 15-25 Damage",
+        "+25% Faster Run/Walk",
+        "Attacker Takes Damage of 5-10"
+      ],
+      "why": "Maxroll Summon Druid guide, boots list: 30-50% magic find, Strength and Vitality.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Aldur's Advance",
+      "slot": "boots",
+      "setup": "alternative",
+      "kind": "set",
+      "req_level": 45,
+      "base": "Battle Boots (95 Str)",
+      "stats": [
+        "Indestructible",
+        "Heal Stamina Plus 32%",
+        "+50 to Life",
+        "10% Damage Taken Goes To Mana",
+        "+40% Faster Run/Walk",
+        "+180 Maximum Stamina",
+        "Fire Resist +40-50%",
+        "(2 items) +15 to Dexterity",
+        "(3 items) +15 to Dexterity",
+        "(4 items) +15 to Dexterity"
+      ],
+      "why": "Maxroll Summon Druid guide, boots list: 40% faster run/walk, life and fire resist, indestructible.",
+      "notes": "Set Aldur's Watchtower; partners: Aldur's Deception, Aldur's Gauntlet, Aldur's Stony Gaze.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Natalya's Soul",
+      "slot": "boots",
+      "setup": "alternative",
+      "kind": "set",
+      "req_level": 25,
+      "base": "Mesh Boots (65 Str)",
+      "stats": [
+        "+75-125 Defense",
+        "+40% Faster Run/Walk",
+        "Heal Stamina Plus 0.25% per Character Level",
+        "Increase Maximum Durability 50%",
+        "Cold Resist +15-25%",
+        "Lightning Resist +15-25%"
+      ],
+      "why": "Maxroll Summon Druid guide, boots list: Faster run/walk and cold / lightning resist.",
+      "notes": "Set Natalya's Odium; partners: Natalya's Mark, Natalya's Shadow, Natalya's Totem.",
+      "rank_in_slot": 4
+    },
+    {
+      "name": "Waterwalk",
+      "slot": "boots",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 32,
+      "base": "Sharkskin Boots (47 Str)",
+      "stats": [
+        "+100 Defense vs. Missile",
+        "+20% Faster Run/Walk",
+        "+15 to Dexterity",
+        "+180-210% Enhanced Defense",
+        "+45-65 to Life",
+        "+40 Maximum Stamina",
+        "+5% to Maximum Fire Resist",
+        "Heal Stamina Plus 50%"
+      ],
+      "why": "Maxroll Summon Druid guide, boots list: Faster run/walk, life and +5% maximum fire resist.",
+      "rank_in_slot": 5
+    },
+    {
+      "name": "Call to Arms",
+      "slot": "swap",
+      "setup": "alternative",
+      "kind": "runeword",
+      "req_level": 57,
+      "base": "5-socket weapon (any, swap: two-handed is fine)",
+      "stats": [
+        "+1 to All Skills",
+        "+2-6 to Battle Command",
+        "+1-6 to Battle Orders",
+        "+1-4 to Battle Cry"
+      ],
+      "why": "Maxroll Summon Druid guide, weapon-swap list: Battle Orders and Battle Command for the druid, the merc and the zoo.",
+      "notes": "Amn Ral Mal Ist Ohm.",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Wizardspike",
+      "slot": "swap",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 61,
+      "base": "Bone Knife (dagger, 38 Str / 75 Dex)",
+      "stats": [
+        "+2 to Mana per Character Level",
+        "Regenerate Mana 15%",
+        "Increase Maximum Mana 15%",
+        "All Resistances +75",
+        "Indestructible",
+        "+50% Faster Cast Rate"
+      ],
+      "why": "Maxroll Summon Druid guide, weapon-swap list: On the swap with Spirit Monarch: the 163% FCR breakpoint under Battle Orders (the guide's note 2).",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Naj's Puzzler",
+      "slot": "swap",
+      "setup": "alternative",
+      "kind": "set",
+      "req_level": 78,
+      "base": "Elder Staff (two-handed staff, 44 Str / 37 Dex)",
+      "stats": [
+        "+35 to Energy",
+        "+150% Enhanced Damage",
+        "Level 11 Teleport (69 Charges)",
+        "+30% Faster Cast Rate",
+        "Adds 6-45 Lightning Damage",
+        "+70 to Mana",
+        "+1 to All Skills"
+      ],
+      "why": "Maxroll Summon Druid guide, weapon-swap list: Teleport charges before Enigma (the guide's note 3).",
+      "notes": "Set Naj's Ancient Set; partners: Naj's Circlet, Naj's Light Plate.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Bone Break",
+      "slot": "charm",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 75,
+      "base": "Grand Charm",
+      "stats": [
+        "Monster Physical Immunity is Sundered",
+        "Damage Reduced by -20--10%"
+      ],
+      "why": "Maxroll Summon Druid guide, unique charms list: Sunders monster physical immunity: with the merc's Decrepify (The Reaper's Toll) the zoo hits physical immunes.",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Gheed's Fortune",
+      "slot": "charm",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 62,
+      "base": "Grand Charm",
+      "stats": [
+        "20-40% Better Chance of Getting Magic Items",
+        "80-160% Extra Gold from Monsters",
+        "Reduces all Vendor Prices 10-15%"
+      ],
+      "why": "Maxroll Summon Druid guide, unique charms list: Magic and gold find.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Hellfire Torch",
+      "slot": "charm",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 75,
+      "base": "Large Charm",
+      "stats": [
+        "+3 to one class's Skill Levels (rolled class)",
+        "+10-20 to all Attributes",
+        "All Resistances +10-20",
+        "+8 to Light Radius",
+        "5% Chance to cast level 10 Firestorm on striking",
+        "Level 30 Hydra (10 Charges)"
+      ],
+      "why": "Maxroll Summon Druid guide, unique charms list: +3 druid skills (the guide: Druid Hellfire Torch), attributes and resistances.",
+      "notes": "Only a druid-skills Torch is this build's piece; the class is rolled on the Uber Tristram drop.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Annihilus",
+      "slot": "charm",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 70,
+      "base": "Small Charm",
+      "stats": [
+        "+1 to All Skills",
+        "+10-20 to all Attributes",
+        "All Resistances +10-20",
+        "+5-10% to Experience Gained"
+      ],
+      "why": "Maxroll Summon Druid guide, unique charms list: +1 all skills, attributes, resistances and experience.",
+      "rank_in_slot": 4
+    },
+    {
+      "name": "The Stone of Jordan",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 29,
+      "base": "Ring",
+      "stats": [
+        "+20 to Mana",
+        "Increase Maximum Mana 25%",
+        "+1 to All Skills",
+        "Adds 1-12 Lightning Damage"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: +1 all skills and maximum mana.",
+      "rank_in_slot": 1
+    },
+    {
+      "name": "Bul-Kathos' Wedding Band",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 58,
+      "base": "Ring",
+      "stats": [
+        "+0.5 to Life per Character Level",
+        "+1 to All Skills",
+        "3-5% Life Stolen per Hit",
+        "+50 Maximum Stamina"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: +1 all skills, life and life steal.",
+      "rank_in_slot": 2
+    },
+    {
+      "name": "Nagelring",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 7,
+      "base": "Ring",
+      "stats": [
+        "+50-75 to Attack Rating",
+        "15-30% Better Chance of Getting Magic Items",
+        "Magic Damage Reduced by 3",
+        "Attacker Takes Damage of 3"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: Cheap magic find and attack rating.",
+      "rank_in_slot": 3
+    },
+    {
+      "name": "Wisp Projector",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 76,
+      "base": "Ring",
+      "stats": [
+        "10% Chance to cast level 16 Lightning on striking",
+        "10-20% Lightning Absorb",
+        "10-20% Better Chance of Getting Magic Items",
+        "Level 2 Oak Sage (15 Charges)",
+        "Level 5 Heart of Wolverine (13 Charges)",
+        "Level 7 Spirit of Barbs (11 Charges)"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: Lightning absorb and magic find.",
+      "rank_in_slot": 4
+    },
+    {
+      "name": "Dwarf Star",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 45,
+      "base": "Ring",
+      "stats": [
+        "+40 to Life",
+        "15% Fire Absorb",
+        "Magic Damage Reduced by 12-15",
+        "100% Extra Gold from Monsters",
+        "+40 Maximum Stamina",
+        "Heal Stamina Plus 15%"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: Life, fire absorb and magic damage reduction.",
+      "rank_in_slot": 5
+    },
+    {
+      "name": "Opalvein",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 50,
+      "base": "Ring",
+      "stats": [
+        "2% Chance to cast level 15 Flame Wave on attack",
+        "Magic damage rolls a random element (Reign of the Warlock property)",
+        "+10% Faster Cast Rate",
+        "All Resistances +6-8",
+        "+1-3 Life after each Kill",
+        "+1-3 to Mana after each Kill"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: 10% FCR and all resistances (Reign of the Warlock ring).",
+      "rank_in_slot": 6
+    },
+    {
+      "name": "Sling",
+      "slot": "ring2",
+      "setup": "alternative",
+      "kind": "unique",
+      "req_level": 50,
+      "base": "Ring",
+      "stats": [
+        "+1 to Town Portal",
+        "+10% Faster Cast Rate",
+        "-3-5% to Enemy Magic Resistance",
+        "+10-15 to Energy",
+        "Slows Target by 15%",
+        "10-20% Better Chance of Getting Magic Items"
+      ],
+      "why": "Maxroll Summon Druid guide, rings list: 10% FCR, Energy and magic find (Reign of the Warlock ring).",
+      "rank_in_slot": 7
     }
   ],
   "recipes": [

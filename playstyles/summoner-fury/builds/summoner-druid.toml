@@ -122,22 +122,25 @@ skill_plan = [
 ]
 
 [slots]
-weapon = ["Heart of the Oak@55", "Spirit@25", "Stoutnail@5"]
-offhand = ["Spirit@54", "Ancients' Pledge@21", "Swordback Hold@15"]
-helm = ["Jalal's Mane@42", "Lore@27", "Druid pelt with +summoning skills@3"]
-body = ["Enigma@65", "Stealth@17"]
-gloves = ["Bloodfist@9"]
-belt = ["Arachnid Mesh@80", "String of Ears@29"]
-boots = ["Sandstorm Trek@64", "Sigon's Sabot@6"]
-amulet = ["Mara's Kaleidoscope@67"]
-ring1 = ["Raven Frost@45", "Manald Heal@15"]
+weapon = ["Heart of the Oak@55", "Spirit@25", "Stoutnail@5", "Beast@63", "Suicide Branch@33", "Wizardspike@61", "Aldur's Rhythm@42", "Blade of Ali Baba@35", "Gull@4"]
+offhand = ["Spirit@54", "Ancients' Pledge@21", "Swordback Hold@15", "Stormshield@73", "Sanctuary@49", "Rhyme@29"]
+swap = ["Call to Arms@57", "Wizardspike@61", "Naj's Puzzler@78"]
+helm = ["Jalal's Mane@42", "Lore@27", "Druid pelt with +summoning skills@3", "Harlequin Crest@62", "Crown of Ages@82", "Ravenlore@74", "Aldur's Stony Gaze@36", "Metamorphosis@67", "Tarnhelm@15", "Peasant Crown@28", "Veil of Steel@73"]
+body = ["Enigma@65", "Stealth@17", "Skullder's Ire@42", "Skin of the Vipermagi@29", "Aldur's Deception@76", "Arkaine's Valor@85", "Rain@49", "Wealth@43", "Treachery@43", "Silks of the Victor@28"]
+gloves = ["Bloodfist@9", "Trang-Oul's Claws@45", "Magefist@23", "Chance Guards@15"]
+belt = ["Arachnid Mesh@80", "String of Ears@29", "Goldwrap@27", "Verdungo's Hearty Cord@63", "Thundergod's Vigor@47", "Gheed's Wager@71"]
+boots = ["Sandstorm Trek@64", "Sigon's Sabot@6", "War Traveler@42", "Aldur's Advance@45", "Natalya's Soul@25", "Waterwalk@32"]
+amulet = ["Mara's Kaleidoscope@67", "Metalgrid@81"]
+ring1 = ["Raven Frost@45", "Manald Heal@15", "The Stone of Jordan@29", "Bul-Kathos' Wedding Band@58", "Nagelring@7", "Wisp Projector@76", "Dwarf Star@45", "Opalvein@50", "Sling@50"]
+ring2 = ["The Stone of Jordan@29", "Bul-Kathos' Wedding Band@58", "Nagelring@7", "Wisp Projector@76", "Dwarf Star@45", "Opalvein@50", "Sling@50"]
 
 [merc_slots]
-body = ["Smoke@37"]
-helm = ["Bulwark@35"]
-weapon = ["Insight@27", "Soul Harvest@19", "The Battlebranch@17", "Harmony@39"]
+body = ["Smoke@37", "Fortitude@59", "Treachery@43"]
+helm = ["Bulwark@35", "Guillaume's Face@34"]
+weapon = ["Insight@27", "Soul Harvest@19", "The Battlebranch@17", "The Reaper's Toll@75", "Hustle (weapon)@39", "Harmony@39"]
 
 [extras]
+charms = ["Bone Break@75", "Gheed's Fortune@62", "Hellfire Torch@75", "Annihilus@70"]
 
 [pieces."Jalal's Mane"]
 kind = "unique"
@@ -271,6 +274,35 @@ base = "Greaves (70 Str), in the shared stash"
 why = "In the stash: run speed and cold resistance (Raven Frost absorbs cold too)."
 stats = ["+20% Faster Run/Walk", "Cold Resist +40%"]
 
+[pieces."Metalgrid"]
+kind = "unique"
+setup = "alternative"
+base = "Amulet"
+why = "Maxroll Summon Druid guide, amulets list: 25-35 all resistances and Iron Golem charges."
+stats = ["+300-350 Defense", "All Resistances +25-35", "+400-450 to Attack Rating", "Level 22 Iron Golem (11 Charges)", "Level 12 Iron Maiden (20 Charges)"]
+
+[pieces."Call to Arms"]
+kind = "runeword"
+setup = "alternative"
+base = "5-socket weapon (any, swap: two-handed is fine)"
+why = "Maxroll Summon Druid guide, weapon-swap list: Battle Orders and Battle Command for the druid, the merc and the zoo."
+notes = "Amn Ral Mal Ist Ohm."
+stats = ["+1 to All Skills", "+2-6 to Battle Command", "+1-6 to Battle Orders", "+1-4 to Battle Cry"]
+
+[pieces."Bone Break"]
+kind = "unique"
+setup = "alternative"
+base = "Grand Charm"
+why = "Maxroll Summon Druid guide, unique charms list: Sunders monster physical immunity: with the merc's Decrepify (The Reaper's Toll) the zoo hits physical immunes."
+stats = ["Monster Physical Immunity is Sundered", "Damage Reduced by -20--10%"]
+
+[pieces."The Stone of Jordan"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Summon Druid guide, rings list: +1 all skills and maximum mana."
+stats = ["+20 to Mana", "Increase Maximum Mana 25%", "+1 to All Skills", "Adds 1-12 Lightning Damage"]
+
 [pieces."Stoutnail"]
 kind = "unique"
 setup = "lvl 1-12"
@@ -293,12 +325,76 @@ base = "Wolf Head (level 3, 16 Str) or Hawk Helm; white or magic"
 why = "Druid pelts roll +skills to druid skills; pick up every pelt and check it."
 stats = ["+1-3 to Summon Spirit Wolf / Summon Dire Wolf / Raven / Oak Sage (class pelt mods)"]
 
+[pieces."Trang-Oul's Claws"]
+kind = "set"
+setup = "alternative"
+base = "Heavy Bracers (58 Str)"
+why = "Maxroll Summon Druid guide, gloves list: 20% FCR and cold resist."
+notes = "Set Trang-Oul's Avatar; partners: Trang-Oul's Girth, Trang-Oul's Guise, Trang-Oul's Scales, Trang-Oul's Wing."
+stats = ["+30 Defense", "+20% Faster Cast Rate", "Cold Resist +30%", "+2 to Curses (Necromancer Only)", "(4 items) +25% to Poison Skill Damage"]
+
 [pieces."The Battlebranch"]
 kind = "unique"
 setup = "lvl 40-60"
 base = "Poleaxe (polearm, 62 Str), in the shared stash"
 why = "In the stash: life steal keeps the Might merc alive until Insight."
 stats = ["+30% Increased Attack Speed", "7% Life Stolen per Hit", "+50-70% Enhanced Damage", "+50-100 to Attack Rating", "+10 to Dexterity"]
+
+[pieces."Skullder's Ire"]
+kind = "unique"
+setup = "alternative"
+base = "Russet Armor (97 Str)"
+why = "Maxroll Summon Druid guide, body armors list: +1 all skills and magic find per level."
+stats = ["+1 to All Skills", "+1.25% Better Chance of Getting Magic Items per Character Level", "+160-200% Enhanced Defense", "Increase Maximum Durability 60%", "Magic Damage Reduced by 10", "Repairs 1 Durability in 5 Seconds"]
+
+[pieces."Goldwrap"]
+kind = "unique"
+setup = "alternative"
+base = "Heavy Belt (45 Str); the guide lists it in a Battle Belt (upgraded)"
+why = "Maxroll Summon Druid guide, belts list: Magic and gold find with 10% IAS."
+stats = ["30% Better Chance of Getting Magic Items", "+2 to Light Radius", "+25 Defense", "+10% Increased Attack Speed", "+40-60% Enhanced Defense", "50-80% Extra Gold from Monsters"]
+
+[pieces."War Traveler"]
+kind = "unique"
+setup = "alternative"
+base = "Battle Boots (95 Str)"
+why = "Maxroll Summon Druid guide, boots list: 30-50% magic find, Strength and Vitality."
+stats = ["30-50% Better Chance of Getting Magic Items", "+10 to Strength", "+10 to Vitality", "Adds 15-25 Damage", "+25% Faster Run/Walk", "Attacker Takes Damage of 5-10"]
+
+[pieces."Wizardspike"]
+kind = "unique"
+setup = "alternative"
+base = "Bone Knife (dagger, 38 Str / 75 Dex)"
+why = "Maxroll Summon Druid guide, weapon-swap list: On the swap with Spirit Monarch: the 163% FCR breakpoint under Battle Orders (the guide's note 2)."
+stats = ["+2 to Mana per Character Level", "Regenerate Mana 15%", "Increase Maximum Mana 15%", "All Resistances +75", "Indestructible", "+50% Faster Cast Rate"]
+
+[pieces."Gheed's Fortune"]
+kind = "unique"
+setup = "alternative"
+base = "Grand Charm"
+why = "Maxroll Summon Druid guide, unique charms list: Magic and gold find."
+stats = ["20-40% Better Chance of Getting Magic Items", "80-160% Extra Gold from Monsters", "Reduces all Vendor Prices 10-15%"]
+
+[pieces."Bul-Kathos' Wedding Band"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Summon Druid guide, rings list: +1 all skills, life and life steal."
+stats = ["+0.5 to Life per Character Level", "+1 to All Skills", "3-5% Life Stolen per Hit", "+50 Maximum Stamina"]
+
+[pieces."Harlequin Crest"]
+kind = "unique"
+setup = "alternative"
+base = "Shako (50 Str)"
+why = "Maxroll Summon Druid guide, helmets list: +2 all skills, life / mana per level and 50% magic find."
+stats = ["+2 to All Skills", "+1.5 to Life per Character Level", "+1.5 to Mana per Character Level", "50% Better Chance of Getting Magic Items", "Damage Reduced by 10%", "+2 to Strength", "+2 to Dexterity", "+2 to Vitality", "+2 to Energy"]
+
+[pieces."Magefist"]
+kind = "unique"
+setup = "alternative"
+base = "Light Gauntlets (45 Str)"
+why = "Maxroll Summon Druid guide, gloves list: 20% FCR and mana regeneration."
+stats = ["+20% Faster Cast Rate", "Regenerate Mana 25%", "+1 to Fire Skills", "Adds 1-6 Fire Damage", "+10 Defense", "+20-30% Enhanced Defense"]
 
 [pieces."Soul Harvest"]
 kind = "unique"
@@ -307,6 +403,80 @@ base = "Scythe (polearm, 41 Str / 41 Dex), in the shared stash"
 why = "In the stash: +20 all resistances for the merc; the other option until Insight."
 stats = ["All Resistances +20", "10% Mana Stolen per Hit", "30% Chance of Open Wounds", "+50-90% Enhanced Damage", "+45 to Attack Rating", "+5 to Energy"]
 
+[pieces."Beast"]
+kind = "runeword"
+setup = "alternative"
+base = "5-socket one-handed axe, hammer or scepter (beside the shield), e.g. War Scepter (55 Str), Divine Scepter, Caduceus"
+why = "Maxroll Summon Druid guide, weapons list: the guide's Ubers weapon: Level 9 Fanaticism Aura for the whole zoo and +3 Werebear / Shape Shifting."
+notes = "Ber Tir Um Mal Lum."
+stats = ["+40% Increased Attack Speed", "Level 9 Fanaticism Aura When Equipped", "+240-270% Enhanced Damage", "+25-40 to Strength", "Level 13 Summon Grizzly (5 Charges)", "+3 to Werebear", "+3 to Shape Shifting", "20% Chance of Crushing Blow", "+2 to Mana after each Kill", "25% Chance of Open Wounds", "Prevent Monster Heal", "+10 to Energy"]
+
+[pieces."Skin of the Vipermagi"]
+kind = "unique"
+setup = "alternative"
+base = "Serpentskin Armor (43 Str)"
+why = "Maxroll Summon Druid guide, body armors list: +1 all skills, 30% FCR and all resistances."
+stats = ["+120% Enhanced Defense", "All Resistances +20-35", "+30% Faster Cast Rate", "Magic Damage Reduced by 9-13", "+1 to All Skills"]
+
+[pieces."Verdungo's Hearty Cord"]
+kind = "unique"
+setup = "alternative"
+base = "Mithril Coil (106 Str)"
+why = "Maxroll Summon Druid guide, belts list: Vitality, damage reduction and FHR."
+stats = ["+30-40 to Vitality", "Physical Damage Taken Reduced by 10-15%", "+10% Faster Hit Recovery", "Replenish Life +10-13", "+100-120 Maximum Stamina", "+90-140% Enhanced Defense"]
+
+[pieces."Aldur's Advance"]
+kind = "set"
+setup = "alternative"
+base = "Battle Boots (95 Str)"
+why = "Maxroll Summon Druid guide, boots list: 40% faster run/walk, life and fire resist, indestructible."
+notes = "Set Aldur's Watchtower; partners: Aldur's Deception, Aldur's Gauntlet, Aldur's Stony Gaze."
+stats = ["Indestructible", "Heal Stamina Plus 32%", "+50 to Life", "10% Damage Taken Goes To Mana", "+40% Faster Run/Walk", "+180 Maximum Stamina", "Fire Resist +40-50%", "(2 items) +15 to Dexterity", "(3 items) +15 to Dexterity", "(4 items) +15 to Dexterity"]
+
+[pieces."Naj's Puzzler"]
+kind = "set"
+setup = "alternative"
+base = "Elder Staff (two-handed staff, 44 Str / 37 Dex)"
+why = "Maxroll Summon Druid guide, weapon-swap list: Teleport charges before Enigma (the guide's note 3)."
+notes = "Set Naj's Ancient Set; partners: Naj's Circlet, Naj's Light Plate."
+stats = ["+35 to Energy", "+150% Enhanced Damage", "Level 11 Teleport (69 Charges)", "+30% Faster Cast Rate", "Adds 6-45 Lightning Damage", "+70 to Mana", "+1 to All Skills"]
+
+[pieces."Hellfire Torch"]
+kind = "unique"
+setup = "alternative"
+base = "Large Charm"
+why = "Maxroll Summon Druid guide, unique charms list: +3 druid skills (the guide: Druid Hellfire Torch), attributes and resistances."
+notes = "Only a druid-skills Torch is this build's piece; the class is rolled on the Uber Tristram drop."
+stats = ["+3 to one class's Skill Levels (rolled class)", "+10-20 to all Attributes", "All Resistances +10-20", "+8 to Light Radius", "5% Chance to cast level 10 Firestorm on striking", "Level 30 Hydra (10 Charges)"]
+
+[pieces."Nagelring"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Summon Druid guide, rings list: Cheap magic find and attack rating."
+stats = ["+50-75 to Attack Rating", "15-30% Better Chance of Getting Magic Items", "Magic Damage Reduced by 3", "Attacker Takes Damage of 3"]
+
+[pieces."Stormshield"]
+kind = "unique"
+setup = "alternative"
+base = "Monarch (156 Str)"
+why = "Maxroll Summon Druid guide, off-hands list: 35% damage reduction, block and resistances (the guide: also on the off-hand swap)."
+stats = ["+3.75 Defense per Character Level", "Damage Reduced by 35%", "+30 to Strength", "Indestructible", "+35% Faster Block Rate", "Lightning Resist +25%", "25% Increased Chance of Blocking", "Cold Resist +60%", "Attacker Takes Lightning Damage of 10"]
+
+[pieces."Crown of Ages"]
+kind = "unique"
+setup = "alternative"
+base = "Corona (174 Str)"
+why = "Maxroll Summon Druid guide, helmets list: +1 all skills, damage reduction, all resistances and up to 2 sockets."
+stats = ["+30% Faster Hit Recovery", "All Resistances +20-30", "+1 to All Skills", "+100-150 Defense", "Indestructible", "Damage Reduced by 10-15%", "+50% Enhanced Defense", "Socketed (1-2)"]
+
+[pieces."Chance Guards"]
+kind = "unique"
+setup = "alternative"
+base = "Chain Gloves (25 Str)"
+why = "Maxroll Summon Druid guide, gloves list: Magic and gold find."
+stats = ["200% Extra Gold from Monsters", "25-40% Better Chance of Getting Magic Items", "+25 to Attack Rating", "+15 Defense", "+2 to Light Radius", "+20-30% Enhanced Defense"]
+
 [pieces."Harmony"]
 kind = "runeword"
 setup = "lvl 39-99"
@@ -314,6 +484,236 @@ base = "bow that dropped with 4 sockets (Act 1 rogue: bows, amazon bows too sinc
 why = "Act 1 rogue: Harmony gives Vigor + Valkyrie (Vigor as the rogue's aura for the whole party, Valkyrie from the druid's weapon swap); the rogue in Normal before Insight, or for fun (user, 2026-11-20). The Act 2 merc keeps Insight as the main weapon."
 notes = "One Harmony serves the Fury stage's weapon swap and the rogue: it is swapped between them, so one base is kept. A merc uses no oskills or charges (Valkyrie, Revive): on the rogue only the Vigor aura works. Below level 39 the rogue shoots a plain bow."
 stats = ["Level 10 Vigor Aura When Equipped", "+2-6 to Valkyrie", "+200-275% Enhanced Damage", "Adds 55-160 Fire/Cold/Lightning Damage", "Level 20 Revive (25 Charges)", "Regenerate Mana 20%"]
+
+[pieces."Suicide Branch"]
+kind = "unique"
+setup = "alternative"
+base = "Burnt Wand (wand, 25 Str)"
+why = "Maxroll Summon Druid guide, weapons list: +1 all skills and 50% FCR one-handed."
+stats = ["Attacker Takes Damage of 25", "+50% Faster Cast Rate", "All Resistances +10", "Increase Maximum Mana 10%", "+40 to Life", "+1 to All Skills"]
+
+[pieces."Aldur's Deception"]
+kind = "set"
+setup = "alternative"
+base = "Shadow Plate (230 Str)"
+why = "Maxroll Summon Druid guide, body armors list: +1 Elemental / Shape Shifting, resistances; Aldur's Watchtower set bonuses."
+notes = "Set Aldur's Watchtower; partners: Aldur's Advance, Aldur's Gauntlet, Aldur's Stony Gaze."
+stats = ["+300 Defense", "+1 to Shape Shifting Skills (Druid Only)", "+20 to Strength", "+15 to Dexterity", "Lightning Resist +40-50%", "Requirements -50%", "+1 to Elemental Skills (Druid Only)", "(2 items) +15 to Vitality", "(3 items) +15 to Vitality", "(4 items) +15 to Vitality"]
+
+[pieces."Thundergod's Vigor"]
+kind = "unique"
+setup = "alternative"
+base = "War Belt (110 Str)"
+why = "Maxroll Summon Druid guide, belts list: +10% maximum lightning resist and lightning absorb."
+stats = ["5% Chance to cast level 7 Fist of the Heavens when struck", "Adds 1-50 Lightning Damage", "+10% to Maximum Lightning Resist", "+20 Lightning Absorb", "+160-200% Enhanced Defense", "+20 to Vitality", "+20 to Strength", "+3 to Lightning Strike", "+3 to Lightning Fury"]
+
+[pieces."Natalya's Soul"]
+kind = "set"
+setup = "alternative"
+base = "Mesh Boots (65 Str)"
+why = "Maxroll Summon Druid guide, boots list: Faster run/walk and cold / lightning resist."
+notes = "Set Natalya's Odium; partners: Natalya's Mark, Natalya's Shadow, Natalya's Totem."
+stats = ["+75-125 Defense", "+40% Faster Run/Walk", "Heal Stamina Plus 0.25% per Character Level", "Increase Maximum Durability 50%", "Cold Resist +15-25%", "Lightning Resist +15-25%"]
+
+[pieces."Annihilus"]
+kind = "unique"
+setup = "alternative"
+base = "Small Charm"
+why = "Maxroll Summon Druid guide, unique charms list: +1 all skills, attributes, resistances and experience."
+stats = ["+1 to All Skills", "+10-20 to all Attributes", "All Resistances +10-20", "+5-10% to Experience Gained"]
+
+[pieces."Wisp Projector"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Summon Druid guide, rings list: Lightning absorb and magic find."
+stats = ["10% Chance to cast level 16 Lightning on striking", "10-20% Lightning Absorb", "10-20% Better Chance of Getting Magic Items", "Level 2 Oak Sage (15 Charges)", "Level 5 Heart of Wolverine (13 Charges)", "Level 7 Spirit of Barbs (11 Charges)"]
+
+[pieces."Sanctuary"]
+kind = "runeword"
+setup = "alternative"
+base = "3-socket shield (non-class; druids can't use paladin shields)"
+why = "Maxroll Summon Druid guide, off-hands list: Faster block, block chance and all resistances."
+notes = "Ko Ko Mal."
+stats = ["20% Increased Chance of Blocking", "+20% Faster Block Rate", "+130-160% Enhanced Defense", "+250 Defense vs. Missile", "All Resistances +50-70", "+20% Faster Hit Recovery", "Level 12 Slow Missiles (60 Charges)", "+20 to Dexterity", "Magic Damage Reduced by 7"]
+
+[pieces."Ravenlore"]
+kind = "unique"
+setup = "alternative"
+base = "Sky Spirit (druid pelt, 113 Str)"
+why = "Maxroll Summon Druid guide, helmets list: +7 Raven and +3 Elemental Skills: the guide's Raven helm."
+stats = ["+120-150% Enhanced Defense", "All Resistances +15-25", "+3 to Elemental Skills (Druid Only)", "+20-30 to Energy", "-10-20% to Enemy Fire Resistance", "+7 to Raven"]
+
+[pieces."Arkaine's Valor"]
+kind = "unique"
+setup = "alternative"
+base = "Balrog Skin (165 Str)"
+why = "Maxroll Summon Druid guide, body armors list: +1-2 all skills, 30% FHR and damage reduction."
+stats = ["+150-180% Enhanced Defense", "+30% Faster Hit Recovery", "+1-2 to All Skills", "Damage Reduced by 10-15", "+0.5 to Vitality per Character Level"]
+
+[pieces."Gheed's Wager"]
+kind = "unique"
+setup = "alternative"
+base = "Troll Belt (151 Str)"
+why = "Maxroll Summon Druid guide, belts list: FHR, faster run/walk, all resistances and gold find."
+stats = ["+10-20% Faster Cast Rate", "+10-20% Faster Hit Recovery", "+10-20% Faster Run/Walk", "+90-150% Enhanced Defense", "-3-7% to Enemy Magic Resistance", "All Resistances +5-15", "44-75% Extra Gold from Monsters"]
+
+[pieces."Waterwalk"]
+kind = "unique"
+setup = "alternative"
+base = "Sharkskin Boots (47 Str)"
+why = "Maxroll Summon Druid guide, boots list: Faster run/walk, life and +5% maximum fire resist."
+stats = ["+100 Defense vs. Missile", "+20% Faster Run/Walk", "+15 to Dexterity", "+180-210% Enhanced Defense", "+45-65 to Life", "+40 Maximum Stamina", "+5% to Maximum Fire Resist", "Heal Stamina Plus 50%"]
+
+[pieces."Dwarf Star"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Summon Druid guide, rings list: Life, fire absorb and magic damage reduction."
+stats = ["+40 to Life", "15% Fire Absorb", "Magic Damage Reduced by 12-15", "100% Extra Gold from Monsters", "+40 Maximum Stamina", "Heal Stamina Plus 15%"]
+
+[pieces."Rhyme"]
+kind = "runeword"
+setup = "alternative"
+base = "2-socket shield (non-class)"
+why = "Maxroll Summon Druid guide, off-hands list: Cannot Be Frozen, magic find and resistances on cheap runes."
+notes = "Shael Eth."
+stats = ["+40% Faster Block Rate", "20% Increased Chance of Blocking", "All Resistances +25", "Cannot Be Frozen", "50% Extra Gold from Monsters", "25% Better Chance of Getting Magic Items", "Regenerate Mana 15%"]
+
+[pieces."Aldur's Stony Gaze"]
+kind = "set"
+setup = "alternative"
+base = "Hunter's Guise (druid pelt, 56 Str)"
+why = "Maxroll Summon Druid guide, helmets list: Druid pelt with 25% FHR, mana regeneration and cold resist; Aldur's Watchtower bonuses with Aldur's Advance, Deception and Rhythm."
+notes = "Set Aldur's Watchtower; partners: Aldur's Advance, Aldur's Deception, Aldur's Gauntlet."
+stats = ["+90 Defense", "Regenerate Mana 17%", "+5 to Light Radius", "+25% Faster Hit Recovery", "Cold Resist +40-50%", "Socketed (2)", "(2 items) +15 to Energy", "(3 items) +15 to Energy", "(4 items) +15 to Energy"]
+
+[pieces."Aldur's Rhythm"]
+kind = "set"
+setup = "alternative"
+base = "Jagged Star (mace, 74 Str)"
+why = "Maxroll Summon Druid guide, weapons list: Life / mana steal and IAS; with more of Aldur's Watchtower its set bonuses."
+notes = "Set Aldur's Watchtower; partners: Aldur's Advance, Aldur's Deception, Aldur's Gauntlet, Aldur's Stony Gaze."
+stats = ["Adds 40-62 Damage", "Adds 50-75 Lightning Damage", "10% Life Stolen per Hit", "+30% Increased Attack Speed", "+200% Damage to Demons", "5% Mana Stolen per Hit", "Socketed (2-5)", "(2 items) +15 to Strength", "(3 items) +15 to Strength", "(4 items) +15 to Strength"]
+
+[pieces."Rain"]
+kind = "runeword"
+setup = "alternative"
+base = "3-socket body armor"
+why = "Maxroll Summon Druid guide, body armors list: Druid runeword: +1 druid skills, Cyclone Armor charges and resistances."
+notes = "Ort Mal Ith."
+stats = ["5% Chance to cast level 15 Twister on striking", "5% Chance to cast level 15 Cyclone Armor when struck", "+2 to Druid Skill Levels", "+100-150 to Mana", "Lightning Resist +30%", "Magic Damage Reduced by 7", "15% Damage Taken Goes To Mana"]
+
+[pieces."Opalvein"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Summon Druid guide, rings list: 10% FCR and all resistances (Reign of the Warlock ring)."
+stats = ["2% Chance to cast level 15 Flame Wave on attack", "Magic damage rolls a random element (Reign of the Warlock property)", "+10% Faster Cast Rate", "All Resistances +6-8", "+1-3 Life after each Kill", "+1-3 to Mana after each Kill"]
+
+[pieces."Metamorphosis"]
+kind = "runeword"
+setup = "alternative"
+base = "3-socket helm or druid pelt"
+why = "Maxroll Summon Druid guide, helmets list: Mark of the Wolf / Mark of the Bear and +5 Shape Shifting (the guide's Ubers helm)."
+notes = "Io Cham Fal."
+stats = ["100% Chance to cast level 1 Mark of the Bear on striking", "100% Chance to cast level 1 Mark of the Wolf on striking", "+5 to Shape Shifting Skills (Druid Only)", "+50-80% Enhanced Defense", "All Resistances +10", "25% Chance of Crushing Blow", "+10 to Vitality", "Cannot Be Frozen", "+10 to Strength"]
+
+[pieces."Blade of Ali Baba"]
+kind = "unique"
+setup = "alternative"
+base = "Tulwar (sword, 70 Str / 42 Dex); the guide fills its 2 sockets with Ist"
+why = "Maxroll Summon Druid guide, weapons list: Magic and gold find per level (the guide's Magic Find weapon with 2x Ist)."
+stats = ["+2.5% Extra Gold from Monsters per Character Level", "+1% Better Chance of Getting Magic Items per Character Level", "+15 to Mana", "+60-120% Enhanced Damage", "+5-15 to Dexterity"]
+
+[pieces."Wealth"]
+kind = "runeword"
+setup = "alternative"
+base = "3-socket body armor"
+why = "Maxroll Summon Druid guide, body armors list: 100% magic find and 300% gold find (Magic Find variant)."
+notes = "Lem Ko Tir."
+stats = ["300% Extra Gold from Monsters", "100% Better Chance of Getting Magic Items", "+10 to Dexterity", "+2 to Mana after each Kill"]
+
+[pieces."Sling"]
+kind = "unique"
+setup = "alternative"
+base = "Ring"
+why = "Maxroll Summon Druid guide, rings list: 10% FCR, Energy and magic find (Reign of the Warlock ring)."
+stats = ["+1 to Town Portal", "+10% Faster Cast Rate", "-3-5% to Enemy Magic Resistance", "+10-15 to Energy", "Slows Target by 15%", "10-20% Better Chance of Getting Magic Items"]
+
+[pieces."Tarnhelm"]
+kind = "unique"
+setup = "alternative"
+base = "Skull Cap (15 Str)"
+why = "Maxroll Summon Druid guide, helmets list: +1 all skills and 25-50% magic find on a cheap helm."
+stats = ["75% Extra Gold from Monsters", "25-50% Better Chance of Getting Magic Items", "+1 to All Skills"]
+
+[pieces."Gull"]
+kind = "unique"
+setup = "alternative"
+base = "Dagger (no Str)"
+why = "Maxroll Summon Druid guide, weapons list: 100% magic find on a cheap dagger (Magic Find variant)."
+stats = ["+1 to Minimum Damage", "+15 to Maximum Damage", "100% Better Chance of Getting Magic Items", "-5 to Mana"]
+
+[pieces."Treachery"]
+kind = "runeword"
+setup = "alternative"
+base = "3-socket body armor"
+why = "Maxroll Summon Druid guide, body armors list: Pre-buff Fade for damage reduction and resistances before Ubers (the guide's note 1)."
+notes = "Shael Thul Lem."
+stats = ["25% Chance to cast level 15 Venom on striking", "5% Chance to cast level 15 Fade when struck", "+2 to Assassin Skill Levels", "+45% Increased Attack Speed", "+20% Faster Hit Recovery", "Cold Resist +30%", "50% Extra Gold from Monsters"]
+
+[pieces."Peasant Crown"]
+kind = "unique"
+setup = "alternative"
+base = "War Hat (20 Str)"
+why = "Maxroll Summon Druid guide, helmets list: +1 all skills, faster run/walk and Vitality / Energy (Reign of the Warlock rework)."
+stats = ["+20 to Energy", "+20 to Vitality", "+1 to All Skills", "+15% Faster Run/Walk", "Replenish Life +6-12", "+100% Enhanced Defense"]
+
+[pieces."Silks of the Victor"]
+kind = "unique"
+setup = "alternative"
+base = "Ancient Armor (100 Str)"
+why = "Maxroll Summon Druid guide, body armors list: +1 all skills, faster run/walk and mana steal (added to the guide on 2026-11-13)."
+stats = ["5% Mana Stolen per Hit", "+1 to All Skills", "+2 to Light Radius", "+100-120% Enhanced Defense", "+20% Faster Run/Walk", "+30% Increased Attack Speed", "+50-100% Enhanced Damage", "15% Better Chance of Getting Magic Items"]
+
+[pieces."Veil of Steel"]
+kind = "unique"
+setup = "alternative"
+base = "Spired Helm (192 Str)"
+why = "Maxroll Summon Druid guide, helmets list: +2 all skills, 50 all resistances and 15-25% damage reduction (added to the guide on 2026-11-13)."
+stats = ["All Resistances +50", "+60% Enhanced Defense", "+15 to Strength", "+15 to Vitality", "-4 to Light Radius", "Increase Maximum Durability 20%", "+140 Defense", "+2 to All Skills", "Damage Reduced by 15-25%", "Magic Resist +20-40%"]
+
+[pieces."Fortitude"]
+kind = "runeword"
+setup = "alternative"
+base = "4-socket body armor"
+why = "Maxroll Summon Druid guide, mercenary: Standard / Ubers variants: +300% enhanced damage for the merc and all resistances."
+notes = "El Sol Dol Lo."
+stats = ["+300% Enhanced Damage", "+200% Enhanced Defense", "+25% Faster Cast Rate", "+1-1.5 Life per character level", "All Resistances +25-30", "12% Damage Taken Goes To Mana", "20% Chance to cast level 15 Chilling Armor when struck"]
+
+[pieces."Guillaume's Face"]
+kind = "set"
+setup = "alternative"
+base = "Winged Helm (115 Str)"
+why = "Maxroll Summon Druid guide, mercenary: Standard / Magic Find / Ubers variants: crushing blow, deadly strike and 30% FHR."
+notes = "Set Orphan's Call; partners: Magnus' Skin, Wihtstan's Guard, Wilhelm's Pride."
+stats = ["+120% Enhanced Defense", "+30% Faster Hit Recovery", "35% Chance of Crushing Blow", "15% Deadly Strike", "+15 to Strength"]
+
+[pieces."The Reaper's Toll"]
+kind = "unique"
+setup = "alternative"
+base = "Thresher (polearm, 152 Str / 118 Dex)"
+why = "Maxroll Summon Druid guide, mercenary: Standard / Magic Find / Ubers variants: Decrepify on striking (-50% enemy physical resistance for the zoo); 9-frame Jab with Treachery or Fortitude and Guillaume's Face."
+stats = ["+190-240% Enhanced Damage", "33% Chance to cast level 1 Decrepify on striking", "Ignore Target's Defense", "11-15% Life Stolen per Hit", "Requirements -25%", "33% Deadly Strike", "Adds 4-44 Cold Damage"]
+
+[pieces."Hustle (weapon)"]
+kind = "runeword"
+setup = "alternative"
+base = "3-socket polearm (Act 2 merc), e.g. Voulge, Scythe, Poleaxe"
+why = "Maxroll Summon Druid guide, mercenary: Starter variant: Level 1 Fanaticism Aura for the zoo."
+notes = "Shael Ko Eld."
+stats = ["5% Chance to cast level 1 Quickness on striking", "+30% Increased Attack Speed", "+180-200% Enhanced Damage", "Level 1 Fanaticism Aura When Equipped", "+10 to Dexterity", "+50 to Attack Rating against Undead", "+75% Damage to Undead"]
 
 [[recipes]]
 name = "Stealth"

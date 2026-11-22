@@ -3050,11 +3050,18 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
     let at = |v: &[serde_json::Value], i: usize| v.get(i).cloned().unwrap_or(serde_json::Value::Null);
     let gear = gear_json(&info);
 
+    let names = |col: &[serde_json::Value]| col.iter().map(|p| field(p, "name")).collect::<Vec<_>>();
     let weapon = column(&gear, "Merc weapon");
-    let names: Vec<_> = weapon.iter().map(|p| field(p, "name")).collect();
     assert_eq!(
-        names,
-        ["Insight", "Soul Harvest", "The Battlebranch", "Harmony"],
+        names(&weapon),
+        [
+            "Insight",
+            "Soul Harvest",
+            "The Battlebranch",
+            "The Reaper's Toll",
+            "Hustle (weapon)",
+            "Harmony"
+        ],
         "{weapon:?}"
     );
     assert_eq!(field(&at(&weapon, 0), "tick"), "worn");
@@ -3064,8 +3071,7 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
     }
 
     let body = column(&gear, "Merc body");
-    assert_eq!(body.len(), 1, "{body:?}");
-    assert_eq!(field(&at(&body, 0), "name"), "Smoke");
+    assert_eq!(names(&body), ["Smoke", "Fortitude", "Treachery"], "{body:?}");
     assert_eq!(field(&at(&body, 0), "tick"), "worn");
     assert_eq!(
         field(&at(&body, 0), "notes"),
@@ -3075,8 +3081,7 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
     assert_eq!(field(&at(&body, 0), "now"), serde_json::Value::Null);
 
     let helm = column(&gear, "Merc helm");
-    assert_eq!(helm.len(), 1, "{helm:?}");
-    assert_eq!(field(&at(&helm, 0), "name"), "Bulwark");
+    assert_eq!(names(&helm), ["Bulwark", "Guillaume's Face"], "{helm:?}");
     assert_eq!(field(&at(&helm, 0), "tick"), "worn");
 
     let ups = upgrades_json(&info);

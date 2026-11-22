@@ -522,15 +522,10 @@ pub static RUNEWORDS: [Runeword; 99] = [
 /// Looks a runeword up by name, ignoring ASCII case and apostrophes ([`crate::names::same_name`]:
 /// `"steel"`, `"Ancients' Pledge"` match): the `BiS` piece strings in the config are user-typed. Disambiguated
 /// upstream names (`"Hustle (armor)"`, `"Hustle (weapon)"`) also match their bare
-/// form, since that is what the game shows.
+/// form, since that is what the game shows; a qualified name matches only its own row.
 #[must_use]
 pub fn lookup(name: &str) -> Option<&'static Runeword> {
-    RUNEWORDS.iter().find(|w| {
-        crate::names::same_name(w.name, name)
-            || w.name
-                .split_once(" (")
-                .is_some_and(|(bare, _)| crate::names::same_name(bare, name))
-    })
+    RUNEWORDS.iter().find(|w| crate::names::same_name(w.name, name))
 }
 
 #[cfg(test)]
@@ -574,6 +569,12 @@ mod tests {
             lookup("Hustle").is_some(),
             "the game shows Hustle without a suffix"
         );
+    }
+
+    #[test]
+    fn a_qualified_name_finds_its_own_row() {
+        assert_eq!(lookup("Hustle (weapon)").map(|w| w.name), Some("Hustle (weapon)"));
+        assert_eq!(lookup("Hustle (armor)").map(|w| w.name), Some("Hustle (armor)"));
     }
 
     #[test]

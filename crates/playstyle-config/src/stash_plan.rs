@@ -2360,7 +2360,11 @@ mod tests {
             .build_defs
             .get("fury druid")
             .ok_or_else(|| anyhow::anyhow!("fury"))?;
-        assert_eq!(fury.merc_acts, vec![MercAct::Act5]);
+        assert_eq!(
+            fury.merc_acts,
+            vec![MercAct::Act5, MercAct::Act2],
+            "the Lawbringer merc first, the Act 2 Pride merc after Bone Break"
+        );
         let summoner = config
             .build_defs
             .get("summoner druid")
@@ -2495,6 +2499,120 @@ mod tests {
                 vec![row(name, Spot::Page(1), Action::Keep(Side::Own), 1)]
             );
         }
+        Ok(())
+    }
+
+    /// Asserts each `(code, name, quality, index)` piece is wanted once and kept for own use.
+    fn kept_one_copy_each(needs: &Needs, pieces: &[(&str, &str, u32, u32)]) {
+        for &(code, name, quality, index) in pieces {
+            let wanted: Vec<u32> = needs
+                .pieces
+                .iter()
+                .filter(|(n, _)| same_name(n, name))
+                .map(|&(_, c)| c)
+                .collect();
+            assert_eq!(wanted, vec![1], "{name}");
+            assert_eq!(
+                rows(&[at(named(code, quality, index), Spot::Page(1))], needs),
+                vec![row(name, Spot::Page(1), Action::Keep(Side::Own), 1)]
+            );
+        }
+    }
+
+    #[test]
+    fn summoner_guide_alternatives_are_kept_one_copy_each() -> anyhow::Result<()> {
+        // The shipped Summoner lists the Maxroll Summon Druid guide's pieces of every slot
+        // (shields, one-handers, both rings, the merc's) after its own stage pieces.
+        let config = shipped();
+        let summoner = config
+            .build_defs
+            .get("summoner druid")
+            .ok_or_else(|| anyhow::anyhow!("no summoner druid"))?;
+        let first = |slots: &BTreeMap<String, Vec<String>>, slot: &str| {
+            slots.get(slot).and_then(|s| s.first()).cloned()
+        };
+        let own = &summoner.slots;
+        assert_eq!(
+            first(own, "weapon").as_deref(),
+            Some("Heart of the Oak@55"),
+            "core first"
+        );
+        assert_eq!(first(own, "offhand").as_deref(), Some("Spirit@54"));
+        assert_eq!(first(own, "helm").as_deref(), Some("Jalal's Mane@42"));
+        assert_eq!(first(own, "ring1").as_deref(), Some("Raven Frost@45"));
+        let merc = &summoner.merc_slots;
+        assert_eq!(first(merc, "weapon").as_deref(), Some("Insight@27"));
+        assert_eq!(first(merc, "body").as_deref(), Some("Smoke@37"));
+        assert_eq!(first(merc, "helm").as_deref(), Some("Bulwark@35"));
+        assert_eq!(
+            merc.get("weapon").and_then(|w| w.last()).map(String::as_str),
+            Some("Harmony@39"),
+            "the Act 1 rogue's piece stays last"
+        );
+        let needs = shipped_needs(&config, "summoner druid")?;
+        kept_one_copy_each(
+            &needs,
+            &[
+                ("uit", "Stormshield", item_data::QUALITY_UNIQUE, 253),
+                ("dre", "Ravenlore", item_data::QUALITY_UNIQUE, 350),
+                ("rin", "The Stone of Jordan", item_data::QUALITY_UNIQUE, 122),
+                ("rin", "Bul-Kathos' Wedding Band", item_data::QUALITY_UNIQUE, 268),
+                ("cm1", "Annihilus", item_data::QUALITY_UNIQUE, 381),
+                ("7s8", "The Reaper's Toll", item_data::QUALITY_UNIQUE, 326),
+                ("xhm", "Guillaume's Face", item_data::QUALITY_SET, 104),
+            ],
+        );
+        // The Act 2 merc's Hustle and Fortitude want polearm / body armor bases for Act 2.
+        for word in ["Hustle (weapon)", "Fortitude"] {
+            assert!(
+                needs
+                    .bases
+                    .iter()
+                    .any(|n| n.word.name == word && n.wearer == Wearer::Merc(MercAct::Act2)),
+                "{word}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fury_merc_guide_alternatives_follow_the_lawbringers() -> anyhow::Result<()> {
+        // The Act 5 Lawbringer merc stays first; Pride and The Reaper's Toll are the later
+        // Act 2 Might merc's (after Bone Break), the armor and helms any merc wears.
+        let config = shipped();
+        let fury = config
+            .build_defs
+            .get("fury druid")
+            .ok_or_else(|| anyhow::anyhow!("no fury druid"))?;
+        let slot = |s: &str| fury.merc_slots.get(s).cloned().unwrap_or_default();
+        assert_eq!(
+            slot("weapon"),
+            ["Lawbringer@43", "Pride@67", "The Reaper's Toll@75"]
+        );
+        assert_eq!(
+            slot("helm"),
+            ["Bulwark@35", "Vampire Gaze@41", "Guillaume's Face@34"]
+        );
+        assert_eq!(slot("body"), ["Smoke@37", "Shaftstop@38", "Treachery@43"]);
+        assert!(fury.extras.values().flatten().any(|c| c == "Bone Break@75"));
+        assert_eq!(fury.merc_wearer("Pride@67", Some(4)), MercAct::Act2);
+        assert_eq!(fury.merc_wearer("Treachery@43", Some(3)), MercAct::Act5);
+        let needs = shipped_needs(&config, "fury druid")?;
+        assert!(
+            needs
+                .bases
+                .iter()
+                .any(|n| n.word.name == "Pride" && n.wearer == Wearer::Merc(MercAct::Act2)),
+            "{:?}",
+            needs.bases
+        );
+        kept_one_copy_each(
+            &needs,
+            &[
+                ("xh9", "Vampire Gaze", item_data::QUALITY_UNIQUE, 208),
+                ("xhn", "Shaftstop", item_data::QUALITY_UNIQUE, 215),
+            ],
+        );
         Ok(())
     }
 
@@ -2668,12 +2786,12 @@ mod tests {
     }
 
     #[test]
-    fn live_two_broad_swords_kept_and_the_zweihander_sold_as_two_handed() -> anyhow::Result<()> {
+    fn live_two_broad_swords_kept_and_the_zweihander_is_the_hustle_base() -> anyhow::Result<()> {
         // The shipped build files must load, or every build drops and both swords are sold.
         let config = shipped();
         assert_eq!(
             config.build_defs.get("fury druid").map(|b| b.merc_acts.clone()),
-            Some(vec![MercAct::Act5])
+            Some(vec![MercAct::Act5, MercAct::Act2])
         );
         let needs = shipped_needs(&config, "summoner druid")?;
         let items = [
@@ -2683,17 +2801,13 @@ mod tests {
         ];
         let own = Action::Keep(Side::Own);
         let mine = |n: &str, spot, action, reason, count| (n.to_owned(), spot, action, reason, count);
-        // The Act 5 merc's two Lawbringer bases; no 3-socket need takes a two-hander.
+        // The Act 5 merc's two Lawbringer bases (one-handed swords); the Zweihander is the
+        // Fury's two-handed Hustle (weapon) base, never a Lawbringer one.
+        let zweihander = |action| mine("Zweihander 3os", Spot::Inventory, action, None, 1);
         assert_eq!(
             reasoned(&items, &needs),
             vec![
-                mine(
-                    "Zweihander 3os",
-                    Spot::Inventory,
-                    Action::Sell,
-                    Some("two-handed"),
-                    1
-                ),
+                zweihander(Action::Move(Side::Own)),
                 mine("Broad Sword 3os", Spot::Page(2), own, None, 2),
             ]
         );
@@ -2708,18 +2822,13 @@ mod tests {
             reasoned(&better, &needs),
             vec![
                 mine("Broad Sword 3os", Spot::Page(2), Action::Sell, None, 1),
-                mine(
-                    "Zweihander 3os",
-                    Spot::Inventory,
-                    Action::Sell,
-                    Some("two-handed"),
-                    1
-                ),
                 mine("War Sword 3os", Spot::Inventory, Action::Move(Side::Own), None, 1),
+                zweihander(Action::Move(Side::Own)),
                 mine("Broad Sword 3os", Spot::Page(2), own, None, 1),
             ]
         );
-        // On the map: a Zweihander 3os is no Lawbringer base, a War Sword 3os is.
+        // On the map: a second Zweihander 3os is not needed (the Hustle base is kept), a War
+        // Sword 3os is a Lawbringer base.
         let (_, wants) = plan(&items, &needs, &druid());
         assert_eq!(wants.base(&base("9fb", 3)), None);
         assert_eq!(wants.base(&base("wsd", 3)), Some("Lawbringer"));

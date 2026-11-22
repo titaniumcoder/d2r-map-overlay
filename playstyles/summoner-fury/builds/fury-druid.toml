@@ -6,9 +6,9 @@
 name = "Fury Druid"
 damages = ["physical"]
 notes = "Fury Werewolf from the optional skill reset at 75 (Summoner Druid with Raven Frost); standard = the user's core (Ribcracker, Fortitude, Jalal's Mane, Laying of Hands, Raven Frost; the merc's 2x Lawbringer, Smoke, Bulwark); the druid always fights two-handed. Durations, breakpoints and skill order computed from the D2R game tables, not from a guide."
-targets = ["Lycanthropy duration: Werewolf form lasts 1000 + Lycanthropy(1000 + 500 per level after the first) frames: 40 s without Lycanthropy, 80 s at 1, +20 s per level, 300 s (5 min) at 12, 460 s at 20. Form life bonus 25% + Lycanthropy (20% + 5% per level): 45% at 1, 100% at 12, 140% at 20. Levels include +skills: Jalal's Mane (+2 druid, +2 shape shifting) turns 12 hard points into 16 = 380 s.", "Werewolf: Werewolf attack speed (skill IAS, diminishing 10..80): 20 at 1, 45 at 5, 51 at 7, 57 at 10, 64 at 15, 68 at 20; attack rating +50% +15% per level (335% at 20).", "Feral rage: Feral Rage (level 12): max charges 3 + level/2 (3 at 1, 4 at 2-3, 5 at 4, 8 at 10, 13 at 20); 4% life steal per charge (12/16/20/32/52%), run speed up to 32-55%, charges last 20 s. Life steal is divided by 2 in Nightmare and 3 in Hell (difficultylevels.json). The skill screen formula shows 4 to 4x level + 8% (equal to the charge formula only at levels 1-2): trust the screen in game.", "Fury: Fury (level 30, needs Rabies > Feral Rage > Werewolf): min(level + 1, 5) hits, so 5 hits from level 4; damage +100% +17% per level (423% at 20); attack rating +50% +10% per level. The current skills.json gives Fury no synergy, so 20 hard points is all of its scaling.", "Skill order: At 75 (86 points = 74 levels + 12 quest points, all of Normal/Nightmare/Hell done): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20, Rabies 1, Oak Sage 5. Fury 20 is all of Fury's scaling (no synergy); Werewolf 20 = +335% AR and 68 skill IAS; Feral Rage 20 = 13 charges, 52% life steal (17% in Hell); Lycanthropy 20 = 460 s form and +140% life in form, the same +5% life per point as Oak Sage plus duration, so it fills before Oak Sage. Then Oak Sage to 20 (76-90, +125% life for you and the merc), Rabies with the last 9 (91-99, poison for physical immunes).", "IAS: Werewolf attack frames (Feral Rage, normal attack, Fury's first hit), by effective Werewolf level and off-weapon IAS. Ribcracker (WSM 0, its 50% IAS counts undiminished in wolf form): 6 frames at Werewolf 1-2, 5 frames from Werewolf 3 with no other IAS (fastest of all candidates). Fury's middle hits roll the animation back 70% and are shorter; the tables can't give that sequence exactly.", "Core fit: From the data: Ribcracker is a two-handed Quarterstaff (level 31, 25 Str), the best werewolf weapon here thanks to the 50% weapon IAS. The druid fights two-handed only (user, 2026-11-20: full damage, never one-handed, no shield). Lawbringer is one-handed (sword/hammer/scepter, level 43): both copies go to an Act 5 merc that dual-wields two one-handed swords (the Frenzy Barbarian merc type, since D2R patch 2.4) until something better, very endgame; Act 2 mercs use polearms/spears. Smoke is always merc gear (the druid wears Fortitude, Stealth until then); Bulwark and Jalal's Mane are both helms: Jalal's Mane is a druid pelt, so Bulwark goes to the merc. Laying of Hands (Bramble Mitts, level 63, 20% IAS) is part of The Disciple set.", "Physical immunes: Fury only deals physical damage: skip physical immunes or leave them to the merc and Rabies (poison); each of the merc's Lawbringers adds 150-210 fire and 130-180 cold.", "Merc: Act 5 Barbarian dual-wielding both Lawbringers until something better, very endgame (user plan, 2026-11-20; replaces the summoner stage's Act 2 Might merc) — A Lawbringer merc must use swords: Act 3 or Act 5 (Act 2 mercs use polearms and spears). Both copies are planned as one-handed swords: the Act 5 Frenzy merc type dual-wields one-handed swords (D2R patch 2.4)."]
+targets = ["Lycanthropy duration: Werewolf form lasts 1000 + Lycanthropy(1000 + 500 per level after the first) frames: 40 s without Lycanthropy, 80 s at 1, +20 s per level, 300 s (5 min) at 12, 460 s at 20. Form life bonus 25% + Lycanthropy (20% + 5% per level): 45% at 1, 100% at 12, 140% at 20. Levels include +skills: Jalal's Mane (+2 druid, +2 shape shifting) turns 12 hard points into 16 = 380 s.", "Werewolf: Werewolf attack speed (skill IAS, diminishing 10..80): 20 at 1, 45 at 5, 51 at 7, 57 at 10, 64 at 15, 68 at 20; attack rating +50% +15% per level (335% at 20).", "Feral rage: Feral Rage (level 12): max charges 3 + level/2 (3 at 1, 4 at 2-3, 5 at 4, 8 at 10, 13 at 20); 4% life steal per charge (12/16/20/32/52%), run speed up to 32-55%, charges last 20 s. Life steal is divided by 2 in Nightmare and 3 in Hell (difficultylevels.json). The skill screen formula shows 4 to 4x level + 8% (equal to the charge formula only at levels 1-2): trust the screen in game.", "Fury: Fury (level 30, needs Rabies > Feral Rage > Werewolf): min(level + 1, 5) hits, so 5 hits from level 4; damage +100% +17% per level (423% at 20); attack rating +50% +10% per level. The current skills.json gives Fury no synergy, so 20 hard points is all of its scaling.", "Skill order: At 75 (86 points = 74 levels + 12 quest points, all of Normal/Nightmare/Hell done): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20, Rabies 1, Oak Sage 5. Fury 20 is all of Fury's scaling (no synergy); Werewolf 20 = +335% AR and 68 skill IAS; Feral Rage 20 = 13 charges, 52% life steal (17% in Hell); Lycanthropy 20 = 460 s form and +140% life in form, the same +5% life per point as Oak Sage plus duration, so it fills before Oak Sage. Then Oak Sage to 20 (76-90, +125% life for you and the merc), Rabies with the last 9 (91-99, poison for physical immunes).", "IAS: Werewolf attack frames (Feral Rage, normal attack, Fury's first hit), by effective Werewolf level and off-weapon IAS. Ribcracker (WSM 0, its 50% IAS counts undiminished in wolf form): 6 frames at Werewolf 1-2, 5 frames from Werewolf 3 with no other IAS (fastest of all candidates). Fury's middle hits roll the animation back 70% and are shorter; the tables can't give that sequence exactly.", "Core fit: From the data: Ribcracker is a two-handed Quarterstaff (level 31, 25 Str), the best werewolf weapon here thanks to the 50% weapon IAS. The druid fights two-handed only (user, 2026-11-20: full damage, never one-handed, no shield). Lawbringer is one-handed (sword/hammer/scepter, level 43): both copies go to an Act 5 merc that dual-wields two one-handed swords (the Frenzy Barbarian merc type, since D2R patch 2.4) until something better, very endgame; Act 2 mercs use polearms/spears. Smoke is always merc gear (the druid wears Fortitude, Stealth until then); Bulwark and Jalal's Mane are both helms: Jalal's Mane is a druid pelt, so Bulwark goes to the merc. Laying of Hands (Bramble Mitts, level 63, 20% IAS) is part of The Disciple set.", "Physical immunes: Fury only deals physical damage: skip physical immunes or leave them to the merc and Rabies (poison); each of the merc's Lawbringers adds 150-210 fire and 130-180 cold.", "Merc: Act 5 Barbarian dual-wielding both Lawbringers until something better, very endgame (user plan, 2026-11-20; replaces the summoner stage's Act 2 Might merc); later, once Bone Break (unique charm) is owned: an Act 2 Might merc with Pride (user, 2026-11-22: \"the pride for the fury is once I have the bonebreaker charm. then also the fury switches to act 2 might (for the buff)\") — A Lawbringer merc must use swords: Act 3 or Act 5 (Act 2 mercs use polearms and spears). Both copies are planned as one-handed swords: the Act 5 Frenzy merc type dual-wields one-handed swords (D2R patch 2.4). Act 2 second: Might adds to the werewolf's physical damage and Pride's Concentration aura on top; Bone Break first, since only with it does Fury hit physical immunes without the Lawbringers' Decrepify."]
 class = "druid"
-merc_acts = [5]
+merc_acts = [5, 2]
 skill_plan = [
   { skill = "Werewolf", points = 20, by_level = 75 },
   { skill = "Lycanthropy", points = 20, by_level = 75 },
@@ -55,10 +55,10 @@ ring1 = ["Raven Frost@45", "Nature's Peace@69", "Dwarf Star@45", "Wisp Projector
 ring2 = ["Nature's Peace@69", "Dwarf Star@45", "Wisp Projector@76", "Nagelring@7", "Manald Heal@15", "Angelic Halo@12"]
 
 [merc_slots]
-body = ["Smoke@37"]
-helm = ["Bulwark@35"]
+body = ["Smoke@37", "Shaftstop@38", "Treachery@43"]
+helm = ["Bulwark@35", "Vampire Gaze@41", "Guillaume's Face@34"]
 offhand = ["Lawbringer@43"]
-weapon = ["Lawbringer@43"]
+weapon = ["Lawbringer@43", "Pride@67", "The Reaper's Toll@75"]
 
 [extras]
 charms = ["Annihilus@70", "Hellfire Torch@75", "Gheed's Fortune@62", "Bone Break@75"]
@@ -365,6 +365,7 @@ kind = "unique"
 setup = "alternative"
 base = "Grand Charm"
 why = "Maxroll Fury Druid guide, unique charms list: Sunders monster physical immunity (to 95% physical resistance): with Amplify Damage / Decrepify (the merc's Lawbringers proc Decrepify) Fury hits physical immunes."
+notes = "Once owned, the merc may move to Act 2 Might with Pride (merc alternatives)."
 stats = ["Monster Physical Immunity is Sundered", "Damage Reduced by -20--10%"]
 
 [pieces."Oath"]
@@ -707,6 +708,22 @@ setup = "alternative"
 base = "Spired Helm (192 Str)"
 why = "Maxroll Fury Druid guide, helmets list: +2 all skills, 50 all resistances and damage reduction."
 stats = ["All Resistances +50", "+60% Enhanced Defense", "+15 to Strength", "+15 to Vitality", "-4 to Light Radius", "Increase Maximum Durability 20%", "+140 Defense", "+2 to All Skills", "Damage Reduced by 15-25%", "Magic Resist +20-40%"]
+
+[pieces."Pride"]
+kind = "runeword"
+setup = "alternative"
+base = "4-socket polearm or spear (Act 2 merc), e.g. Bill, Partizan, Thresher"
+why = "Maxroll Fury Druid guide, mercenary: after Bone Break (charm): Standard / Magic Find variants: the Act 2 Might merc's weapon, Level 16-20 Concentration Aura boosts the werewolf's damage on top of Might."
+notes = "Cham Sur Io Lo. The later Act 2 Might merc, only once Bone Break (unique charm, hard to get) is owned (user, 2026-11-22); until then the Act 5 merc with 2x Lawbringer stays."
+stats = ["+1% Damage to Demons per Character Level", "Adds 50-280 Lightning Damage", "260-300% Bonus to Attack Rating", "Level 16-20 Concentration Aura When Equipped", "25% Chance to cast level 17 Fire Wall when struck", "Replenish Life +8", "+1.875% Extra Gold from Monsters per Character Level", "Freezes Target +3", "Hit Blinds Target", "+10 to Vitality", "20% Deadly Strike"]
+
+[pieces."The Reaper's Toll"]
+kind = "unique"
+setup = "alternative"
+base = "Thresher (polearm, 152 Str / 118 Dex)"
+why = "Maxroll Fury Druid guide, mercenary: after Bone Break (charm): Ubers variant: Decrepify on striking for the Act 2 Might merc (with Treachery and Guillaume's Face the 75% IAS breakpoint)."
+notes = "The later Act 2 Might merc, only once Bone Break (unique charm, hard to get) is owned (user, 2026-11-22); until then the Act 5 merc with 2x Lawbringer stays."
+stats = ["+190-240% Enhanced Damage", "33% Chance to cast level 1 Decrepify on striking", "Ignore Target's Defense", "11-15% Life Stolen per Hit", "Requirements -25%", "33% Deadly Strike", "Adds 4-44 Cold Damage"]
 
 [[recipes]]
 name = "Smoke"

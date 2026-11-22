@@ -408,7 +408,11 @@ def main(argv):
     # An alternative merc act's piece (its own `merc_act`, not the primary) after the others.
     alt = lambda i: i.get("merc_act") is not None and i["merc_act"] != (merc_acts or [2])[0]
     if leveling_items:
-        key = lambda i: (i["slot"], alt(i), -(i.get("req_level") or 0), i.get("rank_in_slot") or 99)
+        # Stage pieces by required level (the latest stage first); a guide's "alternative"
+        # pieces after them in their own rank order, so the stage gear stays first.
+        guide = lambda i: i.get("setup") == "alternative"
+        key = lambda i: (i["slot"], alt(i), guide(i), 0 if guide(i) else -(i.get("req_level") or 0),
+                         i.get("rank_in_slot") or 99)
     else:
         key = lambda i: (i["slot"], alt(i), i.get("rank_in_slot") if i.get("rank_in_slot") is not None else 999)
     slots, merc, extras = {}, {}, {}

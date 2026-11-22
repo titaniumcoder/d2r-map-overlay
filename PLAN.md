@@ -757,6 +757,19 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   excepted: two worn rings). The merc stays the Act 5 2x Lawbringer (the guide's Act 2 Might
   merc is not taken). Open: magic charm types (Sharp / Shimmering / Fine ... of Vita) have no
   build-file form.
+- **Summoner guide and merc alternatives (user, 2026-11-22: "did you do it for the summoner
+  druid too?", "can we get that for the mercs too")**: the Summoner lists the Maxroll Summon
+  Druid guide's unique/set/runeword pieces after its own stage pieces (gen_build sorts a
+  leveling build's `alternative` pieces after the stage gear), one-handers and shields included
+  (sword + shield), a weapon-swap list (Call to Arms, Wizardspike, Naj's Puzzler), ring2 = the
+  guide's rings, its unique charms in `[extras]`; its Act 2 merc gets The Reaper's Toll, Hustle,
+  Fortitude, Treachery, Guillaume's Face after Insight / Smoke / Bulwark. The Fury merc gets the
+  guide's armor and helms any merc wears (Shaftstop, Treachery, Vampire Gaze, Guillaume's Face);
+  `merc_acts = [5, 2]`: Pride and The Reaper's Toll are for a later Act 2 Might merc once Bone
+  Break is owned (user: "the pride for the fury is once I have the bonebreaker charm"), ranked
+  after the Lawbringers. Open: no build-file way to gate a merc act on an owned item, so that
+  order is only a note. Fixed: `runewords_data::lookup("Hustle (weapon)")` found Hustle (armor),
+  so the Fury's Hustle wanted a body armor base; a two-handed 3os weapon (Zweihander) is now it.
 - **Not needed, by hand (user decision 2026-11-22: "make the user decide ... by allowing him
   to remove items he deems no longer worthy ... some kind of local kept info in the user
   directory"; nothing automatic)**: `~/.local/share/d2r-map-overlay/not-needed.toml`
