@@ -3674,7 +3674,7 @@ fn next_stage_gear_puts_held_and_craftable_pieces_up_front() -> Result<()> {
     assert_eq!(body(1, "ready"), true);
     assert_eq!(
         body(1, "craft"),
-        "craft: Fortitude in Loricated Mail 4os (base on page 1)"
+        "craft: Fortitude in Loricated Mail 4os (base on page 1), if its sockets are empty"
     );
     assert_eq!(body(1, "at"), true);
     // Stealth: the runes alone don't make it.
@@ -3740,6 +3740,96 @@ fn next_stage_gear_lists_the_next_build_s_charm_wishes() -> Result<()> {
     assert!(
         next.pointer("/charms/0/stage")
             .is_some_and(serde_json::Value::is_null)
+    );
+    Ok(())
+}
+
+/// The next stage's Body column for a Fury wanting `body`, with `bases` (armour code, sockets)
+/// on page 1 and one of each of `runes` held.
+fn next_body(body: &[&str], bases: &[(&str, u8)], runes: &[&str]) -> Result<Vec<serde_json::Value>> {
+    use d2r_core::offsets::item_data::QUALITY_NORMAL;
+    let summoner = config::Build {
+        name: "Summoner".to_owned(),
+        next: Some("fury".to_owned()),
+        ..config::Build::default()
+    };
+    let fury = config::Build {
+        name: "Fury".to_owned(),
+        slots: [("body".to_owned(), body.iter().map(|p| (*p).to_owned()).collect())].into(),
+        ..config::Build::default()
+    };
+    let items = bases
+        .iter()
+        .map(|&(code, sockets)| {
+            let mut item = stash_item("base", code, QUALITY_NORMAL, None);
+            item.sockets = sockets;
+            item
+        })
+        .collect();
+    let stash = [d2r_core::stash::StashTab {
+        kind: d2r_core::stash::TabKind::Page(1),
+        items,
+    }];
+    let runes: Vec<(String, u32)> = runes.iter().map(|r| (format!("{r} Rune"), 1)).collect();
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &stash, &[]);
+    info.live.held_materials = &runes;
+    info.build = Some(&summoner);
+    info.stage = Some(config::Stage {
+        slug: "summoner",
+        build: &summoner,
+        class_default: false,
+        next: Some(("fury", &fury)),
+    });
+    next_gear::next_gear_json(&info)
+        .pointer("/columns/0/pieces")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .context("body pieces")
+}
+
+#[test]
+fn next_stage_gear_spends_a_shared_rune_once() -> Result<()> {
+    // Lionheart (Hel Lum Fal) and Smoke (Nef Lum) share the one Lum; each has its base.
+    let pieces = next_body(
+        &["Lionheart@41", "Smoke@37"],
+        &[("ucl", 3), ("ucl", 2)],
+        &["Hel", "Lum", "Fal", "Nef"],
+    )?;
+    let at = |i: usize, key: &str| {
+        pieces
+            .get(i)
+            .and_then(|p| p.get(key))
+            .cloned()
+            .unwrap_or_default()
+    };
+    assert_eq!(at(0, "ready"), true, "{pieces:?}");
+    assert_eq!(at(1, "ready"), false);
+    assert_eq!(at(1, "missing"), serde_json::json!(["Lum 0/1"]));
+    Ok(())
+}
+
+#[test]
+fn next_stage_gear_spends_a_shared_base_once() -> Result<()> {
+    // Stealth (Tal Eth) and Smoke (Nef Lum): every rune, but one 2os armour.
+    let pieces = next_body(
+        &["Stealth@17", "Smoke@37"],
+        &[("ucl", 2)],
+        &["Tal", "Eth", "Nef", "Lum"],
+    )?;
+    let at = |i: usize, key: &str| {
+        pieces
+            .get(i)
+            .and_then(|p| p.get(key))
+            .cloned()
+            .unwrap_or_default()
+    };
+    assert_eq!(at(0, "ready"), true, "{pieces:?}");
+    assert_eq!(at(1, "ready"), false);
+    assert_eq!(at(1, "missing"), serde_json::json!([]));
+    assert!(
+        at(1, "base_owned").is_null() && at(1, "base_hint").is_string(),
+        "{pieces:?}"
     );
     Ok(())
 }

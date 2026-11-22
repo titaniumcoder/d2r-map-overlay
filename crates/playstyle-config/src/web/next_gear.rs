@@ -16,7 +16,9 @@ use super::{PanelInfo, base_hint, is_worn, level_range};
 use crate::config::Build;
 use crate::stash_plan::Held;
 
-/// What every piece of the section is judged against.
+/// What every piece of the section is judged against. `held` and `materials` are a ledger: a
+/// piece found craftable takes its runes and its base out, so the pieces after it (display
+/// order) can't count them again.
 struct Next<'a> {
     info: &'a PanelInfo<'a>,
     build: &'a Build,
@@ -35,7 +37,7 @@ pub fn next_gear_json(info: &PanelInfo) -> serde_json::Value {
     let Some((_, build)) = stage.next else {
         return serde_json::Value::Null;
     };
-    let next = Next {
+    let mut next = Next {
         info,
         build,
         held: crate::stash_plan::held_from(info.live.owned_items, info.live.stash),
@@ -43,7 +45,8 @@ pub fn next_gear_json(info: &PanelInfo) -> serde_json::Value {
     };
     let class = info.live.class;
     let offhand = build.slots.contains_key("offhand");
-    let mut columns: Vec<(&str, Vec<serde_json::Value>)> = GRID_COLUMNS
+    // The player's columns in display order (title, pieces, body, wearer), then the merc's.
+    let mut player: Vec<(&str, Vec<String>, u8, Wearer)> = GRID_COLUMNS
         .iter()
         .map(|&(title, slot, bodies)| {
             let wearer = if slot == "weapon" && offhand {
@@ -51,27 +54,26 @@ pub fn next_gear_json(info: &PanelInfo) -> serde_json::Value {
             } else {
                 Wearer::Player(class)
             };
-            let pieces = build.slots.get(slot).map_or(&[][..], Vec::as_slice);
-            (
-                title,
-                pieces_json(pieces, |_| (bodies.first().copied(), wearer), &next),
-            )
+            let pieces = build.slots.get(slot).cloned().unwrap_or_default();
+            (title, pieces, bodies.first().copied().unwrap_or(0), wearer)
         })
         .collect();
-    let rings = ring_pieces(Some(&build.slots));
-    columns.insert(
+    player.insert(
         RING_COLUMN_AT,
-        (
-            "Ring",
-            pieces_json(&rings, |_| (Some(6), Wearer::Player(class)), &next),
-        ),
+        ("Ring", ring_pieces(Some(&build.slots)), 6, Wearer::Player(class)),
     );
-    let merc: Vec<(&str, Vec<serde_json::Value>)> = MERC_COLUMNS
+    let columns: Vec<_> = player
+        .iter()
+        .map(|(title, pieces, body, wearer)| {
+            (*title, pieces_json(pieces, |_| (Some(*body), *wearer), &mut next))
+        })
+        .collect();
+    let merc: Vec<_> = MERC_COLUMNS
         .iter()
         .filter_map(|&(title, slot, body)| {
             let pieces = build.merc_slots.get(slot)?;
             let wearer = |piece: &str| (Some(body), Wearer::Merc(build.merc_wearer(piece, Some(body))));
-            Some((title, pieces_json(pieces, wearer, &next)))
+            Some((title, pieces_json(pieces, wearer, &mut next)))
         })
         .collect();
     let cards = |list: Vec<(&str, Vec<serde_json::Value>)>| {
@@ -94,7 +96,7 @@ pub fn next_gear_json(info: &PanelInfo) -> serde_json::Value {
 fn pieces_json(
     pieces: &[String],
     wearer: impl Fn(&str) -> (Option<u8>, Wearer),
-    next: &Next,
+    next: &mut Next,
 ) -> Vec<serde_json::Value> {
     pieces
         .iter()
@@ -103,11 +105,16 @@ fn pieces_json(
 }
 
 /// One piece: `ready` when held (`tick`: worn, owned or in the shared stash) or `craft` (a
-/// runeword whose runes and a fitting socketed base are all held, the base named), `at` when
+/// runeword whose runes and a fitting socketed base are all still in the ledger, the base
+/// named; both then leave the ledger), `at` when
 /// its level is above the character's. A runeword not ready lists its `missing` runes
 /// (`"Ber 0/1"`) and the held base (`base_owned`) or else where bases drop (`base_hint`). A
 /// piece past its leveling window leaves unless held.
-fn piece_json(piece: &str, (slot, wearer): (Option<u8>, Wearer), next: &Next) -> Option<serde_json::Value> {
+fn piece_json(
+    piece: &str,
+    (slot, wearer): (Option<u8>, Wearer),
+    next: &mut Next,
+) -> Option<serde_json::Value> {
     let info = next.info;
     let name = d2r_core::info::piece_name(piece);
     let req = d2r_core::info::piece_level(piece);
@@ -116,12 +123,18 @@ fn piece_json(piece: &str, (slot, wearer): (Option<u8>, Wearer), next: &Next) ->
         return None;
     }
     let word = d2r_core::runewords_data::lookup(name);
-    let base = word.and_then(|w| held_base(w, slot, wearer, &next.held));
+    let found = word.and_then(|w| held_base(w, slot, wearer, &next.held));
     let missing = word.map_or_else(Vec::new, |w| missing_runes(w, &next.materials));
-    let craft = match (tick, word, &base) {
-        (None, Some(w), Some(base)) if missing.is_empty() => Some(format!("craft: {} in {base}", w.name)),
+    let craft = match (tick, word, &found) {
+        (None, Some(w), Some((at, base))) if missing.is_empty() => {
+            next.held.remove(*at);
+            take_runes(w, &mut next.materials);
+            // Socket contents are unread outside runewords: a filled base looks empty.
+            Some(format!("craft: {} in {base}, if its sockets are empty", w.name))
+        }
         _ => None,
     };
+    let base = found.map(|(_, base)| base);
     let lvl = info.live.char_level.map(u32::from);
     let mut json = serde_json::json!({
         "piece": piece,
@@ -203,9 +216,9 @@ fn missing_runes(word: &Runeword, materials: &[(String, u32)]) -> Vec<String> {
 }
 
 /// The first held white or superior base with exactly `word`'s socket count that can carry it
-/// for `wearer` in body `slot`, as `"Loricated Mail 4os (base on page 1)"`.
-fn held_base(word: &Runeword, slot: Option<u8>, wearer: Wearer, held: &[Held]) -> Option<String> {
-    held.iter().find_map(|h| {
+/// for `wearer` in body `slot`: its index in `held` and `"Loricated Mail 4os (base on page 1)"`.
+fn held_base(word: &Runeword, slot: Option<u8>, wearer: Wearer, held: &[Held]) -> Option<(usize, String)> {
+    held.iter().enumerate().find_map(|(i, h)| {
         let item = &h.item;
         let code = item.code.as_deref()?;
         let fits = matches!(
@@ -226,6 +239,18 @@ fn held_base(word: &Runeword, slot: Option<u8>, wearer: Wearer, held: &[Held]) -
             Spot::Cube => "in the cube".to_owned(),
             Spot::Stash => "in the stash".to_owned(),
         };
-        Some(format!("{eth}{base} {}os (base {place})", item.sockets))
+        Some((i, format!("{eth}{base} {}os (base {place})", item.sockets)))
     })
+}
+
+/// Takes one of each rune of `word` (repeats counted) out of `materials`.
+fn take_runes(word: &Runeword, materials: &mut [(String, u32)]) {
+    for rune in word.runes {
+        if let Some((_, qty)) = materials
+            .iter_mut()
+            .find(|(name, qty)| *qty > 0 && super::gear::same_rune(name, rune))
+        {
+            *qty = qty.saturating_sub(1);
+        }
+    }
 }
