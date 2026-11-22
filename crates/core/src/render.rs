@@ -17,34 +17,27 @@ use crate::items::{CharmSize, DropKind, GemColour};
 use crate::offsets::monster_data;
 use crate::{info, session, tombs, xp};
 
-/// Exit labels in an area that gives experience ([`draw_labels`]).
+/// Exit labels in an area that gives experience.
 const LABEL_TEXT: [u8; 4] = [255, 255, 255, 255];
 
-/// Object txt ids of waypoints: every waypoint row of classic objects.txt. Live-verified: 119
-/// (Act 1 town), 156 (Act 2 outdoor, Dry Hills), 157 (Act 1 indoor, Jail 1).
+/// Object txt ids of waypoints: every waypoint row of classic objects.txt.
 pub const WAYPOINT_IDS: &[u32] = &[
     119, 145, 156, 157, 237, 238, 288, 323, 324, 398, 402, 429, 494, 496, 511, 539,
 ];
-/// A room that marks a landmark: the rooms of a level in `level_ids` whose level-preset id (lvlprest
-/// row) is in `preset_ids` get one marker per piece, at the centre of the piece's bounding box (one
-/// piece often spans several Room2 cells; a piece is the edge-connected rooms of one preset id, so
-/// two copies of a preset get a marker each): [`Marker::Landmark`] if the rule is confirmed in
-/// game, [`Marker::Suspected`] (a "?") if it is only assumed.
+/// A landmark found by room preset: in a level of `level_ids`, each piece ([`pieces`]) of rooms
+/// whose lvlprest id is in `preset_ids` gets one marker at its centre.
 #[derive(Debug)]
 pub struct LandmarkRule {
     pub level_ids: std::ops::RangeInclusive<u32>,
     pub preset_ids: std::ops::RangeInclusive<u32>,
-    /// What the landmark is (not drawn; for tests and debugging).
+    /// What the landmark is (not drawn).
     pub label: &'static str,
-    /// Seen in game; `false` for a rule extrapolated from a pattern.
+    /// Seen in game; an unconfirmed rule draws a "?" ([`Marker::Suspected`]).
     pub confirmed: bool,
     /// How a confirmed rule is drawn.
     pub style: LandmarkStyle,
-    /// `Some(txt)`: the pieces are only candidates for where quest object `txt` lies. A piece
-    /// holding a waypoint preset is skipped, and so is a piece whose rooms were all seen loaded
-    /// ([`Room::loaded`] or [`Room::seen_loaded`]) without object `txt` in the snapshot: a loaded
-    /// room's preset list is complete, so the object is not there. Once object `txt`'s preset is
-    /// in the snapshot the rule draws nothing (the exact [`QUEST_OBJECTS`] marker shows instead).
+    /// `Some(txt)`: the pieces are only candidates for where quest object `txt` lies; see
+    /// [`ruled_out`]. Once the object's preset is loaded its own marker replaces them all.
     pub candidates_for: Option<u32>,
 }
 
@@ -55,59 +48,14 @@ pub enum LandmarkStyle {
     Star,
     /// Stairs down to a deeper level ([`Marker::StairsDown`]).
     StairsDown,
-    /// A gold worm ([`Marker::Worm`]): Coldworm's chamber, the most hated spot in act 2 (user's
-    /// choice, 2026-11-15).
+    /// A gold worm ([`Marker::Worm`]).
     Worm,
-    /// A mini orifice ([`Marker::Orifice`]): the real Tal Rasha tomb's staff hole, apart from the
-    /// fake tombs' treasure stars (user's choice, 2026-11-16).
+    /// A mini orifice ([`Marker::Orifice`]).
     Orifice,
 }
 
-/// Landmark rules.
-/// - Arcane Sanctuary (74): the arm end holding the Summoner's platform has its own preset per
-///   direction: 525 (+x), 526 (−x), 527 (−y), 528 (+y), all four confirmed in game (2026-11-15).
-///   Ordinary arm ends use other ids (510, 511, 513, 517 seen).
-/// - Tal Rasha's tombs (66–72): the real tomb's orifice chamber is lvlprest "Tomb Talrasha W/E/S/N"
-///   (460–463), only ever placed in the real tomb. Confirmed: 462 in tomb 72 (orifice object 152
-///   inside it) and 460 in tomb 69 (user stood on the orifice, Nightmare 2026-11-16); 461 and 463
-///   confirmed by the family name (2026-11-17). A fake tomb's chest chamber is "Tomb Chest" (472–475;
-///   473 seen in tombs 71 and 68, 472 in tomb 67). All four drawn as a gold star at the user's
-///   request (2026-11-16): nothing else in the tombs is a landmark. The 462 chamber spans 4 Room2 cells. (An earlier level+390 guess was
-///   wrong: 456–459 are the Halls of the Dead cube pieces.)
-/// - Halls of the Dead Level 3 (60): lvlprest "Tomb Cube W/E/S/N" (456–459) holds the Horadric Cube
-///   chest (object 354) and Bloodwitch's spawn. Confirmed: 459 (chest inside it, 2026-11-15).
-/// - Flayer Jungle (78): the Gidbinn altar (object 252) lies in a pygmy-village clearing, lvlprest
-///   595–604 "Act 3 - Clearing Pygmy W/E/EW/S/SW/SE/N/NW/NE/NS" (one variant per exit direction,
-///   16 Room2 cells each). A jungle holds several of them, and the altar is in only one: 602 held
-///   it on 2026-11-15 (player 5 tiles from the altar; 601 held the waypoint), but on 2026-11-20
-///   (user report, Nightmare) the jungle had 595 (waypoint object 237 inside), 600 and 602, and
-///   602 had no altar. So every clearing without the waypoint is a candidate, drawn as a gold
-///   star (user's choice, 2026-11-20); a clearing whose rooms were all seen loaded without the
-///   altar is ruled out for the rest of the game (the session remembers the rooms), and once the
-///   altar's preset is loaded only its exact quest-object star shows.
-/// - Kurast Sewers Level 1 (92): the sewer lever (object 367) and the stairs down (object 366) both
-///   sat in room preset 739 (live 2026-11-15, one game; the user then went down to level 2).
-/// - Act 1 caves, level 1 (Cave 9, Underground Passage 10, Hole 11, Pit 12): lvlprest names the
-///   pieces "Cave Next W/E/S/N" (87–90, exit to the next outdoor area) and "Cave Down W/E/S/N"
-///   (91–94, stairs to level 2); Underground Passage 1 had one 90 and one 91 piece (2026-11-15).
-///   Confirmed: the 90 piece holds the exit to Dark Wood (room link to level 5, user stood on it),
-///   drawn as a gold star because it is where the user wants to go (2026-11-15); the 91 piece holds
-///   the stairs to Underground Passage 2 (room link to level 14), drawn as a staircase.
-/// - Stony Field (4): lvlprest 160 "Act 1 - Cairn Stones", the stone circle; the five stones and the
-///   portal stone (objects 17–22) lay inside it (live 2026-11-15).
-/// - Barracks (28): lvlprest "Barracks Forge W/E/S/N" (202–205) holds the Smith and the Horadric
-///   Malus; confirmed for 204 and 203 (Smith preset 771 and malus object 108 inside it, two games
-///   2026-11-15).
-/// - Lut Gholein sewers (47–49): lvlprest "Sewer Radament's Lair W/E/S/N" (341–344) in level 3 (49;
-///   341, 343 and 344 confirmed in game 2026-11-15, Radament (txt 229) standing in 344); stairs pieces 338 (level 1, link to 48) and 337 (level 2, link to 49) confirmed and "Sewer Next W/E/S/N" (337–340, stairs down) in levels 1–2.
-/// - Maggot Lair (62–64): lvlprest "Lair Next W/E/S/N" (501–504) is the stairs down in levels 1–2
-///   (drawn as stairs at once: the "Next" = stairs-down naming is confirmed for act 1 caves and the
-///   sewers); "Lair Tight Spot S" (509, MagQueen.ds1) in level 3 is Coldworm's chamber with the staff
-///   chest (confirmed in game 2026-11-15).
-/// - Dark Wood (5): lvlprest 161 "Act 1 - Inifus" (funktree.ds1), the Tree of Inifuss (confirmed in
-///   game 2026-11-15).
-/// - Black Marsh (6): lvlprest 163 "Act 1 - Tower 1" (Tower1.ds1), the Forgotten Tower entrance
-///   (confirmed in game 2026-11-15).
+/// The landmark rules. The W/E/S/N variants of a lvlprest family ("Cave Next W/E/S/N") count as
+/// confirmed once one of them is: the letter only says where in the piece the feature sits.
 pub const LANDMARKS: &[LandmarkRule] = &[
     LandmarkRule {
         level_ids: 62..=63,
@@ -153,8 +101,6 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 49..=49,
         preset_ids: 342..=342,
         label: "radament's lair (E)",
-        // W/E/S/N name family, 341/343/344 live-confirmed: the direction letter only says where
-        // in the piece the feature sits (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::Star,
         candidates_for: None,
@@ -179,7 +125,6 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 47..=48,
         preset_ids: 339..=340,
         label: "sewer stairs down (S/N)",
-        // "Sewer Next W/E/S/N" family, 337/338 live-confirmed (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::StairsDown,
         candidates_for: None,
@@ -196,7 +141,6 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 28..=28,
         preset_ids: 202..=202,
         label: "smith (forge W)",
-        // "Barracks Forge W/E/S/N" family, 203/204 live-confirmed (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::Star,
         candidates_for: None,
@@ -229,7 +173,6 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 9..=12,
         preset_ids: 87..=89,
         label: "cave exit to the next area",
-        // "Cave Next W/E/S/N" family, 90 live-confirmed (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::Star,
         candidates_for: None,
@@ -246,9 +189,6 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 9..=12,
         preset_ids: 92..=94,
         label: "cave stairs down",
-        // "Cave Down W/E/S/N" family, 91 live-confirmed. Seen again live 2026-11-17: the
-        // Underground Passage 1 stairs to level 2 were a 94 piece carrying the room link to
-        // level 14.
         confirmed: true,
         style: LandmarkStyle::StairsDown,
         candidates_for: None,
@@ -305,7 +245,6 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 60..=60,
         preset_ids: 456..=458,
         label: "horadric cube (W/E/S)",
-        // "Tomb Cube W/E/S/N" family, 459 live-confirmed with the chest inside it (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::Star,
         candidates_for: None,
@@ -322,7 +261,6 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 66..=72,
         preset_ids: 461..=461,
         label: "orifice (E)",
-        // "Tomb Talrasha W/E/S/N" family, 460/462 live-confirmed (2026-11-17).
         confirmed: true,
         style: LandmarkStyle::Orifice,
         candidates_for: None,
@@ -339,8 +277,7 @@ pub const LANDMARKS: &[LandmarkRule] = &[
         level_ids: 78..=78,
         preset_ids: 595..=604,
         label: "gidbinn",
-        // Which clearing holds the altar varies per game (2026-11-20): candidates, ruled out as
-        // they are explored. Confirmed: the altar lies in a clearing (two games).
+        // The altar lies in one of the pygmy clearings, a different one each game.
         confirmed: true,
         style: LandmarkStyle::Star,
         candidates_for: Some(252),
@@ -355,53 +292,31 @@ pub const LANDMARKS: &[LandmarkRule] = &[
     },
 ];
 
-/// Quest objects (object txt ids from objects.txt, which matched live) drawn where their preset
-/// is, once the room holding it is loaded. The id alone identifies them, so they are confirmed.
+/// Quest objects (objects.txt ids) drawn as a small star where their preset is.
 pub const QUEST_OBJECTS: &[(u32, &str)] = &[
-    // Barracks (28), live 2026-11-15: the Horadric Malus stand, inside the Smith's forge piece 204.
     (108, "horadric malus"),
-    // Halls of the Dead Level 3 (60), live 2026-11-15: the Horadric Cube chest, next to
-    // Bloodwitch's spawn preset 762.
     (354, "horadric cube chest"),
-    // Maggot Lair Level 3 (64), live 2026-11-15: the Staff of Kings chest (OperateFn 41) in
-    // Coldworm's chamber 509, next to his spawn preset 766.
     (356, "staff of kings chest"),
     (152, "orifice"),
     (252, "gidbinn altar"),
     (366, "sewer stairs"),
     (367, "sewer lever"),
-    // River of Flame (107), live 2026-11-15: at the forge, 25 tiles from Hephasto's superunique
-    // preset 792 (superuniques.txt calls him "The Feature Creep").
     (376, "hellforge"),
-    // Chaos Sanctuary (108): the five Diablo seals (objects.txt "Seal", OperateFn 52-56); the seal
-    // bosses are superunique presets 787-789 (Infector of Souls, Lord De Seis, Grand Vizier).
     (392, "diablo seal"),
     (393, "diablo seal"),
     (394, "diablo seal"),
     (395, "diablo seal"),
     (396, "diablo seal"),
-    // Frozen River (114): Anya's spot is object 460, a dummy "Drehya Start Outside Town" (Drehya =
-    // Anya's internal name), live 2026-11-15 next to Frozenstein's preset 810. Object 558 "frozen
-    // anya" (the ice figure) is not in the level layout. The dummy can't be operated, so the star
-    // stays after she is freed.
+    // A dummy object that can't be operated, so the star stays after Anya is freed.
     (460, "anya"),
 ];
 
-/// Quest monster presets (monster preset txt id, label) drawn like a quest object until the
-/// monster is seen dead near its preset (see [`crate::session`]).
+/// Quest monster presets (monster preset txt id = monstats hcIdx) drawn like a quest object
+/// until the monster is seen dead near its preset (see [`crate::session`]).
 pub const QUEST_MONSTERS: &[(u32, &str)] = &[
-    // Frigid Highlands (111, data name "Rigid Highlands"), quest "Rescue on Mount Arreat": the
-    // breakable door of each barbarian prisoner's cage is the monster `prisondoor` (monstats
-    // hcIdx 434). Verified live: every cage has monster preset 434, so a normal monster's preset
-    // txt id is its hcIdx. The cage itself is object preset 473 ("cagedwussie1"), ~10 tiles
-    // from the door; deliberately not in QUEST_OBJECTS so a cage gets one marker, not two.
-    // Monster presets 432/433 (Barricade Door) and 435 (Barricade Tower) are siege barricades,
-    // not prisoners: dropped. Still unverified: the live door's txt (hcIdx 434) and its dead
-    // mode once broken, which hide the marker.
+    // The breakable door of a barbarian prisoner's cage; the cage object (473) is left out so a
+    // cage gets one marker.
     (434, "prison door"),
-    // Halls of Vaught (124): Nihlathak, monstats `nihlathakboss` hcIdx 526 (preset txt = hcIdx, as
-    // verified for the prison door). Not yet seen live. The level is one piece type (864), so no
-    // landmark rule can find his platform; this marker appears once his preset is loaded.
     (526, "nihlathak"),
 ];
 
@@ -423,16 +338,12 @@ pub fn quest_object(txt: u32) -> Option<&'static str> {
         .map(|&(_, label)| label)
 }
 
-/// Waypoint, well and mini orifice labels. Star markers (quest objects and landmark stars) have
-/// no tag: the star says enough (user request, 2026-11-18). Monsters, drops, stairs and cave exits
-/// (the exit label names them) have none either. Shrines: [`crate::config::SHRINE_TAGS`].
+/// Marker tags ([`marker_tag`]); shrines take theirs from [`crate::config::SHRINE_TAGS`].
 const WAYPOINT_TAG: &str = "wp";
 const WELL_TAG: &str = "well";
 const ORIFICE_TAG: &str = "orif";
 
-/// The map label of `marker` and its rank (lower wins a crowded spot; exit labels are rank 0):
-/// waypoint 1, mini orifice 2, shrine 3, well 4. `None` for stars, monsters, drops, exits and the
-/// player.
+/// The map tag of `marker` and its rank (lower wins a crowded spot; exit labels are rank 0).
 fn marker_tag(marker: Marker) -> Option<(u8, &'static str)> {
     match marker {
         Marker::Waypoint => Some((1, WAYPOINT_TAG)),
@@ -454,73 +365,54 @@ const FALLBACK_SPAN: u32 = 50;
 type Rgba = [u8; 4];
 const ROOM: Rgba = [70, 74, 84, 120];
 const ROOM_LOADED: Rgba = [125, 130, 142, 160];
-/// The Moo Moo Farm trail ([`Snapshot::trail`]): a faint pink, apart from the grey room fill.
+/// The Moo Moo Farm trail ([`Snapshot::trail`]).
 const TRAIL: Rgba = [255, 200, 225, 90];
 const TRAIL_WIDTH: f32 = 3.0;
-/// Consecutive trail points farther apart than this (tiles) were a teleport, waypoint or
-/// portal: the line breaks there instead of drawing a long jump.
+/// Tiles between consecutive trail points beyond which the player teleported: the line breaks.
 const TRAIL_BREAK: f64 = 30.0;
 const MARKER_OUTLINE: Rgba = [0, 0, 0, 220];
-/// Landmark star: gold fill, a thick dark outline and a gold halo ring around it.
 const LANDMARK_GOLD: Rgba = [255, 200, 30, 255];
-/// Halo ring radius in px, beyond the star's tips.
+/// Radius in px of the landmark star's halo ring.
 const LANDMARK_RING: f32 = 13.0;
-/// "?" marker for an unconfirmed landmark: a light gold glyph on a dark translucent disc.
+/// The "?" of an unconfirmed landmark: glyph colour, disc colour and disc radius.
 const SUSPECT_TEXT: Rgba = [255, 235, 150, 255];
 const SUSPECT_DISC: Rgba = [0, 0, 0, 150];
 const SUSPECT_DISC_RADIUS: f32 = 13.0;
-/// Font size; the "?" ink is about 16 px tall at this size.
 const SUSPECT_GLYPH_PX: f32 = 22.0;
-/// Unique items, and unique charms.
 const UNIQUE_GOLD: Rgba = [235, 190, 60, 255];
-/// Charms: a light blue, apart from the rune orange and the entry teal.
 const CHARM_BLUE: Rgba = [120, 170, 255, 255];
-/// A base shown only for a valuables rule (white 4os Crystal Sword, ...).
 const BASE_WHITE: Rgba = [240, 240, 240, 255];
-/// Valuables ring: radius = drop marker size + this, stroke width, and the dash pattern
-/// (on, off px) of an uncertain match.
+/// Drop mark ring: px between the drop marker and the ring, stroke width, and the dash
+/// pattern (on, off px) of an uncertain match.
 const RING_GAP: f32 = 4.0;
 const RING_WIDTH: f32 = 2.0;
 const RING_DASH: [f32; 2] = [3.0, 2.5];
-/// Keep and farm rings ("for me"): a mint green, apart from the set items' pure green diamond,
-/// the player's green dot and the trade tiers' red / orange / yellow.
+/// Keep and farm rings.
 const KEEP_GREEN: Rgba = [60, 240, 150, 255];
-/// The farm ring's star: size (tip radius, px), sitting on the ring at its upper right.
+/// Tip radius in px of the farm ring's star.
 const FARM_STAR: f32 = 3.5;
-/// A marked drop's tag ([`Mark::label`]: `5os`, `Shae`, `KoT`): text size in px, smaller than
-/// the exit names, and the px between the ring and the tag's box, which clears the ring's
-/// stroke and the star on it.
+/// A marked drop's tag ([`Mark::label`]): text size in px, and px between the ring and the tag.
 const DROP_LABEL_PX: f32 = 11.0;
 const DROP_LABEL_CLEAR: f32 = 3.0;
-/// The lowest trade tier whose drops get the gold coin ([`high_value`]): worth a lot sold to
-/// other players (user request, 2026-11-22: "a gold symbol for something that has a high selling
-/// value"; there is no vendor price model, the valuables tier stands in for it).
+/// The lowest trade tier whose drops get the gold coin ([`high_value`]).
 const COIN_MIN_TIER: Tier = Tier::A;
-/// The gold coin on a high-value drop's ring: radius in px, sitting on the ring at its upper
-/// left (the farm star sits at the upper right), gold with a darker rim.
+/// The gold coin on a high-value drop's ring: radius in px, colours and rim width.
 const COIN_RADIUS: f32 = 3.0;
 const COIN_GOLD: Rgba = [255, 205, 40, 255];
 const COIN_RIM: Rgba = [140, 90, 0, 255];
 const COIN_RIM_WIDTH: f32 = 1.5;
-/// Live elites: the dot and the superunique and boss skulls.
 const ELITE_RED: Rgba = [230, 30, 30, 255];
-/// Skull icons: the dark outline is stroked under the fill, so about 1 px of it shows around the
-/// skull and it darkens the small eye holes.
+/// Stroked under the fill, so about 1 px of it shows around the skull.
 const SKULL_OUTLINE_WIDTH: f32 = 2.0;
-/// Most distance in tiles between a live superunique or boss and a superunique or quest monster
-/// preset whose marker it replaces for the frame: the live icon is drawn, the preset dot not.
-/// A bit above `session`'s bind radius (15), as the monster moves around its spawn while alive;
-/// once it is dead the session hides the preset for the game.
+/// Tiles within which a live superunique or boss hides its spawn preset's marker; a bit above
+/// `session`'s bind radius (15), as the monster wanders around its spawn.
 const LIVE_REPLACES_PRESET_RADIUS: f64 = 20.0;
-/// Shrine dots have a white outline, apart from every other marker's dark one.
 const SHRINE_OUTLINE: Rgba = [255, 255, 255, 230];
-/// Well: a hollow cyan ring (the entry is a teal square) on a dark backing ring.
 const WELL_CYAN: Rgba = [0, 230, 255, 255];
 const WELL_RING_WIDTH: f32 = 2.0;
 const WELL_BACKING_WIDTH: f32 = 3.5;
 
-/// Outline shape of a marker. Monsters and presets are circles (the level entry a square); drops
-/// are diamonds and squares.
+/// Outline shape of a marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     Circle,
@@ -530,16 +422,13 @@ pub enum Shape {
     Square,
     /// Five-pointed star, one tip up; the size is the centre-to-tip distance.
     Star,
-    /// Isosceles triangle, tip up unless drawn with a direction ([`triangle_path`]); the size is
-    /// the centre-to-tip distance.
+    /// Isosceles triangle ([`triangle_path`]); the size is the centre-to-tip distance.
     Triangle,
-    /// Death skull: cranium, jaw, two eye holes ([`skull_path`]); the size is a quarter of its
-    /// height and width, so 3.5 gives the 8 px footprint of an elite dot.
+    /// Death skull ([`skull_path`]); the size is a quarter of its height and width.
     Skull,
     /// [`Shape::Skull`] with two horns, the demon skull of a boss.
     HornedSkull,
-    /// A wavy worm body (an open centre line, stroked; see [`worm_path`]) with a round head on the
-    /// right; the size is half its length.
+    /// A wavy worm ([`worm_path`]); the size is half its length.
     Worm,
     /// Three steps descending to the right ([`stairs_path`]); the size is half the side.
     Stairs,
@@ -554,60 +443,42 @@ pub enum Marker {
     StairsDown,
     /// The tile preset the player entered the level by (see `Session::apply`).
     Entry,
-    /// A walk-through border to an adjacent level (see [`border_exits`]): a small triangle on
-    /// the shared border pointing from this level's rooms toward the other level's. `dir` is that
-    /// direction in world tiles (unnormalised); `entry` if the player came from that level (teal
-    /// instead of the exit purple).
+    /// A walk-through border to an adjacent level ([`border_exits`]): a triangle pointing along
+    /// `dir` (world tiles, unnormalised); `entry` if the player came from that level.
     BorderExit {
         dir: (i32, i32),
         entry: bool,
     },
     Waypoint,
-    /// Monster preset: superunique or other special spawn, with the superunique's name when its
-    /// txt id is in the table (see `session::superunique`). Not drawn as text; kept for later use.
+    /// Monster preset: a superunique (with its name if known) or other special spawn.
     Special(Option<&'static str>),
-    /// A room an unconfirmed landmark rule matched (see [`LANDMARKS`]), with the rule's label:
-    /// drawn as a "?".
+    /// A room an unconfirmed landmark rule matched, with the rule's label: drawn as a "?".
     Suspected(&'static str),
-    /// A landmark room (see [`LANDMARKS`]), with the rule's label. Drawn below live elites so the
-    /// boss standing on it stays visible.
+    /// A landmark room, with the rule's label. Below the live elites, so a boss on it shows.
     Landmark(&'static str),
-    /// A confirmed [`LandmarkStyle::Worm`] landmark: a wavy gold worm with a head, landmark size.
     Worm,
-    /// A confirmed [`LandmarkStyle::Orifice`] landmark: a dark hole in a gold ring with the staff
-    /// standing in it.
     Orifice,
-    /// A quest object preset (see [`QUEST_OBJECTS`]) or quest monster preset (see
-    /// [`QUEST_MONSTERS`]), with its label: a small gold star without
-    /// halo, drawn above the landmark star so both show when they overlap.
+    /// A quest object or quest monster preset, with its label. Above the landmark star, so both
+    /// show when they overlap.
     QuestObject(&'static str),
-    /// A well near the player (live object): a hollow cyan ring. Wells refill: drawn used or not.
+    /// A well (wells refill: drawn used or not).
     Well,
-    /// An unused shrine of a type the config shows (live object), with its shrines.txt code.
+    /// An unused shrine, with its shrines.txt code.
     Shrine(u8),
-    /// Any other living monster, only on levels in [`ALL_MONSTER_LEVELS`]: a small dim red dot
-    /// below the elites.
+    /// Any other living monster, only on levels in [`ALL_MONSTER_LEVELS`].
     Monster,
     /// Live champion or unique monster.
     Elite,
-    /// Live superunique (`MonsterData` flag 0x02): a red death skull.
     Superunique,
-    /// Live quest boss ([`BOSS_MONSTERS`](crate::levels_data::BOSS_MONSTERS) by txt id): a red
-    /// horned skull.
+    /// Live quest boss ([`BOSS_MONSTERS`](crate::levels_data::BOSS_MONSTERS)).
     Boss,
-    /// The local player's mercenary (`MonsterData` owner id, unverified hypothesis): a pale
-    /// green dot, drawn below the player.
+    /// The local player's mercenary.
     Merc,
-    /// The player. Drawn below drops and rings: on big levels a fresh drop lies within a pixel or
-    /// two of the player and would otherwise be hidden (live, Bloody Foothills, a large charm 3.6
-    /// tiles away).
+    /// The player. Below the drops: on big levels a fresh drop lies within a pixel of the player.
     Player,
-    /// An item on the ground worth picking up.
     Drop(DropKind),
-    /// A mark around the drop marker of `kind` ([`crate::guidance::Mark`]): a ring in the
-    /// colour of its [`RingLook`], dashed when the match is uncertain, with a gold coin on it
-    /// when the drop sells for a lot ([`high_value`]). Drawn after all drop markers, so no drop
-    /// hides a ring.
+    /// The mark ring around the drop marker of `kind`, with a gold coin if the drop sells for a
+    /// lot ([`high_value`]). After all drops, so no drop hides a ring.
     Ring {
         kind: DropKind,
         look: RingLook,
@@ -616,14 +487,13 @@ pub enum Marker {
     },
 }
 
-/// How a drop mark looks: "for me" (green) apart from "for trade" (the tier colours).
+/// How a drop mark looks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RingLook {
-    /// For the player's own builds: a green ring.
+    /// For the player's own builds.
     Keep,
-    /// A still-missing farm-list item: the green ring with a small green star on it.
+    /// A still-missing farm-list item: the keep ring with a star on it.
     Farm,
-    /// Worth trading: S red, A orange, B yellow.
     Trade(Tier),
 }
 
@@ -652,7 +522,6 @@ impl Marker {
         match self {
             Self::Exit => ([170, 90, 255, 255], 5.0, Shape::Circle),
             Self::Entry => ([40, 200, 200, 255], 4.5, Shape::Square),
-            // Size 7: about 11 px long with the outline; at 4 it was barely visible (user, 2026-11-15).
             Self::StairsDown => (Self::Exit.style().0, 6.0, Shape::Stairs),
             Self::BorderExit { entry: false, .. } => (Self::Exit.style().0, 7.0, Shape::Triangle),
             Self::BorderExit { entry: true, .. } => (Self::Entry.style().0, 7.0, Shape::Triangle),
@@ -689,22 +558,24 @@ impl Marker {
                 (look.colour(), radius, Shape::Circle)
             }
             Self::Merc => ([150, 255, 190, 255], 2.5, Shape::Circle),
-            // Bigger than the merc and the drops (user, 2026-11-20: "make my own point a little
-            // bit bigger"); redrawn after the labels so it is always in front.
             Self::Player => ([40, 255, 60, 255], 3.5, Shape::Circle),
         }
     }
 }
 
-/// Fill colour of a shrine by shrines.txt code: the five default ones apart from each other and from
-/// the waypoint blue, exit purple and elite red; other types a neutral grey.
+/// Fill colour of a shrine by shrines.txt code; a neutral grey for the types without their own.
 const fn shrine_colour(code: u8) -> Rgba {
+    const REFILLING: u8 = 1;
+    const SKILL: u8 = 12;
+    const STAMINA: u8 = 14;
+    const GEM: u8 = 18;
+    const MONSTER: u8 = 20;
     match code {
-        1 => [120, 210, 255, 255],  // refilling: light blue
-        12 => [255, 80, 200, 255],  // skill: magenta
-        14 => [180, 235, 30, 255],  // stamina: yellow-green
-        18 => [250, 250, 250, 255], // gem: white
-        20 => [140, 0, 20, 255],    // monster: dark red
+        REFILLING => [120, 210, 255, 255],
+        SKILL => [255, 80, 200, 255],
+        STAMINA => [180, 235, 30, 255],
+        GEM => [250, 250, 250, 255],
+        MONSTER => [140, 0, 20, 255],
         _ => [150, 150, 150, 255],
     }
 }
@@ -741,7 +612,6 @@ impl View {
     pub fn fit(bounds: Bounds, width: u32, height: u32) -> Self {
         let (min_x, min_y) = (f64::from(bounds.min_x), f64::from(bounds.min_y));
         let (max_x, max_y) = (f64::from(bounds.max_x), f64::from(bounds.max_y));
-        // The extremes of x - y and (x + y) / 2 over the box are at its corners.
         let (left, right) = (min_x - max_y, max_x - min_y);
         let (top, bottom) = (f64::midpoint(min_x, min_y), f64::midpoint(max_x, max_y));
         let (w, h) = (f64::from(width), f64::from(height));
@@ -803,23 +673,18 @@ pub fn level_bounds(snap: &Snapshot) -> Bounds {
     }
 }
 
-/// Levels where every living enemy is drawn (not hirelings, summons or critters, see
-/// `NON_HOSTILE_MONSTERS`), not just elites (user requests, 2026-11-15): Den of Evil (8), whose
-/// quest needs every monster killed, and the Moo Moo Farm (39), to see where the cow packs are.
+/// Levels where every living enemy is drawn, not just elites: Den of Evil (its quest needs every
+/// monster killed) and the Moo Moo Farm.
 pub const ALL_MONSTER_LEVELS: &[u32] = &[8, 39];
 
-/// Live superunique/champion/unique, not dead. Minion-only (0x10) and normal (0) monsters are skipped.
-///
-/// Allies never count: assassin traps (e.g. Wake of Fire, txt 410) carry the unique flag 0x08
-/// (live 2026-11-15), so every `NON_HOSTILE_MONSTERS` id is skipped.
+/// A live superunique, champion or unique enemy. Allies are skipped by txt id: assassin traps
+/// carry the unique flag.
 #[must_use]
 pub fn is_elite(m: &Monster) -> bool {
     m.flags & ELITE_FLAGS != 0 && !m.is_dead() && !crate::levels_data::NON_HOSTILE_MONSTERS.contains(&m.txt)
 }
 
-/// The icon marker of a live monster: [`Marker::Boss`] for a quest boss by txt id (whatever its
-/// flags: the boss check comes first), else [`Marker::Superunique`] or [`Marker::Elite`] for an
-/// elite (see [`is_elite`]). `None` for a dead or ordinary monster.
+/// The icon marker of a live boss (by txt id, whatever its flags) or elite ([`is_elite`]).
 #[must_use]
 pub fn elite_marker(m: &Monster) -> Option<Marker> {
     if m.is_dead() {
@@ -835,9 +700,8 @@ pub fn elite_marker(m: &Monster) -> Option<Marker> {
     }
 }
 
-/// True if a preset drawn as `marker` at (`x`, `y`) is a superunique or quest monster spawn that
-/// one of the live superunique or boss positions `live` stands within
-/// [`LIVE_REPLACES_PRESET_RADIUS`] of: the live icon shows instead.
+/// Whether the monster spawn preset `p`, drawn as `marker`, has a live superunique or boss of
+/// `live` within [`LIVE_REPLACES_PRESET_RADIUS`]: the live icon shows instead.
 fn replaced_by_live(p: &Preset, marker: Marker, live: &[(f64, f64)]) -> bool {
     p.kind == PresetKind::Monster
         && matches!(marker, Marker::Special(_) | Marker::QuestObject(_))
@@ -863,51 +727,69 @@ pub fn preset_marker(p: &Preset) -> Option<Marker> {
 
 /// One landmark marker per piece matched by a rule in `rules`, at the centre of the piece's
 /// bounding box (see [`LandmarkRule`]).
+#[must_use]
 pub fn landmarks(snap: &Snapshot, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f64)> {
     let level = &snap.level;
-    let has_object = |txt: u32| {
-        snap.presets
-            .iter()
-            .any(|p| p.kind == PresetKind::Object && p.txt == txt)
-    };
-    let waypoint_in = |s: Span| {
-        snap.presets.iter().any(|p| {
-            p.kind == PresetKind::Object
-                && WAYPOINT_IDS.contains(&p.txt)
-                && (s.x0..s.x1).contains(&p.x)
-                && (s.y0..s.y1).contains(&p.y)
-        })
-    };
     let mut out = Vec::new();
     for rule in rules.iter().filter(|rule| rule.level_ids.contains(&level.id)) {
-        // Past this check object `txt` is nowhere in the snapshot: a piece seen whole lacks it.
-        if rule.candidates_for.is_some_and(has_object) {
+        if rule.candidates_for.is_some_and(|txt| has_object(snap, txt)) {
             continue;
         }
-        let marker = match (rule.confirmed, rule.style) {
-            (false, _) => Marker::Suspected(rule.label),
-            (true, LandmarkStyle::Star) => Marker::Landmark(rule.label),
-            (true, LandmarkStyle::StairsDown) => Marker::StairsDown,
-            (true, LandmarkStyle::Worm) => Marker::Worm,
-            (true, LandmarkStyle::Orifice) => Marker::Orifice,
-        };
+        let marker = rule_marker(rule);
         for piece in pieces(&level.rooms, &rule.preset_ids) {
-            // The quest object never shares the waypoint's piece, and a piece seen whole without
-            // it doesn't hold it: skip those candidates.
-            if rule.candidates_for.is_some()
-                && (piece.iter().any(|&(s, _)| waypoint_in(s)) || piece.iter().all(|&(_, seen)| seen))
-            {
+            if rule.candidates_for.is_some() && ruled_out(snap, &piece) {
                 continue;
             }
-            let Some(b) = piece.into_iter().map(|(s, _)| s).reduce(Span::union) else {
-                continue;
-            };
-            let x = f64::midpoint(f64::from(b.x0), f64::from(b.x1));
-            let y = f64::midpoint(f64::from(b.y0), f64::from(b.y1));
-            out.push((marker, x, y));
+            if let Some((x, y)) = piece_centre(&piece) {
+                out.push((marker, x, y));
+            }
         }
     }
     out
+}
+
+/// The marker a piece matched by `rule` gets.
+const fn rule_marker(rule: &LandmarkRule) -> Marker {
+    match (rule.confirmed, rule.style) {
+        (false, _) => Marker::Suspected(rule.label),
+        (true, LandmarkStyle::Star) => Marker::Landmark(rule.label),
+        (true, LandmarkStyle::StairsDown) => Marker::StairsDown,
+        (true, LandmarkStyle::Worm) => Marker::Worm,
+        (true, LandmarkStyle::Orifice) => Marker::Orifice,
+    }
+}
+
+/// Whether an object preset of txt id `txt` is in the snapshot.
+fn has_object(snap: &Snapshot, txt: u32) -> bool {
+    snap.presets
+        .iter()
+        .any(|p| p.kind == PresetKind::Object && p.txt == txt)
+}
+
+/// Whether a candidate piece can't hold the quest object the snapshot lacks: it holds the
+/// waypoint (the two never share a piece), or all its rooms were seen loaded (a loaded room's
+/// preset list is complete).
+fn ruled_out(snap: &Snapshot, piece: &[(Span, bool)]) -> bool {
+    piece.iter().any(|&(s, _)| waypoint_in(snap, s)) || piece.iter().all(|&(_, seen)| seen)
+}
+
+/// Whether a waypoint preset lies in `s`.
+fn waypoint_in(snap: &Snapshot, s: Span) -> bool {
+    snap.presets.iter().any(|p| {
+        p.kind == PresetKind::Object
+            && WAYPOINT_IDS.contains(&p.txt)
+            && (s.x0..s.x1).contains(&p.x)
+            && (s.y0..s.y1).contains(&p.y)
+    })
+}
+
+/// The centre (world tiles) of a piece's bounding box; `None` for an empty piece.
+fn piece_centre(piece: &[(Span, bool)]) -> Option<(f64, f64)> {
+    let b = piece.iter().map(|&(s, _)| s).reduce(Span::union)?;
+    Some((
+        f64::midpoint(f64::from(b.x0), f64::from(b.x1)),
+        f64::midpoint(f64::from(b.y0), f64::from(b.y1)),
+    ))
 }
 
 /// Whether a room of level `level` with level-preset id `preset` belongs to a
@@ -923,8 +805,8 @@ pub fn candidate_room(level: u32, preset: Option<u32>) -> bool {
 }
 
 /// The rooms of `rooms` whose preset id is in `ids`, grouped into pieces: rooms of one preset id
-/// joined through shared edges (a corner touch does not join). Pieces come in room order; each
-/// room comes with whether it is or was seen loaded.
+/// joined through shared edges ([`Span::shares_edge`]). Pieces come in room order; each room
+/// comes with whether it is or was seen loaded.
 fn pieces(rooms: &[Room], ids: &std::ops::RangeInclusive<u32>) -> Vec<Vec<(Span, bool)>> {
     let rooms: Vec<(u32, Span, bool)> = rooms
         .iter()
@@ -939,35 +821,30 @@ fn pieces(rooms: &[Room], ids: &std::ops::RangeInclusive<u32>) -> Vec<Vec<(Span,
             Some((id, span, r.loaded || r.seen_loaded))
         })
         .collect();
-    // Two spans share an edge: they touch along one axis and overlap (by more than a point) along
-    // the other.
-    let joined = |a: Span, b: Span| {
-        let x_overlap = a.x0 < b.x1 && b.x0 < a.x1;
-        let y_overlap = a.y0 < b.y1 && b.y0 < a.y1;
-        let x_touch = a.x1 == b.x0 || b.x1 == a.x0;
-        let y_touch = a.y1 == b.y0 || b.y1 == a.y0;
-        (x_overlap && (y_overlap || y_touch)) || (y_overlap && x_touch)
-    };
-    // Grow each piece from its first room until no remaining room of its id shares an edge with
-    // it. A level has at most a few hundred rooms, so the repeated scans are cheap.
     let mut rest = rooms;
     rest.reverse();
     let mut out = Vec::new();
     while let Some((id, seed, seen)) = rest.pop() {
         let mut piece = vec![(seed, seen)];
-        loop {
-            let (grown, keep): (Vec<_>, Vec<_>) = rest
-                .into_iter()
-                .partition(|&(rid, r, _)| rid == id && piece.iter().any(|&(p, _)| joined(p, r)));
-            rest = keep;
-            if grown.is_empty() {
-                break;
-            }
-            piece.extend(grown.into_iter().map(|(_, r, seen)| (r, seen)));
-        }
+        grow_piece(id, &mut piece, &mut rest);
         out.push(piece);
     }
     out
+}
+
+/// Moves the rooms of `rest` with preset `id` that share an edge with `piece` into it, until
+/// none is left. A level has at most a few hundred rooms, so the repeated scans are cheap.
+fn grow_piece(id: u32, piece: &mut Vec<(Span, bool)>, rest: &mut Vec<(u32, Span, bool)>) {
+    loop {
+        let (grown, keep): (Vec<_>, Vec<_>) = std::mem::take(rest)
+            .into_iter()
+            .partition(|&(rid, r, _)| rid == id && piece.iter().any(|&(p, _)| p.shares_edge(r)));
+        *rest = keep;
+        if grown.is_empty() {
+            return;
+        }
+        piece.extend(grown.into_iter().map(|(_, r, seen)| (r, seen)));
+    }
 }
 
 /// A world-tile box, `max` exclusive.
@@ -998,6 +875,16 @@ impl Span {
         }
     }
 
+    /// Whether the two touch along one axis and overlap by more than a point along the other
+    /// (a corner touch does not count).
+    const fn shares_edge(self, o: Self) -> bool {
+        let x_overlap = self.x0 < o.x1 && o.x0 < self.x1;
+        let y_overlap = self.y0 < o.y1 && o.y0 < self.y1;
+        let x_touch = self.x1 == o.x0 || o.x1 == self.x0;
+        let y_touch = self.y1 == o.y0 || o.y1 == self.y0;
+        (x_overlap && (y_overlap || y_touch)) || (y_overlap && x_touch)
+    }
+
     /// Where `self`, grown by one tile on every side, overlaps `o`: the strip of `o` along the
     /// edge the two share. `None` if they don't touch.
     fn touch(self, o: Self) -> Option<Self> {
@@ -1020,11 +907,7 @@ impl Span {
 }
 
 /// One [`Marker::BorderExit`] per adjacent level the player can walk into over the level's
-/// edge (from [`Snapshot::border_links`]). Only near rooms that actually touch a room of this
-/// level count: a level reached by stairs or a cave mouth lies elsewhere in world space, so it
-/// never touches, and levels with a room-tile link keep their tile exit markers instead. The
-/// marker sits at the centre of the shared border strips; it points from the centre of this
-/// level's touching rooms to the centre of the other level's.
+/// edge ([`border_exit_to`]); levels with a room-tile link keep their tile exit marker instead.
 #[must_use]
 pub fn border_exits(snap: &Snapshot) -> Vec<(Marker, f64, f64)> {
     border_exits_to(snap)
@@ -1042,31 +925,38 @@ fn border_exits_to(snap: &Snapshot) -> Vec<(u32, Marker, f64, f64)> {
         .into_iter()
         .filter(|id| !snap.room_links.iter().any(|l| l.to_level_id == *id))
         .filter_map(|id| {
-            let mut found: Option<(Span, Span, Span)> = None;
-            let mut entry = false;
-            for l in snap.border_links.iter().filter(|l| l.to_level_id == id) {
-                let (from, to) = (Span::of(l.from_room), Span::of(l.to_room));
-                let Some(strip) = from.touch(to) else { continue };
-                entry |= l.entry;
-                found = Some(found.map_or((strip, from, to), |(s, f, t)| {
-                    (s.union(strip), f.union(from), t.union(to))
-                }));
-            }
-            let (strip, from, to) = found?;
-            let ((fx, fy), (tx, ty)) = (from.centre2(), to.centre2());
-            let dir = (i32::try_from(tx - fx).ok()?, i32::try_from(ty - fy).ok()?);
-            let (sx, sy) = strip.centre2();
-            #[allow(clippy::cast_precision_loss, reason = "world tiles are far below 2^52")]
-            let (x, y) = (sx as f64 / 2.0, sy as f64 / 2.0);
-            Some((id, Marker::BorderExit { dir, entry }, x, y))
+            let (marker, x, y) = border_exit_to(snap, id)?;
+            Some((id, marker, x, y))
         })
         .collect()
 }
 
+/// The border exit to level `id`, from the border links whose rooms actually touch (a level
+/// behind stairs or a cave mouth lies elsewhere in world space). It sits at the centre of the
+/// shared border strips and points from this level's touching rooms to the other level's.
+fn border_exit_to(snap: &Snapshot, id: u32) -> Option<(Marker, f64, f64)> {
+    let mut found: Option<(Span, Span, Span)> = None;
+    let mut entry = false;
+    for l in snap.border_links.iter().filter(|l| l.to_level_id == id) {
+        let (from, to) = (Span::of(l.from_room), Span::of(l.to_room));
+        let Some(strip) = from.touch(to) else { continue };
+        entry |= l.entry;
+        found = Some(found.map_or((strip, from, to), |(s, f, t)| {
+            (s.union(strip), f.union(from), t.union(to))
+        }));
+    }
+    let (strip, from, to) = found?;
+    let ((fx, fy), (tx, ty)) = (from.centre2(), to.centre2());
+    let dir = (i32::try_from(tx - fx).ok()?, i32::try_from(ty - fy).ok()?);
+    let (sx, sy) = strip.centre2();
+    #[allow(clippy::cast_precision_loss, reason = "world tiles are far below 2^52")]
+    let (x, y) = (sx as f64 / 2.0, sy as f64 / 2.0);
+    Some((Marker::BorderExit { dir, entry }, x, y))
+}
+
 /// One label per level this level links to: the target level id and where its name goes (world
-/// tiles). A room-tile link's label sits on the tile exit preset in its room (the room's centre
-/// if the preset isn't loaded); a walk-through border's on its [`border_exits`] triangle. Links
-/// from rooms the level doesn't list are left out.
+/// tiles): a room-tile link's on its room's exit ([`room_exit_spot`]), a walk-through border's
+/// on its [`border_exits`] triangle. Links from rooms the level doesn't list are left out.
 #[must_use]
 pub fn exit_labels(snap: &Snapshot) -> Vec<(u32, f64, f64)> {
     let mut out: Vec<(u32, f64, f64)> = Vec::new();
@@ -1082,20 +972,7 @@ pub fn exit_labels(snap: &Snapshot) -> Vec<(u32, f64, f64)> {
         else {
             continue;
         };
-        let inside = |p: &&Preset| {
-            p.kind == PresetKind::Tile
-                && (room.x..room.x.saturating_add(room.w)).contains(&p.x)
-                && (room.y..room.y.saturating_add(room.h)).contains(&p.y)
-        };
-        let (x, y) = snap.presets.iter().find(inside).map_or_else(
-            || {
-                (
-                    f64::from(room.x) + f64::from(room.w) / 2.0,
-                    f64::from(room.y) + f64::from(room.h) / 2.0,
-                )
-            },
-            |p| (f64::from(p.x), f64::from(p.y)),
-        );
+        let (x, y) = room_exit_spot(snap, room);
         out.push((l.to_level_id, x, y));
     }
     for (id, _, x, y) in border_exits_to(snap) {
@@ -1106,7 +983,26 @@ pub fn exit_labels(snap: &Snapshot) -> Vec<(u32, f64, f64)> {
     out
 }
 
-/// The markers of `snap` with its drops' `marks` as rings, by the landmark `rules`.
+/// The tile exit preset in `room`, or the room's centre if it isn't loaded (world tiles).
+fn room_exit_spot(snap: &Snapshot, room: &Room) -> (f64, f64) {
+    let inside = |p: &&Preset| {
+        p.kind == PresetKind::Tile
+            && (room.x..room.x.saturating_add(room.w)).contains(&p.x)
+            && (room.y..room.y.saturating_add(room.h)).contains(&p.y)
+    };
+    snap.presets.iter().find(inside).map_or_else(
+        || {
+            (
+                f64::from(room.x) + f64::from(room.w) / 2.0,
+                f64::from(room.y) + f64::from(room.h) / 2.0,
+            )
+        },
+        |p| (f64::from(p.x), f64::from(p.y)),
+    )
+}
+
+/// The markers of `snap` with its drops' `marks` as rings, by the landmark `rules`, in draw
+/// order (stable: snapshot order within one kind).
 fn markers_with(snap: &Snapshot, marks: &Marks, rules: &[LandmarkRule]) -> Vec<(Marker, f64, f64)> {
     let live_bosses: Vec<(f64, f64)> = snap
         .monsters
@@ -1132,15 +1028,7 @@ fn markers_with(snap: &Snapshot, marks: &Marks, rules: &[LandmarkRule]) -> Vec<(
                 .map(|s| (Marker::Shrine(s.code), f64::from(s.x), f64::from(s.y))),
         )
         .chain(snap.monsters.iter().filter(|m| !m.is_dead()).filter_map(|m| {
-            let marker = if let Some(elite) = elite_marker(m) {
-                elite
-            } else if ALL_MONSTER_LEVELS.contains(&snap.level.id)
-                && !crate::levels_data::NON_HOSTILE_MONSTERS.contains(&m.txt)
-            {
-                Marker::Monster
-            } else {
-                return None;
-            };
+            let marker = monster_marker(m, snap.level.id)?;
             Some((marker, f64::from(m.x), f64::from(m.y)))
         }))
         .chain(
@@ -1149,13 +1037,7 @@ fn markers_with(snap: &Snapshot, marks: &Marks, rules: &[LandmarkRule]) -> Vec<(
                 .map(|d| (Marker::Drop(d.kind), f64::from(d.x), f64::from(d.y))),
         )
         .chain(snap.drops.iter().filter_map(|d| {
-            let mark = marks.get(&d.id)?;
-            let ring = Marker::Ring {
-                kind: d.kind,
-                look: RingLook::of(mark),
-                uncertain: mark.uncertain,
-                coin: high_value(mark),
-            };
+            let ring = ring_marker(d.kind, marks.get(&d.id)?);
             Some((ring, f64::from(d.x), f64::from(d.y)))
         }))
         .chain(landmarks(snap, rules))
@@ -1168,15 +1050,31 @@ fn markers_with(snap: &Snapshot, marks: &Marks, rules: &[LandmarkRule]) -> Vec<(
             .map(|m| (Marker::Merc, f64::from(m.x), f64::from(m.y))),
     );
     out.push((Marker::Player, f64::from(snap.player.x), f64::from(snap.player.y)));
-    // Stable sort: keeps snapshot order within one kind.
     out.sort_by_key(|&(m, _, _)| m);
     out
 }
 
-/// Renders the snapshot's level into a new `width`×`height` pixmap, with the info line (see
-/// [`info`]) at the bottom if a font is available. From the playstyle's `guidance` it draws the
-/// drop rings and the build's monster-level colours. There is no background panel: everything
-/// outside the level shape, the markers and the text is fully transparent.
+/// The marker of living monster `m` in level `level_id`: its elite icon, or a plain dot for
+/// any enemy on an [`ALL_MONSTER_LEVELS`] level.
+fn monster_marker(m: &Monster, level_id: u32) -> Option<Marker> {
+    elite_marker(m).or_else(|| {
+        (ALL_MONSTER_LEVELS.contains(&level_id) && !crate::levels_data::NON_HOSTILE_MONSTERS.contains(&m.txt))
+            .then_some(Marker::Monster)
+    })
+}
+
+/// The ring a drop of `kind` with `mark` gets.
+fn ring_marker(kind: DropKind, mark: &Mark) -> Marker {
+    Marker::Ring {
+        kind,
+        look: RingLook::of(mark),
+        uncertain: mark.uncertain,
+        coin: high_value(mark),
+    }
+}
+
+/// Renders the snapshot's level into a new transparent `width`×`height` pixmap, with the info
+/// line at the bottom if a font is available, and `guidance`'s drop rings and rating.
 ///
 /// # Errors
 /// Fails if the canvas size is zero or too large for tiny-skia.
@@ -1191,27 +1089,17 @@ pub fn map_height(height: u32, font: Option<&FontVec>) -> u32 {
     font.map_or(height, |f| height.saturating_sub(info::band_height(f)).max(1))
 }
 
-/// The text blocks below the info line, kept separate: the breakpoint guide bands, the level
-/// suggestions, the item plan's sell / move / keep / give-away groups and the `BiS` chase list.
-/// The webapp's live dashboard (`live` publishes from the same tick) consumes all of them; the
-/// overlay draws none of them (only the info line; the guide moved to the dashboard, user
-/// request 2026-11-17).
+/// The dashboard's text blocks from one snapshot (the overlay draws none of them): the
+/// breakpoint guide, the item plan's groups by action and the `BiS` chase list.
 #[derive(Debug, Default)]
 pub struct TextBlocks {
     pub guide: Vec<info::Band>,
-    /// The item plan's groups (`d2r_playstyle_config::stash_plan`): every entry, structured (the dashboard
-    /// sends the text, [`info::advice_entry`], and the place parts separately, and its Sell /
-    /// Keep panel wraps each group as a comma-separated run).
     pub sell: Vec<Advice>,
-    /// Keepers on the wrong place, with their target pages.
+    /// Keepers in the wrong place, with their target pages or tab.
     pub moves: Vec<Advice>,
-    /// Kept for the player's own builds (pages 1–2 or on the character).
     pub keep_own: Vec<Advice>,
-    /// Kept for trading (pages 3–4).
     pub keep_trade: Vec<Advice>,
     pub give: Vec<Advice>,
-    /// The `BiS` chase lines with their structural tick ([`info::BisLine::tick`]): the
-    /// dashboard marks ✓(stash) from the tick.
     pub bis: Vec<info::BisLine>,
 }
 
@@ -1233,20 +1121,15 @@ pub fn text_blocks(snap: &Snapshot, guidance: &Guidance, width: u32, font: Optio
     };
     let max_width = f32::from(u16::try_from(width).unwrap_or(u16::MAX)) - 8.0;
     TextBlocks {
-        guide:
-            // Width-fitted like the other blocks (spans ride along: low resistances are red).
-            crate::breakpoints::guide_band(&snap.player, snap.difficulty)
-                .into_iter()
-                .map(|band| info::fit_band(band, f, max_width))
-                .collect(),
-        // Every entry: the dashboard lays them out as one wrapping run.
+        guide: crate::breakpoints::guide_band(&snap.player, snap.difficulty)
+            .into_iter()
+            .map(|band| info::fit_band(band, f, max_width))
+            .collect(),
         sell: entries(guidance, |a| a == Action::Sell),
         moves: entries(guidance, |a| matches!(a, Action::Move(_) | Action::Stow(_))),
         keep_own: entries(guidance, |a| a == Action::Keep(Side::Own)),
         keep_trade: entries(guidance, |a| a == Action::Keep(Side::Trade)),
         give: entries(guidance, |a| a == Action::GiveAway),
-        // The BiS chase list (user request, 2026-11-17): the tick is computed from the owned
-        // and shared-stash names separately, so the dashboard can mark ✓(stash) distinctly.
         bis: guidance.bis.as_ref().map_or_else(Vec::new, |bis| {
             info::bis_lines(
                 bis,
@@ -1291,127 +1174,123 @@ fn render_rules(
     let view = View::fit(level_bounds(snap), width, map_height(height, font));
     fill_rooms(&mut pm, view, snap);
     draw_trail(&mut pm, view, &snap.trail);
-
-    let ring = Stroke {
-        width: 1.5,
-        ..Stroke::default()
-    };
-    // The landmark star's outline is stroked under its fill: half of it shows, a clean 2 px dark
-    // border, and the star's narrow inner corners keep their gold.
-    // Round joins: a miter on the sharp tips would spike out into the halo.
-    let star_outline = Stroke {
-        width: 4.0,
-        line_join: LineJoin::Round,
-        ..Stroke::default()
-    };
-    let halo_ring = Stroke {
-        width: 2.0,
-        ..Stroke::default()
-    };
-    let halo_backing = Stroke {
-        width: 4.5,
-        ..Stroke::default()
-    };
-    // The quest-object star: same scheme as the landmark star, thinner for its smaller size.
-    let small_star_outline = Stroke {
-        width: 3.0,
-        line_join: LineJoin::Round,
-        ..Stroke::default()
-    };
     let mut tagged: Vec<(Marker, f32, f32)> = Vec::new();
     for (marker, x, y) in markers_with(snap, &guidance.marks, rules) {
-        let (colour, size, shape) = marker.style();
         let (cx, cy) = view.to_screen(x, y);
         if marker_tag(marker).is_some() {
             tagged.push((marker, cx, cy));
         }
-        let Some(dot) = marker_outline(marker, shape, cx, cy, size) else {
-            continue;
-        };
-        if let Marker::Suspected(_) = marker {
-            draw_suspected(&mut pm, font, &dot, cx, cy);
-        } else if shape == Shape::Worm || marker == Marker::Orifice {
-            draw_figure(&mut pm, marker, &dot, colour, (cx, cy, size));
-        } else if let Marker::Ring { .. } = marker {
-            draw_mark_ring(&mut pm, marker, &dot, (cx, cy, size));
-        } else if marker == Marker::Well {
-            draw_well(&mut pm, &dot, colour);
-        } else if let Marker::Shrine(_) = marker {
-            solid(&mut pm, &dot, colour);
-            pm.stroke_path(&dot, &paint(SHRINE_OUTLINE), &ring, Transform::identity(), None);
-        } else if let Marker::QuestObject(_) = marker {
-            pm.stroke_path(
-                &dot,
-                &paint(MARKER_OUTLINE),
-                &small_star_outline,
-                Transform::identity(),
-                None,
-            );
-            solid(&mut pm, &dot, colour);
-        } else if matches!(shape, Shape::Skull | Shape::HornedSkull) {
-            draw_skull(&mut pm, &dot, colour, (cx, cy, size), shape == Shape::HornedSkull);
-        } else if matches!(shape, Shape::Triangle | Shape::Stairs) {
-            // Outline under the fill: the small triangle keeps all its colour, with half the
-            // outline showing around it.
-            pm.stroke_path(&dot, &paint(MARKER_OUTLINE), &ring, Transform::identity(), None);
-            solid(&mut pm, &dot, colour);
-        } else if shape == Shape::Star {
-            // Halo: a gold ring on a wider dark ring, so it reads on any background.
-            if let Some(halo) = PathBuilder::from_circle(cx, cy, LANDMARK_RING) {
-                pm.stroke_path(
-                    &halo,
-                    &paint(MARKER_OUTLINE),
-                    &halo_backing,
-                    Transform::identity(),
-                    None,
-                );
-                pm.stroke_path(&halo, &paint(colour), &halo_ring, Transform::identity(), None);
-            }
-            pm.stroke_path(
-                &dot,
-                &paint(MARKER_OUTLINE),
-                &star_outline,
-                Transform::identity(),
-                None,
-            );
-            solid(&mut pm, &dot, colour);
-        } else {
-            solid(&mut pm, &dot, colour);
-            pm.stroke_path(&dot, &paint(MARKER_OUTLINE), &ring, Transform::identity(), None);
-        }
+        draw_marker(&mut pm, font, marker, cx, cy);
     }
     if let Some(font) = font {
         let drops = drop_tags(view, snap, &guidance.marks);
         draw_labels(&mut pm, view, font, snap, &tagged, &drops);
         draw_info_line(&mut pm, font, snap, guidance.rating);
     }
-    draw_player_on_top(&mut pm, view, snap, &ring);
+    draw_player_on_top(&mut pm, view, snap);
     Ok(pm)
 }
 
-/// The player's dot drawn again over everything, labels included (user, 2026-11-20: a label or
-/// marker must never hide it), on a dark padding disc that separates it from whatever lies
-/// underneath ("surround it with a padding").
-fn draw_player_on_top(pm: &mut Pixmap, view: View, snap: &Snapshot, ring: &Stroke) {
+/// Draws `marker` centred on canvas point (`cx`, `cy`).
+fn draw_marker(pm: &mut Pixmap, font: Option<&FontVec>, marker: Marker, cx: f32, cy: f32) {
+    let (colour, size, shape) = marker.style();
+    let Some(dot) = marker_outline(marker, shape, cx, cy, size) else {
+        return;
+    };
+    let geom = (cx, cy, size);
+    match marker {
+        Marker::Suspected(_) => draw_suspected(pm, font, &dot, cx, cy),
+        Marker::Orifice => draw_orifice(pm, colour, geom),
+        Marker::Ring { .. } => draw_mark_ring(pm, marker, &dot, geom),
+        Marker::Well => draw_well(pm, &dot, colour),
+        Marker::Shrine(_) => fill_then_outline(pm, &dot, colour, SHRINE_OUTLINE),
+        Marker::QuestObject(_) => outline_then_fill(pm, &dot, colour, &round_join(3.0)),
+        _ => match shape {
+            Shape::Worm => draw_worm(pm, &dot, colour, geom),
+            Shape::Skull | Shape::HornedSkull => {
+                draw_skull(pm, &dot, colour, geom, shape == Shape::HornedSkull);
+            }
+            Shape::Triangle | Shape::Stairs => outline_then_fill(pm, &dot, colour, &marker_stroke()),
+            Shape::Star => {
+                draw_halo(pm, cx, cy, colour);
+                // Round joins: a miter on the sharp tips would spike out into the halo.
+                outline_then_fill(pm, &dot, colour, &round_join(4.0));
+            }
+            Shape::Circle | Shape::Diamond | Shape::Square => {
+                fill_then_outline(pm, &dot, colour, MARKER_OUTLINE);
+            }
+        },
+    }
+}
+
+/// The default marker outline stroke.
+fn marker_stroke() -> Stroke {
+    Stroke {
+        width: 1.5,
+        ..Stroke::default()
+    }
+}
+
+/// A `width` px stroke with round joins.
+fn round_join(width: f32) -> Stroke {
+    Stroke {
+        width,
+        line_join: LineJoin::Round,
+        ..Stroke::default()
+    }
+}
+
+/// Fills `path` in `colour`, then strokes the default outline in `outline` over its edge.
+fn fill_then_outline(pm: &mut Pixmap, path: &Path, colour: Rgba, outline: Rgba) {
+    solid(pm, path, colour);
+    pm.stroke_path(
+        path,
+        &paint(outline),
+        &marker_stroke(),
+        Transform::identity(),
+        None,
+    );
+}
+
+/// Strokes the dark outline with `stroke`, then fills `path` in `colour` over it: only the
+/// outer half of the outline shows, so small and pointed shapes keep all their colour.
+fn outline_then_fill(pm: &mut Pixmap, path: &Path, colour: Rgba, stroke: &Stroke) {
+    pm.stroke_path(path, &paint(MARKER_OUTLINE), stroke, Transform::identity(), None);
+    solid(pm, path, colour);
+}
+
+/// The landmark star's halo: a `colour` ring on a wider dark ring, so it reads on any background.
+fn draw_halo(pm: &mut Pixmap, cx: f32, cy: f32, colour: Rgba) {
+    let Some(halo) = PathBuilder::from_circle(cx, cy, LANDMARK_RING) else {
+        return;
+    };
+    for (colour, width) in [(MARKER_OUTLINE, 4.5), (colour, 2.0)] {
+        let stroke = Stroke {
+            width,
+            ..Stroke::default()
+        };
+        pm.stroke_path(&halo, &paint(colour), &stroke, Transform::identity(), None);
+    }
+}
+
+/// The player's dot drawn again over everything, labels included, on a dark padding disc.
+fn draw_player_on_top(pm: &mut Pixmap, view: View, snap: &Snapshot) {
     let (colour, size, shape) = Marker::Player.style();
     let (px, py) = view.to_screen(f64::from(snap.player.x), f64::from(snap.player.y));
     if let Some(pad) = PathBuilder::from_circle(px, py, size + PLAYER_PADDING) {
         solid(pm, &pad, PLAYER_PADDING_COLOUR);
     }
     if let Some(dot) = marker_outline(Marker::Player, shape, px, py, size) {
-        solid(pm, &dot, colour);
-        pm.stroke_path(&dot, &paint(MARKER_OUTLINE), ring, Transform::identity(), None);
+        fill_then_outline(pm, &dot, colour, MARKER_OUTLINE);
     }
 }
 
-/// Width in px of the dark padding disc around the player's dot (drawn on top of everything).
+/// Width in px of the dark padding disc around the player's dot.
 const PLAYER_PADDING: f32 = 3.0;
-/// The padding disc's colour: near-black, mostly opaque, so the dot stands out on any label.
 const PLAYER_PADDING_COLOUR: Rgba = [10, 10, 10, 220];
 
-/// Half-side in px of a Tal Rasha's Tomb symbol on a Canyon exit: about a label's text height.
+/// Half-side in px of a Tal Rasha's Tomb symbol on a Canyon exit, and of the real tomb's.
 const TOMB_HALF: f32 = 8.0;
-/// Half-side of the real tomb's symbol ([`Snapshot::staff_tomb`]), drawn bigger and gold.
 const REAL_TOMB_HALF: f32 = 11.0;
 /// Stroke width of a tomb symbol's lines; the real tomb's is wider.
 const TOMB_STROKE: f32 = 2.0;
@@ -1420,9 +1299,9 @@ const REAL_TOMB_STROKE: f32 = 2.5;
 const REAL_TOMB_STAR: f32 = 5.0;
 const REAL_TOMB_STAR_GAP: f32 = 3.0;
 
-/// What a map label shows: text, or a tomb's symbol in place of the seven identical
+/// What a map label shows: text, a tomb's symbol in place of the seven identical
 /// "Tal Rasha's Tomb" names (`real`: the tomb with the orifice), or a marked drop's small tag
-/// kept `clear` px off the drop's centre (its ring).
+/// kept `clear` px off the drop's centre.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum LabelBody<'a> {
     Text(&'a str),
@@ -1456,13 +1335,12 @@ fn drop_tags<'a>(view: View, snap: &Snapshot, marks: &'a Marks) -> Vec<DropTag<'
             })
         })
         .collect();
-    // Stable, highest look first.
     tags.sort_by_key(|t| std::cmp::Reverse(t.look));
     tags
 }
 
-/// The box a tomb symbol label takes, as [`info::LabelSize`]: the symbol's square plus 2 px
-/// on each side for its stroke and outline, and the star for the real tomb. Nothing below the baseline.
+/// The box a tomb symbol label takes: the symbol's square plus 2 px on each side for its stroke
+/// and outline, and the star for the real tomb.
 fn tomb_label_size(real: bool) -> info::LabelSize {
     let (half, star) = if real {
         (REAL_TOMB_HALF, REAL_TOMB_STAR.mul_add(2.0, REAL_TOMB_STAR_GAP))
@@ -1498,7 +1376,7 @@ fn draw_tomb_label(
         ..Stroke::default()
     };
     let glyph = symbol.glyph(cx, cy, half);
-    // All outlines first, so no outline covers a neighbouring stroke's colour.
+    // Every outline before any colour, so no outline covers a neighbouring stroke.
     if let Some(lines) = &glyph.lines {
         pm.stroke_path(
             lines,
@@ -1536,13 +1414,19 @@ fn draw_tomb_label(
     }
 }
 
-/// The map labels: the target area names of the level's exits ([`exit_labels`]), grey where the
-/// character gets almost no experience ([`xp::is_low`]), white otherwise; a Tal Rasha's Tomb
-/// exit shows the tomb's symbol ([`tombs::symbol`]) in that colour instead, except the real
-/// tomb's ([`Snapshot::staff_tomb`]): bigger and gold (over grey too) with a star. Then the short tags of `tagged` markers ([`marker_tag`]) in
-/// [`marker_label_colour`], then the marked drops' tags ([`drop_tags`]), small, in the ring's
-/// colour, kept off the player's dot where they can. Where labels would overlap,
-/// [`info::place_labels`] moves or drops the lower-ranked one; exit labels are always drawn.
+/// One map label for [`draw_labels`]: what it shows, its colour, the canvas centre of the
+/// marker it names, and whether it is drawn even without a free spot.
+#[derive(Debug, Clone, Copy)]
+struct MapLabel<'a> {
+    body: LabelBody<'a>,
+    colour: Rgba,
+    at: (f32, f32),
+    keep: bool,
+}
+
+/// The map labels, highest priority first: exit names ([`exit_label_list`]), marker tags
+/// ([`marker_tag_list`]) and the marked drops' tags. [`info::place_labels`] moves or drops the
+/// lower-ranked one where labels would overlap; exit labels are always drawn.
 fn draw_labels(
     pm: &mut Pixmap,
     view: View,
@@ -1558,7 +1442,43 @@ fn draw_labels(
             (id, name, x, y)
         })
         .collect();
-    let mut labels: Vec<(LabelBody, Rgba, (f32, f32), bool)> = names
+    let mut labels = exit_label_list(view, snap, &names);
+    labels.extend(marker_tag_list(tagged));
+    labels.extend(drops.iter().map(|t| MapLabel {
+        body: LabelBody::Drop {
+            text: t.text,
+            clear: t.clear,
+        },
+        colour: t.look.colour(),
+        at: t.at,
+        keep: false,
+    }));
+    let player = player_box(view, snap);
+    let specs: Vec<info::LabelSpec> = labels.iter().map(|l| label_spec(font, l, player)).collect();
+    let bottom = map_height(pm.height(), Some(font));
+    #[allow(clippy::cast_precision_loss, reason = "canvas widths are far below 2^24")]
+    let spots = info::place_labels(&specs, pm.width() as f32, bottom as f32);
+    for (l, spot) in labels.iter().zip(spots) {
+        let Some(spot) = spot else { continue };
+        match l.body {
+            LabelBody::Text(text) => info::draw_label(pm, font, l.colour, text, spot),
+            LabelBody::Tomb { symbol, real } => draw_tomb_label(pm, symbol, real, l.colour, spot),
+            LabelBody::Drop { text, .. } => {
+                info::draw_label_at(pm, font, DROP_LABEL_PX, l.colour, text, spot);
+            }
+        }
+    }
+}
+
+/// The exit labels for `names` (level id, name, world position): white, grey where the character
+/// gets almost no experience ([`xp::is_low`]). A Tal Rasha's Tomb exit shows the tomb's symbol
+/// instead, the real tomb's ([`Snapshot::staff_tomb`]) gold.
+fn exit_label_list<'a>(
+    view: View,
+    snap: &Snapshot,
+    names: &'a [(u32, String, f64, f64)],
+) -> Vec<MapLabel<'a>> {
+    names
         .iter()
         .map(|(id, name, x, y)| {
             let real = snap.staff_tomb == Some(*id);
@@ -1571,94 +1491,82 @@ fn draw_labels(
             };
             let body =
                 tombs::symbol(*id).map_or(LabelBody::Text(name), |symbol| LabelBody::Tomb { symbol, real });
-            (body, colour, view.to_screen(*x, *y), true)
+            MapLabel {
+                body,
+                colour,
+                at: view.to_screen(*x, *y),
+                keep: true,
+            }
         })
-        .collect();
-    let mut tags: Vec<(u8, &str, Rgba, (f32, f32))> = tagged
+        .collect()
+}
+
+/// The tags of the `tagged` markers ([`marker_tag`]) by rank, in [`marker_label_colour`].
+fn marker_tag_list(tagged: &[(Marker, f32, f32)]) -> Vec<MapLabel<'static>> {
+    let mut tags: Vec<(u8, MapLabel<'static>)> = tagged
         .iter()
         .filter_map(|&(m, cx, cy)| {
             let (rank, tag) = marker_tag(m)?;
-            Some((rank, tag, marker_label_colour(m.style().0), (cx, cy)))
-        })
-        .collect();
-    // Stable: snapshot order within one rank.
-    tags.sort_by_key(|t| t.0);
-    labels.extend(
-        tags.into_iter()
-            .map(|(_, tag, colour, at)| (LabelBody::Text(tag), colour, at, false)),
-    );
-    labels.extend(drops.iter().map(|t| {
-        let body = LabelBody::Drop {
-            text: t.text,
-            clear: t.clear,
-        };
-        (body, t.look.colour(), t.at, false)
-    }));
-    // The player's dot with its padding disc ([`draw_player_on_top`]).
-    let player = {
-        let (px, py) = view.to_screen(f64::from(snap.player.x), f64::from(snap.player.y));
-        let r = Marker::Player.style().1 + PLAYER_PADDING;
-        [px - r, py - r, px + r, py + r]
-    };
-    let specs: Vec<info::LabelSpec> = labels
-        .iter()
-        .map(|&(body, _, at, keep)| {
-            let (size, clear, avoid) = match body {
-                LabelBody::Text(text) => (info::label_size(font, text), None, None),
-                LabelBody::Tomb { real, .. } => (tomb_label_size(real), None, None),
-                LabelBody::Drop { text, clear } => (
-                    info::label_size_at(font, DROP_LABEL_PX, text),
-                    Some(clear),
-                    Some(player),
-                ),
+            let label = MapLabel {
+                body: LabelBody::Text(tag),
+                colour: marker_label_colour(m.style().0),
+                at: (cx, cy),
+                keep: false,
             };
-            info::LabelSpec {
-                size,
-                at,
-                keep,
-                clear,
-                avoid,
-            }
+            Some((rank, label))
         })
         .collect();
-    let bottom = map_height(pm.height(), Some(font));
-    #[allow(clippy::cast_precision_loss, reason = "canvas widths are far below 2^24")]
-    let spots = info::place_labels(&specs, pm.width() as f32, bottom as f32);
-    for (&(body, colour, _, _), spot) in labels.iter().zip(spots) {
-        match (body, spot) {
-            (LabelBody::Text(text), Some(spot)) => info::draw_label(pm, font, colour, text, spot),
-            (LabelBody::Tomb { symbol, real }, Some(spot)) => draw_tomb_label(pm, symbol, real, colour, spot),
-            (LabelBody::Drop { text, .. }, Some(spot)) => {
-                info::draw_label_at(pm, font, DROP_LABEL_PX, colour, text, spot);
-            }
-            (_, None) => {}
-        }
+    tags.sort_by_key(|&(rank, _)| rank);
+    tags.into_iter().map(|(_, label)| label).collect()
+}
+
+/// The canvas box `[x0, y0, x1, y1]` of the player's dot with its padding disc.
+fn player_box(view: View, snap: &Snapshot) -> [f32; 4] {
+    let (px, py) = view.to_screen(f64::from(snap.player.x), f64::from(snap.player.y));
+    let r = Marker::Player.style().1 + PLAYER_PADDING;
+    [px - r, py - r, px + r, py + r]
+}
+
+/// The placement spec of `l`; a drop tag keeps off its ring and, where it can, the `player` box.
+fn label_spec(font: &FontVec, l: &MapLabel, player: [f32; 4]) -> info::LabelSpec {
+    let (size, clear, avoid) = match l.body {
+        LabelBody::Text(text) => (info::label_size(font, text), None, None),
+        LabelBody::Tomb { real, .. } => (tomb_label_size(real), None, None),
+        LabelBody::Drop { text, clear } => (
+            info::label_size_at(font, DROP_LABEL_PX, text),
+            Some(clear),
+            Some(player),
+        ),
+    };
+    info::LabelSpec {
+        size,
+        at: l.at,
+        keep: l.keep,
+        clear,
+        avoid,
     }
 }
 
-/// A marker label's colour: the marker's fill blended 35 % toward white, so dark fills (the
-/// monster shrine's dark red) still read on the dark outline and every tag stays apart from the
-/// white exit names.
+/// A marker tag's colour: the marker's fill blended 35 % toward white, so dark fills still read
+/// on the dark outline.
 fn marker_label_colour([r, g, b, _]: Rgba) -> Rgba {
     let lift = |c: u8| {
         let c = u16::from(c);
-        // At most 255: (c * 65 + 255 * 35) / 100 with c <= 255.
         u8::try_from((c * 65 + 255 * 35) / 100).unwrap_or(u8::MAX)
     };
     [lift(r), lift(g), lift(b), 255]
 }
 
 /// The info line at the bottom of the frame. A terrorized level's monster levels follow the
-/// character, so its name is never greyed.
+/// character, so its name is never greyed for low experience.
 fn draw_info_line(pm: &mut Pixmap, font: &FontVec, snap: &Snapshot, rating: crate::build::Rating) {
     let mut line = info::info_line(snap.level.id, snap.difficulty, snap.terrorized, snap.cows, rating);
     line.low_xp = !snap.terrorized && xp::is_low(snap.level.id, snap.difficulty, snap.player.char_level);
     info::draw(pm, font, &line);
 }
 
-/// Strokes `trail` (world tiles) as one translucent polyline with round joins, broken where two
-/// points lie more than [`TRAIL_BREAK`] apart. One path, so overlapping segments don't stack
-/// their alpha.
+/// Strokes `trail` (world tiles) as one translucent polyline, broken where two points lie more
+/// than [`TRAIL_BREAK`] apart. One path, so overlapping segments don't stack their alpha.
 fn draw_trail(pm: &mut Pixmap, view: View, trail: &[(u16, u16)]) {
     let mut pb = PathBuilder::new();
     let mut prev: Option<(f64, f64)> = None;
@@ -1671,7 +1579,6 @@ fn draw_trail(pm: &mut Pixmap, view: View, trail: &[(u16, u16)]) {
         }
         prev = Some((x, y));
     }
-    // `None` for an empty trail or a lone point: nothing to draw.
     let Some(path) = pb.finish() else { return };
     let stroke = Stroke {
         width: TRAIL_WIDTH,
@@ -1682,12 +1589,9 @@ fn draw_trail(pm: &mut Pixmap, view: View, trail: &[(u16, u16)]) {
     pm.stroke_path(&path, &paint(TRAIL), &stroke, Transform::identity(), None);
 }
 
-/// Fills the level's rooms, then the loaded ones on top.
+/// Fills the level's rooms, then the loaded ones on top, each layer as one path: separate fills
+/// per room would leave anti-aliasing seams along shared edges.
 fn fill_rooms(pm: &mut Pixmap, view: View, snap: &Snapshot) {
-    // The level is one continuous shape: all rooms in one path, then the loaded ones in a second
-    // path on top. Separate fills per room would leave anti-aliasing seams along shared edges;
-    // within one path the edges' coverage adds up, and the loaded layer blends onto the base fill
-    // rather than onto the transparent canvas.
     for (rooms, fill) in [
         (rooms_path(view, snap.level.rooms.iter()), ROOM),
         (
@@ -1721,26 +1625,12 @@ fn draw_ring(pm: &mut Pixmap, circle: &Path, colour: Rgba, uncertain: bool) {
     pm.stroke_path(circle, &paint(colour), &stroke, Transform::identity(), None);
 }
 
-/// The farm ring's star: on the ring of radius `size` around (`cx`, `cy`) at 45° up-right, so
-/// it reads as "this ring, starred"; dark outline under the fill, as the quest-object star.
+/// The farm ring's star, on the ring of radius `size` around (`cx`, `cy`) at its upper right.
 fn draw_farm_star(pm: &mut Pixmap, (cx, cy, size): (f32, f32, f32), colour: Rgba) {
     let at = size * std::f32::consts::FRAC_1_SQRT_2;
-    let Some(star) = marker_path(Shape::Star, cx + at, cy - at, FARM_STAR) else {
-        return;
-    };
-    let outline = Stroke {
-        width: 3.0,
-        line_join: LineJoin::Round,
-        ..Stroke::default()
-    };
-    pm.stroke_path(
-        &star,
-        &paint(MARKER_OUTLINE),
-        &outline,
-        Transform::identity(),
-        None,
-    );
-    solid(pm, &star, colour);
+    if let Some(star) = marker_path(Shape::Star, cx + at, cy - at, FARM_STAR) {
+        outline_then_fill(pm, &star, colour, &round_join(3.0));
+    }
 }
 
 /// A drop's mark: the `ring` ([`draw_ring`]) along `circle` of radius `size` around (`cx`,
@@ -1765,8 +1655,8 @@ fn draw_mark_ring(pm: &mut Pixmap, ring: Marker, circle: &Path, (cx, cy, size): 
     }
 }
 
-/// Whether a marked drop sells for a lot to other players: a trade-category valuables match of
-/// at least [`COIN_MIN_TIER`] (a twink base is for the player's own characters).
+/// Whether a marked drop sells for a lot to other players: a trade-category (not twink)
+/// valuables match of at least [`COIN_MIN_TIER`].
 fn high_value(mark: &Mark) -> bool {
     matches!(mark.trade, Some((tier, Category::Trade)) if tier >= COIN_MIN_TIER)
 }
@@ -1786,7 +1676,7 @@ fn draw_coin(pm: &mut Pixmap, (cx, cy, size): (f32, f32, f32)) {
     pm.stroke_path(&coin, &paint(COIN_RIM), &rim, Transform::identity(), None);
 }
 
-/// A well: the hollow `circle` in `colour` on a wider dark ring, so it reads on any background.
+/// A well: the hollow `circle` in `colour` on a wider dark ring.
 fn draw_well(pm: &mut Pixmap, circle: &Path, colour: Rgba) {
     for (colour, width) in [(MARKER_OUTLINE, WELL_BACKING_WIDTH), (colour, WELL_RING_WIDTH)] {
         let stroke = Stroke {
@@ -1800,9 +1690,8 @@ fn draw_well(pm: &mut Pixmap, circle: &Path, colour: Rgba) {
 /// A superunique or boss skull: `dot` is its [`skull_path`] with the eye holes, centred on
 /// (`cx`, `cy`) with `size`.
 fn draw_skull(pm: &mut Pixmap, dot: &Path, colour: Rgba, (cx, cy, size): (f32, f32, f32), horns: bool) {
-    // Outline of the outer contour under the fill, as for the stars. Stroking the eye holes too
-    // would ring them and merge both eyes into one dark band at 8 px, so even-odd cuts them out
-    // of the fill and they are filled dark on their own.
+    // Only the outer contour is outlined: stroked eye holes would merge into one dark band at
+    // 8 px, so they are cut out of the fill and filled dark on their own.
     let outline = Stroke {
         width: SKULL_OUTLINE_WIDTH,
         line_join: LineJoin::Round,
@@ -1865,7 +1754,6 @@ fn draw_suspected(pm: &mut Pixmap, font: Option<&FontVec>, ring: &Path, cx: f32,
 fn marker_outline(marker: Marker, shape: Shape, cx: f32, cy: f32, size: f32) -> Option<Path> {
     match marker {
         Marker::BorderExit { dir: (dx, dy), .. } => {
-            // `iso` is linear, so the screen direction is the projected world direction.
             let (ux, uy) = iso(f64::from(dx), f64::from(dy));
             triangle_path(cx, cy, size, (px(ux), px(uy)))
         }
@@ -1883,31 +1771,21 @@ fn triangle_path(cx: f32, cy: f32, size: f32, (ux, uy): (f32, f32)) -> Option<Pa
     } else {
         (0.0, -1.0)
     };
-    // Perpendicular to the direction, for the base corners.
-    let (vx, vy) = (-uy, ux);
+    let (perp_x, perp_y) = (-uy, ux);
     let back = size * 0.5;
     let half_base = size * 0.65;
     let mut pb = PathBuilder::new();
     pb.move_to(ux.mul_add(size, cx), uy.mul_add(size, cy));
     pb.line_to(
-        vx.mul_add(half_base, ux.mul_add(-back, cx)),
-        vy.mul_add(half_base, uy.mul_add(-back, cy)),
+        perp_x.mul_add(half_base, ux.mul_add(-back, cx)),
+        perp_y.mul_add(half_base, uy.mul_add(-back, cy)),
     );
     pb.line_to(
-        vx.mul_add(-half_base, ux.mul_add(-back, cx)),
-        vy.mul_add(-half_base, uy.mul_add(-back, cy)),
+        perp_x.mul_add(-half_base, ux.mul_add(-back, cx)),
+        perp_y.mul_add(-half_base, uy.mul_add(-back, cy)),
     );
     pb.close();
     pb.finish()
-}
-
-/// Draws a figure landmark: the worm (`body` is its path) or the mini orifice.
-fn draw_figure(pm: &mut Pixmap, marker: Marker, body: &Path, colour: Rgba, geom: (f32, f32, f32)) {
-    if marker == Marker::Orifice {
-        draw_orifice(pm, colour, geom);
-    } else {
-        draw_worm(pm, body, colour, geom);
-    }
 }
 
 /// Draws the mini orifice centred on (`cx`, `cy`) with outer radius `size`: a dark hole inside a
@@ -1985,7 +1863,6 @@ fn draw_worm(pm: &mut Pixmap, body: &Path, colour: Rgba, (cx, cy, size): (f32, f
         ..Stroke::default()
     };
     let head_x = cx + size;
-    // sin(3π) = 0: the body ends on the centre line.
     let head = PathBuilder::from_circle(head_x, cy, size * 0.3);
     pm.stroke_path(
         body,
@@ -2062,39 +1939,40 @@ fn marker_path(shape: Shape, cx: f32, cy: f32, size: f32) -> Option<Path> {
             pb.close();
             pb.finish()
         }
-        Shape::Star => {
-            // Ten points alternating tip and inner corner, starting at the top tip.
-            let inner = size * 0.45;
-            let mut pb = PathBuilder::new();
-            for i in 0..10u8 {
-                let r = if i % 2 == 0 { size } else { inner };
-                let angle = f32::from(i).mul_add(std::f32::consts::PI / 5.0, -std::f32::consts::FRAC_PI_2);
-                let (x, y) = (r.mul_add(angle.cos(), cx), r.mul_add(angle.sin(), cy));
-                if i == 0 {
-                    pb.move_to(x, y);
-                } else {
-                    pb.line_to(x, y);
-                }
-            }
-            pb.close();
-            pb.finish()
-        }
+        Shape::Star => star_path(cx, cy, size),
     }
 }
 
-/// A skull centred on (`cx`, `cy`), in units of `size` / 4 (so the outline spans about ±4 units):
-/// one outer contour (cranium arc, with a horn on each upper side if `horns`, down into a narrower
-/// jaw) and, if `eyes`, the two eye circles of [`skull_eyes`] inside it. Filled even-odd, the eyes
-/// are holes. The outer contour is one polygon on purpose: separate overlapping cranium and jaw
-/// shapes would cancel out under even-odd.
+/// A five-pointed star, one tip up: ten points alternating tip (`size` from the centre) and
+/// inner corner.
+fn star_path(cx: f32, cy: f32, size: f32) -> Option<Path> {
+    let inner = size * 0.45;
+    let mut pb = PathBuilder::new();
+    for i in 0..10u8 {
+        let r = if i % 2 == 0 { size } else { inner };
+        let angle = f32::from(i).mul_add(std::f32::consts::PI / 5.0, -std::f32::consts::FRAC_PI_2);
+        let (x, y) = (r.mul_add(angle.cos(), cx), r.mul_add(angle.sin(), cy));
+        if i == 0 {
+            pb.move_to(x, y);
+        } else {
+            pb.line_to(x, y);
+        }
+    }
+    pb.close();
+    pb.finish()
+}
+
+/// A skull centred on (`cx`, `cy`), in units of `size` / 4: one outer contour (cranium arc,
+/// optional horns, a narrower jaw) and, if `eyes`, the eye circles of [`skull_eyes`] as even-odd
+/// holes. The contour is one polygon because overlapping cranium and jaw shapes would cancel out
+/// under even-odd.
 fn skull_path(cx: f32, cy: f32, size: f32, horns: bool, eyes: bool) -> Option<Path> {
-    // Cranium circle (centre y, radius), jaw half-width and bottom.
     const CRANIUM_Y: f32 = -0.9;
     const CRANIUM_R: f32 = 3.0;
     const JAW_HALF: f32 = 1.5;
     const JAW_BOTTOM: f32 = 3.8;
-    // Right horn: its base spans these cranium angles (degrees, screen y down), its tip is here;
-    // the left horn mirrors it.
+    // The right horn's base as cranium angles (degrees, screen y down) and its tip; the left
+    // horn mirrors it.
     const HORN_BASE: (f32, f32) = (-30.0, -62.0);
     const HORN_TIP: (f32, f32) = (3.7, -5.0);
     let k = size / 4.0;
@@ -2105,8 +1983,6 @@ fn skull_path(cx: f32, cy: f32, size: f32, horns: bool, eyes: bool) -> Option<Pa
     };
     let mut pb = PathBuilder::new();
     let line = |pb: &mut PathBuilder, (x, y): (f32, f32)| pb.line_to(x, y);
-    // An arc of the cranium from angle `from` down to `to`: 20 segments, at most ~15 degrees
-    // each for the longest (the whole skull top), plenty at 8 px.
     let arc = |pb: &mut PathBuilder, from: f32, to: f32| {
         const STEPS: u8 = 20;
         for i in 0..=STEPS {
@@ -2114,19 +1990,18 @@ fn skull_path(cx: f32, cy: f32, size: f32, horns: bool, eyes: bool) -> Option<Pa
             line(pb, on_cranium((to - from).mul_add(t, from)));
         }
     };
-    // Angle of the right jaw corner on the cranium; the left one is 180 - this.
-    let join = (JAW_HALF / CRANIUM_R).acos().to_degrees();
+    let right_jaw_corner = (JAW_HALF / CRANIUM_R).acos().to_degrees();
     let (x, y) = at(JAW_HALF, JAW_BOTTOM);
     pb.move_to(x, y);
     if horns {
         let (tx, ty) = HORN_TIP;
-        arc(&mut pb, join, HORN_BASE.0);
+        arc(&mut pb, right_jaw_corner, HORN_BASE.0);
         line(&mut pb, at(tx, ty));
         arc(&mut pb, HORN_BASE.1, -180.0 - HORN_BASE.1);
         line(&mut pb, at(-tx, ty));
-        arc(&mut pb, -180.0 - HORN_BASE.0, -180.0 - join);
+        arc(&mut pb, -180.0 - HORN_BASE.0, -180.0 - right_jaw_corner);
     } else {
-        arc(&mut pb, join, -180.0 - join);
+        arc(&mut pb, right_jaw_corner, -180.0 - right_jaw_corner);
     }
     line(&mut pb, at(-JAW_HALF, JAW_BOTTOM));
     pb.close();
@@ -2136,8 +2011,7 @@ fn skull_path(cx: f32, cy: f32, size: f32, horns: bool, eyes: bool) -> Option<Pa
     pb.finish()
 }
 
-/// The two eye circles of the skull of [`skull_path`], alone: filled dark so they read on any
-/// background (a hole alone would show the room grey).
+/// The two eye circles of the skull of [`skull_path`], alone, to fill dark.
 fn skull_eyes(cx: f32, cy: f32, size: f32) -> Option<Path> {
     let mut pb = PathBuilder::new();
     push_eyes(&mut pb, cx, cy, size);
@@ -2145,7 +2019,6 @@ fn skull_eyes(cx: f32, cy: f32, size: f32) -> Option<Path> {
 }
 
 fn push_eyes(pb: &mut PathBuilder, cx: f32, cy: f32, size: f32) {
-    // Offset from the centre and radius, in units of `size` / 4 as in `skull_path`.
     const EYE_X: f32 = 1.5;
     const EYE_Y: f32 = -0.4;
     const EYE_R: f32 = 0.95;
