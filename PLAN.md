@@ -1334,7 +1334,7 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   stash; the reader now also reads stored white bases and magic / rare / crafted items with stats).
 - **Keep · own**: pieces of the active build and its later stages (`BiS` slots without the
   pieces whose leveling window the character has passed, extras, `switch_requires` without the
-  not-needed ones and, for a met any-of group, only its held candidates) and of the farm list,
+  not-needed ones and, for a met any-of group, only its count of held candidates, worn first) and of the farm list,
   as many copies as needed minus the worn ones; one white
   base per (runeword, wearer, slot) need: allowed type, exactly the rune count of sockets, usable by
   the player class (within the build's `weapon_rule` for its `weapon` slot) or the merc of
@@ -1711,8 +1711,10 @@ fine, keep them").
   the switch condition itself is unchanged. The Colossus Crossbow 4os stays kept, now as the
   Fury's swap Brand base (a guide alternative); a second 4os bow is sold.
 - [x] An any-of switch group met by the held copies (worn, merc, carried, stash: the same
-  count as the switch) wants only its held candidates: the merc wears Bulwark → Isenhart's
-  Horns is no piece any more. Unmet: every candidate as before.
+  count as the switch) wants only its `count` of held candidates, the worn ones first, then in
+  the group's order; every other held candidate is no piece of the group (live check after
+  c5b78ad: the merc wears Bulwark → Isenhart's Horns on page 2 is no longer kept by it).
+  Unmet: every candidate as before.
 - [x] A build's `weapon_rule = { two_handed, melee }` (build file, from `gen_build.py`'s
   BUILDS; `socket_bases::WeaponRule`) limits the bases of its player `weapon` slot (stash plan
   `fills`, next stage gear `held_base`): the Fury has both (werewolf: no bows or crossbows;

@@ -459,7 +459,7 @@ impl Needs {
         }
         for build in chain_builds(config, chain) {
             needs.build(build, class, level, &mut spare);
-            needs.switch_gear(config, build, class, owns);
+            needs.switch_gear(config, build, class, worn, owns);
         }
         for group in &config.farm {
             needs.farm_group(group, build_def(config, &group.target), class, &mut spare);
@@ -497,22 +497,57 @@ impl Needs {
     /// The `switch_requires` items of `build`, without those marked "not needed" for it or for
     /// the stage it switches to. A one-item group wants its copies and a base. An any-of group
     /// wants each candidate as a piece but no base (that would keep a base for every
-    /// alternative runeword); once the held copies (`owns`) meet it, only the held candidates.
-    fn switch_gear(&mut self, config: &Settings, build: &Build, class: u32, owns: &dyn Fn(&str) -> u32) {
+    /// alternative runeword); once the held copies (`owns`) meet it, only the group's count of
+    /// held candidates: the `worn` ones first, then in the group's order.
+    fn switch_gear(
+        &mut self,
+        config: &Settings,
+        build: &Build,
+        class: u32,
+        worn: &[String],
+        owns: &dyn Fn(&str) -> u32,
+    ) {
         let player = Wearer::Player(build.class.unwrap_or(class));
         let marks_of = |slug: &str| config.not_needed.get(slug).map_or(&[][..], Vec::as_slice);
         let own = marks_of(&build.name.to_lowercase());
         let next = build.next.as_deref().map_or(&[][..], marks_of);
         let marked =
             |item: &str| crate::not_needed::covers(own, item) || crate::not_needed::covers(next, item);
+        let worn_copies = |item: &str| {
+            let on = worn.iter().filter(|w| same_name(w, item)).count();
+            u32::try_from(on).unwrap_or(u32::MAX)
+        };
         for group in &build.switch_requires {
-            let single = group.any.len() == 1;
-            let met = group.met(owns);
-            for item in group.any.iter().filter(|item| !marked(item)) {
-                if single {
+            let candidates: Vec<&String> = group.any.iter().filter(|item| !marked(item)).collect();
+            if group.any.len() == 1 {
+                for item in candidates {
                     self.piece(item, group.count);
                     self.base(item, player, None, WeaponRule::default());
-                } else if !met || owns(item) > 0 {
+                }
+            } else if group.met(owns) {
+                let mut left = group.count;
+                let mut taken: Vec<(&str, u32)> = Vec::new();
+                let worn_first = candidates
+                    .iter()
+                    .map(|item| (item.as_str(), worn_copies(item)))
+                    .chain(
+                        candidates
+                            .iter()
+                            .map(|item| (item.as_str(), owns(item).saturating_sub(worn_copies(item)))),
+                    );
+                for (item, copies) in worn_first {
+                    let take = copies.min(left);
+                    left -= take;
+                    match taken.iter_mut().find(|(n, _)| *n == item) {
+                        Some((_, t)) => *t += take,
+                        None => taken.push((item, take)),
+                    }
+                }
+                for (item, count) in taken.into_iter().filter(|&(_, c)| c > 0) {
+                    self.piece(item, count);
+                }
+            } else {
+                for item in candidates {
                     self.piece(item, 1);
                 }
             }
@@ -3192,8 +3227,35 @@ mod tests {
             .get("summoner druid")
             .ok_or_else(|| anyhow::anyhow!("summoner"))?;
         let mut held = Needs::default();
-        held.switch_gear(&config, def, 5, &|n| u32::from(n == "Wormskull"));
+        held.switch_gear(&config, def, 5, &[], &|n| u32::from(n == "Wormskull"));
         assert!(wants_piece(&held, "Wormskull") && !wants_piece(&held, "Isenhart's Horns"));
+        // Live 2026-11-22: the merc wears Bulwark and Isenhart's Horns is on page 2. The group
+        // needs one helm: the worn one; Isenhart's isn't wanted by it.
+        let mut both = Needs::default();
+        let worn = ["Bulwark".to_owned()];
+        both.switch_gear(&config, def, 5, &worn, &|n| {
+            u32::from(n == "Bulwark" || n == "Isenhart's Horns")
+        });
+        both.subtract_worn(&worn);
+        assert!(!wants_piece(&both, "Isenhart's Horns"), "{:?}", both.pieces);
+        assert!(!wants_piece(&both, "Bulwark"), "worn: no stash copy");
+        let owns = |n: &str| u32::from(n == "Bulwark" || n == "Isenhart's Horns");
+        let chain: Vec<String> = CHAIN.iter().map(|&c| c.to_owned()).collect();
+        let live = Needs::from_config(&config, &chain, None, 5, Some(77), &worn, &owns);
+        assert!(!wants_piece(&live, "Isenhart's Horns"), "{:?}", live.pieces);
+        assert!(
+            rows(&horns, &live)
+                .iter()
+                .all(|(_, _, action, _)| *action != Action::Keep(Side::Own)),
+            "{:?}",
+            rows(&horns, &live)
+        );
+        // Neither worn: the first held in the group's order (Isenhart's before Wormskull).
+        let mut stash = Needs::default();
+        stash.switch_gear(&config, def, 5, &[], &|n| {
+            u32::from(n == "Wormskull" || n == "Isenhart's Horns")
+        });
+        assert!(wants_piece(&stash, "Isenhart's Horns") && !wants_piece(&stash, "Wormskull"));
         Ok(())
     }
 
