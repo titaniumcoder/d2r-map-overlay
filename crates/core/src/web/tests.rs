@@ -66,6 +66,26 @@ fn live_json_has_the_skill_trees() -> Result<()> {
 }
 
 #[test]
+fn live_json_has_the_buffs() -> Result<()> {
+    let blocks = crate::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    let json = serde_json::from_str::<serde_json::Value>(&live_json(&info))?;
+    assert_eq!(json.get("buffs"), Some(&serde_json::json!([])), "no states");
+    // A curse, Feral Rage, an uncurated state and a hidden one (justhit).
+    info.states = &[7, 61, 86, 120];
+    let json = serde_json::from_str::<serde_json::Value>(&live_json(&info))?;
+    assert_eq!(
+        json.get("buffs"),
+        Some(&serde_json::json!([
+            {"state": 120, "name": "Feral Rage", "kind": "good", "stacks": null, "seconds_left": null},
+            {"state": 61, "name": "Lower Resist", "kind": "bad", "stacks": null, "seconds_left": null},
+            {"state": 7, "name": "state 7 playerbody", "kind": "other", "stacks": null, "seconds_left": null},
+        ]))
+    );
+    Ok(())
+}
+
+#[test]
 fn live_json_skills_are_null_when_unread() -> Result<()> {
     let blocks = crate::render::TextBlocks::default();
     let json = serde_json::from_str::<serde_json::Value>(&live_json(&live_info(7, &blocks, &[], &[], &[])))?;

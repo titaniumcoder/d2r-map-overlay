@@ -89,6 +89,8 @@ pub struct LiveInfo<'a> {
     /// Base strength and dexterity ([`crate::game::Player::strength`]); `None` if unread.
     pub strength: Option<u32>,
     pub dexterity: Option<u32>,
+    /// The player's active states ([`crate::game::Player::states`]): the Buffs panel.
+    pub states: &'a [u32],
     /// The marked ground drops by unit id ([`crate::guidance::Guidance::marks`]): the `drops`
     /// section the page's drop sounds key on.
     pub marks: &'a crate::guidance::Marks,
@@ -131,13 +133,15 @@ pub struct Panels<'a> {
 /// `{ "live": true, "updated_at": <unix secs>, "player": {"name", "class", "level",
 /// "difficulty"}, "area": …, "guide": […], "equipped": […], "stash_pages": […],
 /// "stash_materials": {…}, "stash_owned": […], "skills": {…} | null, "shop": {…} | null,
-/// "drops": […] }`,
+/// "drops": […], "buffs": […] }`,
 /// where each line is `{ "text": …, "colour": "#rrggbb" }` (the overlay line's colour as hex;
 /// the guide's per-span colours are flattened to the base colour). The shared stash comes as
 /// `stash_pages` (the normal tabs in the game's UI order, [`stash::stash_pages`]) and
 /// `stash_materials` (the gems/runes/materials tab's stacks, [`stash::stash_materials`]). The
 /// `skills` section is the class's three skill trees ([`skills::skills_json`]), `shop` the open
-/// trade window ([`vendor::shop_json`]), `drops` the marked ground drops ([`drops_json`]). The
+/// trade window ([`vendor::shop_json`]), `drops` the marked ground drops ([`drops_json`]), `buffs` the player's states worth
+/// showing as `{ "state", "name", "kind": "good" | "bad" | "other", "stacks", "seconds_left" }`
+/// ([`crate::buffs::lines`]; the last two `null` until they can be read). The
 /// playstyle's sections are listed in
 /// `d2r_playstyle_config::web`.
 #[must_use]
@@ -164,6 +168,7 @@ pub fn live_json(info: &LiveInfo, panels: Panels) -> String {
         "skills": skills::skills_json(info.class, info.char_level, info.skills, panels.skill_plan),
         "shop": vendor::shop_json(info, &panels.shop),
         "drops": drops_json(info.marks),
+        "buffs": crate::buffs::lines(info.states),
     });
     if let Some(obj) = json.as_object_mut() {
         for (key, value) in panels.sections {

@@ -38,13 +38,24 @@ a { color: var(--gold); text-decoration: none; } a:hover { text-decoration: unde
 /* Top row: Sell / Keep beside Skills (user 2026-11-20); one column on narrow screens. */
 .toprow { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); align-items: start; }
 .wrap > .toprow + .panel { margin-top: 16px; }
-/* Next: the route's current step, above everything else (plugin refactor step 9). */
-#nextpanel:not([hidden]) + .toprow { margin-top: 16px; }
+/* Next: the route's current step, above everything else (plugin refactor step 9). Next and
+   Buffs sit above the top row; whichever of them shows spaces it. */
+.wrap > .panel:not([hidden]) ~ .toprow { margin-top: 16px; }
+#nextpanel[hidden] + #buffpanel { margin-top: 0; }
 #nextpanel .step { font-size: 15px; font-weight: 650; }
 #nextpanel ul.todo { margin: 4px 0 0; padding: 0; list-style: none; font-size: 13px; }
 #nextpanel ul.todo li::before { content: "▸ "; color: var(--gold); }
 #nextpanel .note { color: var(--dim); font-size: 12px; margin-top: 4px; }
 #nextpanel .then { color: var(--faint); font-size: 12px; margin-top: 4px; }
+/* Buffs: the player's active states as chips: good, then bad (highlighted), then the
+   uncurated ones muted. */
+.buffs { display: flex; flex-wrap: wrap; gap: 6px; }
+.buff { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px;
+  padding: 2px 10px; font-size: 12.5px; white-space: nowrap; }
+.buff.good { color: var(--good); border-color: rgba(111,220,111,.35); }
+.buff.bad { color: var(--bad); border-color: var(--bad); background: rgba(255,107,91,.12); font-weight: 650; }
+.buff.other { color: var(--faint); font-size: 11.5px; border-style: dashed; }
+.buff .n { color: var(--dim); margin-left: 5px; font-variant-numeric: tabular-nums; }
 /* The Gear panel's fold: the heading's button toggles the body. */
 .panel h2 .fold { all: unset; cursor: pointer; display: inline-flex; align-items: baseline; gap: 6px; }
 .panel h2 .fold::before { content: "▸"; display: inline-block; transition: transform .15s; }
@@ -244,6 +255,7 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
 <div class="upbar" id="upgrades" hidden></div>
 <div class="wrap">
 <section class="panel full" id="nextpanel" hidden><h2>Next</h2><div id="next"></div></section>
+<section class="panel full" id="buffpanel" hidden><h2>Buffs</h2><div class="buffs" id="buffs"></div></section>
 <div class="toprow">
 <section class="panel" id="sellpanel"><h2>Sell / Keep</h2><div id="sell" class="lines"></div></section>
 <section class="panel" id="skillpanel"><h2>Skills <span class="sub" id="skillsum"></span></h2>

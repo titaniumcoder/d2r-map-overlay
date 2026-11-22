@@ -217,6 +217,7 @@ fn publish_dashboard<'a, P: Playstyle>(
         shop: snap.shop.as_ref(),
         strength: snap.player.strength,
         dexterity: snap.player.dexterity,
+        states: &snap.player.states,
         marks: &evaluation.guidance.marks,
         updated_at: now_secs(),
     };

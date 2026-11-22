@@ -821,14 +821,15 @@ mod tests {
     /// change updates these numbers (the failure message prints the new ones). Step 8 added the
     /// farm panel's "worth farming" line; the dashboard sounds (2026-11-20) the ▾ sound picker
     /// and the sound detection; the config page's "Loot filter" section (2026-11-20); the
-    /// Countess's reliable / rare runes on the worth line (2026-11-20).
+    /// Countess's reliable / rare runes on the worth line (2026-11-20); the Buffs panel
+    /// (2026-11-22).
     #[test]
     fn served_pages_match_their_snapshot() {
         let dashboard = html_page("/");
         let config = html_page("/config");
         assert_eq!(
             (dashboard.len(), format!("{:#018x}", fnv1a(dashboard.as_bytes()))),
-            (51_198, "0xa899dd0e21c373b6".to_owned()),
+            (52_784, "0x657ecd50dbc697b6".to_owned()),
             "dashboard page"
         );
         assert_eq!(
