@@ -1648,6 +1648,52 @@ fn upgrades_list_wearable_owned_pieces_and_craftable_runewords() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn no_equip_upgrade_below_the_worn_piece_of_the_list() -> Result<()> {
+    // The Fury's guide alternatives sit below the user's core pick: an owned one with a higher
+    // level requirement is no upgrade over a worn piece ranked above it.
+    let build = config::Build {
+        name: "Fury".to_owned(),
+        slots: [(
+            "helm".to_owned(),
+            vec!["Harlequin Crest@62".to_owned(), "Crown of Ages@82".to_owned()],
+        )]
+        .into(),
+        ..config::Build::default()
+    };
+    let owned = ["Crown of Ages".to_owned()];
+    let json = guide_json(&build, 85, &[], &[], &[], &owned, &[equipped_unique(1)])?;
+    assert_eq!(
+        json.get("upgrades")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "{json}"
+    );
+    assert_eq!(
+        json.pointer("/gear/columns/0/pieces/1/state")
+            .and_then(serde_json::Value::as_str),
+        Some("worse"),
+        "the grid strikes it too"
+    );
+    // Worn below it, the core pick is still an upgrade.
+    let build = config::Build {
+        slots: [(
+            "helm".to_owned(),
+            vec!["Crown of Ages@82".to_owned(), "Harlequin Crest@62".to_owned()],
+        )]
+        .into(),
+        ..build
+    };
+    let json = guide_json(&build, 85, &[], &[], &[], &owned, &[equipped_unique(1)])?;
+    assert_eq!(
+        json.pointer("/upgrades/0/key")
+            .and_then(serde_json::Value::as_str),
+        Some("equip:helm:Crown of Ages")
+    );
+    Ok(())
+}
+
 fn rune_worded(body: u8, code: &str, name: &str) -> d2r_core::game::Equipped {
     d2r_core::game::Equipped {
         body,

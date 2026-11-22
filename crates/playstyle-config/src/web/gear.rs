@@ -241,8 +241,8 @@ fn equip_upgrades(bis: &Bis, lvl: u32, info: &PanelInfo) -> Vec<serde_json::Valu
     out
 }
 
-/// The first of `pieces` that is owned, wearable at `lvl`, not worn and better than what is
-/// equipped in `slot`, with where it is.
+/// The first of `pieces` above the worn one that is owned, wearable at `lvl` and better than
+/// what is equipped in `slot`, with where it is.
 fn owned_upgrade<'p>(
     pieces: &'p [String],
     slot: &str,
@@ -250,11 +250,15 @@ fn owned_upgrade<'p>(
     info: &PanelInfo,
 ) -> Option<(&'p str, String)> {
     let eq_level = equipped_level(slot_bodies(slot), info);
-    pieces.iter().filter(|p| !outgrown(p, info)).find_map(|piece| {
+    // The list is ranked: a piece below a worn one is no upgrade, whatever its level.
+    let above_worn = pieces
+        .iter()
+        .take_while(|p| !is_worn(d2r_core::info::piece_name(p), info));
+    above_worn.filter(|p| !outgrown(p, info)).find_map(|piece| {
         let name = d2r_core::info::piece_name(piece);
         let req = d2r_core::info::piece_level(piece)?;
         let tick = d2r_core::info::piece_tick(piece, &[], info.live.owned, info.live.stash_owned)?;
-        (req <= lvl && !is_worn(name, info) && piece_state(Some(req), eq_level, lvl) == "better").then(|| {
+        (req <= lvl && piece_state(Some(req), eq_level, lvl) == "better").then(|| {
             let place = match tick {
                 d2r_core::info::Tick::Worn | d2r_core::info::Tick::Owned => "you have it",
                 d2r_core::info::Tick::Stash => "in the shared stash",
@@ -599,6 +603,17 @@ pub fn grid_column(
         Wearer::Player(class)
     };
     let note = (title == "Off-Hand" && two_handed_equipped(info)).then_some("(two-handed weapon equipped)");
+    let mut pieces = grid_pieces(
+        pieces.map_or(&[][..], Vec::as_slice),
+        equipped_level(bodies, info),
+        &d2r_core::game::worn_names(info.live.equipped_items),
+        (bodies.first().copied(), wearer),
+        info,
+    );
+    // The Ring column holds two worn rings: a piece between them can still beat the second.
+    if bodies.len() == 1 {
+        beat_below_worn(&mut pieces);
+    }
     serde_json::json!({
         "title": title,
         "equipped": header
@@ -606,13 +621,7 @@ pub fn grid_column(
             .map(|e| serde_json::json!({ "name": equipped_name(e), "level": e.required_level() }))
             .collect::<Vec<_>>(),
         "note": note,
-        "pieces": grid_pieces(
-            pieces.map_or(&[][..], Vec::as_slice),
-            equipped_level(bodies, info),
-            &d2r_core::game::worn_names(info.live.equipped_items),
-            (bodies.first().copied(), wearer),
-            info,
-        ),
+        "pieces": pieces,
     })
 }
 

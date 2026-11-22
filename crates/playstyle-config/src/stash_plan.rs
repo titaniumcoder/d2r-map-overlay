@@ -2461,6 +2461,44 @@ mod tests {
     }
 
     #[test]
+    fn fury_guide_alternatives_are_kept_one_copy_each() -> anyhow::Result<()> {
+        // The shipped Fury lists the Maxroll guide's pieces of every slot after the user's
+        // options (and its unique charms in the extras): each held one is kept for own use.
+        let config = shipped();
+        let fury = config
+            .build_defs
+            .get("fury druid")
+            .ok_or_else(|| anyhow::anyhow!("no fury druid"))?;
+        let first = |slot: &str| fury.slots.get(slot).and_then(|s| s.first()).cloned();
+        assert_eq!(first("weapon").as_deref(), Some("Eternity@63"), "core first");
+        assert_eq!(first("helm").as_deref(), Some("Jalal's Mane@42"));
+        assert_eq!(first("gloves").as_deref(), Some("Laying of Hands@63"));
+        let needs = shipped_needs(&config, "fury druid")?;
+        let guide = [
+            ("7pa", "Tomb Reaver", item_data::QUALITY_UNIQUE, 298),
+            ("uap", "Harlequin Crest", item_data::QUALITY_UNIQUE, 248),
+            ("zhb", "Thundergod's Vigor", item_data::QUALITY_UNIQUE, 246),
+            ("xhn", "Shaftstop", item_data::QUALITY_UNIQUE, 215),
+            ("cm1", "Annihilus", item_data::QUALITY_UNIQUE, 381),
+            ("xhm", "Guillaume's Face", item_data::QUALITY_SET, 104),
+        ];
+        for (code, name, quality, index) in guide {
+            let wanted: Vec<u32> = needs
+                .pieces
+                .iter()
+                .filter(|(n, _)| same_name(n, name))
+                .map(|&(_, c)| c)
+                .collect();
+            assert_eq!(wanted, vec![1], "{name}");
+            assert_eq!(
+                rows(&[at(named(code, quality, index), Spot::Page(1))], &needs),
+                vec![row(name, Spot::Page(1), Action::Keep(Side::Own), 1)]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn one_harmony_base_serves_the_druid_swap_and_the_act1_rogue() -> anyhow::Result<()> {
         let config = shipped();
         let needs = shipped_needs(&config, "summoner druid")?;
@@ -2483,16 +2521,22 @@ mod tests {
             rows(&[at(base("am1", 4), Spot::Page(1))], &needs),
             vec![mine("Stag Bow 4os", own)]
         );
-        // Both held: one Harmony, one base (the stronger one).
+        // Both held: one Harmony, one base (the stronger one); the other 4os bow is the
+        // druid's base for Brand (the Fury's guide swap alternative), and a third is sold.
         assert_eq!(
             rows(
                 &[
+                    at(base("hbw", 4), Spot::Page(1)),
                     at(base("hbw", 4), Spot::Page(1)),
                     at(base("am1", 4), Spot::Page(1))
                 ],
                 &needs
             ),
-            vec![mine("Hunter's Bow 4os", Action::Sell), mine("Stag Bow 4os", own)]
+            vec![
+                mine("Hunter's Bow 4os", Action::Sell),
+                mine("Hunter's Bow 4os", own),
+                mine("Stag Bow 4os", own)
+            ]
         );
         // The Fury stage alone has no rogue: the amazon bow is no base.
         let fury = config

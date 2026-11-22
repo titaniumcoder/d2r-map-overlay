@@ -746,6 +746,17 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   farm `kind = "rolled"` entry only matches skill `needs`. Until then a rare or crafted ring is
   judged by `gear_score` against the worse worn ring (kept within `NEAR_WORN` of it or with
   notable affixes, else sold "worse than worn" / "no build stats"), not by the guide's affix list.
+- **Fury guide alternatives (user decision 2026-11-22: "Yes, all slots as alternatives, without
+  one-handers and shields")**: every other slot lists the Maxroll guide's unique/set/runeword
+  pieces as `alternative`, after the user's options (weapons two-handed only: eth Tomb Reaver,
+  Oath, Grief in a two-handed base, Hustle, Unbending Will in a Colossus Blade; swap Brand; no
+  off-hand, shield, Demon Limb or charge wand), and its unique charms in `[extras] charms`.
+  Stats and levels from d2data (runewords with their rune bonuses). One copy each is "keep own";
+  each runeword also wants a base like the user's own runeword options. The lists are ranked, so
+  an owned piece below the worn one is no equip upgrade and is struck in the grid (Ring column
+  excepted: two worn rings). The merc stays the Act 5 2x Lawbringer (the guide's Act 2 Might
+  merc is not taken). Open: magic charm types (Sharp / Shimmering / Fine ... of Vita) have no
+  build-file form.
 - **Upgrades + chime**: `upgrades` in the live JSON = owned/stash pieces of the current stage wearable now
   and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
   are all owned. The page chimes (WebAudio, 🔔 toggle) when a key appears that this character hasn't had.
