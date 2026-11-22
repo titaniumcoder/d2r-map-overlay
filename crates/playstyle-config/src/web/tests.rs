@@ -3552,10 +3552,11 @@ fn gear_lists_the_charm_wishlist_with_what_is_found_and_the_next_stage_s_wishes(
     ];
     let stash = [d2r_core::stash::StashTab {
         kind: d2r_core::stash::TabKind::Page(3),
-        items: vec![d2r_core::stash::stash_item(
-            &magic("cm3", &[(stat::SKILL_TAB, 5 * 8 + 1, 1)]),
-            None,
-        )],
+        items: vec![
+            d2r_core::stash::stash_item(&magic("cm3", &[(stat::SKILL_TAB, 5 * 8 + 1, 1)]), None),
+            // A Latent Bone Break (the Sunder as it drops) is the wished Bone Break.
+            d2r_core::stash::stash_item(&unique("cm3", 431, &[]), None),
+        ],
     }];
     let blocks = d2r_core::render::TextBlocks::default();
     let mut info = live_info(5, &blocks, &[], &stash, &[]);
@@ -3588,7 +3589,7 @@ fn gear_lists_the_charm_wishlist_with_what_is_found_and_the_next_stage_s_wishes(
             row("Annihilus", 1, 1, None),
             row("Hellfire Torch", 0, 1, None),
             row("Gheed's Fortune", 0, 1, None),
-            row("Bone Break", 0, 1, None),
+            row("Bone Break", 1, 1, None),
             row("Summoning skiller", 2, 7, None),
             row("Life small charm", 0, 2, None),
             row("Resistance small charm", 0, 2, None),

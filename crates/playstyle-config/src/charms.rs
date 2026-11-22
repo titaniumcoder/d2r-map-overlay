@@ -44,8 +44,7 @@ const fn one() -> u32 {
 
 impl CharmWish {
     /// Whether `item` fills this wish for a character of `class`: an identified unique of
-    /// this name (also "Latent <name>", the Sunder as it drops, and "Renewed <name>", its
-    /// crafted form), or a magic charm of this size;
+    /// this name (a Sunder in any form, [`same_name`]), or a magic charm of this size;
     /// either way with every `stats` condition met.
     #[must_use]
     pub fn matches(&self, item: &ItemDrop, class: Option<u32>) -> bool {
@@ -53,14 +52,7 @@ impl CharmWish {
             return false;
         };
         let kind_fits = if self.unique {
-            unique
-                && valuables::unique_set_name(item).is_some_and(|n| {
-                    same_name(n, &self.name)
-                        || ["Latent ", "Renewed "].iter().any(|form| {
-                            n.strip_prefix(form)
-                                .is_some_and(|bare| same_name(bare, &self.name))
-                        })
-                })
+            unique && valuables::unique_set_name(item).is_some_and(|n| same_name(n, &self.name))
         } else {
             !unique
                 && item.quality == item_data::QUALITY_MAGIC

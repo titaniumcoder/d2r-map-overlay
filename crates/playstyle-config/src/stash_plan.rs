@@ -2833,6 +2833,28 @@ mod tests {
     }
 
     #[test]
+    fn every_form_of_bone_break_is_the_wanted_piece() -> anyhow::Result<()> {
+        // Row 405 is the old Bone Break, 431 the Latent one that drops, 436 the Renewed one.
+        let needs = shipped_needs(&shipped(), "fury druid")?;
+        let bone_break = |index| at(named("cm3", item_data::QUALITY_UNIQUE, index), Spot::Page(3));
+        for (index, name) in [
+            (405, "Bone Break"),
+            (431, "Latent Bone Break"),
+            (436, "Renewed Bone Break"),
+        ] {
+            assert_eq!(
+                rows(&[bone_break(index)], &needs),
+                vec![row(name, Spot::Page(3), Action::Move(Side::Own), 1)]
+            );
+        }
+        // One copy wanted, whatever its form.
+        let plan = rows(&[bone_break(431), bone_break(436)], &needs);
+        let own = plan.iter().filter(|r| r.2 == Action::Move(Side::Own)).count();
+        assert_eq!(own, 1, "{plan:?}");
+        Ok(())
+    }
+
+    #[test]
     fn fury_guide_alternatives_are_kept_one_copy_each() -> anyhow::Result<()> {
         // The shipped Fury lists the Maxroll guide's pieces of every slot after the user's
         // options (and its unique charms in the extras): each held one is kept for own use.

@@ -1112,6 +1112,24 @@ mod tests {
     }
 
     #[test]
+    fn a_latent_or_renewed_sunder_ticks_its_plain_piece() {
+        for owned in ["Latent Bone Break", "Renewed Bone Break"] {
+            let names = [owned.to_owned()];
+            assert_eq!(
+                piece_tick("Bone Break", &[], &names, &[]),
+                Some(Tick::Owned),
+                "{owned}"
+            );
+            assert_eq!(
+                piece_tick("Bone Break", &[], &[], &names),
+                Some(Tick::Stash),
+                "{owned}"
+            );
+            assert_eq!(piece_tick("Black Cleft", &[], &names, &names), None, "{owned}");
+        }
+    }
+
+    #[test]
     fn levels_table_has_flayer_dungeon() {
         assert!(
             LEVELS.contains(&(88, "Flayer Dungeon Level 1", [22, 51, 81])),

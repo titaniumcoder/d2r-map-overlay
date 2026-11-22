@@ -9,13 +9,47 @@ use crate::game::ItemDrop;
 use crate::item_names_data;
 use crate::offsets::item_data;
 
+/// The Sunder charms, each in three uniqueitems rows: the old ladder one, `PreCrafted <name>`
+/// (shown `Latent <name>`, the one that drops) and `Crafted <name>` (shown `Renewed <name>`).
+const SUNDER_CHARMS: [&str; 6] = [
+    "Black Cleft",
+    "Bone Break",
+    "Cold Rupture",
+    "Crack of the Heavens",
+    "Flame Rift",
+    "Rotting Fissure",
+];
+
+/// The name of the piece `name` is a form of: a Sunder charm's latent or renewed form in
+/// either spelling (`PreCrafted Bone Break`, `Latent Bone Break`, `Crafted Bone Break`,
+/// `Renewed Bone Break`) is plain `Bone Break`; any other name is itself (trimmed).
+#[must_use]
+pub fn plain_name(name: &str) -> &str {
+    let name = name.trim();
+    ["PreCrafted ", "Crafted ", "Latent ", "Renewed "]
+        .iter()
+        .find_map(|form| {
+            let rest = name
+                .get(..form.len())
+                .filter(|prefix| prefix.eq_ignore_ascii_case(form))
+                .and_then(|_| name.get(form.len()..))?
+                .trim();
+            SUNDER_CHARMS
+                .iter()
+                .any(|sunder| sunder.eq_ignore_ascii_case(rest))
+                .then_some(rest)
+        })
+        .unwrap_or(name)
+}
+
 /// Whether two item names are the same piece, ignoring ASCII case, surrounding spaces and
-/// apostrophes ("Ancient's Pledge" vs "Ancients' Pledge"), and a trailing "(qualifier)" on
-/// one side only ("Hustle" matches "Hustle (weapon)", which differs from "Hustle (armor)").
+/// apostrophes ("Ancient's Pledge" vs "Ancients' Pledge"), a trailing "(qualifier)" on
+/// one side only ("Hustle" matches "Hustle (weapon)", which differs from "Hustle (armor)"),
+/// and a Sunder charm's form ([`plain_name`]: "Latent Bone Break" is "Bone Break").
 #[must_use]
 pub fn same_name(a: &str, b: &str) -> bool {
     let bare = |s: &str| {
-        s.trim()
+        plain_name(s)
             .chars()
             .filter(|&c| c != '\'')
             .map(|c| c.to_ascii_lowercase())
@@ -188,6 +222,30 @@ pub fn display_name(item: &ItemDrop) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_sunder_form_is_the_plain_sunder() {
+        for form in [
+            "Bone Break",
+            "PreCrafted Bone Break",
+            "Latent Bone Break",
+            "Crafted Bone Break",
+            "Renewed Bone Break",
+            " latent bone break ",
+        ] {
+            assert!(same_name(form, "Bone Break"), "{form}");
+        }
+        assert_eq!(
+            plain_name("PreCrafted Crack of the Heavens"),
+            "Crack of the Heavens"
+        );
+        assert_eq!(shown("PreCrafted Bone Break"), "Latent Bone Break");
+        assert!(!same_name("Latent Bone Break", "Black Cleft"));
+        // Only the Sunder charms have forms: other names keep their words.
+        assert_eq!(plain_name("Renewed Shako"), "Renewed Shako");
+        assert!(!same_name("Crafted Harlequin Crest", "Harlequin Crest"));
+        assert!(same_name("Harlequin Crest", "harlequin crest"));
+    }
 
     #[test]
     fn same_name_ignores_case_spaces_and_apostrophes() {

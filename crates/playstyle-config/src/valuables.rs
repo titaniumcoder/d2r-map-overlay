@@ -415,7 +415,7 @@ fn name_unknown(rule: &Rule, name: Option<&str>) -> Option<bool> {
         return Some(false);
     }
     match name {
-        Some(n) if rule.item_names.iter().any(|r| r == n) => Some(false),
+        Some(n) if rule.item_names.iter().any(|r| names::same_name(r, n)) => Some(false),
         Some(_) => None,
         None => Some(true),
     }
