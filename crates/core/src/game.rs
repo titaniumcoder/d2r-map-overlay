@@ -247,6 +247,20 @@ pub struct Player {
     /// the last value over a failed read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub states: Option<Vec<u32>>,
+    /// The state list most recently attached to the player's stats: a new one each time a
+    /// state is (re)applied, which is how a refreshed buff shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newest_state: Option<StateList>,
+}
+
+/// A state's own stat list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateList {
+    pub list: Addr,
+    /// states.txt row.
+    pub state: u32,
+    /// `(stat id, value)`.
+    pub stats: Vec<(u16, u32)>,
 }
 
 /// The player's speed stats and elemental resistances summed over equipped items and charms;

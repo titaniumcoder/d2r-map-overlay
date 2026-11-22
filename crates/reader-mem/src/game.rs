@@ -7,9 +7,9 @@ use anyhow::{Context, Result, bail};
 use d2r_core::game::{
     Addr, BorderLink, Bounds, BuffResearch, Candidate, ChosenBy, Equipped, ItemDrop, Level, Monster,
     OperatedObject, Place, Player, Preset, PresetKind, Room, RoomLink, RoomPos, RoomRect, Shrine, Skills,
-    Snapshot, SpeedStats, StatListDump, Well, active_states, char_level_from_raw, difficulty_from_raw,
-    has_state, identified_unique_or_set, is_shrine_object, is_terrorized, is_town, is_well_object,
-    magic_or_better, maybe_white_base,
+    Snapshot, SpeedStats, StatListDump, StateList, Well, active_states, char_level_from_raw,
+    difficulty_from_raw, has_state, identified_unique_or_set, is_shrine_object, is_terrorized, is_town,
+    is_well_object, magic_or_better, maybe_white_base,
 };
 use d2r_core::items::{self, DropKind};
 use d2r_core::objects::is_consumable_quest_object;
@@ -971,6 +971,7 @@ impl<'a, M: ReadMem> Reader<'a, M> {
             strength: self.stat(addr, stat_list::STRENGTH).ok().flatten(),
             dexterity: self.stat(addr, stat_list::DEXTERITY).ok().flatten(),
             states: self.states(addr, stat_list::STATE_FLAGS),
+            newest_state: self.newest_state_list(addr),
         };
         Ok((player, level))
     }
@@ -1246,6 +1247,27 @@ impl<'a, M: ReadMem> Reader<'a, M> {
         self.bytes(list, at, stat_list::STATE_FLAG_DWORDS * 4)
             .ok()
             .map(|flags| active_states(&flags))
+    }
+
+    /// The list newest attached to the unit's top stat list, if it is a state's and still
+    /// attached; unreadable is `None`, silently (it is read every tick).
+    fn newest_state_list(&self, addr: u64) -> Option<StateList> {
+        let top = self.ptr(addr, unit::STATS).ok().flatten()?;
+        let list = self.ptr(top, stat_list::NEXT).ok().flatten()?;
+        let state = self.u32(list, stat_list::STATE).ok()?;
+        let attached = self.ptr(list, stat_list::PARENT).ok().flatten() == Some(top);
+        if state == 0 || !attached {
+            return None;
+        }
+        let entries = self.stat_entries(list).ok()?;
+        Some(StateList {
+            list: Addr(list),
+            state,
+            stats: entries
+                .into_iter()
+                .map(|(_, stat, value)| (stat, value))
+                .collect(),
+        })
     }
 
     /// The player's raw stat lists for the journal's `buffs` event; `None` without a stat list.
@@ -3730,6 +3752,92 @@ mod tests {
         // A stat list too short for the bitfield (a failed read): unread too.
         let m = world_with_player_stats(&[(stat_list::LEVEL, 30)])?;
         assert_eq!(snapshot(&m, TABLE, None, None, None)?.player.states, None);
+        Ok(())
+    }
+
+    /// The experience shrine's list as recorded live (journal 2026-11-22, list 0x8a9355a0 of
+    /// top list 0x2c764510): state 137, one stat (85 = 50), parent at +0x78.
+    const RECORDED_XP_SHRINE_LIST: &str = concat!(
+        "503de6640000000000000000a12c00a1ffffffffffffffffffffffff00000000",
+        "8900000000000000000000000000000090548ae8000000000100000000000000",
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "000000000000000090a9822c0000000000000000000000001045762c00000000",
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000010000000000000000000000000000000000000000000000",
+        "000000000000000000000000000000005001e76400000000040000008b8bdc36",
+        "ffffffffffffffffffffffff4000000000000000000000000000000000000000",
+    );
+
+    fn unhex(text: &str) -> Result<Vec<u8>> {
+        let digits = text.as_bytes();
+        digits
+            .chunks(2)
+            .map(|pair| Ok(u8::from_str_radix(std::str::from_utf8(pair)?, 16)?))
+            .collect()
+    }
+
+    /// Alice whose top list's newest list is the recorded experience-shrine list, with its
+    /// entries pointer and parent moved to this world (`parent` replaces the top list there).
+    fn world_with_newest_list(header: &str, parent: Option<u64>) -> Result<FakeMem> {
+        use d2r_core::reader::ReadMem;
+        const TOP: u64 = 0x90_0000;
+        const LIST: u64 = 0x91_0000;
+        const LIST_ENTRIES: u64 = 0x92_0000;
+        let mut m = world()?;
+        let mut alice = vec![0u8; UNIT_SIZE];
+        m.read(P_ALICE, &mut alice)?;
+        let off = usize::try_from(unit::STATS)?;
+        alice
+            .get_mut(off..off + 8)
+            .context("stats field in unit")?
+            .copy_from_slice(&TOP.to_le_bytes());
+        m.add(P_ALICE, alice);
+        put(&mut m, TOP, 0xB70, &[(stat_list::NEXT, &LIST.to_le_bytes())])?;
+        let mut list = unhex(header)?;
+        let mut set = |off: u64, value: u64| -> Result<()> {
+            let off = usize::try_from(off)?;
+            list.get_mut(off..off + 8)
+                .context("pointer inside the header")?
+                .copy_from_slice(&value.to_le_bytes());
+            Ok(())
+        };
+        set(stat_list::ENTRIES, LIST_ENTRIES)?;
+        set(stat_list::PARENT, parent.unwrap_or(TOP))?;
+        m.add(LIST, list);
+        entries(&mut m, LIST_ENTRIES, &[(85, 50)]);
+        Ok(m)
+    }
+
+    #[test]
+    fn newest_state_list_from_a_recorded_header() -> Result<()> {
+        assert_eq!(unhex(RECORDED_XP_SHRINE_LIST)?.len(), stat_list::DUMP_LEN);
+        let m = world_with_newest_list(RECORDED_XP_SHRINE_LIST, None)?;
+        let s = snapshot(&m, TABLE, None, None, None)?;
+        assert_eq!(
+            s.player.newest_state,
+            Some(StateList {
+                list: Addr(0x91_0000),
+                state: 137,
+                stats: vec![(85, 50)],
+            })
+        );
+
+        let freed = world_with_newest_list(RECORDED_XP_SHRINE_LIST, Some(0))?;
+        assert_eq!(
+            snapshot(&freed, TABLE, None, None, None)?.player.newest_state,
+            None,
+            "a freed list (parent 0) is no state's"
+        );
+        let mut untagged = unhex(RECORDED_XP_SHRINE_LIST)?;
+        let state = usize::try_from(stat_list::STATE)?;
+        untagged.get_mut(state..state + 4).context("state field")?.fill(0);
+        let untagged = hex(&untagged);
+        let m = world_with_newest_list(&untagged, None)?;
+        assert_eq!(
+            snapshot(&m, TABLE, None, None, None)?.player.newest_state,
+            None,
+            "the run toggle's list carries no state"
+        );
         Ok(())
     }
 

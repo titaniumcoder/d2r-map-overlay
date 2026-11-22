@@ -198,6 +198,7 @@ mod tests {
             strength: None,
             dexterity: None,
             states: None,
+            newest_state: None,
         }
     }
 

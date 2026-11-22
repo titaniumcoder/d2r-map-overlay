@@ -121,6 +121,7 @@ mod tests {
                 strength: None,
                 dexterity: None,
                 states: None,
+                newest_state: None,
             },
             equipped: vec![],
             merc_equipped: vec![],

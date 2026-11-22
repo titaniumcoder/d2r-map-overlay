@@ -180,6 +180,41 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   points, no unspent `newskills` stat). Gear-granted skills sit in the list with 0 hard points; no bonus-level
   field in the node's first 0x100 bytes. Tree layout from `research/gen_skills.py` → `src/skills_data.rs`.
 
+- **State stat lists and buff timing** (journal 2026-11-22, 137 `buffs` events over four games,
+  summoner druid: Heart of Wolverine, Meditation merc aura, shrines, potions, chill, Amplify
+  Damage; scripts were throwaway Python over `grep '"ev":"buffs"'`):
+  - A state's own list carries its state id as **u32 `+0x20`** (high confidence: 38 attached
+    lists, every one matching the state that was set: 137 shrine_experience, 128 shrine_armor,
+    148 wolverine, 48 meditation, 11 cold, 9 amplifydamage, 105 alignment, 98, 49, 44, 33 …;
+    0 on the base, item and run-toggle lists). `+0x08/+0x0C` owner type/id, `+0x1C` flags,
+    `+0x30/+0x38/+0x40` entries/count/capacity, **`+0x78` the owner's top list** (0 once freed),
+    `+0x10/+0x14/+0x18` = -1 on every state list.
+  - **No expiry frame on the client.** In the classic order (flags, state, expire frame, skill,
+    skill level) the expire frame would sit at `+0x24`; `+0x24/+0x28/+0x2C` are 0 on all 38
+    state lists, the experience shrine's included. No word of any dumped header (top lists
+    too) advances with time like a frame counter. The countdown runs on the server; the client
+    only learns "set" and "cleared".
+  - **Top list `+0xD0` = the newest attached list** (medium-high: in 51 of 76 `added` events
+    it carried the added state; the other 25 were the run toggle's list, flags 0x4 with stat 67
+    = 50, or states without a client list such as healthpot and shrine_skill). Recasting a buff
+    attaches a new list there. A child list's own `+0xD0` is no link (the `--dump` chain walked
+    into freed lists and unrelated memory); `+0x68` points at an older list but missed active
+    ones (the experience shrine, Wolverine), so there is no known complete walk of the
+    player's lists.
+  - Durations from the game tables (blizzhackers/d2data, D2R): shrines.txt Armor, Combat,
+    Skill, Mana Recharge 2400 frames (96 s); the four Resist shrines and Experience 3600
+    (144 s); Stamina 4800 (192 s). misc.txt thawing / antidote / stamina potion `len` 750
+    (30 s). skills.txt Feral Rage `auralencalc` par1 = 500 (20 s, renewed by every hit that
+    stacks it); Battle Orders / Battle Command `ln12 + (other two warcries' blvl)·par8` = 30 s +
+    10 s per level + 5 s per base level of the other two (Shout the same with its own
+    params): known only to the caster. Cyclone Armor has no `auralencalc`: it lasts until its
+    `bonearmor` absorb is used up. The recorded experience shrine ran 144 s (t 1795327689 →
+    1795327833) = 3600 frames at 25 fps, matching the table.
+  - Feral Rage stacks and Cyclone Armor absorb: no data yet (summoner). The Feral Rage list's
+    skills.txt stats are velocitypercent and lifedrain min/max, none of them a stack count; the
+    count may be a stat of its own or skill-side. Cyclone Armor's absorb should be its list's
+    `bonearmor` stat (132; skills.txt sets it ×256). Both read from the newest list when it is theirs.
+
 - **Quest flags** (live 2026-11-18, druid "Elemental" clvl 21 Normal, probe `research/quests.py`):
   PlayerData `+0x40/+0x48/+0x50` point to per-difficulty quest BitBuffers, but on the client they
   stay **all zero** (server copy). The client's record of the current game is a `.data` global
