@@ -168,8 +168,8 @@ fn reload_config(config: &mut config::Config, path: &Path) {
     }
 }
 
-/// Publishes the dashboard JSON and the gear state the config page annotates from, and plays
-/// the frame's sounds; returns the in-game UI marks, which share the Vendor panel's notes.
+/// Publishes the dashboard JSON and plays the frame's sounds; returns the in-game UI marks,
+/// which share the Vendor panel's notes.
 fn publish_web<'a, P: Playstyle>(
     sound_memory: &mut sounds::Memory,
     snap: &game::Snapshot,
@@ -180,13 +180,6 @@ fn publish_web<'a, P: Playstyle>(
     stash_open: bool,
 ) -> UiMarks {
     let blocks = render::text_blocks(snap, &evaluation.guidance, width, info::font());
-    web::publish_gear(web::GearInfo {
-        worn: game::worn_names(&snap.equipped_items),
-        owned: snap.owned_names.clone(),
-        stash: snap.stash_names.clone(),
-        equipped: snap.equipped.clone(),
-        merc_equipped: snap.merc_equipped.clone(),
-    });
     publish_dashboard(
         sound_memory,
         snap,

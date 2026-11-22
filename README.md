@@ -122,8 +122,8 @@ line on start and runs without builds, stages or farm list (unless your own or o
 them). To change a file
 without touching the repo, copy it to `~/.config/d2r-map-overlay/playstyle/` under the same relative
 path (for example `playstyle/farm.toml` or `playstyle/builds/fury-druid.toml`): a file there replaces
-the shipped one. The build each character follows is chosen on the dashboard's `/config` page and
-saved in `~/.local/share/d2r-map-overlay/bis.toml`. The page's "Money farming" switch (marks and
+the shipped one. The build chain each of your characters follows is chosen on the dashboard's
+`/config` page (it lists the characters the overlay has seen you play) and saved in `~/.local/share/d2r-map-overlay/bis.toml`. The page's "Money farming" switch (marks and
 stash keeps for the wands, scepters, sorceress orbs and daggers vendors pay well for) is saved in
 `~/.local/share/d2r-map-overlay/settings.toml`.
 

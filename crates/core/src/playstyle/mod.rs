@@ -8,7 +8,7 @@ pub use files::{DIR_VAR, Files};
 use crate::game::{ItemDrop, Snapshot};
 use crate::guidance::{Guidance, Marks};
 use crate::played::Played;
-use crate::web::{GearInfo, LiveInfo, Panels};
+use crate::web::{LiveInfo, Panels};
 
 /// One snapshot's evaluation ([`Playstyle::evaluate`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,10 +50,10 @@ pub trait Playstyle {
     /// The playstyle's part of one tick's dashboard.
     fn panels<'a>(&'a self, evaluation: &'a EvaluationOf<'_, Self>, info: &LiveInfo<'a>) -> Panels<'a>;
 
-    /// `GET /api/config`: every known character with its build selection and gear view.
-    fn config_json(&self, gear: &GearInfo, played: &Played) -> serde_json::Value;
+    /// `GET /api/config`: the player's own characters (`played`) with their build selection.
+    fn config_json(&self, played: &Played) -> serde_json::Value;
 
-    /// `GET /api/builds`.
+    /// `GET /api/builds`: the builds a character can follow.
     fn builds_json(&self) -> serde_json::Value;
 
     /// `None` clears the selection. The core serialises the calls.

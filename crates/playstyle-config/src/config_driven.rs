@@ -5,7 +5,7 @@ use d2r_core::game::{ItemDrop, Snapshot};
 use d2r_core::guidance::{Guidance, Marks};
 use d2r_core::played::Played;
 use d2r_core::playstyle::{Evaluation, EvaluationOf, Files, Playstyle};
-use d2r_core::web::{GearInfo, LiveInfo, Panels};
+use d2r_core::web::{LiveInfo, Panels};
 
 use crate::config::{Settings, Stage};
 use crate::stash_plan::Wants;
@@ -91,8 +91,8 @@ impl Playstyle for ConfigDriven {
         panels
     }
 
-    fn config_json(&self, gear: &GearInfo, played: &Played) -> serde_json::Value {
-        web::config_page::config_json(&self.config, gear, played)
+    fn config_json(&self, played: &Played) -> serde_json::Value {
+        web::config_page::config_json(&self.config, played)
     }
 
     fn builds_json(&self) -> serde_json::Value {

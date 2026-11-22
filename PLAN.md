@@ -839,8 +839,22 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   inline slots (legacy, hand-edited) if present, else the selected build's slots, else none. Same for
   damages: character-level `[builds]` entry if present, else the build's damages. The old
   `POST /api/build` (damages) and slot-editing `POST /api/bis` UI are gone; `POST /api/bis` now writes
-  the selection only, `GET /api/builds` lists the available builds, and `GET /api/config` returns the
-  resolved view (per character: build slug/name, resolved damages, per-piece annotated slots).
+  the selection only, `GET /api/builds` lists the builds to follow (`{slug, name, class, chain}`,
+  `chain` = the stage chain's names via `Config::stage_chain`), and `GET /api/config` returns the
+  characters with their selection (`{name, class, build, build_name, class_default, last_played}`;
+  `build_name` = the `played.json` stage latch when it lies on the selected chain, else the chain's start).
+- **Config page without BiS lists** (user request, 2026-11-22: "in the config screen, remove the bis
+  list in the webapp, it is unneeded now and honestly mostly deprecated and old. character (and
+  naturally only players own characters) and a selection of the plugin to follow"): the read-only
+  per-character BiS / Mercenary slot lists, the damages line and the free-text "Add character" form
+  are gone, and with them the gear state the core published for them (`GearInfo`, `publish_gear`).
+  "Characters" lists only the player's own characters: the keys of `played.json`, which the live loop
+  fills from the snapshot's own player only and seeds from the account's save files, so other players
+  of a group game never appear; a `[bis]` or `[builds]` entry alone no longer lists a name. Each row:
+  name, a build select (options of the character's class or of any class, labelled with the chain,
+  "Summoner Druid → Fury Druid"; saved on change via `POST /api/bis`), class, current stage, played
+  ago, delete. Legacy inline `[bis.<name>.slots]` in an old `bis.toml` still load and still win for
+  the dashboard (unchanged; just not shown on /config).
 - **Guide stages (2026-11-17, druid)**: a build file may also carry `class`, `default_for_class` (a
   character without a `[bis]` selection gets its class default), a stage chain `next` / `switch_level` /
   `auto_switch` / `switch_note` (`Config::stage`: selected build, else class default, then follow `next`
@@ -1057,10 +1071,11 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   changes or at most once a minute. Seeded once when the file is missing from the D2R save dir in the
   game's Proton prefix (`WINEPREFIX` from `/proc/<pid>/environ` → `drive_c/users/*/Saved Games/Diablo II
   Resurrected`): mtime of `<Name><account digits>.ctlo` (online) / `<Name>.d2s` (offline). A corrupt
-  file is ignored (no order) and repaired by the next write. `GET /api/config` sorts characters by
-  `last_played` desc (stable: the never-seen keep config order) and the page shows "played … ago".
+  file is ignored (no order) and repaired by the next write. `GET /api/config` lists its characters
+  by `last_played` desc and the page shows "played … ago".
   The dashboard has no other character list.
 - [x] Config page lists recently played characters first (2026-11-18).
+- [x] Config page without BiS lists, own characters only (2026-11-22).
 
 ### Dashboard rules (moved from code comments, 2026-11-22)
 - Recipes panel: an `upgrade` recipe (3 Ral → Ort, gem upgrades) is shown only when its result is a rune or gem another recipe still misses (2026-11-17: the tornado guide lists ~60).

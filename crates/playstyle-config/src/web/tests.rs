@@ -11,8 +11,8 @@ use super::recipes::{Input, runeword_slots, socket_count};
 use super::*;
 use crate::config;
 use d2r_core::build::Damage;
+use d2r_core::web::LiveInfo;
 use d2r_core::web::fixtures::{EMPTY_MARKS, EMPTY_SKILLS, lines_of, stash_item, test_stash};
-use d2r_core::web::{GearInfo, LiveInfo};
 
 static NO_ROUTE: crate::route::Route = crate::route::Route { bosses: Vec::new() };
 
@@ -147,29 +147,20 @@ fn names_of(json: &serde_json::Value) -> Vec<String> {
 }
 
 #[test]
-fn config_json_lists_every_character_once_recently_played_first() {
-    let mut config = crate::config::Settings::default();
-    for name in ["demonmaster", "elemental", "fulmina", "vex"] {
-        let bis = crate::config::Bis {
-            build: String::new(),
-            slots: BTreeMap::new(),
-            merc_slots: BTreeMap::new(),
-        };
-        config.bis.insert(name.to_owned(), bis);
-    }
-    // Builds-only, and one in both tables (listed once).
+fn config_json_lists_only_the_played_characters_recently_played_first() {
+    let mut config = resolved_config();
+    // A selection and a damages entry of characters never seen as the player: not listed.
     config.builds.names.insert("hork".to_owned(), vec![Damage::Fire]);
-    config.builds.names.insert("vex".to_owned(), vec![Damage::Cold]);
     let played = d2r_core::played::Played::from([
         played_entry("Fulmina", 30, None),
         played_entry("Elemental", 20, None),
         played_entry("Other", 99, None),
     ]);
-    let json = config_json(&config, &GearInfo::default(), &played);
+    let json = config_json(&config, &played);
     assert_eq!(
         names_of(&json),
-        ["Other", "Fulmina", "Elemental", "demonmaster", "vex", "hork"],
-        "recent first with played display names, the never-seen in config order"
+        ["Other", "Fulmina", "Elemental"],
+        "recent first with played display names; config-only names left out"
     );
     assert_eq!(
         json.pointer("/characters/0/last_played"),
@@ -178,15 +169,53 @@ fn config_json_lists_every_character_once_recently_played_first() {
     assert_eq!(
         json.pointer("/characters/0/build_name"),
         Some(&serde_json::Value::Null),
-        "played-only: no build selected"
+        "no build selected"
+    );
+    assert_eq!(json.pointer("/characters/0/slots"), None, "no BiS lists any more");
+}
+
+#[test]
+fn config_json_names_the_stage_reached_on_the_selected_chain() {
+    let mut config = resolved_config();
+    let build = |name: &str, next: Option<&str>| crate::config::Build {
+        name: name.to_owned(),
+        next: next.map(str::to_owned),
+        ..crate::config::Build::default()
+    };
+    config.build_defs.insert(
+        "summoner druid".to_owned(),
+        build("Summoner Druid", Some("fury druid")),
+    );
+    config
+        .build_defs
+        .insert("fury druid".to_owned(), build("Fury Druid", None));
+    let selected = |slug: &str| crate::config::Bis {
+        build: slug.to_owned(),
+        slots: BTreeMap::new(),
+        merc_slots: BTreeMap::new(),
+    };
+    config.bis.insert("wolf".to_owned(), selected("summoner druid"));
+    config.bis.insert("vex".to_owned(), selected("blood boil"));
+    let reached = |name: &str, t: u64| {
+        let (key, mut entry) = played_entry(name, t, Some(5));
+        entry.stage = Some("fury druid".to_owned());
+        (key, entry)
+    };
+    let played = d2r_core::played::Played::from([reached("Wolf", 2), reached("Vex", 1)]);
+    let json = config_json(&config, &played);
+    assert_eq!(
+        json.pointer("/characters/0/build_name"),
+        Some(&serde_json::json!("Fury Druid")),
+        "the latched stage"
     );
     assert_eq!(
-        json.pointer("/characters/3/last_played"),
-        Some(&serde_json::Value::Null)
+        json.pointer("/characters/0/build"),
+        Some(&serde_json::json!("summoner druid"))
     );
     assert_eq!(
-        json.pointer("/characters/4/damages"),
-        Some(&serde_json::json!(["cold"]))
+        json.pointer("/characters/1/build_name"),
+        Some(&serde_json::json!("Blood Boil")),
+        "a stage off the selected chain is ignored"
     );
 }
 
@@ -216,7 +245,7 @@ fn config_json_lists_every_not_needed_mark_by_build_the_stale_ones_too() {
         &mut [],
     );
     assert!(config.not_needed.contains_key("fury druid"), "inherited there");
-    let json = config_json(&config, &GearInfo::default(), &d2r_core::played::Played::new());
+    let json = config_json(&config, &d2r_core::played::Played::new());
     assert_eq!(
         json.get("not_needed"),
         Some(&serde_json::json!([
@@ -227,11 +256,11 @@ fn config_json_lists_every_not_needed_mark_by_build_the_stale_ones_too() {
         "own marks only, a character key and an unknown build included"
     );
     config.not_needed.clear();
-    let json = config_json(&config, &GearInfo::default(), &d2r_core::played::Played::new());
+    let json = config_json(&config, &d2r_core::played::Played::new());
     assert_eq!(json.get("not_needed"), Some(&serde_json::json!([])));
     assert_eq!(json.get("money_farming"), Some(&serde_json::json!(true)));
     config.valuables.money = false;
-    let json = config_json(&config, &GearInfo::default(), &d2r_core::played::Played::new());
+    let json = config_json(&config, &d2r_core::played::Played::new());
     assert_eq!(
         json.get("money_farming"),
         Some(&serde_json::json!(false)),
@@ -251,7 +280,7 @@ fn config_json_shows_the_class_default_of_a_played_class() {
         played_entry("Amy", 5, Some(0)),
         played_entry("Demonmaster", 1, Some(7)),
     ]);
-    let json = config_json(&config, &GearInfo::default(), &played);
+    let json = config_json(&config, &played);
     assert_eq!(names_of(&json), ["Warly", "Amy", "Demonmaster"]);
     let field = |i: usize, key: &str| {
         json.pointer(&format!("/characters/{i}/{key}"))
@@ -262,10 +291,6 @@ fn config_json_shows_the_class_default_of_a_played_class() {
     assert_eq!(field(0, "build"), serde_json::json!(""));
     assert_eq!(field(0, "build_name"), serde_json::json!("Blood Boil"));
     assert_eq!(field(0, "class_default"), serde_json::json!(true));
-    assert_eq!(
-        json.pointer("/characters/0/slots/weapon/0/name"),
-        Some(&serde_json::json!("Heart of the Oak"))
-    );
     assert_eq!(field(1, "class"), serde_json::json!("amazon"));
     assert_eq!(field(1, "build_name"), serde_json::Value::Null);
     assert_eq!(field(2, "build"), serde_json::json!("blood boil"));
@@ -323,83 +348,19 @@ fn set_bis_selection_writes_every_spelling() -> Result<()> {
 }
 
 #[test]
-fn config_json_resolves_the_selected_build() {
-    // The selection-only character gets the build's name, damages and pieces.
-    let json = config_json(
-        &resolved_config(),
-        &GearInfo::default(),
-        &d2r_core::played::Played::new(),
-    );
-    let chars = json
-        .get("characters")
-        .and_then(|v| v.as_array())
-        .map_or_else(Vec::new, Vec::clone);
-    assert_eq!(chars.len(), 1, "one character: {chars:?}");
-    let char = chars.first().map_or(serde_json::Value::Null, Clone::clone);
-    assert_eq!(char.get("name"), Some(&serde_json::json!("demonmaster")));
-    assert_eq!(char.get("build"), Some(&serde_json::json!("blood boil")));
-    assert_eq!(char.get("build_name"), Some(&serde_json::json!("Blood Boil")));
+fn config_json_shows_the_selected_build() {
+    let played = d2r_core::played::Played::from([played_entry("DemonMaster", 5, None)]);
+    let json = config_json(&resolved_config(), &played);
     assert_eq!(
-        char.get("damages"),
-        Some(&serde_json::json!(["physical", "fire"]))
-    );
-    let weapon = char
-        .pointer("/slots/weapon/0")
-        .map_or(serde_json::Value::Null, Clone::clone);
-    assert_eq!(
-        weapon.get("piece"),
-        Some(&serde_json::json!("Heart of the Oak@55"))
-    );
-    assert_eq!(weapon.get("name"), Some(&serde_json::json!("Heart of the Oak")));
-    assert_eq!(weapon.get("level"), Some(&serde_json::json!(55)));
-    assert_eq!(weapon.get("tick"), Some(&serde_json::Value::Null));
-    assert_eq!(weapon.get("better"), Some(&serde_json::json!(false)));
-    assert_eq!(
-        weapon.get("runes"),
-        Some(&serde_json::json!(["Ko", "Vex", "Pul", "Thul"]))
-    );
-    assert_eq!(
-        char.pointer("/merc_slots/weapon/0/name"),
-        Some(&serde_json::json!("Insight"))
-    );
-}
-
-#[test]
-fn config_json_marks_owned_stash_and_better_pieces() {
-    // Owned ✓, stash ✓(stash), and an equipped unique strikes the chase pieces through.
-    let gear = GearInfo {
-        worn: vec![],
-        owned: vec!["Heart of the Oak".to_owned()],
-        stash: vec!["Insight".to_owned()],
-        equipped: vec![(4, 7)], // body slot 4 = weapon, quality 7 = unique
-        merc_equipped: vec![],
-    };
-    let json = config_json(&resolved_config(), &gear, &d2r_core::played::Played::new());
-    let char = json
-        .pointer("/characters/0")
-        .map_or(serde_json::Value::Null, Clone::clone);
-    assert_eq!(
-        char.pointer("/slots/weapon/0/tick"),
-        Some(&serde_json::json!("owned"))
-    );
-    assert_eq!(
-        char.pointer("/slots/weapon/0/better"),
-        Some(&serde_json::json!(true)),
-        "a unique equipped in the weapon slot beats the chase pieces"
-    );
-    assert_eq!(
-        char.pointer("/merc_slots/weapon/0/tick"),
-        Some(&serde_json::json!("stash"))
-    );
-    // Worn beats owned.
-    let wearing = GearInfo {
-        worn: vec!["Heart of the Oak".to_owned()],
-        ..gear
-    };
-    let json = config_json(&resolved_config(), &wearing, &d2r_core::played::Played::new());
-    assert_eq!(
-        json.pointer("/characters/0/slots/weapon/0/tick"),
-        Some(&serde_json::json!("worn"))
+        json.get("characters"),
+        Some(&serde_json::json!([{
+            "name": "DemonMaster",
+            "class": null,
+            "build": "blood boil",
+            "build_name": "Blood Boil",
+            "class_default": false,
+            "last_played": 5,
+        }]))
     );
 }
 
@@ -630,27 +591,34 @@ fn gear_grid_notes_two_handed_weapons() {
 }
 
 #[test]
-fn builds_json_lists_slug_name_damages_and_counts() {
-    let json = builds_json(&resolved_config());
-    let builds = json
-        .get("builds")
-        .and_then(|v| v.as_array())
-        .map_or_else(Vec::new, Vec::clone);
-    assert_eq!(builds.len(), 1, "{builds:?}");
-    let build = builds.first().map_or(serde_json::Value::Null, Clone::clone);
-    assert_eq!(build.get("slug"), Some(&serde_json::json!("blood boil")));
-    assert_eq!(build.get("name"), Some(&serde_json::json!("Blood Boil")));
-    assert_eq!(
-        build.get("damages"),
-        Some(&serde_json::json!(["physical", "fire"]))
+fn builds_json_lists_slug_name_class_and_stage_chain() {
+    let mut config = resolved_config();
+    let build = |name: &str, next: Option<&str>| crate::config::Build {
+        name: name.to_owned(),
+        class: Some(5),
+        next: next.map(str::to_owned),
+        ..crate::config::Build::default()
+    };
+    config.build_defs.insert(
+        "summoner druid".to_owned(),
+        build("Summoner Druid", Some("fury druid")),
     );
-    assert_eq!(build.get("notes"), Some(&serde_json::json!("guide")));
+    config
+        .build_defs
+        .insert("fury druid".to_owned(), build("Fury Druid", None));
     assert_eq!(
-        build.get("slots"),
-        Some(&serde_json::json!({"weapon": 1})),
-        "per-slot piece counts"
+        builds_json(&config),
+        serde_json::json!({ "builds": [
+            { "slug": "blood boil", "name": "Blood Boil", "class": null, "chain": ["Blood Boil"] },
+            { "slug": "fury druid", "name": "Fury Druid", "class": "druid", "chain": ["Fury Druid"] },
+            {
+                "slug": "summoner druid",
+                "name": "Summoner Druid",
+                "class": "druid",
+                "chain": ["Summoner Druid", "Fury Druid"],
+            },
+        ]})
     );
-    assert_eq!(build.get("merc_slots"), Some(&serde_json::json!({"weapon": 1})));
 }
 
 /// A gear grid over a one-slot build, one equipped piece and one owned name.

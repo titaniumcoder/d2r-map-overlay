@@ -39,32 +39,6 @@ static CONFIG_WRITE: Mutex<()> = Mutex::new(());
 /// The latest live snapshot's JSON; `None` while no game was seen yet.
 static LIVE: OnceLock<RwLock<Option<String>>> = OnceLock::new();
 
-/// The live gear state the config page's `BiS` view is annotated from; keeps the last game's
-/// values after it exits.
-#[derive(Debug, Clone, Default)]
-pub struct GearInfo {
-    pub worn: Vec<String>,
-    pub owned: Vec<String>,
-    pub stash: Vec<String>,
-    pub equipped: Vec<(u8, u32)>,
-    pub merc_equipped: Vec<(u8, u32)>,
-}
-
-static GEAR: OnceLock<RwLock<GearInfo>> = OnceLock::new();
-
-pub fn publish_gear(gear: GearInfo) {
-    // A poisoned cell still holds a usable value, and the next tick overwrites it anyway.
-    *gear_cell().write().unwrap_or_else(PoisonError::into_inner) = gear;
-}
-
-fn gear_cell() -> &'static RwLock<GearInfo> {
-    GEAR.get_or_init(|| RwLock::new(GearInfo::default()))
-}
-
-fn current_gear() -> GearInfo {
-    gear_cell().read().unwrap_or_else(PoisonError::into_inner).clone()
-}
-
 /// The pages inline the same SVG, percent-encoded, as their icon.
 const FAVICON_SVG: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='#1a1815'/><path d='M16 4 28 16 16 28 4 16Z' fill='#2b2721' stroke='#c8a85a' stroke-width='3' stroke-linejoin='round'/><circle cx='16' cy='16' r='4' fill='#ff6b3d'/></svg>";
 
@@ -320,13 +294,12 @@ fn respond_no_store(status: &str, content_type: &str, body: &str) -> String {
 
 fn api_config<P: Playstyle>(files: &Files) -> String {
     let playstyle = P::load(&files.quiet());
-    let gear = current_gear();
     let played =
         crate::played::default_path().map_or_else(crate::played::Played::new, |p| crate::played::load(&p));
     respond(
         "200 OK",
         "application/json",
-        &playstyle.config_json(&gear, &played).to_string(),
+        &playstyle.config_json(&played).to_string(),
     )
 }
 
@@ -692,7 +665,7 @@ mod tests {
             crate::web::Panels::default()
         }
 
-        fn config_json(&self, _: &GearInfo, _: &crate::played::Played) -> serde_json::Value {
+        fn config_json(&self, _: &crate::played::Played) -> serde_json::Value {
             serde_json::Value::Null
         }
 
@@ -978,7 +951,7 @@ mod tests {
         );
         assert_eq!(
             (config.len(), format!("{:#018x}", fnv1a(config.as_bytes()))),
-            (13_274, "0xf54b98e08310ccab".to_owned()),
+            (10_422, "0xa442aba7884d5bf3".to_owned()),
             "config page"
         );
     }
