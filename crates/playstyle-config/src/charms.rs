@@ -44,7 +44,8 @@ const fn one() -> u32 {
 
 impl CharmWish {
     /// Whether `item` fills this wish for a character of `class`: an identified unique of
-    /// this name ("Renewed <name>", the crafted Sunder, too), or a magic charm of this size;
+    /// this name (also "Latent <name>", the Sunder as it drops, and "Renewed <name>", its
+    /// crafted form), or a magic charm of this size;
     /// either way with every `stats` condition met.
     #[must_use]
     pub fn matches(&self, item: &ItemDrop, class: Option<u32>) -> bool {
@@ -55,8 +56,10 @@ impl CharmWish {
             unique
                 && valuables::unique_set_name(item).is_some_and(|n| {
                     same_name(n, &self.name)
-                        || n.strip_prefix("Renewed ")
-                            .is_some_and(|bare| same_name(bare, &self.name))
+                        || ["Latent ", "Renewed "].iter().any(|form| {
+                            n.strip_prefix(form)
+                                .is_some_and(|bare| same_name(bare, &self.name))
+                        })
                 })
         } else {
             !unique
@@ -329,10 +332,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_renewed_sunder_charm_counts_as_its_unique() -> Result<(), toml::de::Error> {
+    fn latent_and_renewed_sunder_charms_count_as_their_unique() -> Result<(), toml::de::Error> {
         let (list, _) = wishes("[[charms]]\nname = \"Bone Break\"\nunique = true\n")?;
         let wish: Vec<&CharmWish> = list.iter().take(1).collect();
         assert_eq!(found(&wish, [&unique("cm3", 405, &[])], DRUID), [1]);
+        assert_eq!(found(&wish, [&unique("cm3", 431, &[])], DRUID), [1], "Latent");
         assert_eq!(found(&wish, [&unique("cm3", 436, &[])], DRUID), [1], "Renewed");
         assert_eq!(found(&wish, [&unique("cm3", 359, &[])], DRUID), [0], "Gheed's");
         Ok(())
