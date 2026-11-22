@@ -757,6 +757,23 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   excepted: two worn rings). The merc stays the Act 5 2x Lawbringer (the guide's Act 2 Might
   merc is not taken). Open: magic charm types (Sharp / Shimmering / Fine ... of Vita) have no
   build-file form.
+- **Not needed, by hand (user decision 2026-11-22: "make the user decide ... by allowing him
+  to remove items he deems no longer worthy ... some kind of local kept info in the user
+  directory"; nothing automatic)**: `~/.local/share/d2r-map-overlay/not-needed.toml`
+  (`Files::not_needed_path`, watched by the hot reload) holds `[not_needed]`
+  `"<build name>" = ["<piece>", ...]`. Written by `POST /api/not-needed`
+  `{build, name, needed: bool}` (`Playstyle::set_not_needed`; toml_edit, comments kept, temp
+  file + rename; bad input 400). The load (`not_needed::apply`) takes a marked piece out of that
+  build's slots, merc slots and extras, its runeword recipe (unless another piece of the build
+  still names the runeword) and the build's farm group; the build files stay unchanged and an
+  unknown name or build is ignored, a broken file marks nothing. So the stash plan keeps
+  neither the piece nor a base for it (it falls through to the trade / sell rules), and the
+  farm list, gear grid, upgrades and Recipes panel leave it out. A build marks only its own
+  pieces: a piece another build of the chain still lists stays wanted; `switch_requires` items
+  stay wanted. Dashboard: a ✕ on each gear-grid piece and farm card (dim until hover); "show N
+  not needed" under the grid and under each farm group lists the marked pieces struck through,
+  ↺ undoes (`d2r-show-hidden` in localStorage). A clicked card fades until the live stream
+  sends the reloaded frame; with the game closed that frame waits for the next game.
 - **Upgrades + chime**: `upgrades` in the live JSON = owned/stash pieces of the current stage wearable now
   and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
   are all owned. The page chimes (WebAudio, 🔔 toggle) when a key appears that this character hasn't had.

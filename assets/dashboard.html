@@ -223,6 +223,21 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .stk.farm::before { content: "⚑"; color: var(--accent); font-size: 10px; }
 .stk.short .q { color: var(--bad); }
 .stk.absent { opacity: .5; } .stk.absent .nm { color: var(--dim); }
+/* "Not needed": the ✕ on a piece / farm card, the toggle and the undo list */
+.nn { margin-left: auto; background: none; border: 1px solid transparent; border-radius: 4px; color: var(--faint);
+  font-size: 11px; line-height: 1; padding: 2px 4px; cursor: pointer; opacity: .45; }
+.pc:hover .nn, .fm:hover .nn, .nn:focus-visible { opacity: 1; }
+.nn:hover, .nn:focus-visible { color: var(--bad); border-color: currentColor; outline: none; }
+.nn.undo { opacity: 1; margin-left: 4px; } .nn.undo:hover { color: var(--good); }
+.nn.err { color: var(--bad); opacity: 1; }
+.fm { position: relative; } .fm-h .nn { position: absolute; top: 1px; right: 1px; }
+.pending { opacity: .3; text-decoration: line-through; pointer-events: none; }
+.hidden-row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; margin-top: 8px; font-size: 12px; color: var(--dim); }
+.showhidden { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; color: var(--faint);
+  font-size: 11.5px; padding: 2px 9px; cursor: pointer; }
+.showhidden[aria-pressed="true"] { color: var(--text); border-color: var(--gold); }
+.nnlist { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.nnitem { text-decoration: line-through; color: var(--faint); } .nnitem .nn { text-decoration: none; }
 details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer; font-size: 12px; color: var(--dim); margin-bottom: 8px; }
 
 @media (max-width: 1200px) { .gear { grid-template-columns: repeat(3, minmax(0, 1fr)); } .toprow { grid-template-columns: minmax(0, 1fr); } }
@@ -254,10 +269,11 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
 <details class="help"><summary>How to read this</summary>
 Each card is a slot. The dashed box shows what is equipped (name and required level), and below it are the build's pieces, best first.
 ▲ / green outline = an upgrade you can wear now, faded = above the level gate (character level + 5), struck through = already beaten by what you wear.
-✓ = owned, ✓ stash = in the shared stash. A runeword the reader can't decode shows as “runeword (unnamed)”. The Swap card mirrors the active weapon set.
+✓ = owned, ✓ stash = in the shared stash. ✕ on a piece = not needed for this build: no longer kept, given a base, farmed or suggested; “show … not needed” lists them with ↺ to undo. A runeword the reader can't decode shows as “runeword (unnamed)”. The Swap card mirrors the active weapon set.
 </details>
 <ul class="targets stats" id="statsplan"></ul>
 <div class="gear" id="gear"></div>
+<div id="gearhidden"></div>
 <div id="mercbox"><h3 class="row-h">Mercenary · charms · sockets</h3>
 <div class="gear" id="merc"></div><div class="gear extras" id="extras"></div></div></div></section>
 <section class="panel full" id="recipepanel" hidden><h2>Recipes <span class="sub">✓ = you have it (shared stash, inventory, cube, stash) · bases can't be read: check them</span></h2>

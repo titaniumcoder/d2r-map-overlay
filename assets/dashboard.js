@@ -22,7 +22,15 @@ function kindOf(p) {
   if (p.runes) return "runeword";
   return "unique";
 }
-function piece(p) {
+// The ✕ "not needed" control of a build piece or farm entry (user decision 2026-11-22: the
+// player removes pieces by hand); `needed` true is the undo.
+function nnButton(build, name, needed) {
+  if (!build || !name) return "";
+  const label = needed ? `needed again: ${name}` : `not needed: ${name} (hide it for ${build})`;
+  return `<button type="button" class="nn${needed ? " undo" : ""}" data-build="${esc(build)}" data-name="${esc(name)}" data-needed="${needed}"`
+    + ` title="${esc(label)}" aria-label="${esc(label)}">${needed ? "↺" : "✕"}</button>`;
+}
+function piece(p, build) {
   // Green = worn; yellow = owned elsewhere: go equip it (carried, cube, private stash, shared stash).
   const tick = p.tick === "worn" ? ' <span class="tick">✓</span>'
     : p.tick === "owned" ? ' <span class="tick have">✓ owned</span>'
@@ -37,7 +45,7 @@ function piece(p) {
     + (p.notes ? `<div class="note">${esc(p.notes)}</div>` : "");
   const setup = (p.now ? ' <span class="badge now">wear now</span>' : "")
     + (p.setup && p.setup !== "alternative" ? ` <span class="badge">${esc(p.setup)}</span>` : "");
-  return `<div class="pc ${esc(kindOf(p))} ${esc(p.state || "better")}"><div class="top"><span class="nm">${esc(p.name)}${tick}</span>${setup}${lvl}</div>${sub}${stats}${why}</div>`;
+  return `<div class="pc ${esc(kindOf(p))} ${esc(p.state || "better")}"><div class="top"><span class="nm">${esc(p.name)}${tick}</span>${setup}${lvl}${nnButton(build, p.name, false)}</div>${sub}${stats}${why}</div>`;
 }
 // A slot's pieces: the guide's own picks (starter / standard, and pieces without a setup)
 // stay visible; the alternatives fold into a <details> so a 14-weapon list stays readable.
@@ -49,19 +57,54 @@ document.addEventListener("toggle", e => {
   if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("alts")) return;
   if (d.open) openAlts.add(d.dataset.slot); else openAlts.delete(d.dataset.slot);
 }, true);
-function pieceList(pieces, title) {
+function pieceList(pieces, title, build) {
   const main = pieces.filter(p => p.setup !== "alternative");
   const alt = pieces.filter(p => p.setup === "alternative");
-  const shown = main.map(piece).join("");
+  const shown = main.map(p => piece(p, build)).join("");
   const folded = alt.length
-    ? `<details class="alts" data-slot="${esc(title)}"${openAlts.has(title) ? " open" : ""}><summary>${alt.length} alternative${alt.length > 1 ? "s" : ""}</summary>${alt.map(piece).join("")}</details>`
+    ? `<details class="alts" data-slot="${esc(title)}"${openAlts.has(title) ? " open" : ""}><summary>${alt.length} alternative${alt.length > 1 ? "s" : ""}</summary>${alt.map(p => piece(p, build)).join("")}</details>`
     : "";
   return (shown + folded) || '<div class="empty">no build piece for this slot</div>';
 }
-function slotCard(title, eqHtml, pieces) {
+function slotCard(title, eqHtml, pieces, build) {
   const eq = eqHtml == null ? "" : `<div class="eq"><span class="lbl">equipped</span>${eqHtml}</div>`;
-  return `<div class="slot"><div class="slot-h"><span>${esc(title)}</span></div>${eq}<div class="pieces">${pieceList(pieces || [], title)}</div></div>`;
+  return `<div class="slot"><div class="slot-h"><span>${esc(title)}</span></div>${eq}<div class="pieces">${pieceList(pieces || [], title, build)}</div></div>`;
 }
+// The pieces marked not needed, each with its undo: listed only while "show hidden" is on;
+// the toggle names how many there are.
+let showHidden = false;
+try { showHidden = localStorage.getItem("d2r-show-hidden") === "on"; } catch (e) { /* storage blocked */ }
+function hiddenList(build, names, what) {
+  names = names || [];
+  if (!names.length) return "";
+  const toggle = `<button type="button" class="showhidden" aria-pressed="${showHidden}">${showHidden ? "hide" : "show"} ${names.length} not needed</button>`;
+  const list = showHidden
+    ? `<span class="nnlist">${esc(what)}: ${names.map(n => `<span class="nnitem">${esc(n)}${nnButton(build, n, true)}</span>`).join("")}</span>` : "";
+  return `<div class="hidden-row">${toggle}${list}</div>`;
+}
+document.addEventListener("click", e => {
+  const t = e.target instanceof Element ? e.target.closest("button.showhidden, button.nn") : null;
+  if (!t) return;
+  if (t.classList.contains("showhidden")) {
+    showHidden = !showHidden;
+    try { localStorage.setItem("d2r-show-hidden", showHidden ? "on" : "off"); } catch (err) { /* storage blocked */ }
+    if (lastFrame) render(lastFrame);
+    return;
+  }
+  // The card fades until the live stream sends the frame without it (after the hot reload).
+  const card = t.closest(".pc, .fm, .nnitem");
+  if (card) card.classList.add("pending");
+  t.disabled = true;
+  const body = JSON.stringify({ build: t.dataset.build, name: t.dataset.name, needed: t.dataset.needed === "true" });
+  fetch("/api/not-needed", { method: "POST", body }).then(async r => {
+    if (!r.ok) throw new Error((await r.text()).trim() || r.status);
+  }).catch(err => {
+    if (card) card.classList.remove("pending");
+    t.disabled = false;
+    t.title = `not saved: ${err.message}`;
+    t.classList.add("err");
+  });
+});
 function gear(g) {
   g = g || {};
   $("buildname").textContent = g.build || "";
@@ -73,10 +116,11 @@ function gear(g) {
       return `<span class="nm${unknown ? " unknown" : ""}">${esc(unknown ? "unidentified / magic" : e.name)}</span>${lvl}`;
     }).join("<br>") || '<span class="nm unknown">empty</span>';
     const note = col.note ? `<span class="warn">${esc(col.note)}</span>` : "";
-    return slotCard(col.title, eq + note, col.pieces);
+    return slotCard(col.title, eq + note, col.pieces, g.build);
   }).join("");
-  $("merc").innerHTML = (g.merc || []).map(c => slotCard(c.title, null, c.pieces)).join("");
-  $("extras").innerHTML = (g.extras || []).map(c => slotCard(c.title, null, c.pieces)).join("");
+  $("merc").innerHTML = (g.merc || []).map(c => slotCard(c.title, null, c.pieces, g.build)).join("");
+  $("extras").innerHTML = (g.extras || []).map(c => slotCard(c.title, null, c.pieces, g.build)).join("");
+  $("gearhidden").innerHTML = hiddenList(g.build, g.not_needed, `Not needed for ${g.build || "this build"}`);
   $("mercbox").hidden = !(g.merc || []).length && !(g.extras || []).length;
 }
 // The shared stash: five page cards in UI order, then the gem/rune/material stacks.
@@ -379,9 +423,10 @@ function farm(f) {
       const note = i.note ? `<div class="bs">${esc(i.note)}</div>` : "";
       const where = i.where ? `<div class="wh">${esc(i.where)}</div>` : "";
       return `<div class="fm ${esc(i.kind)} missing"><div class="fm-h"><span class="nm">${esc(i.name)}</span>`
-        + `<span class="kd">${esc(i.kind)}</span><span class="fst missing">missing${n}</span></div>${needs}${note}${runes}${bases}${where}</div>`;
+        + `<span class="kd">${esc(i.kind)}</span><span class="fst missing">missing${n}</span>${nnButton(g.for, i.name, false)}</div>${needs}${note}${runes}${bases}${where}</div>`;
     }).join("");
-    return `<h3 class="row-h">for ${esc(g.for)} · ${done}/${done + items.length} held</h3><div class="fms">${cards}</div>`;
+    return `<h3 class="row-h">for ${esc(g.for)} · ${done}/${done + items.length} held</h3><div class="fms">${cards}</div>`
+      + hiddenList(g.for, g.not_needed, "Not needed");
   }).join("");
 }
 // The route's current step: its title, what to do, why, and the step after it.
@@ -431,11 +476,14 @@ function gearFold(r) {
   $("gearwhy").textContent = why;
   setGear(gearChoice != null ? gearChoice : why !== "");
 }
+// The frame on screen, re-rendered when "show hidden" flips.
+let lastFrame = null;
 function render(r) {
+  lastFrame = r;
   gearFold(r);
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
-    for (const id of ["guide", "gear", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
+    for (const id of ["guide", "gear", "gearhidden", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
     next(null);
