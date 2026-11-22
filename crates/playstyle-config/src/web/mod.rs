@@ -22,6 +22,8 @@ pub struct PanelInfo<'a> {
     pub build: Option<&'a Build>,
     pub stage: Option<Stage<'a>>,
     pub farm: &'a [FarmGroup],
+    /// The route, whose bosses get the farm list's boss cards.
+    pub route: &'a crate::route::Route,
     /// The build names of the current stage and every later one.
     pub stage_chain: &'a [String],
     pub next: Option<&'a crate::route::Advice>,

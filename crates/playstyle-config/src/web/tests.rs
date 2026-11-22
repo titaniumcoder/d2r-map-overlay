@@ -14,6 +14,12 @@ use d2r_core::build::Damage;
 use d2r_core::web::fixtures::{EMPTY_MARKS, EMPTY_SKILLS, lines_of, stash_item, test_stash};
 use d2r_core::web::{GearInfo, LiveInfo};
 
+static NO_ROUTE: crate::route::Route = crate::route::Route {
+    options: BTreeMap::new(),
+    quest_sets: BTreeMap::new(),
+    step: Vec::new(),
+};
+
 fn live_info<'a>(
     class: u32,
     blocks: &'a d2r_core::render::TextBlocks,
@@ -27,6 +33,7 @@ fn live_info<'a>(
         build: None,
         stage: None,
         farm: &[],
+        route: &NO_ROUTE,
         stage_chain: &[],
         next: None,
     }
@@ -636,6 +643,7 @@ fn gear_grid<'a>(
         build: None,
         stage: None,
         farm: &[],
+        route: &NO_ROUTE,
         stage_chain: &[],
         next: None,
     };
@@ -1498,6 +1506,7 @@ fn shop_marks_items_better_than_the_worn_ones() {
         build: None,
         stage: None,
         farm: &[],
+        route: &NO_ROUTE,
         stage_chain: &[],
         next: None,
     };
@@ -1569,6 +1578,7 @@ fn score_profile_takes_the_weapon_kind_from_gear_or_build() {
             build: None,
             stage: None,
             farm: &[],
+            route: &NO_ROUTE,
             stage_chain: &[],
             next: None,
         });
@@ -1769,47 +1779,117 @@ fn fury_farm() -> Result<Vec<config::FarmGroup>> {
     Ok(groups)
 }
 
-/// The farm section's items as `(name, status, stashed, carried)`.
-fn farm_rows(json: &serde_json::Value) -> Vec<(String, String, u64, u64)> {
-    json.pointer("/farm/groups/0/items")
+/// The farm cards as `(title, [item names])`.
+fn farm_cards(json: &serde_json::Value) -> Vec<(String, Vec<String>)> {
+    let str_of =
+        |v: &serde_json::Value, k: &str| v.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_owned();
+    json.pointer("/farm/cards")
         .and_then(serde_json::Value::as_array)
-        .map_or_default(|items| {
-            items
+        .map_or_default(|cards| {
+            cards
                 .iter()
-                .map(|i| {
-                    let s = |k: &str| i.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_owned();
-                    let n = |k: &str| i.get(k).and_then(serde_json::Value::as_u64).unwrap_or(99);
-                    (s("name"), s("status"), n("stashed"), n("carried"))
+                .map(|c| {
+                    let items = c
+                        .get("items")
+                        .and_then(serde_json::Value::as_array)
+                        .map_or_default(|i| i.iter().map(|i| str_of(i, "name")).collect());
+                    (str_of(c, "title"), items)
                 })
                 .collect()
         })
 }
 
-/// An item's runes as `(rune, need, have)`.
-fn farm_runes(json: &serde_json::Value, item: usize) -> Vec<(String, u64, u64)> {
-    json.pointer(&format!("/farm/groups/0/items/{item}/runes"))
+/// The still-needed entries over every card, each once in card order, as `(name, tag)`.
+fn farm_needed(json: &serde_json::Value) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for item in json
+        .pointer("/farm/cards")
         .and_then(serde_json::Value::as_array)
-        .map_or_default(|runes| {
-            runes
-                .iter()
-                .map(|r| {
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.get("items")?.as_array())
+        .flatten()
+    {
+        let s = |k: &str| {
+            item.get(k)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        if !out.iter().any(|(name, _)| *name == s("name")) {
+            out.push((s("name"), s("tag")));
+        }
+    }
+    out
+}
+
+/// The first card entry named `name`.
+fn farm_item<'j>(json: &'j serde_json::Value, name: &str) -> Option<&'j serde_json::Value> {
+    json.pointer("/farm/cards")?
+        .as_array()?
+        .iter()
+        .filter_map(|c| c.get("items")?.as_array())
+        .flatten()
+        .find(|i| i.get("name") == Some(&serde_json::json!(name)))
+}
+
+/// The base hint of the first card entry named `name`.
+fn farm_hint(json: &serde_json::Value, name: &str) -> Result<String> {
+    Ok(farm_item(json, name)
+        .and_then(|i| i.get("base_hint")?.as_str())
+        .with_context(|| format!("no hint for {name}"))?
+        .to_owned())
+}
+
+/// The held entries as `(for, name, copies)`.
+fn farm_held(json: &serde_json::Value) -> Vec<(String, String, u64)> {
+    json.pointer("/farm/held")
+        .and_then(serde_json::Value::as_array)
+        .map_or_default(|held| {
+            held.iter()
+                .map(|h| {
+                    let s = |k: &str| h.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_owned();
                     (
-                        r.get("rune")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_owned(),
-                        r.get("need").and_then(serde_json::Value::as_u64).unwrap_or(99),
-                        r.get("have").and_then(serde_json::Value::as_u64).unwrap_or(99),
+                        s("for"),
+                        s("name"),
+                        h.get("copies").and_then(serde_json::Value::as_u64).unwrap_or(99),
                     )
                 })
                 .collect()
         })
 }
 
+/// The farm section as `(needed (name, tag), held (for, name, copies))`.
+type FarmRows = (Vec<(String, String)>, Vec<(String, String, u64)>);
+
+/// A card's runes as `(rune, short)`.
+fn card_runes(card: &serde_json::Value) -> Vec<(String, u64)> {
+    card.get("runes")
+        .and_then(serde_json::Value::as_array)
+        .map_or_default(|runes| {
+            runes
+                .iter()
+                .filter_map(|r| Some((r.get("rune")?.as_str()?.to_owned(), r.get("short")?.as_u64()?)))
+                .collect()
+        })
+}
+
+fn held_row(target: &str, name: &str, copies: u64) -> (String, String, u64) {
+    (target.to_owned(), name.to_owned(), copies)
+}
+
+fn shipped_route() -> Result<crate::route::Route> {
+    let (route, warnings) =
+        crate::route::parse_route(include_str!("../../../../playstyles/summoner-fury/route.toml"))?;
+    assert_eq!(warnings, Vec::<String>::new());
+    Ok(route)
+}
+
 #[test]
-fn farm_status_done_found_missing_and_rune_needs() -> Result<()> {
+fn farm_leaves_held_entries_out_and_sorts_the_rest_onto_cards() -> Result<()> {
     use d2r_core::offsets::item_data::{QUALITY_NORMAL, QUALITY_UNIQUE};
     let farm = fury_farm()?;
+    let route = shipped_route()?;
     let blocks = d2r_core::render::TextBlocks::default();
     let mut lawbringer = stash_item("Lawbringer", "flc", QUALITY_NORMAL, None);
     lawbringer.runeword = true;
@@ -1830,55 +1910,78 @@ fn farm_status_done_found_missing_and_rune_needs() -> Result<()> {
     let held = [("Sol Rune".to_owned(), 1)];
     let mut info = live_info(5, &blocks, &[], &stash, &[]);
     info.live.char_level = None;
+    info.live.difficulty = Some(2);
     info.farm = &farm;
+    info.route = &route;
     info.live.owned = &owned;
     info.live.runeword_copies = &copies;
     info.live.held_materials = &held;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(
-        json.pointer("/farm/groups/0/for"),
-        Some(&serde_json::json!("Fury Druid"))
+        farm_held(&json),
+        [
+            held_row("Fury Druid", "Raven Frost", 1),
+            held_row("Fury Druid", "Ribcracker", 1),
+            held_row("Fury Druid", "Lawbringer", 2),
+        ],
+        "done or found: off the cards"
     );
-    let row = |name: &str, status: &str, stashed: u64, carried: u64| {
-        (name.to_owned(), status.to_owned(), stashed, carried)
+    // Hell: the Countess drops Fortitude's Dol, Bulwark's Shael and Smoke's Nef / Lum
+    // reliably; Fortitude's Lo comes from any level-85 area.
+    let card = |title: &str, items: &[&str]| {
+        (
+            title.to_owned(),
+            items.iter().map(|&i| i.to_owned()).collect::<Vec<_>>(),
+        )
     };
     assert_eq!(
-        farm_rows(&json),
-        [
-            row("Fortitude", "missing", 0, 0),
-            row("Raven Frost", "done", 1, 0),
-            row("Ribcracker", "found", 0, 1),
-            row("Lawbringer", "found", 1, 1),
-            row("Smoke", "missing", 0, 0),
-            row("Bulwark", "missing", 0, 0),
-        ]
+        farm_cards(&json),
+        [card("General drops", &["Fortitude"]), card("The Countess", &[])]
     );
-    let rune = |r: &str, need: u64, have: u64| (r.to_owned(), need, have);
     assert_eq!(
-        farm_runes(&json, 0),
-        [
-            rune("El", 1, 8),
-            rune("Sol", 1, 1),
-            rune("Dol", 1, 0),
-            rune("Lo", 1, 0)
-        ]
+        farm_item(&json, "Fortitude").and_then(|i| i.get("runes")),
+        Some(&serde_json::json!([{ "rune": "Lo", "short": 1 }]))
     );
-    assert_eq!(farm_runes(&json, 3), [], "Lawbringer: both copies exist");
-    assert_eq!(farm_runes(&json, 1), [], "uniques have no runes");
     assert_eq!(
-        json.pointer("/farm/groups/0/items/0/bases"),
+        farm_item(&json, "Fortitude").and_then(|i| i.get("bases")),
         Some(&serde_json::json!(["weapons", "armor"]))
     );
     assert_eq!(
-        json.pointer("/farm/groups/0/items/3/bases"),
-        Some(&serde_json::json!([]))
-    );
-    assert_eq!(
-        json.pointer("/farm/groups/0/items/0/base_hint"),
+        farm_item(&json, "Fortitude").and_then(|i| i.get("base_hint")),
         Some(&serde_json::Value::Null),
         "unknown character level: no item level to check bases by"
     );
-    // Held runes count as had, but not as in the stash.
+    let countess = json.pointer("/farm/cards/1").context("countess card")?;
+    assert_eq!(countess.get("sub"), Some(&serde_json::json!("Hell · level 82")));
+    let short = |r: &str, n: u64| (r.to_owned(), n);
+    assert_eq!(
+        card_runes(countess),
+        [
+            short("Nef", 1),
+            short("Sol", 1),
+            short("Shael", 1),
+            short("Dol", 1),
+            short("Lum", 1)
+        ],
+        "by rank; Sol: two needed, one held"
+    );
+    assert_eq!(
+        countess.pointer("/runes/1/for"),
+        Some(&serde_json::json!(["Fortitude", "Bulwark"]))
+    );
+    assert!(
+        countess
+            .pointer("/runes/0/one_in")
+            .and_then(serde_json::Value::as_f64)
+            .is_some_and(|n| n > 1.0),
+        "{countess}"
+    );
+    assert_fury_rune_needs(&json)
+}
+
+/// The farm runes of [`fury_farm`] with El ×8 and Io in the stash and a Sol held: held runes
+/// count as had, but not as in the stash.
+fn assert_fury_rune_needs(json: &serde_json::Value) -> Result<()> {
     let runes = json
         .pointer("/farm/runes")
         .and_then(serde_json::Value::as_array)
@@ -1904,6 +2007,94 @@ fn farm_status_done_found_missing_and_rune_needs() -> Result<()> {
 }
 
 #[test]
+fn farm_cards_split_general_boss_and_elsewhere_and_merge_build_tags() -> Result<()> {
+    // Highlord's Wrath qlvl 73 (any level-85 area); Arachnid Mesh qlvl 87 (Hell Mephisto 87,
+    // Baal 99; not Andariel 75); Lawbringer's Amn / Lem / Ko: the Hell Countess.
+    let (farm, warnings) = crate::config::parse_farm(
+        "[[farm]]\nfor = \"Summoner Druid\"\nitems = [\n\
+         { name = \"Teleport Amulet\", kind = \"rolled\", slot = \"amulet\", needs = [\"Teleport\"] },\n\
+         { name = \"Arachnid Mesh\", kind = \"unique\" },\n]\n\
+         [[farm]]\nfor = \"Fury Druid\"\nitems = [\n\
+         { name = \"Teleport Amulet\", kind = \"rolled\", slot = \"amulet\", needs = [\"Teleport\"] },\n\
+         { name = \"Highlord's Wrath\", kind = \"unique\" },\n\
+         { name = \"Lawbringer\", kind = \"runeword\", count = 2 },\n]\n",
+    )?;
+    assert_eq!(warnings, Vec::<String>::new());
+    let route = shipped_route()?;
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.farm = &farm;
+    info.route = &route;
+    info.live.difficulty = Some(2);
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    let card = |title: &str, items: &[&str]| {
+        (
+            title.to_owned(),
+            items.iter().map(|&i| i.to_owned()).collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(
+        farm_cards(&json),
+        [
+            card("General drops", &["Teleport Amulet", "Highlord's Wrath"]),
+            card("The Countess", &[]),
+            card("Mephisto", &["Arachnid Mesh"]),
+            card("Baal", &["Arachnid Mesh"]),
+        ],
+        "Andariel drops nothing special: no card"
+    );
+    let tag = |name: &str, tag: &str| (name.to_owned(), tag.to_owned());
+    assert_eq!(
+        farm_needed(&json),
+        [
+            tag("Teleport Amulet", "both"),
+            tag("Highlord's Wrath", "Fury"),
+            tag("Arachnid Mesh", "Summoner"),
+        ]
+    );
+    assert_eq!(
+        card_runes(json.pointer("/farm/cards/1").context("countess")?),
+        [("Amn".to_owned(), 2), ("Ko".to_owned(), 2), ("Lem".to_owned(), 2)]
+    );
+    assert_eq!(
+        json.pointer("/farm/cards/2/sub"),
+        Some(&serde_json::json!("Hell · level 87"))
+    );
+    // Nightmare: no boss reaches qlvl 87 and the Countess drops Lem / Ko only rarely.
+    info.live.difficulty = Some(1);
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    assert_eq!(
+        farm_cards(&json),
+        [
+            card(
+                "General drops",
+                &["Teleport Amulet", "Highlord's Wrath", "Lawbringer"]
+            ),
+            card("The Countess", &[]),
+            card("Elsewhere", &["Arachnid Mesh"]),
+        ]
+    );
+    assert_eq!(
+        farm_item(&json, "Lawbringer").and_then(|i| i.get("runes")),
+        Some(&serde_json::json!([{ "rune": "Lem", "short": 2 }, { "rune": "Ko", "short": 2 }]))
+    );
+    // Out of a game: every rune is a general drop and the bosses wait.
+    info.live.difficulty = None;
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    assert_eq!(
+        farm_cards(&json),
+        [
+            card(
+                "General drops",
+                &["Teleport Amulet", "Highlord's Wrath", "Lawbringer"]
+            ),
+            card("Elsewhere", &["Arachnid Mesh"]),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Result<()> {
     use d2r_core::item_stats::{ItemStat, stat};
     use d2r_core::offsets::item_data::QUALITY_MAGIC;
@@ -1919,13 +2110,15 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
         base: false,
     }];
     let blocks = d2r_core::render::TextBlocks::default();
-    let rows = |info: &PanelInfo| -> Result<Vec<(String, String, u64, u64)>> {
+    let rows = |info: &PanelInfo| -> Result<FarmRows> {
         let json: serde_json::Value = serde_json::from_str(&live_json(info))?;
-        Ok(farm_rows(&json))
+        Ok((farm_needed(&json), farm_held(&json)))
     };
-    let row = |status: &str, stashed: u64, carried: u64| {
-        vec![("Teleport Amulet".to_owned(), status.to_owned(), stashed, carried)]
-    };
+    let missing = (
+        vec![("Teleport Amulet".to_owned(), "Summoner".to_owned())],
+        Vec::new(),
+    );
+    let held = (Vec::new(), vec![held_row("Summoner Druid", "Teleport Amulet", 1)]);
     let ring = d2r_core::stash::StashItem {
         stats: teleport.clone(),
         ..stash_item("Magic Ring", "rin", QUALITY_MAGIC, None)
@@ -1937,9 +2130,13 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
     }];
     let mut info = live_info(5, &blocks, &[], &tabs, &[]);
     info.farm = &farm;
-    assert_eq!(rows(&info)?, row("missing", 0, 0));
+    assert_eq!(rows(&info)?, missing);
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    let entry = json.pointer("/farm/groups/0/items/0").context("entry")?;
+    assert_eq!(
+        json.pointer("/farm/cards/0/title"),
+        Some(&serde_json::json!("General drops"))
+    );
+    let entry = farm_item(&json, "Teleport Amulet").context("entry")?;
     assert_eq!(entry.get("kind"), Some(&serde_json::json!("rolled")));
     assert_eq!(entry.get("slot"), Some(&serde_json::json!("amulet")));
     assert_eq!(entry.get("needs"), Some(&serde_json::json!(["Teleport"])));
@@ -1954,7 +2151,7 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
         stats: teleport.clone(),
     }];
     info.live.equipped_items = &worn;
-    assert_eq!(rows(&info)?, row("found", 0, 1));
+    assert_eq!(rows(&info)?, held, "found");
     info.live.equipped_items = &[];
     let carried = [(
         d2r_core::game::ItemDrop {
@@ -1974,7 +2171,7 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
         d2r_core::game::Place::Inventory,
     )];
     info.live.owned_items = &carried;
-    assert_eq!(rows(&info)?, row("found", 0, 1));
+    assert_eq!(rows(&info)?, held, "found");
     let stashed = [d2r_core::stash::StashTab {
         kind: d2r_core::stash::TabKind::Page(2),
         items: vec![d2r_core::stash::StashItem {
@@ -1983,13 +2180,12 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
         }],
     }];
     info.live.stash = &stashed;
-    assert_eq!(rows(&info)?, row("done", 1, 1));
+    assert_eq!(rows(&info)?, held, "done");
     let copies = ["Enigma".to_owned()];
     info.live.runeword_copies = &copies;
-    assert_eq!(rows(&info)?, row("done", 1, 1));
+    assert_eq!(rows(&info)?, held, "done");
     info.live.owned = &copies;
-    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    assert_eq!(json.pointer("/farm/groups"), Some(&serde_json::json!([])));
+    assert_eq!(rows(&info)?, (Vec::new(), Vec::new()), "hidden with Enigma");
     Ok(())
 }
 
@@ -2000,21 +2196,27 @@ fn farm_counts_split_and_multiply_rune_needs() -> Result<()> {
     let mut info = live_info(5, &blocks, &[], &[], &[]);
     info.farm = &farm;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    let rune = |r: &str, need: u64| (r.to_owned(), need, 0);
+    let lawbringer = |json: &serde_json::Value| {
+        farm_item(json, "Lawbringer")
+            .and_then(|i| i.get("runes"))
+            .cloned()
+    };
     assert_eq!(
-        farm_runes(&json, 3),
-        [rune("Amn", 2), rune("Lem", 2), rune("Ko", 2)]
+        lawbringer(&json),
+        Some(serde_json::json!([
+            { "rune": "Amn", "short": 2 }, { "rune": "Lem", "short": 2 }, { "rune": "Ko", "short": 2 },
+        ])),
+        "no route: the Countess's runes are on no boss card"
     );
     let copies = ["Lawbringer".to_owned()];
     info.live.runeword_copies = &copies;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    assert_eq!(
-        farm_runes(&json, 3),
-        [rune("Amn", 1), rune("Lem", 1), rune("Ko", 1)]
-    );
-    assert_eq!(
-        json.pointer("/farm/groups/0/items/3/status"),
-        Some(&serde_json::json!("found"))
+    assert_eq!(lawbringer(&json), None, "found: off the cards");
+    assert_eq!(farm_held(&json), [held_row("Fury Druid", "Lawbringer", 1)]);
+    let runes = json.pointer("/farm/runes").map_or_default(ToString::to_string);
+    assert!(
+        runes.contains("\"Amn\""),
+        "the second copy's runes stay marked: {runes}"
     );
     let mut stashed = stash_item("Lawbringer", "flc", 2, None);
     stashed.runeword = true;
@@ -2024,11 +2226,7 @@ fn farm_counts_split_and_multiply_rune_needs() -> Result<()> {
     }];
     info.live.stash = &stash;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    assert_eq!(
-        json.pointer("/farm/groups/0/items/3/status"),
-        Some(&serde_json::json!("done"))
-    );
-    assert_eq!(farm_runes(&json, 3), []);
+    assert_eq!(farm_held(&json), [held_row("Fury Druid", "Lawbringer", 2)]);
     let runes = json.pointer("/farm/runes").map_or_default(ToString::to_string);
     assert!(!runes.contains("\"Amn\""), "{runes}");
     Ok(())
@@ -2352,7 +2550,7 @@ fn runeword_pieces_and_farm_entries_name_natural_socket_bases() -> Result<()> {
         "{insight}"
     );
     assert!(insight.starts_with("4 sockets: Voulge (50 Str)"), "{insight}");
-    let farm_fort = hint("/farm/groups/0/items/0/base_hint")?;
+    let farm_fort = farm_hint(&json, "Fortitude")?;
     assert!(
         farm_fort.contains("weapons: ") && farm_fort.contains(" · armor: "),
         "{farm_fort}"
@@ -2389,10 +2587,24 @@ fn farm_merc_and_slot_fields_steer_the_base_hint() -> Result<()> {
             .with_context(|| format!("no hint at {pointer}"))?
             .to_owned())
     };
-    let fort = hint("/farm/groups/0/items/0/base_hint")?;
+    let fort = farm_hint(&json, "Fortitude")?;
     assert!(fort.starts_with("4 sockets: "), "{fort}");
     assert!(!fort.contains("weapons: ") && !fort.contains("armor: "), "{fort}");
-    let merc = hint("/farm/groups/0/items/1/base_hint")?;
+    let bulwarks: Vec<&str> = json
+        .pointer("/farm/cards")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.get("items")?.as_array())
+        .flatten()
+        .filter(|i| i.get("name") == Some(&serde_json::json!("Bulwark")))
+        .filter_map(|i| i.get("base_hint")?.as_str())
+        .collect();
+    let [merc, own] = bulwarks.as_slice() else {
+        return Err(anyhow!(
+            "two Bulwark entries, the mercenary's first: {bulwarks:?}"
+        ));
+    };
     assert!(
         !merc.contains("Wolf Head") && !merc.contains("Hawk Helm"),
         "{merc}"
@@ -2404,8 +2616,8 @@ fn farm_merc_and_slot_fields_steer_the_base_hint() -> Result<()> {
         .collect::<Result<_, _>>()?;
     assert!(defs.len() >= 2, "{merc}");
     assert!(defs.windows(2).all(|w| w.first() >= w.get(1)), "{merc}");
-    assert_eq!(hint("/gear/merc/0/pieces/0/base_hint")?, merc);
-    let own = hint("/farm/groups/0/items/2/base_hint")?;
+    assert_eq!(hint("/gear/merc/0/pieces/0/base_hint")?, *merc);
+
     assert!(own.contains("Wolf Head") && !own.contains("(def "), "{own}");
     Ok(())
 }
@@ -2442,38 +2654,47 @@ fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
     )?;
     farm.extend(fury_farm()?);
     let blocks = d2r_core::render::TextBlocks::default();
-    let names = |json: &serde_json::Value| -> Vec<(String, Vec<String>)> {
-        json.pointer("/farm/groups")
-            .and_then(serde_json::Value::as_array)
-            .map_or_default(|groups| {
-                groups
-                    .iter()
-                    .map(|g| {
-                        let items = g
-                            .get("items")
-                            .and_then(serde_json::Value::as_array)
-                            .map_or_default(|i| {
-                                i.iter()
-                                    .filter_map(|i| Some(i.get("name")?.as_str()?.to_owned()))
-                                    .collect()
-                            });
-                        let target = g.get("for").and_then(|f| f.as_str()).unwrap_or_default();
-                        (target.to_owned(), items)
-                    })
-                    .collect()
-            })
+    // Every entry still listed, needed or held, as sorted "build|name".
+    let names = |json: &serde_json::Value| -> Vec<String> {
+        let cards = json.pointer("/farm/cards").and_then(serde_json::Value::as_array);
+        let needed = cards
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c.get("items")?.as_array())
+            .flatten()
+            .flat_map(|i| {
+                let name = i.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+                let builds = i.get("for").and_then(serde_json::Value::as_array);
+                builds
+                    .into_iter()
+                    .flatten()
+                    .filter_map(move |b| Some(format!("{}|{name}", b.as_str()?)))
+            });
+        let held = farm_held(json)
+            .into_iter()
+            .map(|(b, name, _)| format!("{b}|{name}"));
+        let mut out: Vec<String> = needed.chain(held).collect();
+        out.sort();
+        out.dedup();
+        out
     };
-    let fury_all: Vec<String> = [
+    let listed = |entries: &[(&str, &[&str])]| -> Vec<String> {
+        let mut out: Vec<String> = entries
+            .iter()
+            .flat_map(|(build, names)| names.iter().map(move |n| format!("{build}|{n}")))
+            .collect();
+        out.sort();
+        out
+    };
+    let fury_all: &[&str] = &[
         "Fortitude",
         "Raven Frost",
         "Ribcracker",
         "Lawbringer",
         "Smoke",
         "Bulwark",
-    ]
-    .map(str::to_owned)
-    .to_vec();
-    let fury_rest: Vec<String> = fury_all.iter().filter(|n| *n != "Raven Frost").cloned().collect();
+    ];
+    let fury_rest: &[&str] = &["Fortitude", "Ribcracker", "Lawbringer", "Smoke", "Bulwark"];
     let worn = [
         worn_item(4, "Spirit", true),
         worn_item(6, "Raven Frost", false),
@@ -2487,16 +2708,13 @@ fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     // Spirit worn for the current build and Raven Frost for the later stage: hidden; one
     // Lawbringer of two: listed.
-    assert_eq!(names(&json), [("Fury Druid".to_owned(), fury_rest.clone())]);
+    assert_eq!(names(&json), listed(&[("Fury Druid", fury_rest)]));
     let other_chain = ["Other Build".to_owned()];
     info.stage_chain = &other_chain;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(
         names(&json),
-        [
-            ("Summoner Druid".to_owned(), vec!["Spirit".to_owned()]),
-            ("Fury Druid".to_owned(), fury_all.clone()),
-        ]
+        listed(&[("Summoner Druid", &["Spirit"]), ("Fury Druid", fury_all)])
     );
     let owned = ["Raven Frost".to_owned()];
     info.stage_chain = &summoner_chain;
@@ -2505,25 +2723,19 @@ fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(
         names(&json),
-        [
-            ("Summoner Druid".to_owned(), vec!["Spirit".to_owned()]),
-            ("Fury Druid".to_owned(), fury_all.clone()),
-        ]
+        listed(&[("Summoner Druid", &["Spirit"]), ("Fury Druid", fury_all)])
     );
     let merc = ["Raven Frost".to_owned(), "Spirit".to_owned()];
     info.live.owned = &[];
     info.live.merc_worn = &merc;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    assert_eq!(names(&json), [("Fury Druid".to_owned(), fury_rest)]);
+    assert_eq!(names(&json), listed(&[("Fury Druid", fury_rest)]));
     // In a group game `merc_worn` is empty.
     info.live.merc_worn = &[];
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(
         names(&json),
-        [
-            ("Summoner Druid".to_owned(), vec!["Spirit".to_owned()]),
-            ("Fury Druid".to_owned(), fury_all),
-        ]
+        listed(&[("Summoner Druid", &["Spirit"]), ("Fury Druid", fury_all)])
     );
     Ok(())
 }

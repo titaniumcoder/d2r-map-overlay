@@ -88,6 +88,7 @@ impl Playstyle for ConfigDriven {
             build: extra.stage.map(|s| s.build),
             stage: extra.stage,
             farm: &self.config.farm,
+            route: &self.config.route,
             stage_chain: &extra.chain,
             next: extra.route.as_ref(),
         })

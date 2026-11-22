@@ -381,6 +381,19 @@ fn boss_line(boss: &Boss, facts: &Facts) -> Option<String> {
     Some(line)
 }
 
+/// The route's bosses, each once, in route order with the Countess first.
+#[must_use]
+pub fn bosses(route: &Route) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    for boss in route.step.iter().flat_map(|s| &s.boss) {
+        if !out.iter().any(|b| d2r_core::names::same_name(b, &boss.name)) {
+            out.push(&boss.name);
+        }
+    }
+    out.sort_by_key(|b| !worth::is_countess(b));
+    out
+}
+
 /// Every `worth` boss of the route with the items it is worth farming for in `difficulty`, as
 /// shown ("Heart of the Oak (Ko, Pul)"; the Countess: her missing runes).
 #[must_use]

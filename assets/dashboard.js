@@ -228,7 +228,7 @@ function playSound(name) {
 // flickers away for a tick never sounds twice; a `quiet` frame (the first after loading, a
 // reconnect, a menu return, a new character) records its keys without sounding. Keys: drop unit
 // ids (farm marks; trade marks of tier S / A), farm entries "for|name|copies" once held
-// (missing → found / done; a further copy of a multi-copy entry is a new key), the route step
+// (`farm.held`; a further copy of a multi-copy entry is a new key), the route step
 // id, "<stage>><next stage>" when the switch groups are all met or the stage switched, and
 // "<difficulty>|<boss>" for a worth-farming boss gone two frames in a row. Pure but for `mem`.
 function soundEvents(mem, r, quiet) {
@@ -237,9 +237,7 @@ function soundEvents(mem, r, quiet) {
     farmDrop: drops.filter(d => d.kind === "farm").map(d => "d" + d.id),
     tradeDrop: drops.filter(d => d.kind === "trade" && (d.tier === "S" || d.tier === "A")).map(d => "d" + d.id),
     upgrade: (r.upgrades || []).map(u => u.key),
-    pickup: ((r.farm && r.farm.groups) || []).flatMap(g => (g.items || [])
-      .filter(i => i.status !== "missing")
-      .map(i => `${g.for}|${i.name}|${Math.min((i.stashed || 0) + (i.carried || 0), i.count || 1)}`)),
+    pickup: ((r.farm && r.farm.held) || []).map(h => `${h.for}|${h.name}|${h.copies}`),
     nextStep: r.next && r.next.id ? [r.next.id] : [],
     switchReady: [],
     bossStop: [],
@@ -360,48 +358,26 @@ function recipes(list) {
   });
   $("recipes").innerHTML = groups.join("");
 }
-// The farm list: one group per planned build, one card per item with its cross-character
-// status; a runeword still to build lists its runes (have/need) and allowed bases.
+// The farm list: only what is still missing, as cards by where it drops: any level-85 area,
+// then each route boss with what only it drops (the Countess: her runes with the odds per kill),
+// then "Elsewhere". Each entry is tagged with the build(s) it is for.
 function farm(f) {
-  const groups = (f && f.groups) || [];
-  $("farmpanel").hidden = !groups.length;
-  // "Nightmare worth farming: Mephisto → Bloodfist, Heart of the Oak (Ko); Andariel → …", the
-  // Countess on her own line with her runes split: "The Countess (82) — reliable: Ko (1 in 43:
-  // Heart of the Oak, Lawbringer), Lem (1 in 82: …); rare: Vex (…); items: …".
-  const w = f && f.worth, bosses = (w && w.bosses) || [];
-  const others = bosses.filter(b => !b.reliable), countess = bosses.filter(b => b.reliable);
-  const rune = r => esc(r.rune) + ` (${r.one_in != null ? `1 in ${esc(r.one_in)}: ` : ""}${esc((r.for || []).join(", "))})`;
-  const lines = [];
-  if (others.length) lines.push(others.map(b => `<b>${esc(b.boss)}</b> → `
-    + b.items.map(i => esc(i.name) + (i.runes.length ? ` (${esc(i.runes.join(" "))})` : "")).join(", ")).join("; "));
-  for (const b of countess) {
-    const parts = [["reliable", b.reliable.map(rune)], ["rare", (b.rare || []).map(rune)],
-      ["items", b.items.filter(i => !i.runes.length).map(i => esc(i.name))]]
-      .filter(([, list]) => list.length).map(([label, list]) => `${label}: ${list.join(", ")}`);
-    lines.push(`<b>${esc(b.boss)}</b> (${esc(b.level)}) — ${parts.join("; ")}`);
-  }
-  $("worth").innerHTML = lines.length
-    ? `${esc(w.difficulty || "")} worth farming: ` + lines.join("<br>")
-    : "";
-  $("farm").innerHTML = groups.map(g => {
-    const items = g.items || [];
-    const done = items.filter(i => i.status === "done").length;
-    const cards = items.map(i => {
-      const n = i.count > 1 ? ` ${esc(i.stashed)}/${esc(i.count)}` : "";
-      const carried = i.status !== "done" && i.carried ? `<div class="cr">on this character: ${esc(i.carried)} · put in the shared stash</div>` : "";
-      const runes = (i.runes || []).length
-        ? `<div class="rn">${i.runes.map(x => `<span class="${esc(x.status)}">${esc(x.rune)} ${x.status === "have" ? "✓" : esc(x.have) + "/" + esc(x.need)}</span>`).join("")}</div>` : "";
-      const bases = i.base_hint ? `<div class="bs">${esc(i.base_hint)}</div>`
-        : (i.bases || []).length ? `<div class="bs">${esc(i.bases.join(", "))}</div>` : "";
-      // A rolled entry: its slot and the stats it needs ("amulet with Teleport").
-      const needs = (i.needs || []).length
-        ? `<div class="bs">${esc(i.slot || "any item")} with ${esc(i.needs.join(" + "))}</div>` : "";
-      const note = i.note ? `<div class="bs">${esc(i.note)}</div>` : "";
-      return `<div class="fm ${esc(i.kind)} ${esc(i.status)}"><div class="fm-h"><span class="nm">${esc(i.name)}</span>`
-        + `<span class="kd">${esc(i.kind)}</span><span class="fst ${esc(i.status)}">${esc(i.status)}${n}</span></div>${carried}${needs}${note}${runes}${bases}</div>`;
-    }).join("");
-    return `<h3 class="row-h">for ${esc(g.for)} · ${done}/${items.length} done</h3><div class="fms">${cards}</div>`;
-  }).join("");
+  const cards = (f && f.cards) || [];
+  $("farmpanel").hidden = !cards.length;
+  const times = (name, n) => esc(name) + (n > 1 ? ` ×${esc(n)}` : "");
+  const entry = i => {
+    const runes = (i.runes || []).map(x => times(x.rune, x.short)).join(" ");
+    const needs = (i.needs || []).length ? `${i.slot || "any item"} with ${i.needs.join(" + ")}` : "";
+    const hint = i.base_hint || (i.bases || []).join(", ");
+    const sub = [needs, i.note, hint].filter(Boolean).map(esc).join(" · ");
+    return `<li class="${esc(i.kind)}"><span class="nm">${esc(i.name)}</span>`
+      + (runes ? `<span class="rn">${runes}</span>` : "") + `<span class="tag">${esc(i.tag)}</span>`
+      + (sub ? `<div class="bs">${sub}</div>` : "") + "</li>";
+  };
+  const rune = r => `<li class="rune"><span class="nm">${times(r.rune, r.short)}</span>`
+    + `<span class="odds">1 in ${esc(r.one_in)}</span><div class="bs">${esc((r.for || []).join(", "))}</div></li>`;
+  $("farm").innerHTML = cards.map(c => `<div class="fc ${esc(c.kind)}"><h3>${esc(c.title)} <span class="sub">${esc(c.sub)}</span></h3>`
+    + `<ul>${(c.runes || []).map(rune).join("")}${(c.items || []).map(entry).join("")}</ul></div>`).join("");
 }
 // The route's current step: its title, what to do, why, and the step after it.
 function next(n) {
@@ -454,7 +430,7 @@ function render(r) {
   gearFold(r);
   if (!r || !r.live) {
     $("who").innerHTML = '<span class="waiting">waiting for game…</span>';
-    for (const id of ["guide", "gear", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm", "worth"]) $(id).innerHTML = "";
+    for (const id of ["guide", "gear", "merc", "extras", "statsplan", "stash", "sell", "skills", "recipes", "farm"]) $(id).innerHTML = "";
     $("recipepanel").hidden = true;
     $("farmpanel").hidden = true;
     next(null);
