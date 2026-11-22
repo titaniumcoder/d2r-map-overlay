@@ -1,16 +1,9 @@
-//! The info line at the bottom of the overlay: difficulty, area name, monster levels and the
-//! area's boss, e.g. `Normal · Flayer Dungeon Level 1 · mlvl 22 · champ 24 · unique 25`.
+//! The info line at the bottom of the overlay, e.g.
+//! `Normal · Flayer Dungeon Level 1 · mlvl 22 · champ 24 · unique 25`, plus the text helpers
+//! (fitting, outlined glyphs, map label placement) the map and the dashboard share.
 //!
-//! Monster levels are the table values from `levels_data` (expansion). Terror Zones raise the
-//! actual monster levels, so in a terrorized level (`Snapshot::terrorized`) the line shows
-//! `terrorized` in violet instead of the table values and boss level:
-//! `Normal · Moo Moo Farm · terrorized`.
-//!
-//! In the Moo Moo Farm with a cow counter (`Snapshot::cows`, see [`crate::cows`]) the monster and
-//! boss levels give way to it: `Normal · Moo Moo Farm · kill count: 57 / victims alive: 23`.
-//!
-//! From Nightmare on, the monster-level part (or the cow counter) is coloured by how the
-//! character's build suits the area ([`crate::build::rate`]): red when bad, green when good.
+//! Terror Zones raise the real monster levels, so a terrorized level shows `terrorized` in place
+//! of the `levels_data` table values.
 
 use std::sync::OnceLock;
 
@@ -39,31 +32,31 @@ const FONT_PATHS: [&str; 3] = [
 ];
 /// Text size in px.
 const TEXT_PX: f32 = 16.0;
-/// Px between the text (with its outline) and the canvas's left and bottom edges, and between
-/// the text and the map above it.
+/// Px between the outlined text and the canvas edges or the map above it.
 const PAD: u32 = 3;
+/// Width in px of the dark outline around every glyph.
+const OUTLINE_PX: u32 = 1;
 const TEXT: [u8; 4] = [255, 255, 255, 255];
 /// The keep-for-own-use lines: green.
 pub const KEEP_TEXT: [u8; 4] = [90, 230, 90, 255];
-/// The sell lines: grey (dashboard Sell panel).
+/// The sell lines: grey.
 pub const SELL_TEXT: [u8; 4] = [175, 175, 175, 255];
-/// The give-away lines: yellow (dashboard, riding with the Sell panel).
+/// The give-away lines: yellow.
 pub const GIVE_TEXT: [u8; 4] = [255, 225, 60, 255];
 /// The move lines (a keeper on the wrong stash pages): orange.
 pub const MOVE_TEXT: [u8; 4] = [255, 160, 60, 255];
-/// The keep-for-trade lines: light blue (the own keep lines are [`KEEP_TEXT`]).
+/// The keep-for-trade lines: light blue.
 pub const TRADE_TEXT: [u8; 4] = [110, 190, 255, 255];
-/// The breakpoint/gear/runeword guide lines (user request, 2026-11-17): light violet.
+/// The breakpoint/gear/runeword guide lines: light violet.
 pub const GUIDE_TEXT: [u8; 4] = [200, 130, 255, 255];
 /// The `BiS` chase list ([`bis_lines`]): light gold.
 pub const BIS_TEXT: [u8; 4] = [255, 210, 120, 255];
-/// Most `BiS` chase lines per section (per-slot lines; hard truncation beyond it).
+/// Most `BiS` chase lines in all, character and mercenary together.
 const MAX_BIS_LINES: usize = 12;
-/// The highest monster level a character farms is at most this many above its own level
-/// ([`reachable_level`]). Unique monsters are area level +3 and the experience penalty starts
-/// above clvl +5, so +2 keeps an area's uniques at or under clvl +5: a level-43 character farms
-/// areas up to 45, whose uniques are 48 (user request, 2026-11-20: "if I am 43 then the unique
-/// monsters in a 47 level area would be 50, too high").
+/// A `BiS` piece is chased once its required level is at most this many above the character's.
+const CHASE_LEVELS_AHEAD: u32 = 5;
+/// Farmed areas are at most this many levels above the character: their uniques (+3) then stay
+/// within clvl +5, where the experience penalty starts.
 const REACHABLE_BONUS: u8 = 2;
 /// Town level ids: never farmed.
 pub const TOWNS: [u32; 5] = [1, 40, 75, 103, 109];
@@ -74,13 +67,12 @@ const FIRST_SPECIAL_LEVEL: u32 = 133;
 const TERRORIZED: &str = "terrorized";
 const TERROR_TEXT: [u8; 4] = [190, 120, 255, 255];
 const OUTLINE: [u8; 4] = [0, 0, 0, 220];
-/// The monster-level part in an area bad for the build ([`Rating::Bad`]).
-/// The red of a bad rating — also the colour of a resistance below 75 (user request).
+/// The monster-level part in an area bad for the build ([`Rating::Bad`]); also a low resistance.
 pub const BAD_TEXT: [u8; 4] = [235, 70, 60, 255];
 /// The monster-level part in an area good for the build ([`Rating::Good`]).
 const GOOD_TEXT: [u8; 4] = [80, 220, 100, 255];
 /// An area name (info line, exit labels) where the character gets almost no experience
-/// ([`crate::xp::is_low`]); white otherwise (user request, 2026-11-18).
+/// ([`crate::xp::is_low`]).
 pub const LOW_XP_TEXT: [u8; 4] = [140, 140, 140, 255];
 
 #[must_use]
@@ -128,12 +120,9 @@ impl InfoLine {
     }
 }
 
-/// The info line for `level_id`. Without a known difficulty there is no monster-level column to
-/// pick, so only the area name is shown. An area with monster level 0 (towns, the Forgotten
-/// Tower's ground floor) has no monster levels. A `terrorized` level shows [`TERRORIZED`] in
-/// place of monster and boss levels (the table values don't apply in a Terror Zone). In the Moo
-/// Moo Farm, `cows` replaces them (a terrorized farm keeps [`TERRORIZED`] last). `rating` is how
-/// the area suits the build (the playstyle's [`crate::build::rate`]) and colours the stats.
+/// The info line for `level_id`. The stats are, by precedence: the cow counter in the Moo Moo
+/// Farm (followed by [`TERRORIZED`] if terrorized), [`TERRORIZED`], or the table's monster and
+/// boss levels for a known difficulty. `rating` colours the stats.
 pub fn info_line(
     level_id: u32,
     difficulty: Option<u8>,
@@ -153,18 +142,9 @@ pub fn info_line(
     } else if terrorized {
         stats.push(TERRORIZED.to_owned());
     } else if let Some(d) = difficulty.map(usize::from) {
-        if let Some(&mlvl) = level.and_then(|(_, _, lvls)| lvls.get(d))
-            && mlvl > 0
-        {
-            stats.push(format!("mlvl {mlvl}"));
-            stats.push(format!("champ {}", mlvl.saturating_add(CHAMPION_BONUS)));
-            stats.push(format!("unique {}", mlvl.saturating_add(UNIQUE_BONUS)));
-        }
-        for (boss, _, lvls) in BOSSES.iter().filter(|&&(_, id, _)| id == level_id) {
-            if let Some(blvl) = lvls.get(d) {
-                stats.push(format!("{boss} {blvl}"));
-            }
-        }
+        let mlvl = level.and_then(|(_, _, lvls)| lvls.get(d)).copied();
+        stats.extend(monster_level_stats(mlvl));
+        stats.extend(boss_level_stats(level_id, d));
     }
     InfoLine {
         difficulty: difficulty.and_then(difficulty_name),
@@ -176,11 +156,31 @@ pub fn info_line(
     }
 }
 
+/// `mlvl`, `champ` and `unique` stats for area monster level `mlvl`; none for a missing or zero
+/// level (towns).
+fn monster_level_stats(mlvl: Option<u8>) -> Vec<String> {
+    match mlvl {
+        Some(mlvl) if mlvl > 0 => vec![
+            format!("mlvl {mlvl}"),
+            format!("champ {}", mlvl.saturating_add(CHAMPION_BONUS)),
+            format!("unique {}", mlvl.saturating_add(UNIQUE_BONUS)),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// `<boss> <level>` for each boss of `level_id` in difficulty column `d`.
+fn boss_level_stats(level_id: u32, d: usize) -> impl Iterator<Item = String> {
+    BOSSES
+        .iter()
+        .filter(move |&&(_, id, _)| id == level_id)
+        .filter_map(move |(boss, _, lvls)| lvls.get(d).map(|blvl| format!("{boss} {blvl}")))
+}
+
 /// The highest monster level a character of `char_level` in `difficulty` (0 Normal … 2 Hell)
-/// realistically farms, the item-level cap for findable upgrades and natural-socket bases:
-/// the character level + [`REACHABLE_BONUS`], kept within the difficulty's area levels (a
-/// level-20 character in Nightmare still meets level-36 monsters; nothing in Normal is above
-/// 43). `None` for an unknown level or difficulty.
+/// farms, the item-level cap for findable upgrades and natural-socket bases: the character
+/// level + [`REACHABLE_BONUS`], clamped to the difficulty's area levels. `None` for an unknown
+/// level or difficulty.
 #[must_use]
 pub fn reachable_level(char_level: Option<u8>, difficulty: Option<u8>) -> Option<u8> {
     let (lvl, d) = (char_level?, usize::from(difficulty?));
@@ -195,13 +195,9 @@ pub fn reachable_level(char_level: Option<u8>, difficulty: Option<u8>) -> Option
     Some(lvl.saturating_add(REACHABLE_BONUS).clamp(lowest, highest))
 }
 
-/// Why a `BiS` line carries its ✓: the character wears the piece ([`Tick::Worn`]), owns it
-/// without wearing it ([`Tick::Owned`]: carried, cubed or personally stashed) or it sits in
-/// the shared stash ([`Tick::Stash`]). The dashboard ticks worn pieces green and the others
-/// yellow ("you have it, go equip it"; user request 2026-11-18).
-///
-/// The overlay ticks all three the same (plain ✓, embedded in [`BisLine::text`]); the dashboard
-/// distinguishes them via the line's structured `tick` field ([`crate::web::live_json`]).
+/// Why a `BiS` line carries its ✓: the character wears the piece, owns it without wearing it
+/// (carried, cubed or personally stashed) or it sits in the shared stash. The text shows the
+/// same ✓ for all three; the dashboard tells them apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tick {
     Worn,
@@ -221,24 +217,23 @@ impl Tick {
     }
 }
 
-/// One `BiS` chase line: the overlay's text (any ✓ already embedded) and, structurally, why
-/// it is ticked (`None` when the piece is owned neither by the character nor the stash).
+/// One `BiS` chase line: its text (any ✓ embedded) and why it is ticked.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BisLine {
     pub text: String,
     pub tick: Option<Tick>,
-    /// The runeword behind the piece, when the piece names one: the dashboard renders its
-    /// runes and bases as a dim hint line under the piece (the overlay doesn't).
+    /// The runeword the piece names, if any (the dashboard shows its runes and bases).
     pub runeword: Option<crate::runewords_data::Runeword>,
 }
 
-/// The `BiS` per-slot chase lines (user request, 2026-11-17): one line per configured slot —
-/// `helm: Mang Song's Lesson (82)` — in the user's slot order, only pieces relevant for the
-/// character's level (required level ≤ character level + 5), and skipping slots where the
-/// equipped piece is already set/unique quality (presumed the current `BiS`). The mercenary's
-/// slots follow prefixed `merc`. At most [`MAX_BIS_LINES`] per section.
-// One line: the bis query's inputs are flat snapshot fields; a struct would only shuffle them.
-#[allow(clippy::too_many_arguments)]
+/// The `BiS` chase lines, `helm: Mang Song's Lesson (82)`: per configured slot in
+/// [`crate::config::SLOT_NAMES`] order, the character's slots then the mercenary's (prefixed
+/// `merc`), each fitted to `max_width` px. A slot is skipped when its equipped piece already
+/// beats the list ([`slot_equipped_better`]) or no piece is in reach ([`chase_target`]).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the inputs are flat snapshot fields; a struct would only shuffle them"
+)]
 #[must_use]
 pub fn bis_lines(
     bis: &crate::guidance::Bis,
@@ -251,84 +246,56 @@ pub fn bis_lines(
     font: &FontVec,
     max_width: f32,
 ) -> Vec<BisLine> {
-    let mut out = Vec::new();
     let lvl = u32::from(char_level.unwrap_or(0));
-    // A piece the character already owns (equipped, carried or stashed) gets a ✓ (user pick,
-    // 2026-11-17): equip it instead of chasing a second one. A piece sitting in the shared
-    // stash is ticked too ([`Tick::Stash`]); the overlay shows the same plain ✓, the dashboard
-    // marks ✓(stash) from the line's tick.
-    for slot in crate::config::SLOT_NAMES {
-        let Some(pieces) = bis.slots.get(slot) else {
-            continue;
-        };
-        // Already better: a set/unique equipped in that slot is presumed the current BiS.
+    let own = crate::config::SLOT_NAMES.iter().filter_map(|&slot| {
+        let pieces = bis.slots.get(slot)?;
         if slot_equipped_better(slot, equipped) {
-            continue;
+            return None;
         }
-        // Only pieces relevant for the current level (req ≤ level + 5); the highest-level one
-        // is the current chase target, so a slot graduates from Stealth to Enigma.
-        let Some((piece, req)) = pieces
-            .iter()
-            .filter_map(|p| piece_level(p).map(|l| (p, l)))
-            .filter(|&(_, l)| l <= lvl + 5)
-            .max_by_key(|&(_, l)| l)
-        else {
-            continue;
-        };
-        let t = piece_tick(piece, worn_names, owned_names, stash_names);
-        let mark = if t.is_some() { "✓ " } else { "" };
-        if out.len() < MAX_BIS_LINES {
-            out.push(BisLine {
-                text: format!(
-                    "{slot}: {mark}{} ({req})",
-                    piece.split('@').next().unwrap_or(piece)
-                ),
-                tick: t,
-                runeword: runeword_of(piece),
-            });
-        }
-    }
-    for slot in crate::config::SLOT_NAMES {
-        let Some(pieces) = bis.merc_slots.get(slot) else {
-            continue;
-        };
+        let (piece, req) = chase_target(pieces, lvl)?;
+        let tick = piece_tick(piece, worn_names, owned_names, stash_names);
+        Some(chase_line(slot, piece, req, tick))
+    });
+    let merc = crate::config::SLOT_NAMES.iter().filter_map(|&slot| {
+        let pieces = bis.merc_slots.get(slot)?;
         if slot_equipped_better(slot, merc_equipped) {
-            continue;
+            return None;
         }
-        let Some((piece, req)) = pieces
-            .iter()
-            .filter_map(|p| piece_level(p).map(|l| (p, l)))
-            .filter(|&(_, l)| l <= lvl + 5)
-            .max_by_key(|&(_, l)| l)
-        else {
-            continue;
-        };
-        // The character's worn names are not the mercenary's.
-        let t = piece_tick(piece, &[], owned_names, stash_names);
-        let mark = if t.is_some() { "✓ " } else { "" };
-        if out.len() < MAX_BIS_LINES {
-            out.push(BisLine {
-                text: format!(
-                    "merc {slot}: {mark}{} ({req})",
-                    piece.split('@').next().unwrap_or(piece)
-                ),
-                tick: t,
-                runeword: runeword_of(piece),
-            });
-        }
-    }
-    // Wrapped per line so text and tick stay aligned even when fit_plain shortens a line.
-    out.into_iter()
+        let (piece, req) = chase_target(pieces, lvl)?;
+        let tick = piece_tick(piece, &[], owned_names, stash_names);
+        Some(chase_line(&format!("merc {slot}"), piece, req, tick))
+    });
+    own.chain(merc)
+        .take(MAX_BIS_LINES)
         .map(|l| BisLine {
-            tick: l.tick,
-            runeword: l.runeword,
             text: fit_plain(font, &l.text, max_width),
+            ..l
         })
         .collect()
 }
 
-/// The area name of `level_id` from the levels table, or `None` for an unknown id (callers
-/// fall back to `Level <id>`, like [`info_line`]).
+/// The piece of `pieces` to chase at character level `lvl`, with its required level: the
+/// highest-level one within [`CHASE_LEVELS_AHEAD`], so a slot graduates from Stealth to Enigma.
+fn chase_target(pieces: &[String], lvl: u32) -> Option<(&String, u32)> {
+    pieces
+        .iter()
+        .filter_map(|p| piece_level(p).map(|l| (p, l)))
+        .filter(|&(_, l)| l <= lvl + CHASE_LEVELS_AHEAD)
+        .max_by_key(|&(_, l)| l)
+}
+
+/// The unfitted chase line `<slot>: [✓ ]<piece> (<req>)`.
+fn chase_line(slot: &str, piece: &str, req: u32, tick: Option<Tick>) -> BisLine {
+    let mark = if tick.is_some() { "✓ " } else { "" };
+    let name = piece.split('@').next().unwrap_or(piece);
+    BisLine {
+        text: format!("{slot}: {mark}{name} ({req})"),
+        tick,
+        runeword: runeword_of(piece),
+    }
+}
+
+/// The area name of `level_id` from the levels table.
 #[must_use]
 pub fn level_name(level_id: u32) -> Option<&'static str> {
     LEVELS
@@ -337,8 +304,7 @@ pub fn level_name(level_id: u32) -> Option<&'static str> {
         .map(|&(_, name, _)| name)
 }
 
-/// The slot name of a body equip-location id (the reverse of [`slot_body`]; the swap slot
-/// shares the weapon's id). `None` for ids with no `BiS` slot (the mercenary's or the head).
+/// The `BiS` slot name of a body equip-location id (the reverse of [`slot_body`]).
 #[must_use]
 pub const fn body_slot_name(body: u8) -> Option<&'static str> {
     match body {
@@ -356,9 +322,8 @@ pub const fn body_slot_name(body: u8) -> Option<&'static str> {
     }
 }
 
-/// The required character level of a `BiS` piece: the `@level` config suffix, else the known
-/// runeword levels; `None` when unknown (the piece then always shows). Shared by the overlay's
-/// chase list and the config page's resolved view ([`crate::web`]).
+/// The required character level of a `BiS` piece: its `@level` suffix, else the known runeword
+/// level.
 #[must_use]
 pub fn piece_level(piece: &str) -> Option<u32> {
     if let Some(at) = piece.rfind('@')
@@ -373,17 +338,14 @@ pub fn piece_level(piece: &str) -> Option<u32> {
         .map(|&(_, l)| l)
 }
 
-/// The bare piece name of a `BiS` piece string (`"Insight@27"` → `"Insight"`); shared by the
-/// overlay's chase list and the config page's resolved view ([`crate::web`]).
+/// The bare piece name of a `BiS` piece string (`"Insight@27"` → `"Insight"`).
 #[must_use]
 pub fn piece_name(piece: &str) -> &str {
     piece.split_once('@').map_or(piece, |(name, _)| name).trim()
 }
 
-/// Why a `BiS` piece is ticked: the character wears it (`worn_names`), owns it otherwise
-/// (`owned_names`: carried, cubed or personally stashed; may include the worn ones) or it
-/// sits in the shared stash ([`Tick`]); `None` for none of these. Shared by the overlay's
-/// chase list and the dashboard and config pages ([`crate::web`]).
+/// Why a `BiS` piece is ticked, worn before owned before stashed; `None` if it is in none of
+/// the name lists (`owned_names` may include the worn ones).
 #[must_use]
 pub fn piece_tick(
     piece: &str,
@@ -403,13 +365,20 @@ pub fn piece_tick(
     }
 }
 
-/// Whether the equipped piece in `slot`'s body location is set or unique quality: presumed the
-/// current `BiS`, so the slot's chase pieces are already beaten (the overlay skips the slot
-/// entirely, the config page strikes its pieces through instead).
+/// Whether the piece equipped in `slot` is set or unique quality, presumed better than the
+/// slot's chase list.
 #[must_use]
 pub fn slot_equipped_better(slot: &str, equipped: &[(u8, u32)]) -> bool {
-    slot_body(slot).is_some_and(|body| equipped.iter().any(|&(b, q)| b == body && (q == 5 || q == 7)))
+    slot_body(slot).is_some_and(|body| {
+        equipped
+            .iter()
+            .any(|&(b, q)| b == body && (q == QUALITY_SET || q == QUALITY_UNIQUE))
+    })
 }
+
+/// Item quality ids (`ItemData` quality) of set and unique items.
+const QUALITY_SET: u32 = 5;
+const QUALITY_UNIQUE: u32 = 7;
 
 /// The runeword behind a `BiS` piece string, when the piece names one (case-insensitive).
 fn runeword_of(piece: &str) -> Option<crate::runewords_data::Runeword> {
@@ -433,8 +402,7 @@ fn slot_body(slot: &str) -> Option<u8> {
     }
 }
 
-/// The known runeword required character levels (classic tables); named uniques carry their
-/// level in the config's `@level` suffix instead.
+/// Required character levels of the known runewords; other pieces carry an `@level` suffix.
 const RUNEWORD_LEVELS: [(&str, u32); 20] = [
     ("Steel", 13),
     ("Stealth", 17),
@@ -458,9 +426,8 @@ const RUNEWORD_LEVELS: [(&str, u32); 20] = [
     ("Mang Song's Lesson", 82),
 ];
 
-/// The info-line font, loaded on first use from [`FONT_PATHS`]; `None` (logged once) if none loads.
+/// The info-line font, loaded once from [`FONT_PATHS`]; `None` (logged once) if none loads.
 pub fn font() -> Option<&'static FontVec> {
-    // `OnceLock` runs the loader once, even if the reader thread and `--render` race for it.
     static FONT: OnceLock<Option<FontVec>> = OnceLock::new();
     FONT.get_or_init(|| {
         let font = FONT_PATHS.iter().find_map(|p| {
@@ -475,9 +442,8 @@ pub fn font() -> Option<&'static FontVec> {
     .as_ref()
 }
 
-/// One Sell / Keep panel entry as text: `Gravenspine (inv)`, `Magefist ×2 (stash)`, a move
-/// with its target pages `Hunter's Bow 4os (page 4 → 1–2)` or stash tab `Key of Terror (inv →
-/// mats)`, a scored sell with its reason `Rare Ring (page 4, no build stats)`.
+/// One item-plan entry as text: `Magefist ×2 (stash)`, `Hunter's Bow 4os (page 4 → 1–2)`,
+/// `Rare Ring (page 4, no build stats)`.
 #[must_use]
 pub fn advice_entry(a: &Advice) -> String {
     let mut place = a.spot.label();
@@ -496,18 +462,17 @@ pub fn advice_entry(a: &Advice) -> String {
     }
 }
 
-/// One dashboard text row (the breakpoint guide): its text, colour, and optional coloured segments
-/// (`spans`: byte offset into `text` where a differently coloured part starts — used for the
-/// guide's low-resistance values, user request, 2026-11-17).
+/// One dashboard text row (the breakpoint guide) in `colour`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Band {
     pub text: String,
     pub colour: [u8; 4],
+    /// Byte offsets into `text` where a differently coloured part starts, with its colour.
     pub spans: Vec<(usize, [u8; 4])>,
 }
 
 impl Band {
-    /// A plain row without spans (tests: the core's and the playstyle crates').
+    /// A plain row without spans.
     #[cfg(any(test, feature = "testutil"))]
     pub fn plain(text: impl Into<String>, colour: [u8; 4]) -> Self {
         Self {
@@ -522,8 +487,7 @@ impl Band {
 #[must_use]
 pub fn band_height(font: &FontVec) -> u32 {
     let scaled = font.as_scaled(PxScale::from(TEXT_PX));
-    // +2: the 1 px outline above and below.
-    ceil_px(scaled.height()) + 2 + 2 * PAD
+    ceil_px(scaled.height()) + 2 * (OUTLINE_PX + PAD)
 }
 
 /// Width in px of `text` set in `font` (advances plus kerning).
@@ -547,8 +511,8 @@ fn text_width_at(font: &FontVec, size: f32, text: &str) -> f32 {
     width
 }
 
-/// The line's text, with the area name cut and ended with `…` until it fits `max_width` px. If even
-/// a bare `…` doesn't fit, that is returned (and clipped when drawn).
+/// The line's text, with the area name cut and ended with `…` until it fits `max_width` px (at
+/// worst a bare `…`, clipped when drawn).
 #[must_use]
 pub fn fit_text(font: &FontVec, line: &InfoLine, max_width: f32) -> String {
     let full = line.text();
@@ -583,10 +547,10 @@ pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine) {
         return;
     }
     let scaled = font.as_scaled(PxScale::from(TEXT_PX));
-    // Left edge and baseline; +1 leaves room for the outline.
-    let x0 = f32_px(PAD + 1);
-    let max_width = f32_px(w.saturating_sub(2 * (PAD + 1)));
-    let baseline = f32_px(h - PAD - 1) + scaled.descent();
+    let inset = PAD + OUTLINE_PX;
+    let x0 = f32_px(inset);
+    let max_width = f32_px(w.saturating_sub(2 * inset));
+    let baseline = f32_px(h - inset) + scaled.descent();
     let text = fit_text(font, line, max_width);
     let mut x = x0;
     for (part, colour) in spans(line, &text) {
@@ -595,17 +559,14 @@ pub fn draw(pm: &mut Pixmap, font: &FontVec, line: &InfoLine) {
     }
 }
 
-/// The fitted `text` of `line` ([`fit_text`]) as coloured parts, left to right: white, the area
-/// name grey when it gives almost no experience, then the stats in the rating's colour (red or
-/// green; white when neutral), then a terrorized line's [`TERRORIZED`] in violet. Empty parts
-/// are left out.
+/// The fitted `text` of `line` ([`fit_text`]) as non-empty coloured parts, left to right: white,
+/// a low-xp area name grey, the stats in the rating's colour, [`TERRORIZED`] in violet.
 fn spans<'a>(line: &InfoLine, text: &'a str) -> Vec<(&'a str, [u8; 4])> {
     let mut parts = rated_spans(line, text);
     if !line.low_xp {
         return parts;
     }
-    // The text is `[difficulty · ]area[ · stats]` and fitting only shortens the area, so the
-    // area sits between the known prefix and suffix lengths, inside the first (white) part.
+    // Fitting only shortens the area, so it lies between the known prefix and suffix lengths.
     let start = line.difficulty.map_or(0, |d| d.len() + SEPARATOR.len());
     let tail: usize = line.stats.iter().map(|s| SEPARATOR.len() + s.len()).sum();
     let end = text.len().saturating_sub(tail);
@@ -627,14 +588,12 @@ fn spans<'a>(line: &InfoLine, text: &'a str) -> Vec<(&'a str, [u8; 4])> {
 
 /// [`spans`] without the area colouring.
 fn rated_spans<'a>(line: &InfoLine, text: &'a str) -> Vec<(&'a str, [u8; 4])> {
-    // Shortening only cuts the area name, so the fitted text still ends in the stats.
     let (rest, terror) = match text.strip_suffix(TERRORIZED) {
         Some(rest) if line.terrorized => (rest, TERRORIZED),
         _ => (text, ""),
     };
     let rated_parts = line.stats.len().saturating_sub(usize::from(line.terrorized));
     let rated = line.stats.get(..rated_parts).unwrap_or_default().join(SEPARATOR);
-    // Before a terrorized part, the stats are followed by the separator, which stays white.
     let (rated_end, sep) = match rest.strip_suffix(SEPARATOR) {
         Some(end) if !terror.is_empty() => (end, SEPARATOR),
         _ => (rest, ""),
@@ -656,9 +615,8 @@ fn rated_spans<'a>(line: &InfoLine, text: &'a str) -> Vec<(&'a str, [u8; 4])> {
         .collect()
 }
 
-/// Truncates a [`Band`] to `max_width` px in `font`, appending `…` when it doesn't fit; spans
-/// beyond the cut are dropped (their text is gone anyway). For plain one-line texts use
-/// [`fit_plain`]; the info line has its own span-aware fitting.
+/// Truncates a [`Band`] to `max_width` px in `font`, appending `…` when it doesn't fit and
+/// dropping the spans beyond the cut.
 #[must_use]
 pub fn fit_band(mut band: Band, font: &FontVec, max_width: f32) -> Band {
     if text_width(font, &band.text) <= max_width {
@@ -678,8 +636,7 @@ pub fn fit_band(mut band: Band, font: &FontVec, max_width: f32) -> Band {
     band
 }
 
-/// Truncates `text` to `max_width` px in `font`, appending `…` when it doesn't fit. For plain
-/// one-line texts (the guide lines); the info line has its own span-aware fitting.
+/// Truncates `text` to `max_width` px in `font`, appending `…` when it doesn't fit.
 #[must_use]
 pub fn fit_plain(font: &FontVec, text: &str, max_width: f32) -> String {
     if text_width(font, text) <= max_width {
@@ -697,7 +654,7 @@ pub fn fit_plain(font: &FontVec, text: &str, max_width: f32) -> String {
     text.to_owned()
 }
 
-/// Map label text size in px (exit target names, marker tags).
+/// Map label text size in px.
 const LABEL_PX: f32 = 12.0;
 /// Px between a label's baseline and the centre of the marker it names (label above it).
 const LABEL_RAISE: f32 = 7.0;
@@ -737,20 +694,17 @@ pub struct LabelSpec {
     pub size: LabelSize,
     pub at: (f32, f32),
     pub keep: bool,
-    /// The radius in px of a disc around the marker the label's box stays out of (a drop's
-    /// ring); `None`: the default distances, which suit a plain marker dot.
+    /// Radius in px of a disc around the marker the label stays out of; `None` for a plain dot.
     pub clear: Option<f32>,
-    /// A canvas box `[x0, y0, x1, y1]` (the player's dot) the label avoids while another spot
-    /// is free of it.
+    /// A canvas box `[x0, y0, x1, y1]` the label avoids while another spot is free of it.
     pub avoid: Option<[f32; 4]>,
 }
 
-/// Places map `labels`, highest priority first, on a `canvas_w` px wide canvas above `bottom` (the
-/// map area's height, so labels stay off the info line). Each goes to the first spot around its
-/// marker (above, below, right, left), pushed inside the canvas edges, whose box overlaps no label
-/// placed before it, preferring a spot off its `avoid` box. A label with no free spot is dropped
-/// (`None`), unless it is `keep`: then it goes above its marker anyway. Returns each label's pen
-/// position and baseline, in input order.
+/// Places map `labels`, highest priority first, inside a `canvas_w` px wide canvas above
+/// `bottom` px. Each goes to the first of its spots ([`label_spot`]) that overlaps no label
+/// placed before it, preferring one off its `avoid` box; with none free it is dropped (`None`),
+/// or drawn above its marker anyway if `keep`. Returns each label's pen position and baseline,
+/// in input order.
 #[must_use]
 pub fn place_labels(labels: &[LabelSpec], canvas_w: f32, bottom: f32) -> Vec<Option<(f32, f32)>> {
     let mut taken: Vec<[f32; 4]> = Vec::new();
@@ -758,22 +712,25 @@ pub fn place_labels(labels: &[LabelSpec], canvas_w: f32, bottom: f32) -> Vec<Opt
         .iter()
         .map(|l| {
             let spots = [0, 1, 2, 3].map(|slot| label_spot(l, slot, canvas_w, bottom));
-            let free = |s: &(f32, f32)| {
-                let b = label_box(l.size, *s);
-                !taken.iter().any(|t| boxes_overlap(*t, b))
-            };
-            let off_avoid =
-                |s: &(f32, f32)| !l.avoid.is_some_and(|a| boxes_overlap(a, label_box(l.size, *s)));
-            let free = spots
-                .iter()
-                .find(|s| free(s) && off_avoid(s))
-                .or_else(|| spots.iter().find(|s| free(s)))
-                .copied();
-            let spot = free.or_else(|| l.keep.then_some(spots[0]))?;
+            let spot = first_free_spot(l, &spots, &taken).or_else(|| l.keep.then_some(spots[0]))?;
             taken.push(label_box(l.size, spot));
             Some(spot)
         })
         .collect()
+}
+
+/// The first of `spots` whose box overlaps none of `taken`, preferring one off `l.avoid`.
+fn first_free_spot(l: &LabelSpec, spots: &[(f32, f32)], taken: &[[f32; 4]]) -> Option<(f32, f32)> {
+    let free = |s: &&(f32, f32)| {
+        let b = label_box(l.size, **s);
+        !taken.iter().any(|t| boxes_overlap(*t, b))
+    };
+    let off_avoid = |s: &&(f32, f32)| !l.avoid.is_some_and(|a| boxes_overlap(a, label_box(l.size, **s)));
+    spots
+        .iter()
+        .find(|s| free(s) && off_avoid(s))
+        .or_else(|| spots.iter().find(free))
+        .copied()
 }
 
 /// Pen position and baseline of `l` in spot `slot` (0 above its marker, 1 below, 2 right, 3 left),
@@ -785,9 +742,7 @@ fn label_spot(l: &LabelSpec, slot: u8, canvas_w: f32, bottom: f32) -> (f32, f32)
         descent,
     } = l.size;
     let (cx, cy) = l.at;
-    // Above: the box's bottom edge sits `raise + descent` px above the centre; below mirrors
-    // it. Beside: the box is centred on the marker's height. With `clear`, the box's near edge
-    // (outline included, see `label_box`) is `clear` px from the centre.
+    // With `clear`, the near edge of the box (outline included) is `clear` px from the centre.
     let (raise, side) = l
         .clear
         .map_or((LABEL_RAISE, LABEL_SIDE), |r| (r + 1.0 - descent, r + 1.0));
@@ -798,8 +753,7 @@ fn label_spot(l: &LabelSpec, slot: u8, canvas_w: f32, bottom: f32) -> (f32, f32)
         2 => (cx + side, beside),
         _ => (cx - side - width, beside),
     };
-    // +1/+2: room for the outline. The lowest baseline keeps the descenders and outline above
-    // `bottom`.
+    // The ±1 and 2 px keep the 1 px outline inside the canvas and above `bottom`.
     (
         pen.min(canvas_w - width - 2.0).max(1.0),
         baseline.min(bottom + descent - 1.0).max(ascent + 1.0),
@@ -839,8 +793,8 @@ pub fn draw_label_at(
     draw_outlined(pm, font, size, colour, text, at, false);
 }
 
-/// Draws `c` at `size` px in `colour` with the info line's dark 1 px outline, its ink box centred
-/// on (`cx`, `cy`), emboldened by 1 px. Used for the map's "?" markers.
+/// Draws `c` emboldened at `size` px in `colour` with the dark outline, its ink box centred on
+/// (`cx`, `cy`).
 pub fn draw_centred(pm: &mut Pixmap, font: &FontVec, size: f32, colour: [u8; 4], c: char, cx: f32, cy: f32) {
     let scaled = font.as_scaled(PxScale::from(size));
     let glyph = scaled
@@ -863,16 +817,28 @@ fn draw_outlined(
     size: f32,
     colour: [u8; 4],
     text: &str,
-    (x0, baseline): (f32, f32),
+    at: (f32, f32),
     bold: bool,
 ) {
     let (w, h) = (pm.width(), pm.height());
-    let scaled = font.as_scaled(PxScale::from(size));
-    // Glyph coverage goes into a mask; the outline is the mask grown by 1 px. tiny-skia then
-    // blends a solid colour through each mask, which keeps premultiplied alpha right.
     let (Some(mut glyphs), Some(mut outline)) = (Mask::new(w, h), Mask::new(w, h)) else {
         return;
     };
+    rasterize(&mut glyphs, font, size, text, at);
+    if bold {
+        widen(glyphs.data_mut(), w);
+    }
+    grow(glyphs.data(), outline.data_mut(), w, h);
+    fill_through(pm, OUTLINE, &outline);
+    fill_through(pm, colour, &glyphs);
+}
+
+/// Writes the glyph coverage of `text` at `size` px, from pen position `x0` on `baseline`, into
+/// `mask`.
+fn rasterize(mask: &mut Mask, font: &FontVec, size: f32, text: &str, (x0, baseline): (f32, f32)) {
+    let (w, h) = (mask.width(), mask.height());
+    let scaled = font.as_scaled(PxScale::from(size));
+    let data = mask.data_mut();
     let mut pen = x0;
     let mut prev: Option<GlyphId> = None;
     for c in text.chars() {
@@ -884,46 +850,40 @@ fn draw_outlined(
         pen += scaled.h_advance(id);
         prev = Some(id);
         let Some(outlined) = scaled.outline_glyph(glyph) else {
-            continue; // a space
+            continue;
         };
         let min = outlined.px_bounds().min;
         let (gx, gy) = (round_px(min.x), round_px(min.y));
-        let data = glyphs.data_mut();
         outlined.draw(|x, y, coverage| {
             if let Some(i) = mask_index(w, h, gx + i64::from(x), gy + i64::from(y))
                 && let Some(px) = data.get_mut(i)
             {
-                // Glyphs may overlap by a pixel: keep the stronger coverage.
+                // Neighbouring glyphs may overlap by a pixel.
                 *px = (*px).max(coverage_u8(coverage));
             }
         });
     }
-    if bold {
-        widen(glyphs.data_mut(), w);
-    }
-    grow(glyphs.data(), outline.data_mut(), w, h);
+}
 
-    let Some(rect) = Rect::from_xywh(0.0, 0.0, f32_px(w), f32_px(h)) else {
+/// Blends solid `colour` into `pm` through `mask` (tiny-skia keeps premultiplied alpha right).
+fn fill_through(pm: &mut Pixmap, colour: [u8; 4], mask: &Mask) {
+    let Some(rect) = Rect::from_xywh(0.0, 0.0, f32_px(pm.width()), f32_px(pm.height())) else {
         return;
     };
-    for (colour, mask) in [(OUTLINE, &outline), (colour, &glyphs)] {
-        let mut paint = Paint::default();
-        let [red, green, blue, alpha] = colour;
-        paint.set_color_rgba8(red, green, blue, alpha);
-        pm.fill_rect(rect, &paint, Transform::identity(), Some(mask));
-    }
+    let mut paint = Paint::default();
+    let [red, green, blue, alpha] = colour;
+    paint.set_color_rgba8(red, green, blue, alpha);
+    pm.fill_rect(rect, &paint, Transform::identity(), Some(mask));
 }
 
 /// Faux bold: each pixel of the `w`-wide mask `data` takes the max of itself and its left
-/// neighbour. Horizontal only, so gaps between a glyph's parts above each other (the dot of "?")
-/// stay open.
+/// neighbour. Horizontal only, so the dot of "?" stays apart from its hook.
 fn widen(data: &mut [u8], w: u32) {
     let Ok(w) = usize::try_from(w) else { return };
     if w == 0 {
         return;
     }
     for row in data.chunks_mut(w) {
-        // Right to left, so each pixel reads its left neighbour's original value.
         for x in (1..row.len()).rev() {
             let left = row.get(x - 1).copied().unwrap_or(0);
             if let Some(cur) = row.get_mut(x) {
@@ -1075,13 +1035,16 @@ mod tests {
         };
         let got = place_labels(&[l], 400.0, 400.0);
         assert_eq!(got, vec![Some(label_spot(&l, 1, 400.0, 400.0))], "moved below");
-        // Every spot covers the box: drawn anyway, in the first free one.
         let l = LabelSpec {
             avoid: Some([0.0, 0.0, 400.0, 400.0]),
             ..spec(at, false)
         };
         let got = place_labels(&[l], 400.0, 400.0);
-        assert_eq!(got, vec![Some(label_spot(&l, 0, 400.0, 400.0))]);
+        assert_eq!(
+            got,
+            vec![Some(label_spot(&l, 0, 400.0, 400.0))],
+            "every spot covers it"
+        );
     }
 
     #[test]
@@ -1099,10 +1062,13 @@ mod tests {
             got.first(),
             "kept label falls back to above its marker"
         );
-        // A label far away is unaffected.
         let far = spec((50.0, 50.0), false);
         let got = place_labels(&[spec(at, true), far], 400.0, 400.0);
-        assert_eq!(got.get(1), Some(&Some(label_spot(&far, 0, 400.0, 400.0))));
+        assert_eq!(
+            got.get(1),
+            Some(&Some(label_spot(&far, 0, 400.0, 400.0))),
+            "a label far away is unaffected"
+        );
     }
 
     #[test]
@@ -1207,10 +1173,10 @@ mod tests {
                 "{d:?}"
             );
         }
-        // Mephisto's level depends on the difficulty too.
         assert_eq!(
             info_line(102, None, false, None, Rating::Neutral).stats,
-            Vec::<String>::new()
+            Vec::<String>::new(),
+            "no boss level either"
         );
     }
 
@@ -1228,7 +1194,6 @@ mod tests {
         assert!(text_width(font, &short) <= narrow, "{short}");
         assert!(short.starts_with("Normal · Flayer"), "{short}");
         assert!(short.contains("… · mlvl 22 · champ 24 · unique 25"), "{short}");
-        // Too narrow for anything: the area is cut to a bare ellipsis.
         assert_eq!(
             fit_text(font, &line, 5.0),
             "Normal · … · mlvl 22 · champ 24 · unique 25"
@@ -1298,9 +1263,6 @@ mod tests {
         let owned = ["Harlequin Crest".to_owned()];
         let stash = ["Treachery".to_owned()];
         let lines = bis_lines(&bis, Some(90), &[], &[], &[], &owned, &stash, font, 10_000.0);
-        // The character line carries its tick too (not just the merc lines), and the overlay
-        // text shows the plain ✓ for both tick kinds. A unique piece is no runeword; a runeword
-        // piece carries its runeword for the dashboard's hint line.
         let treachery = match crate::runewords_data::lookup("Treachery") {
             Some(rw) => *rw,
             None => return,
@@ -1320,12 +1282,11 @@ mod tests {
                 },
             ]
         );
-        // The runeword lookup is case-insensitive over the piece string's name part.
         assert_eq!(
             runeword_of("treachery@43").map(|rw| rw.runes),
-            Some(&["Shael", "Thul", "Lem"][..])
+            Some(&["Shael", "Thul", "Lem"][..]),
+            "case-insensitive, without the level suffix"
         );
-        // Unticked pieces keep `tick: null` and no mark.
         let none = bis_lines(&bis, Some(90), &[], &[], &[], &[], &[], font, 10_000.0);
         assert_eq!(none.first().map(|l| l.tick), Some(None));
         assert_eq!(
@@ -1336,14 +1297,19 @@ mod tests {
 
     #[test]
     fn reachable_level_is_two_above_the_character_level() {
-        // clvl +2 keeps an area's uniques (+3) at or under clvl +5: Nightmare 43 → 45.
         assert_eq!(reachable_level(Some(43), Some(1)), Some(45));
         assert_eq!(reachable_level(Some(70), Some(2)), Some(72));
-        // Kept within the difficulty's area levels: Nightmare starts at 36, Normal tops out at 43.
-        assert_eq!(reachable_level(Some(20), Some(1)), Some(36));
-        assert_eq!(reachable_level(Some(80), Some(0)), Some(43));
-        assert_eq!(reachable_level(Some(99), Some(2)), Some(87)); // Arreat Summit
-        // Unknown level or difficulty: no level (no findable or base hints).
+        assert_eq!(
+            reachable_level(Some(20), Some(1)),
+            Some(36),
+            "Nightmare's lowest area"
+        );
+        assert_eq!(
+            reachable_level(Some(80), Some(0)),
+            Some(43),
+            "Normal's highest area"
+        );
+        assert_eq!(reachable_level(Some(99), Some(2)), Some(87), "Arreat Summit");
         assert_eq!(reachable_level(None, Some(0)), None);
         assert_eq!(reachable_level(Some(10), None), None);
         assert_eq!(reachable_level(Some(10), Some(3)), None);
@@ -1351,7 +1317,6 @@ mod tests {
 
     #[test]
     fn terrorized_line_drops_table_levels() {
-        // Moo Moo Farm (39).
         let line = info_line(39, Some(0), true, None, Rating::Neutral);
         assert_eq!(line.text(), "Normal · Moo Moo Farm · terrorized");
         assert!(line.terrorized);
@@ -1361,7 +1326,6 @@ mod tests {
                 .contains("mlvl"),
             "not terrorized: table values"
         );
-        // No boss level either (Mephisto's level is a table value too).
         assert_eq!(
             info_line(102, Some(2), true, None, Rating::Neutral).text(),
             "Hell · Durance of Hate Level 3 · terrorized"
@@ -1374,7 +1338,6 @@ mod tests {
 
     #[test]
     fn zero_mlvl_area_has_no_monster_levels() {
-        // Rogue Encampment: monster level 0 in the table.
         assert_eq!(
             info_line(1, Some(0), false, None, Rating::Neutral).text(),
             "Normal · Rogue Encampment"
@@ -1394,7 +1357,6 @@ mod tests {
             "Hell · Moo Moo Farm · kill count: 57 / victims alive: 23 · terrorized"
         );
         assert!(terror.terrorized, "still ends in the violet part");
-        // Elsewhere, or without a counter, the usual line.
         assert_eq!(
             info_line(88, Some(0), false, cows, Rating::Neutral),
             info_line(88, Some(0), false, None, Rating::Neutral)
@@ -1410,7 +1372,6 @@ mod tests {
 
     #[test]
     fn low_xp_greys_only_the_area_name() {
-        // Travincal, Nightmare, good for Vex: the stats stay green.
         let mut line = info_line(83, Some(1), false, None, build::rate(83, Some(1), &VEX));
         line.low_xp = true;
         let text = line.text();
@@ -1423,7 +1384,6 @@ mod tests {
                 ("mlvl 54 · champ 56 · unique 57", GOOD_TEXT)
             ]
         );
-        // Normal (no rating): the white stats follow the grey name.
         let mut line = info_line(83, Some(0), false, None, build::rate(83, Some(0), &VEX));
         line.low_xp = true;
         let text = line.text();
@@ -1433,9 +1393,9 @@ mod tests {
                 ("Normal · ", TEXT),
                 ("Travincal", LOW_XP_TEXT),
                 (" · mlvl 24 · champ 26 · unique 27", TEXT)
-            ]
+            ],
+            "Normal is unrated"
         );
-        // A shortened name and no difficulty: still just the name.
         let mut line = info_line(83, None, false, None, Rating::Neutral);
         line.low_xp = true;
         assert_eq!(spans(&line, "Travi…"), vec![("Travi…", LOW_XP_TEXT)]);
@@ -1443,7 +1403,6 @@ mod tests {
 
     #[test]
     fn rating_colours_only_the_stats() {
-        // Travincal, Nightmare: no immunes, good for Vex.
         let line = info_line(83, Some(1), false, None, build::rate(83, Some(1), &VEX));
         assert_eq!(line.rating, Rating::Good);
         let text = line.text();
@@ -1454,30 +1413,32 @@ mod tests {
                 ("mlvl 54 · champ 56 · unique 57", GOOD_TEXT)
             ]
         );
-        // Hell City of the Damned: 4 of 7 types lightning immune.
         let line = info_line(106, Some(2), false, None, build::rate(106, Some(2), &VEX));
         let text = line.text();
         assert_eq!(
             spans(&line, &text).last(),
-            Some(&("mlvl 84 · champ 86 · unique 87", BAD_TEXT))
+            Some(&("mlvl 84 · champ 86 · unique 87", BAD_TEXT)),
+            "City of the Damned is lightning immune"
         );
-        // Normal, or no build: one white part.
         for line in [
             info_line(106, Some(0), false, None, build::rate(106, Some(0), &VEX)),
             info_line(106, Some(2), false, None, Rating::Neutral),
         ] {
             let text = line.text();
             assert_eq!(line.rating, Rating::Neutral);
-            assert_eq!(spans(&line, &text), vec![(text.as_str(), TEXT)]);
+            assert_eq!(
+                spans(&line, &text),
+                vec![(text.as_str(), TEXT)],
+                "unrated: all white"
+            );
         }
-        // Mephisto's level is part of the coloured stats.
         let line = info_line(102, Some(1), false, None, build::rate(102, Some(1), &VEX));
         let text = line.text();
         assert!(
             spans(&line, &text)
                 .last()
                 .is_some_and(|&(part, c)| part.ends_with("Mephisto 59") && c != TEXT),
-            "{:?}",
+            "the boss level is rated too: {:?}",
             spans(&line, &text)
         );
     }
@@ -1503,12 +1464,12 @@ mod tests {
                 (TERRORIZED, TERROR_TEXT)
             ]
         );
-        // Terrorized without the counter: nothing to rate, only the violet part.
         let line = info_line(83, Some(1), true, None, build::rate(83, Some(1), &VEX));
         let text = line.text();
         assert_eq!(
             spans(&line, &text),
-            vec![("Nightmare · Travincal · ", TEXT), (TERRORIZED, TERROR_TEXT)]
+            vec![("Nightmare · Travincal · ", TEXT), (TERRORIZED, TERROR_TEXT)],
+            "nothing to rate without the counter"
         );
     }
 
@@ -1542,7 +1503,6 @@ mod tests {
                 .iter()
                 .filter(|p| {
                     let c = p.demultiply();
-                    // Blending through the mask may be off by one per channel.
                     c.alpha() == 255
                         && [c.red(), c.green(), c.blue()]
                             .iter()
@@ -1553,7 +1513,6 @@ mod tests {
         };
         let [r, g, b, _] = GOOD_TEXT;
         let good = info_line(83, Some(1), false, None, build::rate(83, Some(1), &VEX));
-        // Only fully covered glyph pixels count: a few dozen at 16 px.
         assert!(count(&good, [r, g, b]) > 10, "green glyph pixels");
         assert!(count(&good, [255, 255, 255]) > 10, "white area name");
         let neutral = info_line(83, Some(0), false, None, build::rate(83, Some(0), &VEX));
