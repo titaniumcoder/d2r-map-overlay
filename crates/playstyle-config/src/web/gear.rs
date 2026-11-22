@@ -241,19 +241,21 @@ fn equip_upgrades(bis: &Bis, lvl: u32, info: &PanelInfo) -> Vec<serde_json::Valu
     out
 }
 
-/// The first of `pieces` above the worn one that is owned, wearable at `lvl` and better than
-/// what is equipped in `slot`, with where it is.
+/// The first of `pieces` above the worn one (the list is ranked; ring slots, with two rings worn,
+/// go by level only) that is owned, wearable at `lvl` and better than what is equipped in
+/// `slot`, with where it is.
 fn owned_upgrade<'p>(
     pieces: &'p [String],
     slot: &str,
     lvl: u32,
     info: &PanelInfo,
 ) -> Option<(&'p str, String)> {
-    let eq_level = equipped_level(slot_bodies(slot), info);
-    // The list is ranked: a piece below a worn one is no upgrade, whatever its level.
+    let bodies = slot_bodies(slot);
+    let eq_level = equipped_level(bodies, info);
+    let one_body = bodies.len() == 1;
     let above_worn = pieces
         .iter()
-        .take_while(|p| !is_worn(d2r_core::info::piece_name(p), info));
+        .take_while(|p| !(one_body && is_worn(d2r_core::info::piece_name(p), info)));
     above_worn.filter(|p| !outgrown(p, info)).find_map(|piece| {
         let name = d2r_core::info::piece_name(piece);
         let req = d2r_core::info::piece_level(piece)?;
