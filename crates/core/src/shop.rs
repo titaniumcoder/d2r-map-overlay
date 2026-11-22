@@ -34,6 +34,9 @@ pub struct ShopItem {
     /// The item's stat entries, for the comparison with the worn gear; empty when unread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stats: Vec<crate::item_stats::ItemStat>,
+    /// Its cells on its store tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell: Option<crate::game::CellRect>,
 }
 
 /// Names a store item from its code, quality, store tab and raw affix ids (0 = none); only
@@ -64,6 +67,7 @@ pub fn shop_item(code: Option<&str>, quality: u32, page: u8, prefix_id: u16, suf
         name,
         req_level,
         stats: Vec::new(),
+        cell: None,
     }
 }
 
@@ -157,6 +161,7 @@ mod tests {
     #[test]
     fn piece_names_the_base_plus_any_affixes() {
         let gloves = ShopItem {
+            cell: None,
             code: Some("vgl".into()),
             quality: 4,
             page: 0,

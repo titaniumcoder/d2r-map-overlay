@@ -730,6 +730,7 @@ mod tests {
             items: names
                 .iter()
                 .map(|n| crate::stash::StashItem {
+                    cell: None,
                     name: (*n).to_owned(),
                     code: None,
                     quality: 7,
@@ -1766,6 +1767,7 @@ mod tests {
     fn stash_merge_keeps_cached_tabs_over_empty_or_fallback_reads() {
         use crate::stash::{StashItem, StashTab, TabKind};
         let item = |name: &str| StashItem {
+            cell: None,
             name: name.to_owned(),
             quality: 5,
             identified: true,

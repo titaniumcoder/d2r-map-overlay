@@ -750,6 +750,7 @@ mod tests {
             })
         }
         let enigma = StashItem {
+            cell: None,
             name: "Enigma".to_owned(),
             code: Some("uui".to_owned()),
             quality: 2,

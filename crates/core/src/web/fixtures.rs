@@ -15,6 +15,7 @@ pub static EMPTY_MARKS: std::sync::LazyLock<crate::guidance::Marks> =
 #[must_use]
 pub fn stash_item(name: &str, code: &str, quality: u32, quantity: Option<u32>) -> crate::stash::StashItem {
     crate::stash::StashItem {
+        cell: None,
         name: name.to_owned(),
         code: Some(code.to_owned()),
         quality: u8::try_from(quality).unwrap_or_default(),

@@ -241,9 +241,10 @@ pub mod monster_data {
 /// `StaticPath`: the path of a unit that doesn't move (items and objects; `path` is for moving
 /// units).
 pub mod static_path {
-    /// u32 world x (tiles).
+    /// u32 world x (tiles); a stored or store item's grid column (classic `dwPosX`, as d2go
+    /// reads it; not yet seen live).
     pub const X: u64 = 0x10;
-    /// u32 world y (tiles).
+    /// u32 world y (tiles); a stored or store item's grid row.
     pub const Y: u64 = 0x14;
 }
 

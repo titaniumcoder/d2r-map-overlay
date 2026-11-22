@@ -857,6 +857,7 @@ mod tests {
         let mut r = Recorder::default();
         let mut s = snap(0xbeef, 74);
         s.drops = vec![ItemDrop {
+            cell: None,
             id: 9,
             code: Some("cm3".into()),
             kind: DropKind::Charm {
@@ -912,6 +913,7 @@ mod tests {
         }];
         s.monsters = vec![elite(1)];
         s.drops = vec![ItemDrop {
+            cell: None,
             id: 9,
             code: Some("r01".into()),
             kind: DropKind::Rune(1),

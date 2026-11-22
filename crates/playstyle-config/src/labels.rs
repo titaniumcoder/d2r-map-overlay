@@ -67,6 +67,7 @@ mod tests {
 
     fn drop(code: &str, kind: DropKind, quality: u32) -> ItemDrop {
         ItemDrop {
+            cell: None,
             id: 1,
             code: Some(code.into()),
             kind,

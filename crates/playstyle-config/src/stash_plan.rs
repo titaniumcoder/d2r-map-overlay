@@ -1055,13 +1055,17 @@ fn merge_advice(items: &[Held], actions: Vec<Option<Decided>>) -> Vec<Advice> {
             .iter_mut()
             .find(|a| a.action == action && a.spot == h.spot && a.name == h.name && a.reason == reason)
         {
-            Some(a) => a.count = a.count.saturating_add(1),
+            Some(a) => {
+                a.count = a.count.saturating_add(1);
+                a.cells.extend(h.item.cell);
+            }
             None => out.push(Advice {
                 name: h.name.clone(),
                 spot: h.spot,
                 action,
                 reason,
                 count: 1,
+                cells: h.item.cell.into_iter().collect(),
             }),
         }
     }
@@ -1103,6 +1107,7 @@ mod tests {
     /// A white item of `code` with `sockets`, not ethereal.
     fn base(code: &str, sockets: u8) -> ItemDrop {
         ItemDrop {
+            cell: None,
             id: 0,
             code: Some(code.into()),
             kind: DropKind::Base,
@@ -1156,6 +1161,43 @@ mod tests {
         needs.piece("Harmony@39", 1);
         needs.base("Harmony@39", DRUID, Some(4));
         needs
+    }
+
+    #[test]
+    fn merged_lines_carry_every_items_cells() {
+        use d2r_core::game::CellRect;
+        let at_cell = |x| ItemDrop {
+            cell: CellRect::at(Some("hbw"), x, 0),
+            ..base("hbw", 3)
+        };
+        let items = [
+            at(at_cell(0), Spot::Inventory),
+            at(at_cell(4), Spot::Inventory),
+            at(base("hbw", 3), Spot::Inventory),
+        ];
+        let (advice, _) = plan(&items, &harmony_needs(), &druid());
+        let cells: Vec<_> = advice.iter().map(|a| (a.count, a.cells.clone())).collect();
+        assert_eq!(
+            cells,
+            [(
+                3,
+                vec![
+                    CellRect {
+                        x: 0,
+                        y: 0,
+                        w: 2,
+                        h: 3
+                    },
+                    CellRect {
+                        x: 4,
+                        y: 0,
+                        w: 2,
+                        h: 3
+                    }
+                ]
+            )],
+            "three 3os bows sold in one line; the one without a cell adds none"
+        );
     }
 
     #[test]
@@ -1944,6 +1986,7 @@ mod tests {
     fn the_materials_tab_and_live_shared_items_are_not_judged() {
         use d2r_core::stash::StashItem;
         let item = |name: &str, code: &str, quality: u8, sockets| StashItem {
+            cell: None,
             name: name.to_owned(),
             code: Some(code.to_owned()),
             quality,
@@ -2206,6 +2249,7 @@ mod tests {
         let stash = [StashTab {
             kind: TabKind::Page(5),
             items: vec![StashItem {
+                cell: None,
                 name: "Harmony".to_owned(),
                 code: Some("hbw".to_owned()),
                 quality: 2,

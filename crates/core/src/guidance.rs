@@ -140,6 +140,8 @@ pub struct Advice {
     /// Why a scored magic / rare item is sold.
     pub reason: Option<&'static str>,
     pub count: u32,
+    /// The grid cells of the merged items that have one (for the in-game frames).
+    pub cells: Vec<crate::game::CellRect>,
 }
 
 /// A character's `BiS` selection; hand-written inline `slots` win over the selected build's.

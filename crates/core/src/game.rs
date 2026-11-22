@@ -526,6 +526,33 @@ pub struct ItemDrop {
     pub item_data_head: String,
     pub x: u32,
     pub y: u32,
+    /// Where a stored item sits in its grid (inventory, stash page); `None` on the ground.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell: Option<CellRect>,
+}
+
+/// A stored item's cells in its grid: top-left column and row, width and height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellRect {
+    pub x: u8,
+    pub y: u8,
+    pub w: u8,
+    pub h: u8,
+}
+
+impl CellRect {
+    /// An item of `code` at grid column `x`, row `y` (the item's static path position); `None`
+    /// for an unknown code or a position no grid has.
+    #[must_use]
+    pub fn at(code: Option<&str>, x: u32, y: u32) -> Option<Self> {
+        let (w, h) = crate::inv_sizes_data::size(code?)?;
+        Some(Self {
+            x: u8::try_from(x).ok()?,
+            y: u8::try_from(y).ok()?,
+            w,
+            h,
+        })
+    }
 }
 
 /// One equipped body-slot item of the player.

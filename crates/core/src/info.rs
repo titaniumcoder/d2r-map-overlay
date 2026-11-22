@@ -1204,6 +1204,7 @@ mod tests {
     fn advice_entries() {
         use crate::guidance::{Side, Spot, Tab};
         let advice = |name: &str, spot, action, count| Advice {
+            cells: Vec::new(),
             name: name.into(),
             spot,
             action,

@@ -32,11 +32,14 @@ pub struct StashItem {
     /// Magic, rare or crafted items only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stats: Vec<crate::item_stats::ItemStat>,
+    /// Its cells on the page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell: Option<crate::game::CellRect>,
 }
 
 impl StashItem {
     /// The item as the playstyle's rules take it: only the identified / ethereal / runeword
-    /// flags, no unit id or position.
+    /// flags, no unit id or world position (its cell on the page is kept).
     #[must_use]
     pub fn to_drop(&self) -> ItemDrop {
         let quality = u32::from(self.quality);
@@ -57,6 +60,7 @@ impl StashItem {
             item_data_head: String::new(),
             x: 0,
             y: 0,
+            cell: self.cell,
         }
     }
 }
@@ -91,6 +95,7 @@ pub fn stash_item(drop: &ItemDrop, quantity: Option<u32>) -> StashItem {
         sockets: drop.sockets,
         unique_index: drop.unique_index,
         stats: drop.stats.clone(),
+        cell: drop.cell,
     }
 }
 
@@ -377,6 +382,7 @@ mod tests {
 
     fn item(name: &str, quality: u32, flags: u32) -> StashItem {
         StashItem {
+            cell: None,
             name: name.to_owned(),
             code: None,
             quality: u8::try_from(quality).unwrap_or(u8::MAX),
@@ -560,6 +566,7 @@ mod tests {
 
     fn drop_of(code: &str, quality: u32, sockets: u8) -> ItemDrop {
         ItemDrop {
+            cell: None,
             id: 0,
             code: Some(code.to_owned()),
             kind: DropKind::Base,

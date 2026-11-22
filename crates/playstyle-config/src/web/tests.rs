@@ -708,6 +708,7 @@ fn advice(
     action: crate::stash_plan::Action,
 ) -> crate::stash_plan::Advice {
     crate::stash_plan::Advice {
+        cells: Vec::new(),
         name: name.to_owned(),
         spot,
         action,
@@ -2213,6 +2214,7 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
     info.live.equipped_items = &[];
     let carried = [(
         d2r_core::game::ItemDrop {
+            cell: None,
             id: 1,
             code: Some("amu".to_owned()),
             kind: d2r_core::items::DropKind::Base,

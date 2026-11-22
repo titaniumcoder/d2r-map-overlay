@@ -5,10 +5,11 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use d2r_core::game::{
-    Addr, BorderLink, Bounds, Candidate, ChosenBy, Equipped, ItemDrop, Level, Monster, OperatedObject, Place,
-    Player, Preset, PresetKind, Room, RoomLink, RoomPos, RoomRect, Shrine, Skills, Snapshot, SpeedStats,
-    Well, char_level_from_raw, difficulty_from_raw, has_state, identified_unique_or_set, is_shrine_object,
-    is_terrorized, is_town, is_well_object, magic_or_better, maybe_white_base,
+    Addr, BorderLink, Bounds, Candidate, CellRect, ChosenBy, Equipped, ItemDrop, Level, Monster,
+    OperatedObject, Place, Player, Preset, PresetKind, Room, RoomLink, RoomPos, RoomRect, Shrine, Skills,
+    Snapshot, SpeedStats, Well, char_level_from_raw, difficulty_from_raw, has_state,
+    identified_unique_or_set, is_shrine_object, is_terrorized, is_town, is_well_object, magic_or_better,
+    maybe_white_base,
 };
 use d2r_core::items::{self, DropKind};
 use d2r_core::objects::is_consumable_quest_object;
@@ -1649,6 +1650,7 @@ impl<'a, M: ReadMem> Reader<'a, M> {
         if let Ok(id) = self.u32(item, unit::ID) {
             entry.stats = self.item_stats(item, id);
         }
+        entry.cell = self.cell(self.ptr(item, unit::PATH).ok().flatten(), code.as_deref());
         Some(entry)
     }
 
@@ -1864,6 +1866,7 @@ impl<'a, M: ReadMem> Reader<'a, M> {
             .then(|| self.u32(data, item_data::FILE_INDEX).ok())
             .flatten();
         Ok(ItemDrop {
+            cell: None,
             id: head.id,
             code: code.map(items::code_text),
             kind: items::classify(quality, code).unwrap_or(DropKind::Base),
@@ -1886,7 +1889,18 @@ impl<'a, M: ReadMem> Reader<'a, M> {
         if magic_or_better(item.quality) {
             item.stats = self.item_stats(addr, head.id);
         }
+        item.cell = self.cell(head.path, item.code.as_deref());
         Ok(item)
+    }
+
+    /// The grid cells of a stored or store item with static path `path` and item `code`.
+    fn cell(&self, path: Option<u64>, code: Option<&str>) -> Option<CellRect> {
+        let path = path?;
+        let (x, y) = (
+            self.u32(path, static_path::X).ok()?,
+            self.u32(path, static_path::Y).ok()?,
+        );
+        CellRect::at(code, x, y)
     }
 
     /// The ground item `head` (unit at `addr`) as a drop, with its stats when [`drop_stats_read`],
@@ -3679,6 +3693,7 @@ mod tests {
             _ => 2,
         };
         ItemDrop {
+            cell: None,
             id: u32::try_from(addr >> 12).unwrap_or_default(),
             code: code.map(str::to_owned),
             kind,
@@ -3926,6 +3941,20 @@ mod tests {
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
         assert_eq!((s.ground_items, s.drops.len()), (0, 0));
         assert_eq!(s.inventory_items, 4, "page-0 stored items, any owner");
+        let shako = s
+            .owned_items
+            .iter()
+            .find(|(i, _)| i.id == u32::try_from(I1 >> 12).unwrap_or(0));
+        assert_eq!(
+            shako.and_then(|(i, _)| i.cell),
+            Some(CellRect {
+                x: 20,
+                y: 21,
+                w: 2,
+                h: 2
+            }),
+            "a stored item's cell from its static path"
+        );
         assert_eq!(
             item_plan(&s),
             vec![
@@ -4185,7 +4214,9 @@ mod tests {
             "{:?}",
             s.warnings
         );
+        // Every item sits at `stored_item`'s static-path (20, 21).
         let item = |name: &str, code: &str, quality: u8, identified: bool, quantity| StashItem {
+            cell: CellRect::at(Some(code), 20, 21),
             name: name.to_owned(),
             code: Some(code.to_owned()),
             quality,
@@ -4453,6 +4484,10 @@ mod tests {
         )?;
         stored_item(&mut m, S1, (30, 2, 0, 0), (0, 255), &[], 0)?;
         stored_item(&mut m, S2, (40, 2, store, 0), (0, 0), &[], 0)?;
+        // The sword's static path holds its grid cell (column 3, row 0); the Shako keeps
+        // `stored_item`'s (20, 21).
+        patch(&mut m, S0 + 0x400, 0x20, static_path::X, &3u32.to_le_bytes())?;
+        patch(&mut m, S0 + 0x400, 0x20, static_path::Y, &0u32.to_le_bytes())?;
         let first = chain_items(&mut m, &[S0, S1, S2])?;
         tab_inventory(&mut m, NPC_INV, 0, first)?;
         // M1 (monstats 41 here) carries the store; M0 has no inventory.
@@ -4476,6 +4511,12 @@ mod tests {
                 ("Crystal Sword of Teleportation", 1, Some(24)),
                 ("Shako", 0, Some(43))
             ]
+        );
+        let cell = |x, y, w, h| Some(CellRect { x, y, w, h });
+        assert_eq!(
+            shop.items.iter().map(|i| i.cell).collect::<Vec<_>>(),
+            [cell(3, 0, 2, 3), cell(20, 21, 2, 2)],
+            "static-path cell, size from the base (Crystal Sword 2×3, Shako 2×2)"
         );
         Ok(())
     }

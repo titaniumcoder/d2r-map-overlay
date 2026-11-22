@@ -55,6 +55,7 @@ fn as_drop(item: &ShopItem) -> ItemDrop {
         item.code.as_deref().and_then(d2r_core::items::code_bytes),
     );
     ItemDrop {
+        cell: None,
         id: 0,
         code: item.code.clone(),
         kind: kind.unwrap_or(DropKind::Base),
@@ -140,6 +141,7 @@ mod tests {
 
     fn white(code: &str, quality: u32, sockets: u8) -> ItemDrop {
         ItemDrop {
+            cell: None,
             id: 1,
             code: Some(code.into()),
             kind: DropKind::Base,

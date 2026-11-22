@@ -436,6 +436,7 @@ mod tests {
 
     fn drop(code: &str, quality: u32, sockets: u8, ethereal: bool) -> ItemDrop {
         ItemDrop {
+            cell: None,
             id: 1,
             code: Some(code.into()),
             kind: DropKind::Base,

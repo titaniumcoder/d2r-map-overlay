@@ -2685,6 +2685,7 @@ mod tests {
 
     fn drop_at(kind: DropKind, x: u32, y: u32) -> ItemDrop {
         ItemDrop {
+            cell: None,
             id: 1,
             code: None,
             kind,
@@ -3231,6 +3232,7 @@ mod tests {
     fn sample_guidance() -> Guidance {
         use crate::guidance::Spot;
         let advice = |name: &str, spot, action| Advice {
+            cells: Vec::new(),
             name: name.into(),
             spot,
             action,
