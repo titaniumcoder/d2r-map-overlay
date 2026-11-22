@@ -4,6 +4,7 @@
 pub mod affixes_data;
 pub mod bases_data;
 pub mod breakpoints;
+pub mod buff_strip;
 pub mod buffs;
 pub mod build;
 pub mod config;
