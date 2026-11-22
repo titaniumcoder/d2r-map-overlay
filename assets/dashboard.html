@@ -229,7 +229,8 @@ details.help summary { cursor: pointer; color: var(--faint); }
 .pc:hover .nn, .fm:hover .nn, .nn:focus-visible { opacity: 1; }
 .nn:hover, .nn:focus-visible { color: var(--bad); border-color: currentColor; outline: none; }
 .nn.undo { opacity: 1; margin-left: 4px; } .nn.undo:hover { color: var(--good); }
-.nn.err { color: var(--bad); opacity: 1; }
+.nnstatus { background: rgba(255,107,91,.1); border-bottom: 1px solid rgba(255,107,91,.4); color: var(--bad);
+  font-size: 12.5px; padding: 6px 16px; }
 .fm { position: relative; } .fm-h .nn { position: absolute; top: 1px; right: 1px; }
 .pending { opacity: .3; text-decoration: line-through; pointer-events: none; }
 .hidden-row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; margin-top: 8px; font-size: 12px; color: var(--dim); }
@@ -256,6 +257,7 @@ details.rgroup { margin-top: 14px; } details.rgroup > summary { cursor: pointer;
 <div id="soundmenu" class="soundmenu" popover><div class="t">Sounds</div><div id="soundlist"></div>
   <div class="hint">🔔 switches them all; each plays once per event.</div></div>
 <div class="upbar" id="upgrades" hidden></div>
+<div class="nnstatus" id="nnstatus" role="status" hidden></div>
 <div class="wrap">
 <section class="panel full" id="nextpanel" hidden><h2>Next</h2><div id="next"></div></section>
 <div class="toprow">

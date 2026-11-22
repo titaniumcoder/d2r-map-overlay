@@ -23,12 +23,26 @@ function kindOf(p) {
   return "unique";
 }
 // The ✕ "not needed" control of a build piece or farm entry (user decision 2026-11-22: the
-// player removes pieces by hand); `needed` true is the undo.
+// player removes pieces by hand); `needed` true is the undo. A clicked one stays pending
+// (faded, disabled) over the re-renders until a frame no longer shows it.
+const nnPending = new Set();
+const nnKey = (build, name, needed) => `${String(build).toLowerCase()}|${String(name).toLowerCase()}|${needed}`;
+const nnPend = (build, name, needed) => build && name && nnPending.has(nnKey(build, name, needed)) ? " pending" : "";
 function nnButton(build, name, needed) {
   if (!build || !name) return "";
   const label = needed ? `needed again: ${name}` : `not needed: ${name} (hide it for ${build})`;
   return `<button type="button" class="nn${needed ? " undo" : ""}" data-build="${esc(build)}" data-name="${esc(name)}" data-needed="${needed}"`
-    + ` title="${esc(label)}" aria-label="${esc(label)}">${needed ? "↺" : "✕"}</button>`;
+    + ` title="${esc(label)}" aria-label="${esc(label)}"${nnPend(build, name, needed) ? " disabled" : ""}>${needed ? "↺" : "✕"}</button>`;
+}
+// A failed save, in a line outside the re-rendered panels.
+function nnStatus(text) {
+  $("nnstatus").textContent = text;
+  $("nnstatus").hidden = !text;
+}
+// Drops the pending keys whose control the frame just rendered no longer shows.
+function nnSettle() {
+  const shown = new Set([...document.querySelectorAll("button.nn")].map(b => nnKey(b.dataset.build, b.dataset.name, b.dataset.needed)));
+  for (const k of [...nnPending]) if (!shown.has(k)) nnPending.delete(k);
 }
 function piece(p, build) {
   // Green = worn; yellow = owned elsewhere: go equip it (carried, cube, private stash, shared stash).
@@ -45,7 +59,7 @@ function piece(p, build) {
     + (p.notes ? `<div class="note">${esc(p.notes)}</div>` : "");
   const setup = (p.now ? ' <span class="badge now">wear now</span>' : "")
     + (p.setup && p.setup !== "alternative" ? ` <span class="badge">${esc(p.setup)}</span>` : "");
-  return `<div class="pc ${esc(kindOf(p))} ${esc(p.state || "better")}"><div class="top"><span class="nm">${esc(p.name)}${tick}</span>${setup}${lvl}${nnButton(build, p.name, false)}</div>${sub}${stats}${why}</div>`;
+  return `<div class="pc ${esc(kindOf(p))} ${esc(p.state || "better")}${nnPend(build, p.name, false)}"><div class="top"><span class="nm">${esc(p.name)}${tick}</span>${setup}${lvl}${nnButton(build, p.name, false)}</div>${sub}${stats}${why}</div>`;
 }
 // A slot's pieces: the guide's own picks (starter / standard, and pieces without a setup)
 // stay visible; the alternatives fold into a <details> so a 14-weapon list stays readable.
@@ -74,12 +88,15 @@ function slotCard(title, eqHtml, pieces, build) {
 // the toggle names how many there are.
 let showHidden = false;
 try { showHidden = localStorage.getItem("d2r-show-hidden") === "on"; } catch (e) { /* storage blocked */ }
-function hiddenList(build, names, what) {
-  names = names || [];
-  if (!names.length) return "";
-  const toggle = `<button type="button" class="showhidden" aria-pressed="${showHidden}">${showHidden ? "hide" : "show"} ${names.length} not needed</button>`;
+// Each mark names the build it was made for (an earlier stage's marks hold for the later
+// ones); the undo writes there.
+function hiddenList(build, marks, what) {
+  marks = marks || [];
+  if (!marks.length) return "";
+  const toggle = `<button type="button" class="showhidden" aria-pressed="${showHidden}">${showHidden ? "hide" : "show"} ${marks.length} not needed</button>`;
+  const from = m => String(m.build).toLowerCase() === String(build).toLowerCase() ? "" : ` (${m.build})`;
   const list = showHidden
-    ? `<span class="nnlist">${esc(what)}: ${names.map(n => `<span class="nnitem">${esc(n)}${nnButton(build, n, true)}</span>`).join("")}</span>` : "";
+    ? `<span class="nnlist">${esc(what)}: ${marks.map(m => `<span class="nnitem${nnPend(m.build, m.name, true)}">${esc(m.name + from(m))}${nnButton(m.build, m.name, true)}</span>`).join("")}</span>` : "";
   return `<div class="hidden-row">${toggle}${list}</div>`;
 }
 document.addEventListener("click", e => {
@@ -91,18 +108,17 @@ document.addEventListener("click", e => {
     if (lastFrame) render(lastFrame);
     return;
   }
-  // The card fades until the live stream sends the frame without it (after the hot reload).
-  const card = t.closest(".pc, .fm, .nnitem");
-  if (card) card.classList.add("pending");
-  t.disabled = true;
-  const body = JSON.stringify({ build: t.dataset.build, name: t.dataset.name, needed: t.dataset.needed === "true" });
-  fetch("/api/not-needed", { method: "POST", body }).then(async r => {
+  const { build, name } = t.dataset, needed = t.dataset.needed === "true";
+  const key = nnKey(build, name, needed);
+  nnPending.add(key);
+  nnStatus("");
+  if (lastFrame) render(lastFrame);
+  fetch("/api/not-needed", { method: "POST", body: JSON.stringify({ build, name, needed }) }).then(async r => {
     if (!r.ok) throw new Error((await r.text()).trim() || r.status);
   }).catch(err => {
-    if (card) card.classList.remove("pending");
-    t.disabled = false;
-    t.title = `not saved: ${err.message}`;
-    t.classList.add("err");
+    nnPending.delete(key);
+    nnStatus(`“${name}” not saved: ${err.message}`);
+    if (lastFrame) render(lastFrame);
   });
 });
 function gear(g) {
@@ -422,7 +438,7 @@ function farm(f) {
         ? `<div class="bs">${esc(i.slot || "any item")} with ${esc(i.needs.join(" + "))}</div>` : "";
       const note = i.note ? `<div class="bs">${esc(i.note)}</div>` : "";
       const where = i.where ? `<div class="wh">${esc(i.where)}</div>` : "";
-      return `<div class="fm ${esc(i.kind)} missing"><div class="fm-h"><span class="nm">${esc(i.name)}</span>`
+      return `<div class="fm ${esc(i.kind)} missing${nnPend(g.for, i.name, false)}"><div class="fm-h"><span class="nm">${esc(i.name)}</span>`
         + `<span class="kd">${esc(i.kind)}</span><span class="fst missing">missing${n}</span>${nnButton(g.for, i.name, false)}</div>${needs}${note}${runes}${bases}${where}</div>`;
     }).join("");
     return `<h3 class="row-h">for ${esc(g.for)} · ${done}/${done + items.length} held</h3><div class="fms">${cards}</div>`
@@ -495,6 +511,7 @@ function render(r) {
     $("updated").textContent = "";
     document.title = "D2R Dashboard (waiting for game)";
     $("mercbox").hidden = true;
+    nnSettle();
     return;
   }
   const p = r.player;
@@ -516,6 +533,7 @@ function render(r) {
   farm(r.farm);
   stash(r);
   sell(r);
+  nnSettle();
 }
 // First paint from the one-shot endpoint, then live updates from the Server-Sent-Events
 // stream: the server pushes whenever the JSON changes and the browser reconnects on its own.
