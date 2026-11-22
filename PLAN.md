@@ -201,6 +201,21 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 - **Packs/uniques**: live monsters with unique/champion flag (minions clustered to their leader); dead skipped.
 - **Accumulate per game** (done 2026-11-15): presets, shrines, wells, kills, operated seals and arrivals are remembered per level for the game (identity = player unit id; act travel keeps it) and persisted to `~/.cache/d2r-map-overlay/game.json`, so overlay restarts keep them too. Live 2026-11-17: the journal's game id second u32 changed at the Act 1→2 transition (`57f3da70` → `57fa1300`) — per-game identity must not rely on it (it uses the player unit id, which stayed).
 
+### Landmark and quest-object evidence (moved from code comments, 2026-11-22)
+lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member was seen (the letter only says where in the piece the feature sits).
+- Arcane Sanctuary (74): Summoner platform arm 525 (+x) / 526 (−x) / 527 (−y) / 528 (+y), all four live 2026-11-15.
+- Tal Rasha's tombs (66–72): real tomb orifice "Tomb Talrasha W/E/S/N" (460–463): 462 live (4 Room2 cells), 460 live (tomb 69, Nightmare 2026-11-16), 461/463 by family; fake tomb chest chamber "Tomb Chest" (472–475). Nothing else in the tombs is a landmark (user, 2026-11-16).
+- Halls of the Dead 3 (60): "Tomb Cube W/E/S/N" (456–459), Horadric Cube chest object 354 + Bloodwitch preset 762; 459 live 2026-11-15.
+- Flayer Jungle (78): Gidbinn altar object 252 in a pygmy-village clearing whose preset varies per game (2026-11-15 vs 2026-11-20); candidates drawn, a clearing seen fully loaded without the altar is ruled out, a waypoint clearing skipped.
+- Act 1 caves level 1 (9–12): "Cave Next" (90, exit piece) and "Cave Down" (91–94, stairs to level 2); 90 and 91 live (Underground Passage 1, 2026-11-15/17).
+- Stony Field (4): 160 "Act 1 - Cairn Stones"; stones + portal stone objects 17–22 inside (live 2026-11-15).
+- Dark Wood (5): 161 "Act 1 - Inifus", the Tree of Inifuss (live 2026-11-15). Black Marsh (6): 163 "Act 1 - Tower 1", Forgotten Tower entrance (live 2026-11-15).
+- Barracks (28): "Barracks Forge W/E/S/N" (202–205), Smith preset 771 + Horadric Malus object 108 inside; 203/204 live (two games 2026-11-15).
+- Lut Gholein sewers (47–49): "Sewer Radament's Lair W/E/S/N" (341–344) in level 3, 341/343/344 live (Radament txt 229 in 344); stairs "Sewer Next W/E/S/N" (337–340), 337 (level 2) / 338 (level 1) live.
+- Maggot Lair (62–64): "Lair Next W/E/S/N" (501–504) stairs down in levels 1–2; Staff of Kings chest (OperateFn 41) in Coldworm's chamber 509 next to his preset 766 (live 2026-11-15).
+- Other quest objects live 2026-11-15: Hell Forge at River of Flame (107), 25 tiles from Hephasto's preset 792 (superuniques.txt "The Feature Creep"); Anya (frozen, object 558) next to Frozenstein's preset 810 — her star stays after she is freed (a dummy object that can't be operated); Chaos Sanctuary (108) seals = objects "Seal" OperateFn 52–56, seal bosses presets 787–789.
+- Waypoint object ids: every waypoint row of classic objects.txt; 119 and 157 seen live.
+
 ## Arcane Sanctuary Summoner (live-verified 2026-11-15, nine games)
 - Room2 `+0x40` → level-preset record, u32 at `+0x00` = preset id (lvlprest row).
 - The Summoner's arm end uses a dedicated id per direction: **525 (+x / down-right), 526 (−x / up-left),
@@ -674,6 +689,11 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   `last_played` desc (stable: the never-seen keep config order) and the page shows "played … ago".
   The dashboard has no other character list.
 - [x] Config page lists recently played characters first (2026-11-18).
+
+### Dashboard rules (moved from code comments, 2026-11-22)
+- Recipes panel: an `upgrade` recipe (3 Ral → Ort, gem upgrades) is shown only when its result is a rune or gem another recipe still misses (2026-11-17: the tornado guide lists ~60).
+- A gear piece whose leveling window the character outgrew leaves the dashboard (user, 2026-11-18); a rune never runs out, it only has a minimum level.
+- Gear grid: two rows of five, the user's split: Helm, Body, Hands, Belt, Foot / Amulet, Ring, Weapons, Off-Hand, Swap.
 
 ## Overlay
 - Layer-shell surface, layer `overlay`, anchored top-right, default 400×400 (config), **empty input region** (click-through), no keyboard.
