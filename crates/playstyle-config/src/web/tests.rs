@@ -2166,7 +2166,6 @@ fn stage_json_shows_current_and_next() {
             "slug": "leveling", "name": "Leveling", "class_default": true,
             "next": {
                 "slug": "tornado", "name": "Tornado", "level": 38, "auto": false, "note": "you have Spirit",
-                "ready": false,
                 "requires": [
                     {
                         "label": "Cannot Be Frozen", "count": 1, "have": 1, "met": true,
@@ -2190,9 +2189,17 @@ fn stage_json_shows_current_and_next() {
         "Lawbringer" => 2,
         _ => 0,
     };
-    assert_eq!(
-        stage_json(Some(&stage), &owns_all).pointer("/next/ready"),
-        Some(&serde_json::json!(true))
+    let all = stage_json(Some(&stage), &owns_all);
+    let requires = all
+        .pointer("/next/requires")
+        .and_then(serde_json::Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
+    assert!(
+        !requires.is_empty()
+            && requires
+                .iter()
+                .all(|g| g.get("met") == Some(&serde_json::json!(true))),
+        "{all}"
     );
     let last = config::Build {
         next: None,
@@ -2649,60 +2656,6 @@ fn farm_counts_split_and_multiply_rune_needs() -> Result<()> {
     assert_eq!(farm_held(&json), [held_row("Fury Druid", "Lawbringer", 2)]);
     let runes = json.pointer("/farm/runes").map_or_default(ToString::to_string);
     assert!(!runes.contains("\"Amn\""), "{runes}");
-    Ok(())
-}
-
-#[test]
-fn farm_names_the_bosses_worth_farming() -> Result<()> {
-    let farm = fury_farm()?;
-    let blocks = d2r_core::render::TextBlocks::default();
-    let mut info = live_info(5, &blocks, &[], &[], &[]);
-    info.farm = &farm;
-    info.live.difficulty = Some(0);
-    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    assert_eq!(
-        json.pointer("/farm/worth/difficulty"),
-        Some(&serde_json::json!("Normal"))
-    );
-    // Normal Countess (11) keeps runes up to Ral; Andariel (12) drops none above it; Mephisto
-    // (26) is the first boss worth farming for higher runes.
-    let boss = |i: usize| json.pointer(&format!("/farm/worth/bosses/{i}/boss")).cloned();
-    assert!(
-        (0..20).all(|i| boss(i) != Some(serde_json::json!("Andariel"))),
-        "{json}"
-    );
-    assert_eq!(
-        json.pointer("/farm/worth/bosses/0"),
-        Some(&serde_json::json!({
-            "boss": "Mephisto",
-            "level": 26,
-            "items": [
-                { "name": "Fortitude", "runes": ["Sol"] },
-                { "name": "Lawbringer", "runes": ["Amn"] },
-                { "name": "Bulwark", "runes": ["Sol"] },
-            ],
-        }))
-    );
-    assert_eq!(
-        json.pointer("/farm/worth/bosses/5"),
-        Some(&serde_json::json!({
-            "boss": "The Countess",
-            "level": 11,
-            // Rune TC Runes 4: 1 - (1 - p)^3 per kill.
-            "reliable": [
-                { "rune": "El", "one_in": 9.0, "for": ["Fortitude"] },
-                { "rune": "Nef", "one_in": 6.0, "for": ["Smoke"] },
-            ],
-            "rare": [],
-            "items": [
-                { "name": "Fortitude", "runes": ["El"] },
-                { "name": "Smoke", "runes": ["Nef"] },
-            ],
-        }))
-    );
-    info.live.difficulty = None;
-    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    assert_eq!(json.pointer("/farm/worth"), Some(&serde_json::Value::Null));
     Ok(())
 }
 

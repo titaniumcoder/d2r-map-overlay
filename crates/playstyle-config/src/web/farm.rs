@@ -75,8 +75,8 @@ pub const fn farm_status(count: u32, stashed: u32, carried: u32) -> FarmStatus {
 
 /// The farm list section, `null` without one: per farm group (build, in farm-list order) its
 /// still-missing entries, each with where to farm it ([`where_text`]), and the ones marked not
-/// needed (`not_needed`, for the undo); the entries held (`held`, for the pickup sound), the
-/// runes still needed over the whole list (in rune order) and the bosses worth farming.
+/// needed (`not_needed`, for the undo); the entries held (`held`, the per-group done count), and
+/// the runes still needed over the whole list (in rune order).
 #[must_use]
 pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
     if info.farm.is_empty() {
@@ -109,7 +109,6 @@ pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
         "groups": groups,
         "held": held,
         "runes": runes,
-        "worth": worth_json(info, &materials),
     })
 }
 
@@ -407,64 +406,6 @@ fn rune_needs_json(
             })
         })
         .collect()
-}
-
-/// The bosses worth farming in the current difficulty ([`crate::worth`]), only those with at
-/// least one item; `null` with the difficulty unknown.
-#[must_use]
-pub fn worth_json(info: &PanelInfo, materials: &[(String, u32)]) -> serde_json::Value {
-    let Some(difficulty) = info.live.difficulty else {
-        return serde_json::Value::Null;
-    };
-    let holdings = info.live.holdings();
-    let bosses: Vec<serde_json::Value> = crate::worth::bosses()
-        .filter_map(|boss| {
-            let (level, _) = crate::worth::boss_drops(boss, difficulty)?;
-            let items = crate::worth::worth(boss, difficulty, info.farm, &holdings, materials);
-            (!items.is_empty()).then(|| boss_json(boss, level, difficulty, items))
-        })
-        .collect();
-    serde_json::json!({
-        "difficulty": d2r_core::info::difficulty_name(difficulty),
-        "bosses": bosses,
-    })
-}
-
-/// One boss worth farming; the Countess also lists her `reliable` and `rare` runes.
-fn boss_json(boss: &str, level: u32, difficulty: u8, items: Vec<(String, Why)>) -> serde_json::Value {
-    let split = crate::worth::is_countess(boss).then(|| countess_runes_json(difficulty, &items));
-    let items: Vec<serde_json::Value> = items
-        .into_iter()
-        .map(|(name, why)| {
-            let runes = match why {
-                Why::Drops => Vec::new(),
-                Why::Runes(runes) => runes,
-            };
-            serde_json::json!({ "name": name, "runes": runes })
-        })
-        .collect();
-    let mut out = serde_json::json!({ "boss": boss, "level": level, "items": items });
-    if let (Some((reliable, rare)), Some(map)) = (split, out.as_object_mut()) {
-        map.insert("reliable".to_owned(), reliable.into());
-        map.insert("rare".to_owned(), rare.into());
-    }
-    out
-}
-
-/// The Countess's runes for `items`: `(from her rune TC, only from her item TC)`.
-fn countess_runes_json(
-    difficulty: u8,
-    items: &[(String, Why)],
-) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
-    let runes = crate::worth::countess_runes(difficulty, items);
-    let part = |reliable: bool| -> Vec<serde_json::Value> {
-        runes
-            .iter()
-            .filter(|r| r.chance.is_some() == reliable)
-            .map(|r| serde_json::json!({ "rune": r.rune, "one_in": r.one_in(), "for": r.entries }))
-            .collect()
-    };
-    (part(true), part(false))
 }
 
 /// Whether farm entry `item` of the group for build `target` is hidden: the character is on

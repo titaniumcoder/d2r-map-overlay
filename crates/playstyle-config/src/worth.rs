@@ -20,11 +20,6 @@ pub enum Why {
     Runes(Vec<&'static str>),
 }
 
-/// The bosses with drop data: act bosses, quest bosses, then the farmed superuniques.
-pub fn bosses() -> impl Iterator<Item = &'static str> {
-    d2r_core::drops_data::BOSS_DROPS.iter().map(|&(name, _, _)| name)
-}
-
 /// Boss `boss`'s level (the item level of its drops) and sorted drop codes in `difficulty`.
 #[must_use]
 pub fn boss_drops(boss: &str, difficulty: u8) -> Option<(u32, &'static [&'static str])> {
@@ -316,6 +311,11 @@ mod tests {
                 Why::Runes(r) => format!("{name} ({})", r.join(", ")),
             })
             .collect()
+    }
+
+    /// The bosses with drop data: act bosses, quest bosses, then the farmed superuniques.
+    fn bosses() -> impl Iterator<Item = &'static str> {
+        d2r_core::drops_data::BOSS_DROPS.iter().map(|&(name, _, _)| name)
     }
 
     #[test]

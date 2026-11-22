@@ -71,8 +71,7 @@ pub fn panels<'a>(info: &PanelInfo<'a>) -> Panels<'a> {
     }
 }
 
-/// The guide stage section, `null` without a build. `ready` (all `switch_requires` groups met)
-/// ignores the switch level; `copies` counts the held copies of an item.
+/// The guide stage section, `null` without a build; `copies` counts the held copies of an item.
 pub fn stage_json(stage: Option<&Stage>, copies: &dyn Fn(&str) -> u32) -> serde_json::Value {
     let Some(stage) = stage else {
         return serde_json::Value::Null;
@@ -84,7 +83,6 @@ pub fn stage_json(stage: Option<&Stage>, copies: &dyn Fn(&str) -> u32) -> serde_
             "level": stage.build.switch_level,
             "auto": stage.build.auto_switch,
             "note": stage.build.switch_note,
-            "ready": stage.build.switch_requires.iter().all(|group| group.met(copies)),
             "requires": stage
                 .build
                 .switch_requires

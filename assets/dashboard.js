@@ -242,8 +242,9 @@ function sell(r) {
     || '<div class="empty">nothing to sell or keep right now</div>';
 }
 // Sounds: the overlay plays them through the speakers (user decision 2026-11-22), whether or
-// not this page is open; the page only sets its switches (`/api/sounds`). The bell switches
-// them all; the ▾ beside it opens one checkbox per sound and a ▶ that plays it once.
+// not this page is open, once per new marked drop on the map (gems excepted); the page only
+// sets its switches (`/api/sounds`). The bell switches them all; the ▾ beside it opens one
+// checkbox per sound and a ▶ that plays it once.
 let soundState = null;
 function soundUi() {
   const b = $("bell"), on = !!(soundState && soundState.on);
@@ -268,7 +269,7 @@ $("bell").addEventListener("click", () => {
   if (!soundState) return;
   const on = !soundState.on;
   soundSet({ on });
-  if (on) soundPost("/api/sounds/test", { sound: "upgrade" }).catch(() => {});
+  if (on) soundPost("/api/sounds/test", { sound: "markedDrop" }).catch(() => {});
 });
 $("soundlist").addEventListener("change", e => {
   const name = e.target.dataset && e.target.dataset.sound;

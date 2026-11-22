@@ -20,11 +20,13 @@ the screen. The minimap shows:
   keep / sell / give-away lists live on the web dashboard (`/`, served by the overlay's localhost
   web app; `/api/live`). The overlay hides in towns.
 - **Sounds**: the overlay plays them through the speakers (`pw-play`, else `paplay` or `aplay`),
-  whether or not the dashboard is open. The 🔔 in the dashboard's top bar switches them all; the
-  ▾ beside it picks which ones play (▶ plays one to try it). Louder: a farm-list item on the
-  ground, ready to switch stage. Quiet: an upgrade available, an S / A trade item on the ground,
-  a farm-list item picked up, a boss no longer worth farming. Each plays once per event; nothing
-  sounds on the first frame after the overlay starts, a menu return or a character change.
+  whether or not the dashboard is open: a sound whenever a drop the minimap marks with a ring
+  appears (user: "In principle whenever something drops on the map that you mark, then you make
+  a sound. much simpler."). Louder for a farm-list item, a short quiet tone for any other marked
+  drop; never for gems and skulls (the game sounds those itself). Each drop plays once; nothing
+  sounds on the first frame after the overlay starts, a menu return or a character change. The
+  🔔 in the dashboard's top bar switches them all; the ▾ beside it picks which of the two play
+  (▶ plays one to try it).
 
 ## ⚠️ Use at your own risk: it could get your account banned
 

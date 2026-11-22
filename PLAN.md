@@ -937,7 +937,7 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   build). (User request 2026-11-22: "a separate list somewhere where we can get them back".)
 - **Upgrades + chime**: `upgrades` in the live JSON = owned/stash pieces of the current stage wearable now
   and better than the equipped piece (no swap: the swap set is unread), plus runeword recipes whose runes
-  are all owned. The overlay chimes (see Overlay sounds) when a key appears that this character hasn't had.
+  are all owned. (Its chime was dropped with the drop-only sounds, see Overlay sounds.)
 - [x] Guide stages, recipes panel, upgrade chime, favicon (2026-11-17).
 - [x] **Dashboard sounds** (user's picks, 2026-11-20): six more WebAudio sounds beside the upgrade
   chime, each under 0.6 s and once per event. Louder: a farm-list drop on the ground (a `farm`
@@ -970,6 +970,18 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   `POST /api/sounds/test` (`{"sound": name}`) plays one regardless of the switches. The page
   keeps 🔔 and the ▾ checkboxes, each with a ▶ test button; it no longer plays audio itself.
   The old localStorage switches are not migrated (default: everything on).
+- [x] **Drop sounds only** (user decision 2026-11-22: "Sounds: Farm List, yes. Ready to switch,
+  no. Trade, no. Picked up, no. Upgrade a better, no. In principle whenever something drops on
+  the map that you mark, then you make a sound. much simpler." and "sound exceptions: gems
+  because funny enough, there the game makes a sound itself"). Two sounds left: `farmDrop` (a
+  new `farm` mark, the loud three-note melody) and `markedDrop` (any other new mark, keep or
+  trade of any tier: the old trade two-beep, quiet); every drop with a ring on the minimap is
+  in the live JSON's `drops`, and each unit id sounds once per character. A gem or skull drop
+  (`DropKind::Gem`) never sounds, marked or on the farm list (`Memory::frame`'s `silent` ids,
+  from the snapshot's drops). The switch-ready, upgrade, trade, pickup and boss-stop sounds,
+  their tones and switches are gone, and with them the live JSON fields only they read
+  (`stage.next.ready`, `farm.worth`). An old `sounds.json` naming a removed sound in `off`
+  still loads; the unknown names are dropped.
 - **Quest-reward recipes** (user request, 2026-11-18): a `[[recipes]]` entry may name its quest
   (`quest = "Tools of the Trade"`, `"Siege on Harrogath"`, `"Prison of Ice"`; names in
   `src/quests.rs`). The Recipes panel drops it once the reward is used (bit 0 set, bit 1 clear),
@@ -1527,8 +1539,8 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   [`worth`]'s rules against that list, runes the Countess drops reliably in the difficulty (her
   rune TC) left out (none without a difficulty). **JSON** (`web/farm.rs`): an entry held (status
   found / done, as `farm_status`) leaves the list and goes to `held` (`{for, name, copies}`,
-  the pickup sound's keys). `runes` (stash ⚑, a found multi-copy entry's remaining copies
-  included) and `worth` (the boss-stop sound) stay.
+  the per-group done count). `runes` (stash ⚑, a found multi-copy entry's remaining copies
+  included) stays. (`worth`, read only by the boss-stop sound, went with it on 2026-11-22.)
   **Per-build list again** (user, 2026-11-22: "I dont like the farm list. do it still summoner,
   then fury druid like before. then show where to farm it at the bottom"; the boss cards were
   too much effort for simple things): `groups` = per farm group in farm-list order
@@ -1586,8 +1598,7 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   `quests.json`; `Playstyle::evaluate` lost its `quests` argument; the live quest flags still
   feed the recipes' quest status). What remains: `route.toml` = `bosses = ["The Countess",
   "Mephisto", "Andariel", "Baal"]` (`route::Route { bosses }`, a warning for a boss without
-  drop data), read only by the farm list's "where:" line. The boss-stop sound keys on
-  `farm.worth` (`worth::bosses`, every boss with drop data), not on the route.
+  drop data), read only by the farm list's "where:" line.
 - [x] 10. Keep and trade marks v2. `Playstyle::mark_drops(drops, &Wants)` returns marks of three
   **kinds** (`guidance::Mark { kind, trade: Option<(tier, category)>, rule, uncertain }`), drawn
   by the core per kind (`render::RingLook`): **Keep** (for the player's own builds: a mint-green

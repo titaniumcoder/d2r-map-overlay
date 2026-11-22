@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn the_wav_reaches_stdin_and_a_failing_exit_is_an_error() {
-        let wav = synth::wav(&synth::pcm(Sound::TradeDrop));
+        let wav = synth::wav(&synth::pcm(Sound::MarkedDrop));
         let expect = format!("test \"$(wc -c)\" -eq {}", wav.len());
         assert!(
             pipe("sh", &["-c", &expect], &wav).is_ok(),

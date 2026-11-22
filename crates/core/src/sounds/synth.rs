@@ -1,44 +1,18 @@
-//! The sounds as 16-bit mono PCM in a WAV: a few short sine or triangle tones each, with the
-//! dashboard's old `WebAudio` envelope (an exponential 20 ms attack, then an exponential decay to
-//! silence over the tone).
-
-use std::f64::consts::TAU;
+//! The sounds as 16-bit mono PCM in a WAV: a few short triangle tones each, with the dashboard's
+//! old `WebAudio` envelope (an exponential 20 ms attack, then an exponential decay to silence
+//! over the tone).
 
 use super::Sound;
 
 pub const RATE: u32 = 48_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Wave {
-    Sine,
-    Triangle,
-}
-
-/// One tone: start offset (s), frequency (Hz), length (s), wave, an exponential glide to this
-/// frequency over the length.
-type Tone = (f64, f64, f64, Wave, Option<f64>);
+/// One tone: start offset (s), frequency (Hz), length (s).
+type Tone = (f64, f64, f64);
 
 const fn tones(sound: Sound) -> &'static [Tone] {
-    use Wave::{Sine, Triangle};
     match sound {
-        Sound::FarmDrop => &[
-            (0.0, 1318.5, 0.12, Triangle, None),
-            (0.08, 1661.2, 0.12, Triangle, None),
-            (0.16, 1975.5, 0.3, Triangle, None),
-        ],
-        Sound::SwitchReady => &[
-            (0.0, 523.25, 0.14, Triangle, None),
-            (0.1, 659.25, 0.14, Triangle, None),
-            (0.2, 783.99, 0.14, Triangle, None),
-            (0.3, 1046.5, 0.28, Triangle, None),
-        ],
-        Sound::Upgrade => &[(0.0, 659.25, 0.24, Sine, None), (0.16, 987.77, 0.24, Sine, None)],
-        Sound::TradeDrop => &[
-            (0.0, 880.0, 0.08, Triangle, None),
-            (0.12, 1174.66, 0.08, Triangle, None),
-        ],
-        Sound::Pickup => &[(0.0, 784.0, 0.22, Sine, Some(1046.5))],
-        Sound::BossStop => &[(0.0, 659.25, 0.45, Sine, Some(329.63))],
+        Sound::FarmDrop => &[(0.0, 1318.5, 0.12), (0.08, 1661.2, 0.12), (0.16, 1975.5, 0.3)],
+        Sound::MarkedDrop => &[(0.0, 880.0, 0.08), (0.12, 1174.66, 0.08)],
     }
 }
 
@@ -56,7 +30,7 @@ pub fn pcm(sound: Sound) -> Vec<i16> {
     let seconds = tones.iter().map(|t| t.0 + t.2).fold(0.0, f64::max) + TAIL;
     let rate = f64::from(RATE);
     let mut mix = vec![0.0_f64; samples(seconds * rate)];
-    for &(start, freq, len, wave, glide) in tones {
+    for &(start, freq, len) in tones {
         let first = samples(start * rate);
         let mut phase = 0.0_f64;
         for (i, out) in mix.iter_mut().skip(first).enumerate() {
@@ -64,9 +38,8 @@ pub fn pcm(sound: Sound) -> Vec<i16> {
             if t >= len + TAIL {
                 break;
             }
-            let f = glide.map_or(freq, |to| freq * (to / freq).powf((t / len).min(1.0)));
-            *out = envelope(t, len, peak).mul_add(oscillator(wave, phase), *out);
-            phase = (phase + f / rate).fract();
+            *out = envelope(t, len, peak).mul_add(triangle(phase), *out);
+            phase = (phase + freq / rate).fract();
         }
     }
     mix.into_iter().map(to_i16).collect()
@@ -83,12 +56,9 @@ fn envelope(t: f64, len: f64, peak: f64) -> f64 {
     }
 }
 
-/// One cycle's value at `phase` (0..1), between -1 and 1.
-fn oscillator(wave: Wave, phase: f64) -> f64 {
-    match wave {
-        Wave::Sine => (TAU * phase).sin(),
-        Wave::Triangle => 4.0f64.mul_add(-(phase - 0.5).abs(), 1.0),
-    }
+/// One triangle cycle's value at `phase` (0..1), between -1 and 1.
+fn triangle(phase: f64) -> f64 {
+    4.0f64.mul_add(-(phase - 0.5).abs(), 1.0)
 }
 
 #[allow(
@@ -162,18 +132,17 @@ mod tests {
     fn lengths_follow_the_tones() {
         let len = |s| pcm(s).len();
         assert_eq!(len(Sound::FarmDrop), 48_000 * 48 / 100, "0.16 + 0.3 + 0.02 s");
-        assert_eq!(len(Sound::BossStop), 48_000 * 47 / 100, "0.45 + 0.02 s");
-        assert_eq!(len(Sound::TradeDrop), 48_000 * 22 / 100, "0.12 + 0.08 + 0.02 s");
+        assert_eq!(len(Sound::MarkedDrop), 48_000 * 22 / 100, "0.12 + 0.08 + 0.02 s");
     }
 
     #[test]
     fn the_loud_sounds_are_louder() {
-        assert!(peak(&pcm(Sound::FarmDrop)) > 2 * peak(&pcm(Sound::TradeDrop)));
+        assert!(peak(&pcm(Sound::FarmDrop)) > 2 * peak(&pcm(Sound::MarkedDrop)));
     }
 
     #[test]
     fn the_wav_header_describes_the_samples() {
-        let samples = pcm(Sound::Upgrade);
+        let samples = pcm(Sound::MarkedDrop);
         let wav = wav(&samples);
         assert_eq!(wav.len(), 44 + 2 * samples.len());
         assert_eq!(wav.get(..4), Some(&b"RIFF"[..]));

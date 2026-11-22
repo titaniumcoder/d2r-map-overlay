@@ -17,55 +17,39 @@ use serde::{Deserialize, Serialize};
 pub use events::Memory;
 pub use player::play;
 
+/// A new drop the minimap marks with a ring (user decision 2026-11-22: "In principle whenever
+/// something drops on the map that you mark, then you make a sound.").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Sound {
+    /// A farm-list item; louder.
     FarmDrop,
-    SwitchReady,
-    Upgrade,
-    TradeDrop,
-    Pickup,
-    BossStop,
+    /// Any other marked drop (keep, trade).
+    MarkedDrop,
 }
 
 impl Sound {
-    /// In priority order: the louder ones first.
-    pub const ALL: [Self; 6] = [
-        Self::FarmDrop,
-        Self::SwitchReady,
-        Self::Upgrade,
-        Self::TradeDrop,
-        Self::Pickup,
-        Self::BossStop,
-    ];
+    /// In priority order: the louder first.
+    pub const ALL: [Self; 2] = [Self::FarmDrop, Self::MarkedDrop];
 
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::FarmDrop => "farmDrop",
-            Self::SwitchReady => "switchReady",
-            Self::Upgrade => "upgrade",
-            Self::TradeDrop => "tradeDrop",
-            Self::Pickup => "pickup",
-            Self::BossStop => "bossStop",
+            Self::MarkedDrop => "markedDrop",
         }
     }
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::FarmDrop => "farm-list item on the ground",
-            Self::SwitchReady => "ready to switch stage",
-            Self::Upgrade => "upgrade available",
-            Self::TradeDrop => "trade item (S / A) on the ground",
-            Self::Pickup => "farm-list item picked up",
-            Self::BossStop => "a boss is no longer worth farming",
+            Self::FarmDrop => "farm-list drop",
+            Self::MarkedDrop => "marked drop",
         }
     }
 
-    /// The two important ones play louder.
     #[must_use]
     pub const fn loud(self) -> bool {
-        matches!(self, Self::FarmDrop | Self::SwitchReady)
+        matches!(self, Self::FarmDrop)
     }
 
     #[must_use]
@@ -121,9 +105,16 @@ pub fn default_path() -> Option<PathBuf> {
     crate::journal::data_dir().map(|d| d.join("sounds.json"))
 }
 
-/// The defaults when the file is missing; an unreadable or invalid one is logged.
+/// The defaults when the file is missing; an unreadable or invalid one is logged. Names of
+/// sounds that no longer exist are dropped.
 #[must_use]
 pub fn load(path: &Path) -> Settings {
+    let mut settings = read(path);
+    settings.off.retain(|name| Sound::from_name(name).is_some());
+    settings
+}
+
+fn read(path: &Path) -> Settings {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Settings::default(),
@@ -169,27 +160,15 @@ pub fn set_current(settings: Settings) {
     *current_cell().write().unwrap_or_else(PoisonError::into_inner) = settings;
 }
 
-/// Sounds per frame; the rest of a busy frame is dropped (the louder come first).
-const MAX_PER_FRAME: usize = 3;
-
-/// Plays a frame's `sounds` (from [`Memory::frame`]), queued.
+/// Plays a frame's `sounds` (from [`Memory::frame`]) that are switched on, queued.
 pub fn play_all(sounds: &[Sound]) {
     if sounds.is_empty() {
         return;
     }
-    for sound in chosen(&current(), sounds) {
+    let settings = current();
+    for &sound in sounds.iter().filter(|&&s| settings.plays(s)) {
         play(sound);
     }
-}
-
-/// The first [`MAX_PER_FRAME`] of `sounds` that are switched on.
-fn chosen(settings: &Settings, sounds: &[Sound]) -> Vec<Sound> {
-    sounds
-        .iter()
-        .copied()
-        .filter(|&s| settings.plays(s))
-        .take(MAX_PER_FRAME)
-        .collect()
 }
 
 #[cfg(test)]
@@ -199,36 +178,14 @@ mod tests {
     use anyhow::Result;
 
     #[test]
-    fn a_frame_plays_the_first_three_switched_on() {
-        let frame = [Sound::FarmDrop, Sound::SwitchReady, Sound::Upgrade, Sound::Pickup];
-        let all = Settings::default();
-        assert_eq!(
-            chosen(&all, &frame),
-            [Sound::FarmDrop, Sound::SwitchReady, Sound::Upgrade]
-        );
-        let no_farm = Settings {
-            on: true,
-            off: BTreeSet::from(["farmDrop".to_owned()]),
-        };
-        assert_eq!(
-            chosen(&no_farm, &frame),
-            [Sound::SwitchReady, Sound::Upgrade, Sound::Pickup],
-            "a switched-off sound frees its place"
-        );
-        let muted = Settings { on: false, ..all };
-        assert_eq!(chosen(&muted, &frame), []);
-    }
-
-    #[test]
     fn names_round_trip_and_are_unique() {
         for s in Sound::ALL {
             assert_eq!(Sound::from_name(s.name()), Some(s));
         }
         assert_eq!(Sound::from_name("chime"), None);
         assert_eq!(
-            Sound::ALL.iter().filter(|s| s.loud()).count(),
-            2,
-            "farm drop and switch ready"
+            Sound::ALL.iter().filter(|s| s.loud()).collect::<Vec<_>>(),
+            [&Sound::FarmDrop]
         );
     }
 
@@ -240,11 +197,11 @@ mod tests {
         assert!(Sound::ALL.into_iter().all(|s| Settings::default().plays(s)));
         let settings = Settings {
             on: true,
-            off: BTreeSet::from(["bossStop".to_owned()]),
+            off: BTreeSet::from(["markedDrop".to_owned()]),
         };
         save(&path, &settings)?;
         assert_eq!(load(&path), settings);
-        assert!(!settings.plays(Sound::BossStop) && settings.plays(Sound::Pickup));
+        assert!(!settings.plays(Sound::MarkedDrop) && settings.plays(Sound::FarmDrop));
         let muted = Settings {
             on: false,
             ..settings
@@ -259,6 +216,18 @@ mod tests {
             },
             "missing keys default"
         );
+        std::fs::write(
+            &path,
+            r#"{"on": true, "off": ["bossStop", "farmDrop", "pickup"]}"#,
+        )?;
+        assert_eq!(
+            load(&path),
+            Settings {
+                on: true,
+                off: BTreeSet::from(["farmDrop".to_owned()])
+            },
+            "the names of removed sounds are dropped"
+        );
         std::fs::write(&path, "not json")?;
         assert_eq!(load(&path), Settings::default(), "invalid file");
         std::fs::remove_dir_all(&dir)?;
@@ -269,7 +238,7 @@ mod tests {
     fn the_dashboard_json_lists_every_sound() {
         let settings = Settings {
             on: false,
-            off: BTreeSet::from(["pickup".to_owned()]),
+            off: BTreeSet::from(["markedDrop".to_owned()]),
         };
         let json = settings.json();
         assert_eq!(json.get("on"), Some(&serde_json::json!(false)));
@@ -280,9 +249,9 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(sounds.len(), Sound::ALL.len());
         assert_eq!(
-            sounds.get(4),
+            sounds.get(1),
             Some(&serde_json::json!({
-                "name": "pickup", "label": "farm-list item picked up", "loud": false, "on": false
+                "name": "markedDrop", "label": "marked drop", "loud": false, "on": false
             }))
         );
     }

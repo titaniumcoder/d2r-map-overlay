@@ -241,7 +241,13 @@ fn publish_dashboard<'a, P: Playstyle>(
         stash_open,
     );
     let live = web::live_value(&info, panels);
-    sounds::play_all(&sound_memory.frame(&live));
+    let gems: Vec<u32> = snap
+        .drops
+        .iter()
+        .filter(|d| matches!(d.kind, crate::items::DropKind::Gem(_)))
+        .map(|d| d.id)
+        .collect();
+    sounds::play_all(&sound_memory.frame(&live, &gems));
     web::publish_live(live.to_string());
     marks
 }

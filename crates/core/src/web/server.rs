@@ -855,6 +855,7 @@ mod tests {
             "{}",
             r#"{"on": "yes"}"#,
             r#"{"sound": "chime", "on": false}"#,
+            r#"{"sound": "bossStop", "on": false}"#,
             r#"{"sound": 3, "on": false}"#,
         ] {
             let answer = api_sounds(Some(&path), body);
@@ -863,13 +864,13 @@ mod tests {
             assert!(post("/api/sounds", body)?.starts_with("HTTP/1.1 400"), "{body}");
         }
         assert!(!path.exists(), "a bad request saves nothing");
-        let answer = api_sounds(Some(&path), r#"{"sound": "bossStop", "on": false}"#);
+        let answer = api_sounds(Some(&path), r#"{"sound": "markedDrop", "on": false}"#);
         assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
-        assert!(answer.contains(r#""name":"bossStop","on":false"#), "{answer}");
+        assert!(answer.contains(r#""name":"markedDrop","on":false"#), "{answer}");
         api_sounds(Some(&path), r#"{"on": false}"#);
         let saved = crate::sounds::load(&path);
-        assert!(!saved.on && saved.off.contains("bossStop"), "{saved:?}");
-        api_sounds(Some(&path), r#"{"sound": "bossStop", "on": true}"#);
+        assert!(!saved.on && saved.off.contains("markedDrop"), "{saved:?}");
+        api_sounds(Some(&path), r#"{"sound": "markedDrop", "on": true}"#);
         assert!(crate::sounds::load(&path).off.is_empty());
         assert!(api_sounds(None, r#"{"on": true}"#).starts_with("HTTP/1.1 500"));
         std::fs::remove_dir_all(&dir)?;
@@ -878,7 +879,7 @@ mod tests {
 
     #[test]
     fn the_sound_test_plays_a_known_sound_only() -> Result<()> {
-        for body in ["not json", "{}", r#"{"sound": "chime"}"#, r#"{"sound": 1}"#] {
+        for body in ["not json", "{}", r#"{"sound": "upgrade"}"#, r#"{"sound": 1}"#] {
             let mut played = None;
             let answer = api_sound_test(body, |s| played = Some(s));
             assert!(
@@ -891,9 +892,9 @@ mod tests {
             );
         }
         let mut played = None;
-        let answer = api_sound_test(r#"{"sound": "pickup"}"#, |s| played = Some(s));
+        let answer = api_sound_test(r#"{"sound": "farmDrop"}"#, |s| played = Some(s));
         assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
-        assert_eq!(played, Some(crate::sounds::Sound::Pickup));
+        assert_eq!(played, Some(crate::sounds::Sound::FarmDrop));
         Ok(())
     }
 
@@ -925,7 +926,7 @@ mod tests {
         let config = html_page("/config");
         assert_eq!(
             (dashboard.len(), format!("{:#018x}", fnv1a(dashboard.as_bytes()))),
-            (50_571, "0xafe56ebd7eb2ab6c".to_owned()),
+            (50_689, "0x444ddb6a35fdca0d".to_owned()),
             "dashboard page"
         );
         assert_eq!(
