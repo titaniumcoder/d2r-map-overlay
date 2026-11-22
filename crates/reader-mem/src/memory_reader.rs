@@ -78,7 +78,7 @@ impl<M> Attached<M> {
 enum Probe {
     Off,
     Wanted,
-    On(UiProbe),
+    On(Box<UiProbe>),
 }
 
 impl Probe {
@@ -91,7 +91,7 @@ impl Probe {
             *self = match opened {
                 Ok(probe) => {
                     eprintln!("UI probe: writing {}", probe.path().display());
-                    Self::On(probe)
+                    Self::On(Box::new(probe))
                 }
                 Err(e) => {
                     eprintln!("UI probe off: {e:#}");

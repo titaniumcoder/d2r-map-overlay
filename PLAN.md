@@ -151,6 +151,17 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   Includes other levels' rooms: top-row rooms of 27 had near rooms in 28, bottom-row ones in 26. Used for
   walk-through border exits (`Snapshot::border_links`, drawn as a triangle on the shared edge). Earlier note: only
   filled for loaded rooms, and no walkable-connection info for unexplored rooms (openings need the seed).
+- **UI panel flags (candidate, 2026-11-22 recording; not read live)**: `offsets::ui_panels`, a
+  `.data` byte array at rva `0x1ece2d8` (build `6ad81202-279c000`) in d2go's open-menus layout:
+  `+0x01` inventory, `+0x08` NPC interaction, `+0x0B` trade window, `+0x19` stash (d2go: `+0x18`,
+  which never changed). Seen: inventory 0→1→0 with the inventory alone and 0→1 with each
+  stash / trade opening (5 changes, consistent); NPC 0→1 when Hratli's window opened (47 store
+  items the next second); trade 0→1 once; stash 0→1 twice, each the second before items came
+  out of the stash. The stash's closing was never seen: the first probe cut busy ticks to 400
+  `.data` changes in rva order, and a window opening or closing is such a tick, so the high-rva
+  array lost most of its changes. Confidence: inventory medium-high, the others medium-low.
+  No tab / page / store-tab byte in this array or anywhere in `.data` among small values
+  (the tab clicks ran in quiet ticks, nothing was cut there).
 - **Smaller notes** (moved from `offsets.rs` comments, 2026-11-22):
   - Skill node `+0x40` u32 = a tome's charge count (live 15 identify / 17 town portal; not read). Skill header
     left/right follow the community layout (left pointed at Attack, right at Death Mark 375); not yet seen changing.
@@ -969,38 +980,53 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   (items.txt `invwidth/invheight`, `research/gen_inv_sizes.py`). Carried on `ItemDrop.cell`
   (inventory, cube, personal stash), `StashItem.cell` (shared pages), `ShopItem.cell`; the stash
   plan's `Advice.cells` keeps every merged item's. A cell outside the grid draws nothing.
-  **Not yet seen live.**
+  Inventory cells seen live 2026-11-22 (frames on the items); store and stash cells not yet.
 - Frames: store items as the box picks them (green build; no gold money: see "Vendor criteria") on the shown store tab
-  only (`ui_marks::vendor(…, tab)`); the player's items by the stash plan's action
-  (`ui_marks::item_frames`: sell red, move / stow orange, keep trade gold, keep own green,
-  give-away none): inventory always, the stash grid only for the shown tab (`Spot::Stash` or
-  `Spot::Page(n)`).
-- Live now: while a trade window is open, the box and the inventory's frames (the inventory is
-  shown beside every trade window). The shown store tab, whether the stash window is open and
-  which tab / shared page it shows are **not known**: no store-grid or stash-grid frames yet.
-- UI-state research (2026-11-22): no known signal. d2go reads a panel-flag byte array at a
-  `.data` global (stash, store, inventory flags) found by a code signature, but D2R re-encrypts
-  its code pages (see Memory layer), the on-disk D2R.exe is encrypted, and the offsets are
-  unverified here. Probe instead: `D2R_UI_PROBE=1` (`crates/reader-mem/src/ui_probe.rs`): every
-  town tick diffs `.data` (bytes going between values ≤ 16, a byte dropped after 40 changes) and
-  the player's `Inventory` head (0x100 bytes, every byte) and appends to
-  `~/.local/share/d2r-map-overlay/ui-probe.jsonl`, with the trade window's item count, the stash
-  tab count and the inventory items' read cells; `research/ui_probe.py` prints it per byte.
+  only (`ui_marks::vendor(…, tab)`). The player's items by the stash plan's action, only what
+  is done in the open window (user decision 2026-11-22: "less clutter, easier to read";
+  `ui_marks::item_frames(…, Window)`): at a vendor (`Window::Vendor`) the inventory's sell items
+  (red), nothing else; at the stash (`Window::Stash(shown)`) the shown tab's sell (red) and
+  move / stow items (orange) and the inventory's move / stow items (orange), no sell marks in
+  the inventory. No keep (gold / green) and no give-away frames anywhere.
+- Live now: while a trade window is open, the box and the inventory's sell frames. Seen live
+  2026-11-22 12:30 (screenshot at Hratli): every inventory frame sits exactly on its item
+  (cells, sizes and grid geometry right: a 2×4 poleaxe at 4,0, 1×3 blades at 6,0 / 8,0, the
+  amulet at 0,3, a ring at 7,3, a skull at 1,2). The overlay had logged "screen (1920, 1054)
+  … no frames" when the trade window opened: the layer's first configure was 1054 high (the
+  bar's 26 px), a later one 1080, so the frames were drawn; the warning is printed only once.
+  Not wired: the stash window marks (the stash flag is unconfirmed, its tab unknown) and the
+  store-grid frames (store tab unknown).
+- UI-state research (2026-11-22): d2go reads a panel-flag byte array at a `.data` global found
+  by a code signature, but D2R re-encrypts its code pages (see Memory layer) and the on-disk
+  D2R.exe is encrypted. Probe instead: `D2R_UI_PROBE=1` (`crates/reader-mem/src/ui_probe.rs`,
+  off without the variable): every town tick appends to `~/.local/share/d2r-map-overlay/ui-probe.jsonl`
+  the `.data` bytes going between values ≤ 16 (a byte dropped after 40 changes), the `.data`
+  qwords going from one heap pointer to another (a shown tab may be a pointer to it), every
+  byte of the candidate panel array with the flags it reads (`open`), the small-value bytes
+  of the heap objects the qwords within 0x800 of the array point to, the player's `Inventory`
+  head, the trade window's item count, the stash tab count and the inventory items' cells;
+  `research/ui_probe.py` prints it. Since the second version nothing is cut.
+- First recording (2026-11-22 12:28–12:34, the protocol below, then more selling): the panel
+  array (Memory layer). The shown stash tab / shared page and the shown store tab: **not
+  found** — not a small value in `.data` (the clicks' ticks were quiet and fully logged), so a
+  heap object or a pointer; the first probe logged neither.
 - Vendor box `BOX_TOP` = 12 px: the screenshots show only the game world at the top centre
   (the windows start at y ≈ 100), so it stays.
 - [x] Step 1: layer surface, vendor text box (2026-11-22). Not yet seen live.
 - [x] Calibration (2026-11-22): grid geometry above, item cells read, inventory frames at the
-  vendor. Not yet seen live (cells and frame placement).
-- [ ] UI-state recording → the stash-open flag, the shown stash tab / shared page, the shown
-  store tab → store-grid and stash-grid frames (`vendor(…, Some(tab))`, `item_frames(…,
-  Some(spot))`). Session (one town, ~5 min; every step held ≥ 5 s with nothing else in
-  between, so each change stands alone in the probe's timeline): deploy with
-  `D2R_UI_PROBE=1 scripts/deploy.sh`; in town, stand still, no window open, 10 s; open the
-  stash (Personal shows); Shared; shared page arrows to 2, 3, 4, 5, then back to 1; Gems,
-  Materials, Runes, Personal; close (Esc); open again (note which tab it reopens on), close;
-  open the inventory alone (I), close; trade with a vendor: Armor, Weapons, second Weapons,
-  Misc, Armor, then a screenshot (checks the inventory frames and cells), close. Then
-  `research/ui_probe.py` on the jsonl.
+  vendor. Seen live 2026-11-22: frames on the items.
+- [x] Display rules per window (2026-11-22): vendor = inventory sell frames only; stash =
+  shown tab's sell / move, inventory's move; no keep frames.
+- [x] UI-state recording 1 (2026-11-22): panel array candidate; tabs not found.
+- [ ] UI-state recording 2 → confirm the stash flag (open and close), find the shown stash tab
+  / shared page and the shown store tab → wire `Window::Stash(…)` and `vendor(…, Some(tab))`.
+  Session (one town, ~4 min, every step held ≥ 5 s, nothing else in between, no item moves):
+  deploy with `D2R_UI_PROBE=1 scripts/deploy.sh`; in town, stand still, no window open, 10 s;
+  open the stash (Personal); Shared; page arrows to 2, 3, 4, 5, then back to 1; Personal;
+  close (Esc); open again, close (Esc); trade with a vendor: Armor, Weapons, second Weapons,
+  Misc, Armor; close (Esc); the stash once more, Shared, page 3, close. Then
+  `research/ui_probe.py` on the jsonl: the stash flag must go 1 → 0 at each close; a tab
+  candidate in `ptrs` or `heap` must step with the clicks.
 
 ## Permissions
 Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each release build the user runs

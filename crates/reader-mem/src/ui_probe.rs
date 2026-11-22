@@ -1,10 +1,12 @@
 //! Research probe for the UI state the in-game marks still lack: whether the stash window is
 //! open, which of its tabs / shared pages it shows, and which store tab a trade window shows.
-//! With `D2R_UI_PROBE` set, every tick in a town diffs `.data` (bytes that go between small
-//! values, as panel flags and tab indices do) and the player's `Inventory` head (every byte)
-//! against the last tick and appends the changes to `ui-probe.jsonl` in the data directory,
-//! with the inventory items' grid cells for checking the cell read. `research/ui_probe.py`
-//! reads it back.
+//! With `D2R_UI_PROBE` set, every tick in a town diffs against the last tick and appends the
+//! changes to `ui-probe.jsonl` in the data directory: `.data` bytes that go between small
+//! values (as panel flags and tab indices do), `.data` qwords that go from one heap pointer to
+//! another (a "shown tab" held as a pointer), every byte of the candidate panel-flag array
+//! ([`ui_panels`]) and the flags it reads, small-value bytes of the heap objects that `.data`
+//! qwords around that array point to, and every byte of the player's `Inventory` head; with
+//! the inventory items' grid cells. `research/ui_probe.py` reads it back.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -14,8 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, ensure};
 
 use d2r_core::game::{Place, Snapshot, is_town};
-use d2r_core::offsets::unit;
-use d2r_core::reader::ReadMem;
+use d2r_core::offsets::{ui_panels, unit};
+use d2r_core::reader::{ReadMem, is_user_ptr};
 
 use crate::image::Image;
 
@@ -25,8 +27,10 @@ pub const ENV: &str = "D2R_UI_PROBE";
 const SMALL: u8 = 16;
 /// After this many logged changes a `.data` byte is taken for a counter, not UI state: no longer logged.
 const NOISY: u8 = 40;
-/// `.data` changes per line; the rest are only counted.
-const MAX_CHANGES: usize = 400;
+/// `.data` bytes on each side of the panel array whose qwords' heap objects are compared.
+const NEAR_PANELS: u64 = 0x800;
+/// Bytes compared of each such heap object.
+const POINTEE_LEN: usize = 0x200;
 /// Bytes of the player's `Inventory` struct compared.
 const INVENTORY_LEN: usize = 0x100;
 /// A larger `.data` is not copied every tick.
@@ -34,6 +38,16 @@ const MAX_DATA: usize = 32 << 20;
 
 /// One changed byte: (offset, old, new).
 type Change = (usize, u8, u8);
+
+/// A heap object a `.data` qword near the panel array points to.
+#[derive(Debug)]
+struct Pointee {
+    /// rva of the qword.
+    slot: u64,
+    ptr: u64,
+    bytes: Vec<u8>,
+    counts: Vec<u8>,
+}
 
 #[derive(Debug)]
 pub struct UiProbe {
@@ -44,6 +58,9 @@ pub struct UiProbe {
     data: Vec<u8>,
     /// Logged changes per `.data` byte (saturating).
     counts: Vec<u8>,
+    /// Logged pointer changes per `.data` qword (saturating).
+    ptr_counts: Vec<u8>,
+    pointees: Vec<Pointee>,
     inventory: Vec<u8>,
     /// The last line's state fields, so an unchanged tick writes nothing.
     last_state: String,
@@ -79,6 +96,8 @@ impl UiProbe {
             image,
             data_rva,
             counts: vec![0; data.len()],
+            ptr_counts: vec![0; data.len() / 8],
+            pointees: Vec::new(),
             data,
             inventory: Vec::new(),
             last_state: String::new(),
@@ -99,10 +118,19 @@ impl UiProbe {
             return Ok(());
         }
         let mut data_changes = Vec::new();
+        let mut ptr_changes = Vec::new();
+        let mut panel_changes = Vec::new();
         if let Ok(data) = self.image.read_alias(mem, self.data_rva, self.data.len()) {
             data_changes = small_changes(&self.data, &data, &mut self.counts);
+            let image = self.image.live_base..self.image.live_base + self.image.size;
+            ptr_changes = pointer_changes(&self.data, &data, &mut self.ptr_counts, &image);
+            let panels = self.panels_range();
+            if let (Some(old), Some(new)) = (self.data.get(panels.clone()), data.get(panels)) {
+                panel_changes = changes(old, new);
+            }
             self.data = data;
         }
+        let heap_changes = self.pointee_changes(mem);
         let inventory = mem
             .read_ptr(snap.player.addr.0 + unit::INVENTORY)
             .ok()
@@ -115,27 +143,102 @@ impl UiProbe {
             Vec::new()
         };
         self.inventory = inventory;
-        let state = state_fields(snap);
-        if data_changes.is_empty() && inventory_changes.is_empty() && state == self.last_state {
+        let open = self
+            .data
+            .get(self.panels_range())
+            .map_or_else(String::new, open_panels);
+        let state = format!(r#"{},"open":"{open}""#, state_fields(snap));
+        if data_changes.is_empty()
+            && ptr_changes.is_empty()
+            && panel_changes.is_empty()
+            && heap_changes.is_empty()
+            && inventory_changes.is_empty()
+            && state == self.last_state
+        {
             return Ok(());
         }
-        let more = data_changes.len().saturating_sub(MAX_CHANGES);
-        data_changes.truncate(MAX_CHANGES);
         let rva = |off: usize| self.data_rva + off as u64;
         let data = data_changes
             .iter()
             .map(|&(off, old, new)| format!("[{},{old},{new}]", rva(off)))
             .collect::<Vec<_>>()
             .join(",");
+        let ptrs = ptr_changes
+            .iter()
+            .map(|&(off, old, new)| format!("[{},{old},{new}]", rva(off)))
+            .collect::<Vec<_>>()
+            .join(",");
+        let heap = heap_changes
+            .iter()
+            .map(|&(slot, (off, old, new))| format!("[{slot},{off},{old},{new}]"))
+            .collect::<Vec<_>>()
+            .join(",");
         writeln!(
             self.out,
-            r#"{{"t":{},"level":{},{state},"data":[{data}],"more":{more},"inv":[{}]}}"#,
+            r#"{{"t":{},"level":{},{state},"data":[{data}],"ptrs":[{ptrs}],"panels":[{}],"heap":[{heap}],"inv":[{}]}}"#,
             now(),
             snap.level.id,
+            json_changes(&panel_changes),
             json_changes(&inventory_changes),
         )?;
         self.last_state = state;
         Ok(())
+    }
+}
+
+impl UiProbe {
+    /// The panel array's bytes in the `.data` copy.
+    fn panels_range(&self) -> std::ops::Range<usize> {
+        let start = usize::try_from(ui_panels::RVA.saturating_sub(self.data_rva)).unwrap_or(usize::MAX);
+        start..start.saturating_add(ui_panels::LEN)
+    }
+
+    /// The small-value byte changes of the heap objects the qwords within [`NEAR_PANELS`] of
+    /// the panel array point to, as (qword rva, change). A qword that points elsewhere than
+    /// last tick starts over (its pointer change is in the `ptrs` field).
+    fn pointee_changes(&mut self, mem: &impl ReadMem) -> Vec<(u64, Change)> {
+        let image = self.image.live_base..self.image.live_base + self.image.size;
+        let first = ui_panels::RVA.saturating_sub(NEAR_PANELS) & !7;
+        let last = ui_panels::RVA + ui_panels::LEN as u64 + NEAR_PANELS;
+        let mut out = Vec::new();
+        let mut kept = Vec::new();
+        for slot in (first..last).step_by(8) {
+            let Some(ptr) = slot
+                .checked_sub(self.data_rva)
+                .and_then(|off| usize::try_from(off).ok())
+                .and_then(|off| self.data.get(off..off + 8))
+                .and_then(|b| b.try_into().ok())
+                .map(u64::from_le_bytes)
+                .filter(|&p| is_heap_ptr(p, &image))
+            else {
+                continue;
+            };
+            let Ok(bytes) = mem.read_bytes(ptr, POINTEE_LEN) else {
+                continue;
+            };
+            let old = self
+                .pointees
+                .iter()
+                .position(|p| p.slot == slot && p.ptr == ptr)
+                .map(|i| self.pointees.swap_remove(i));
+            let mut counts = vec![0; POINTEE_LEN];
+            if let Some(old) = old {
+                counts = old.counts;
+                out.extend(
+                    small_changes(&old.bytes, &bytes, &mut counts)
+                        .into_iter()
+                        .map(|c| (slot, c)),
+                );
+            }
+            kept.push(Pointee {
+                slot,
+                ptr,
+                bytes,
+                counts,
+            });
+        }
+        self.pointees = kept;
+        out
     }
 }
 
@@ -189,6 +292,48 @@ fn small_changes(prev: &[u8], cur: &[u8], counts: &mut [u8]) -> Vec<Change> {
     out
 }
 
+/// A user-space pointer outside the game image: a heap object.
+fn is_heap_ptr(p: u64, image: &std::ops::Range<u64>) -> bool {
+    is_user_ptr(p) && !image.contains(&p)
+}
+
+/// The 8-byte-aligned qwords that went from one heap pointer to another, unless they did
+/// [`NOISY`] times already; `counts` (one per qword) is updated. The change is logged as
+/// (byte offset, old, new).
+fn pointer_changes(
+    prev: &[u8],
+    cur: &[u8],
+    counts: &mut [u8],
+    image: &std::ops::Range<u64>,
+) -> Vec<(usize, u64, u64)> {
+    let mut out = Vec::new();
+    let pairs = prev.as_chunks::<8>().0.iter().zip(cur.as_chunks::<8>().0);
+    for (i, ((&old, &new), count)) in pairs.zip(counts.iter_mut()).enumerate() {
+        let (old, new) = (u64::from_le_bytes(old), u64::from_le_bytes(new));
+        if old == new || !is_heap_ptr(old, image) || !is_heap_ptr(new, image) || *count >= NOISY {
+            continue;
+        }
+        *count = count.saturating_add(1);
+        out.push((i * 8, old, new));
+    }
+    out
+}
+
+/// The panel flags set in `panels` (the [`ui_panels`] array), space-separated.
+fn open_panels(panels: &[u8]) -> String {
+    [
+        (ui_panels::INVENTORY, "inventory"),
+        (ui_panels::NPC_INTERACT, "npc"),
+        (ui_panels::NPC_SHOP, "shop"),
+        (ui_panels::STASH, "stash"),
+    ]
+    .into_iter()
+    .filter(|&(at, _)| panels.get(at).is_some_and(|&b| b != 0))
+    .map(|(_, name)| name)
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -216,6 +361,37 @@ mod tests {
             flips.extend(small_changes(&a, &b, &mut count));
         }
         assert_eq!(flips.len(), usize::from(NOISY), "a counter stops being logged");
+    }
+
+    #[test]
+    fn heap_pointer_moves_only() {
+        let image = 0x7000_0000_0000..0x7000_1000_0000;
+        let q = |vals: &[u64]| vals.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+        let heap = 0x5c3c_1a70;
+        let prev = q(&[heap, heap, 0x7000_0000_1000, 3, heap]);
+        let cur = q(&[heap + 0x40, heap, heap, 4, 0]);
+        let mut counts = vec![0u8; 5];
+        assert_eq!(
+            pointer_changes(&prev, &cur, &mut counts, &image),
+            [(0, heap, heap + 0x40)],
+            "unchanged, from an image address, small numbers and to null are left out"
+        );
+    }
+
+    /// The panel array around two moments of the 2026-11-22 recording, from the bytes that
+    /// changed: t 3431 (Hratli's trade window opening: the NPC flag set) and t 3496 (the
+    /// stash opened, items taken out).
+    #[test]
+    fn open_panels_from_the_recording() {
+        let set = |on: &[usize]| {
+            (0..ui_panels::LEN)
+                .map(|i| u8::from(on.contains(&i)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(open_panels(&set(&[])), "");
+        assert_eq!(open_panels(&set(&[0x08])), "npc");
+        assert_eq!(open_panels(&set(&[0x01, 0x19])), "inventory stash");
+        assert_eq!(open_panels(&[0, 1]), "inventory", "a short read sees what it has");
     }
 
     #[test]
