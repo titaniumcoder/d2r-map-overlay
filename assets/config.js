@@ -97,6 +97,15 @@ async function load() {
     root.appendChild(div);
   });
   renderNotNeeded(cfg.not_needed || []);
+  const money = document.getElementById("money");
+  money.checked = cfg.money_farming !== false;
+  money.disabled = false;
+}
+// Turns money farming on or off (POST /api/money-farming), then reloads the page's lists.
+async function saveMoney(on) {
+  const r = await fetch("/api/money-farming", {method: "POST", body: JSON.stringify({on})});
+  document.getElementById("err").textContent = r.ok ? "" : `money farming not saved: ${await r.text()}`;
+  load();
 }
 // Every not-needed mark by build (cfg.not_needed), each with a "bring back" button.
 function renderNotNeeded(groups) {

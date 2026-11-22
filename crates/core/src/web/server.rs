@@ -194,6 +194,7 @@ fn handle<P: Playstyle>(stream: TcpStream, files: &Files) {
                 api_character_delete::<P>(files, &String::from_utf8_lossy(&body))
             }
             ("POST", "/api/not-needed") => api_not_needed::<P>(files, &String::from_utf8_lossy(&body)),
+            ("POST", "/api/money-farming") => api_money_farming::<P>(files, &String::from_utf8_lossy(&body)),
             ("GET", "/api/sounds") => respond_no_store(
                 "200 OK",
                 "application/json",
@@ -462,6 +463,18 @@ fn api_not_needed<P: Playstyle>(files: &Files, body: &str) -> String {
     save(|| P::set_not_needed(files, build, name, needed))
 }
 
+/// `POST /api/money-farming` with `{"on": bool}`: turns money farming on or off. The overlay
+/// applies it after the hot reload.
+fn api_money_farming<P: Playstyle>(files: &Files, body: &str) -> String {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return respond("400 Bad Request", "text/plain", "bad json\n");
+    };
+    let Some(on) = json.get("on").and_then(serde_json::Value::as_bool) else {
+        return respond("400 Bad Request", "text/plain", "on must be true or false\n");
+    };
+    save(|| P::set_money_farming(files, on))
+}
+
 /// `POST /api/sounds` with `{"on": bool}` (all sounds) or `{"sound": "<name>", "on": bool}`:
 /// saves the switches to `path` and answers with them as `GET /api/sounds` does.
 fn api_sounds(path: Option<&Path>, body: &str) -> String {
@@ -641,6 +654,9 @@ mod tests {
     /// `NoPlaystyle::set_not_needed`'s calls, as `build|piece|needed`.
     static NOT_NEEDED_CALLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+    /// `NoPlaystyle::set_money_farming`'s calls.
+    static MONEY_CALLS: Mutex<Vec<bool>> = Mutex::new(Vec::new());
+
     impl Playstyle for NoPlaystyle {
         type Wants = ();
         type Extra<'a> = ();
@@ -693,6 +709,14 @@ mod tests {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(format!("{build}|{piece}|{needed}"));
+            Ok(())
+        }
+
+        fn set_money_farming(_: &Files, on: bool) -> Result<()> {
+            MONEY_CALLS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(on);
             Ok(())
         }
 
@@ -847,6 +871,29 @@ mod tests {
     }
 
     #[test]
+    fn money_farming_takes_a_flag_and_rejects_the_rest() -> Result<()> {
+        for body in [
+            "not json",
+            "{}",
+            r#"{"on": "no"}"#,
+            r#"{"on": 0}"#,
+            r#"{"money": false}"#,
+        ] {
+            let answer = post("/api/money-farming", body)?;
+            assert!(answer.starts_with("HTTP/1.1 400"), "{body}: {answer}");
+        }
+        let calls = || MONEY_CALLS.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        assert!(calls().is_empty(), "a bad request saves nothing");
+        let answer = post("/api/money-farming", r#"{"on": false}"#)?;
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        assert!(answer.ends_with("{\"saved\": true}"), "{answer}");
+        post("/api/money-farming", r#"{"on": true}"#)?;
+        assert_eq!(calls(), [false, true]);
+        assert!(post("/api/money-farming", "")?.starts_with("HTTP/1.1 400"));
+        Ok(())
+    }
+
+    #[test]
     fn sound_switches_are_saved_and_bad_requests_rejected() -> Result<()> {
         let dir = crate::testutil::temp_dir("api-sounds")?;
         let path = dir.join("sounds.json");
@@ -931,7 +978,7 @@ mod tests {
         );
         assert_eq!(
             (config.len(), format!("{:#018x}", fnv1a(config.as_bytes()))),
-            (12_368, "0xde69b4452dfbd62e".to_owned()),
+            (13_274, "0xf54b98e08310ccab".to_owned()),
             "config page"
         );
     }

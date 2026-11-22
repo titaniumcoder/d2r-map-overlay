@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use d2r_core::playstyle::{DIR_VAR, Files};
+use serde::Deserialize;
+use toml_edit::DocumentMut;
 
 use crate::config::{
     Bis, Build, Builds, FarmGroup, Settings, Tables, Valuables, parse_build, parse_farm, parse_playstyle,
@@ -22,6 +24,27 @@ use crate::web::config_page;
 const BIS_HEADER: &str = "# Each character's build selection: [bis.<name>] build = \"<build slug>\".\n\
                           # Written by the overlay's /config page.\n\
                           [bis]\n";
+
+/// A new `settings.toml`.
+const SETTINGS_HEADER: &str = "# The overlay's switches (money_farming = false: no marks or keeps for the vendor-gold\n\
+                               # wands, scepters, orbs and daggers). Written by the overlay's /config page.\n";
+
+/// `settings.toml` in the data dir: the `/config` page's switches.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserSettings {
+    /// The money rules count ([`Valuables::money`]); on when absent.
+    #[serde(default = "on")]
+    money_farming: bool,
+}
+
+const fn on() -> bool {
+    true
+}
+
+fn parse_settings(text: &str) -> Result<(UserSettings, Vec<String>), toml::de::Error> {
+    Ok((toml::from_str(text)?, Vec::new()))
+}
 
 /// Index of the old places in [`Files::layers`].
 const OLD_PLACES: usize = 1;
@@ -107,6 +130,8 @@ struct Loaded {
     farm: Option<Vec<FarmGroup>>,
     route: Option<Route>,
     marks: not_needed::Marks,
+    /// `settings.toml`'s money farming switch (on without the file).
+    money: Option<bool>,
     /// The old-place files in use, for the notice.
     old: Vec<String>,
 }
@@ -183,6 +208,11 @@ fn read_all(files: &Files) -> Loaded {
         &mut build_defs,
         farm.as_deref_mut().unwrap_or_default(),
     );
+    let money = match read(files, files.settings_path().as_deref(), parse_settings) {
+        Say::Value(settings) => Some(settings.money_farming),
+        Say::Silent => Some(true),
+        Say::Broken => None,
+    };
     Loaded {
         name,
         filter_name,
@@ -194,6 +224,7 @@ fn read_all(files: &Files) -> Loaded {
         farm,
         route,
         marks,
+        money,
         old,
     }
 }
@@ -311,7 +342,10 @@ pub fn load(files: &Files) -> Settings {
     note_old_places(files, &loaded.old);
     warn_loot_filter(files, loaded.filter_name.as_deref());
     Settings {
-        valuables: loaded.valuables.unwrap_or_default(),
+        valuables: Valuables {
+            money: loaded.money.unwrap_or(true),
+            ..loaded.valuables.unwrap_or_default()
+        },
         builds: loaded.damages.unwrap_or_default(),
         bis: loaded.bis.unwrap_or_default(),
         build_defs: loaded.build_defs,
@@ -328,12 +362,19 @@ pub fn reload(settings: &mut Settings, files: &Files) {
     let loaded = read_all(files);
     note_old_places(files, &loaded.old);
     warn_loot_filter(files, loaded.filter_name.as_deref());
+    let money = loaded.money.unwrap_or(settings.valuables.money);
+    if loaded.money.is_none() {
+        files.say(format_args!(
+            "playstyle: keeping the current money farming switch"
+        ));
+    }
     replace(
         files,
         &mut settings.valuables,
         loaded.valuables,
         "valuables tiers",
     );
+    settings.valuables.money = money;
     replace(files, &mut settings.builds, loaded.damages, "damages");
     replace(files, &mut settings.bis, loaded.bis, "build selections");
     let farm_groups = loaded.farm.as_ref().map(Vec::len);
@@ -457,6 +498,32 @@ pub fn set_not_needed(files: &Files, build: &str, piece: &str, needed: bool) -> 
         .context("no data directory ($XDG_DATA_HOME and $HOME unset)")?;
     let text = read_existing(&path)?.unwrap_or_else(|| not_needed::HEADER.to_owned());
     edit(&path, &text, |t| not_needed::set(t, build, piece, needed))
+}
+
+/// Turns money farming on or off in `settings.toml`, comments kept; the hot reload then applies
+/// it.
+///
+/// # Errors
+/// The file can't be read or written or isn't valid TOML; no data dir.
+pub fn set_money_farming(files: &Files, on: bool) -> Result<()> {
+    let path = files
+        .settings_path()
+        .context("no data directory ($XDG_DATA_HOME and $HOME unset)")?;
+    let text = read_existing(&path)?.unwrap_or_else(|| SETTINGS_HEADER.to_owned());
+    edit(&path, &text, |t| {
+        let mut doc = t.parse::<DocumentMut>().ok()?;
+        if let Some(item) = doc.get_mut("money_farming") {
+            *item = toml_edit::value(on);
+            return Some(doc.to_string());
+        }
+        // Appended as text: toml_edit would put a new key above the header's comments.
+        let newline = if t.is_empty() || t.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        Some(format!("{t}{newline}money_farming = {on}\n"))
+    })
 }
 
 fn read_existing(path: &Path) -> Result<Option<String>> {
@@ -794,6 +861,59 @@ mod tests {
         assert_eq!(fury(&load(&files))?, (true, true, true, vec![]));
         assert!(set_not_needed(&files, "Fury Druid", "Oath", false).is_err());
         assert!(set_not_needed(&Files::default(), "Fury Druid", "Oath", false).is_err());
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn the_money_farming_switch_round_trips_and_hot_applies() -> Result<()> {
+        let dir = temp_dir("playstyle-money")?;
+        let files = Files {
+            shipped: Some(shipped()),
+            state: Some(dir.join("data")),
+            quiet: true,
+            ..Files::default()
+        };
+        let path = dir.join("data/settings.toml");
+        let mut settings = load(&files);
+        assert!(settings.valuables.money, "on without the file");
+        set_money_farming(&files, false)?;
+        let text = std::fs::read_to_string(&path)?;
+        assert!(text.starts_with(SETTINGS_HEADER), "{text}");
+        assert!(text.ends_with("money_farming = false\n"), "{text}");
+        assert!(!load(&files).valuables.money, "survives a restart");
+        reload(&mut settings, &files);
+        assert!(!settings.valuables.money, "applied by the hot reload");
+        set_money_farming(&files, true)?;
+        assert_eq!(
+            std::fs::read_to_string(&path)?,
+            format!("{SETTINGS_HEADER}money_farming = true\n"),
+            "one key, comments kept"
+        );
+        reload(&mut settings, &files);
+        assert!(settings.valuables.money);
+        // A broken file: the start is on, a reload keeps the current switch.
+        set_money_farming(&files, false)?;
+        reload(&mut settings, &files);
+        write(&path, "money_farming = \"no\"\n")?;
+        assert!(load(&files).valuables.money);
+        reload(&mut settings, &files);
+        assert!(!settings.valuables.money, "kept");
+        assert!(
+            set_money_farming(&files, true).is_ok(),
+            "a wrong value is valid TOML: fixed"
+        );
+        write(&path, "money_farming = [\n")?;
+        assert!(
+            set_money_farming(&files, true).is_err(),
+            "invalid TOML isn't overwritten"
+        );
+        write(&path, "money = false\n")?;
+        assert!(load(&files).valuables.money, "an unknown key is a broken file");
+        assert!(
+            set_money_farming(&Files::default(), false).is_err(),
+            "no data dir"
+        );
         std::fs::remove_dir_all(&dir)?;
         Ok(())
     }

@@ -35,6 +35,12 @@ the equipped piece is already better.</p>
 <h2>Add character</h2>
 <input id="newname" placeholder="character name"> <select id="newbuild"></select>
 <button onclick="addChar()">Add</button>
+<h2>Money farming</h2>
+<label><input type="checkbox" id="money" disabled onchange="saveMoney(this.checked)"> Money farming</label>
+<span class="hint">mark wands, scepters, sorceress orbs and daggers that sell well to vendors</span>
+<p class="hint">Off: no ring, coin or sound for them on the map, and the stash plan sells them like
+any other item (<code>~/.local/share/d2r-map-overlay/settings.toml</code>; the overlay applies it
+within seconds).</p>
 <h2>Not needed items</h2>
 <p class="hint">Every piece marked not needed (the ✕ on the live dashboard), by the build it was
 marked for, also when the build or the name matches nothing any more

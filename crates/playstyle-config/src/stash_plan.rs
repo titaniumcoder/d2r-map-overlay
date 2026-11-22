@@ -105,7 +105,7 @@ fn label(item: &ItemDrop, name: String) -> String {
 }
 
 /// What the magic / rare / crafted verdicts need.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Scoring {
     pub profile: Profile,
     /// The farm list's `kind = "rolled"` entries still wanted (a Teleport one only while no
@@ -113,6 +113,20 @@ pub struct Scoring {
     pub rolled: Vec<FarmItem>,
     /// The charm wishlists of the chain's builds: a matching charm is kept for own use.
     pub charms: Vec<CharmWish>,
+    /// The money farming switch ([`crate::config::Valuables::money`]): off, the money rules
+    /// keep nothing and such items are judged like any other.
+    pub money: bool,
+}
+
+impl Default for Scoring {
+    fn default() -> Self {
+        Self {
+            profile: Profile::default(),
+            rolled: Vec::new(),
+            charms: Vec::new(),
+            money: true,
+        }
+    }
 }
 
 impl Scoring {
@@ -148,6 +162,7 @@ impl Scoring {
                 .cloned()
                 .collect(),
             charms: builds.iter().flat_map(|b| b.charms.iter().cloned()).collect(),
+            money: config.valuables.money,
         }
     }
 }
@@ -517,10 +532,11 @@ pub fn plain_base(item: &ItemDrop) -> bool {
         && item.code.as_deref().is_some_and(socket_bases::socketable)
 }
 
-/// What the valuables rules keep for trade: a certain S or A match, or an uncertain S. A white
-/// base matching only a twink A rule is own gear, not a trade good.
-fn trade_worthy(item: &ItemDrop) -> bool {
-    let mut tiers = valuables::keep_tiers();
+/// What the valuables rules keep for trade: a certain S or A match, or an uncertain S; the
+/// money rules only when `money` (the money farming switch). A white base matching only a
+/// twink A rule is own gear, not a trade good.
+fn trade_worthy(item: &ItemDrop, money: bool) -> bool {
+    let mut tiers = valuables::keep_tiers(money);
     if plain_base(item) {
         tiers.twink.retain(|&t| t == Tier::S);
     }
@@ -721,9 +737,9 @@ impl Wants {
     }
 
     /// The runeword whose open base need `drop` fills better than the base kept for it; a
-    /// trade-worthy base is no own base.
+    /// trade-worthy base is no own base (`money`: the money farming switch).
     #[must_use]
-    pub fn base(&self, drop: &ItemDrop) -> Option<&'static str> {
+    pub fn base(&self, drop: &ItemDrop, money: bool) -> Option<&'static str> {
         if !plain_base(drop) {
             return None;
         }
@@ -733,7 +749,7 @@ impl Wants {
             .iter()
             .find(|(need, kept)| fills(need, drop) && kept.as_ref().is_none_or(|k| rank > *k))?;
         // Last: the rules lookup is the costly part.
-        (!trade_worthy(drop)).then_some(need.word.name)
+        (!trade_worthy(drop, money)).then_some(need.word.name)
     }
 }
 
@@ -787,12 +803,14 @@ fn keep_build_pieces(
 
 /// One base per runeword need, the needs with the fewest fitting bases first (a base that fits
 /// two needs must not starve the narrower one), each taking its best free base (on a tie the
-/// best placed, `order`). A trade-worthy base is left for the trade side.
+/// best placed, `order`). A trade-worthy base is left for the trade side (`money`: the money
+/// farming switch).
 fn assign_bases(
     items: &[Held],
     needs: &Needs,
     order: &[usize],
     actions: &mut [Option<Decided>],
+    money: bool,
 ) -> Vec<Option<usize>> {
     let candidates: Vec<usize> = order
         .iter()
@@ -800,7 +818,7 @@ fn assign_bases(
         .filter(|&i| {
             items
                 .get(i)
-                .is_some_and(|h| plain_base(&h.item) && !trade_worthy(&h.item))
+                .is_some_and(|h| plain_base(&h.item) && !trade_worthy(&h.item, money))
                 && actions.get(i).is_some_and(Option::is_none)
         })
         .collect();
@@ -847,7 +865,7 @@ fn decide_rest(
     if let Some(tab) = stow(h) {
         return Some((Action::Stow(tab), None));
     }
-    if valuables::worth_identifying(&h.item) {
+    if valuables::worth_identifying(&h.item, scoring.money) {
         return None;
     }
     if magic_charm(&h.item) {
@@ -857,7 +875,7 @@ fn decide_rest(
         let reason = entry.needs.first().map(|n| n.name());
         return Some((keep_or_move(Side::Own, h.spot), reason));
     }
-    if trade_worthy(&h.item) {
+    if trade_worthy(&h.item, scoring.money) {
         let action = match valuables::keep_one_name(&h.item) {
             Some(name) if kept_one.contains(&name) => Action::GiveAway,
             one => {
@@ -914,7 +932,7 @@ fn charm_action(h: &Held, scoring: &Scoring) -> Option<Decided> {
         .any(|wish| wish.matches(&h.item, Some(scoring.profile.class)));
     Some(if wished || own_charm(&h.item, &scoring.profile) {
         (keep_or_move(Side::Own, h.spot), None)
-    } else if trade_worthy(&h.item) {
+    } else if trade_worthy(&h.item, scoring.money) {
         (keep_or_move(Side::Trade, h.spot), None)
     } else {
         (Action::Sell, Some("no keeper stats"))
@@ -980,7 +998,7 @@ pub fn plan(items: &[Held], needs: &Needs, scoring: &Scoring) -> (Vec<Advice>, W
     let mut actions: Vec<Option<Decided>> = vec![None; items.len()];
     let own_order = by_preference(items, Side::Own);
     let (wanted, mut kept_one) = keep_build_pieces(items, needs, &own_order, &mut actions);
-    let kept = assign_bases(items, needs, &own_order, &mut actions);
+    let kept = assign_bases(items, needs, &own_order, &mut actions, scoring.money);
     let wants = Wants::left(items, needs, kept, &wanted);
     for i in by_preference(items, Side::Trade) {
         let (Some(h), Some(slot)) = (items.get(i), actions.get_mut(i)) else {
@@ -1230,7 +1248,7 @@ mod tests {
             npc: None,
             items: vec![socketed(4), socketed(3)],
         };
-        let marks = crate::marks::shop_marks(&shop, &wants);
+        let marks = crate::marks::shop_marks(&shop, &wants, true);
         let rules: Vec<Option<(MarkKind, String)>> =
             marks.into_iter().map(|m| m.map(|m| (m.kind, m.rule))).collect();
         assert_eq!(
@@ -1247,27 +1265,39 @@ mod tests {
         spirit.base("Spirit", DRUID, Some(4));
         let (_, wants) = plan(&[at(base("crs", 4), Spot::Page(1))], &spirit, &druid());
         assert_eq!(
-            wants.base(&base("bsd", 4)),
+            wants.base(&base("bsd", 4), true),
             Some("Spirit"),
             "Broad Sword beats it"
         );
-        assert_eq!(wants.base(&base("crs", 4)), None, "the same base: no better");
-        assert_eq!(wants.base(&base("bsd", 3)), None, "wrong socket count");
-        assert_eq!(wants.base(&base("crs", 5)), None, "5os: no Spirit");
+        assert_eq!(
+            wants.base(&base("crs", 4), true),
+            None,
+            "the same base: no better"
+        );
+        assert_eq!(wants.base(&base("bsd", 3), true), None, "wrong socket count");
+        assert_eq!(wants.base(&base("crs", 5), true), None, "5os: no Spirit");
         let mut magic = base("bsd", 4);
         magic.quality = item_data::QUALITY_MAGIC;
-        assert_eq!(wants.base(&magic), None, "a magic item takes no runeword");
+        assert_eq!(wants.base(&magic, true), None, "a magic item takes no runeword");
         // Nothing kept yet: any fitting base is wanted.
         let (_, open) = plan(&[], &spirit, &druid());
-        assert_eq!(open.base(&base("crs", 4)), Some("Spirit"));
+        assert_eq!(open.base(&base("crs", 4), true), Some("Spirit"));
         // A trade-worthy base is never an own base: eth elite polearm 4os (twink S) for Insight.
         let mut insight = Needs::default();
         insight.base("Insight", Wearer::Merc(MercAct::Act2), Some(4));
         let (_, merc) = plan(&[], &insight, &druid());
-        assert_eq!(merc.base(&base("9vo", 4)), Some("Insight"), "a plain Bill 4os");
+        assert_eq!(
+            merc.base(&base("9vo", 4), true),
+            Some("Insight"),
+            "a plain Bill 4os"
+        );
         let mut eth = base("7vo", 4);
         eth.ethereal = true;
-        assert_eq!(merc.base(&eth), None, "an eth Colossus Voulge 4os goes to trade");
+        assert_eq!(
+            merc.base(&eth, true),
+            None,
+            "an eth Colossus Voulge 4os goes to trade"
+        );
     }
 
     #[test]
@@ -1689,6 +1719,21 @@ mod tests {
             ],
             "the unidentified wand and dagger: no advice; identified, the +3 rules decide"
         );
+    }
+
+    #[test]
+    fn money_farming_off_sells_a_plus3_wand() {
+        let plus3 = || {
+            let wand = rolled("wnd", QUALITY_MAGIC, &[(stat::SKILL_TAB, 2 * 8, 3)]);
+            at(wand, Spot::Page(3))
+        };
+        let row = |action, reason| vec![("Magic Wand".to_owned(), Spot::Page(3), action, reason)];
+        assert_eq!(judged(&[plus3()], &druid()), row(Action::Keep(Side::Trade), None));
+        let off = Scoring {
+            money: false,
+            ..druid()
+        };
+        assert_eq!(judged(&[plus3()], &off), row(Action::Sell, Some(NOT_FARMED)));
     }
 
     #[test]
@@ -2882,9 +2927,13 @@ mod tests {
         // On the map: a second Zweihander 3os is not needed (the Hustle base is kept), a War
         // Sword 3os is a Lawbringer base.
         let (_, wants) = plan(&items, &needs, &druid());
-        assert_eq!(wants.base(&base("9fb", 3)), None);
-        assert_eq!(wants.base(&base("wsd", 3)), Some("Lawbringer"));
-        assert_eq!(wants.base(&base("bsd", 3)), None, "no better than the kept ones");
+        assert_eq!(wants.base(&base("9fb", 3), true), None);
+        assert_eq!(wants.base(&base("wsd", 3), true), Some("Lawbringer"));
+        assert_eq!(
+            wants.base(&base("bsd", 3), true),
+            None,
+            "no better than the kept ones"
+        );
         Ok(())
     }
 

@@ -484,6 +484,19 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
     Replaces the B "Class-specific magic items" rule. Staves are not candidates. The rules are
     hand-added to the JSON like the labels;
     `research/gen_valuables.py` has neither yet.
+  - Money farming switch (user request 2026-11-22: "also allow me to turn off money farming
+    (the money-only items) in the config"). The 9 vendor-gold rules (the unidentified candidates
+    and the 8 skill rules above) carry `"money": true` in `valuables.json` (validated: a trade
+    rule, not own use; a `rules_parse` test pins the set). The `/config` page's "Money farming"
+    checkbox (default on: "mark wands, scepters, sorceress orbs and daggers that sell well to
+    vendors") posts `POST /api/money-farming {"on": bool}` (`Playstyle::set_money_farming`),
+    saved as `money_farming = true|false` in `settings.toml` in the data dir (comments kept;
+    unknown keys = a broken file: on at start, a reload keeps the current switch). The file is
+    watched, so the hot reload applies it within a tick. It lands in `config::Valuables::money`
+    (no `[valuables]` key): off, every money rule is skipped (`valuables::best`, `rule_label`,
+    `worth_identifying`, the stash plan's `keep_tiers`, `Wants::base`), so no ring, coin or
+    drop sound on the map, no "Keep · trade", and the items fall through to the normal rules
+    (an identified +3 wand: Sell "not on the farm list"; an unidentified one: no line).
 - **Rings, amulets and circlets** (user decision 2026-11-22, confirmed "Yes, like this"):
   stricter trade rules replace "Rare rings and amulets" (B), "Rare circlets" (B) and "Socketed
   magic circlets/tiaras/diadems" (A). All tier A, category trade, `label` "", certain matches

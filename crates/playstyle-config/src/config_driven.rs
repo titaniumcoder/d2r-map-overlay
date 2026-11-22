@@ -83,7 +83,7 @@ impl Playstyle for ConfigDriven {
             not_needed: &self.config.not_needed,
         });
         if let Some(shop) = info.shop {
-            let marks = marks::shop_marks(shop, &evaluation.wants);
+            let marks = marks::shop_marks(shop, &evaluation.wants, self.config.valuables.money);
             for (note, mark) in panels.shop.iter_mut().zip(marks) {
                 note.mark = mark;
             }
@@ -105,6 +105,10 @@ impl Playstyle for ConfigDriven {
 
     fn set_not_needed(files: &Files, build: &str, piece: &str, needed: bool) -> anyhow::Result<()> {
         files::set_not_needed(files, build, piece, needed)
+    }
+
+    fn set_money_farming(files: &Files, on: bool) -> anyhow::Result<()> {
+        files::set_money_farming(files, on)
     }
 
     fn loot_filter(files: &Files) -> Option<Vec<u8>> {

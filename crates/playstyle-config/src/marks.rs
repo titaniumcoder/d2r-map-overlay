@@ -32,12 +32,14 @@ pub fn apply(drops: &mut Vec<ItemDrop>, enabled: &config::Valuables, wants: &Wan
 
 /// The keep / farm mark each item of the open trade window would get as a ground drop, in
 /// window order: a runeword base or a magic piece the builds want. No trade marks: buying to
-/// resell makes no sense.
+/// resell makes no sense. `money`: the money farming switch (a base a money rule wants is no
+/// own base).
 #[must_use]
-pub fn shop_marks(shop: &Shop, wants: &Wants) -> Vec<Option<Mark>> {
+pub fn shop_marks(shop: &Shop, wants: &Wants, money: bool) -> Vec<Option<Mark>> {
     let no_trade = config::Valuables {
         trade: Vec::new(),
         twink: Vec::new(),
+        money,
     };
     shop.items
         .iter()
@@ -98,7 +100,7 @@ fn mark(
             kind: MarkKind::Trade,
             trade: Some((h.tier, h.category)),
             rule: h.rule,
-            label: labels::label(drop),
+            label: labels::label(drop, enabled.money),
             uncertain: h.uncertain || roll_unknown(drop),
         })
     };
@@ -110,16 +112,16 @@ fn mark(
             kind: if farm { MarkKind::Farm } else { MarkKind::Keep },
             trade: None,
             rule,
-            label: labels::label(drop),
+            label: labels::label(drop, enabled.money),
             uncertain,
         });
     }
-    if let Some(word) = wants.base(drop) {
+    if let Some(word) = wants.base(drop, enabled.money) {
         return Some(Mark {
             kind: MarkKind::Keep,
             trade: None,
             rule: format!("{word} base"),
-            label: labels::label(drop),
+            label: labels::label(drop, enabled.money),
             uncertain: false,
         });
     }
@@ -183,7 +185,33 @@ mod tests {
             npc: None,
             items: vec![wand],
         };
-        assert_eq!(shop_marks(&shop, &Wants::default()), [None]);
+        assert_eq!(shop_marks(&shop, &Wants::default(), true), [None]);
+    }
+
+    #[test]
+    fn money_farming_off_leaves_a_plus3_wand_unmarked() {
+        let mut wand = d2r_core::shop::shop_item(Some("wnd"), item_data::QUALITY_MAGIC, 1, 0, 0);
+        wand.stats = vec![d2r_core::item_stats::ItemStat::from_raw(
+            2 * 8 + 1,
+            stat::SKILL_TAB,
+            3,
+            false,
+        )];
+        let mut drop = as_drop(&wand);
+        drop.id = 1;
+        let marks = |money: bool| {
+            let enabled = config::Valuables {
+                money,
+                ..config::Valuables::default()
+            };
+            apply(&mut vec![drop.clone()], &enabled, &Wants::default())
+        };
+        assert_eq!(
+            marks(true).get(&1).map(|m| (m.kind, m.label.as_str())),
+            Some((MarkKind::Trade, "")),
+            "ring and coin, no tag"
+        );
+        assert!(marks(false).is_empty(), "no ring, coin or sound");
     }
 
     #[test]

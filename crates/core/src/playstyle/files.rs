@@ -13,7 +13,7 @@ pub struct Files {
     pub user: Option<PathBuf>,
     /// The config dir holding the pre-folder-layout files (`~/.config/d2r-map-overlay/`).
     pub legacy: Option<PathBuf>,
-    /// Holds `bis.toml` and `not-needed.toml` (`~/.local/share/d2r-map-overlay/`).
+    /// Holds `bis.toml`, `not-needed.toml` and `settings.toml` (`~/.local/share/d2r-map-overlay/`).
     pub state: Option<PathBuf>,
     /// No load messages: the web server loads per request, the start already reported them.
     pub quiet: bool,
@@ -63,6 +63,12 @@ impl Files {
         self.state.as_ref().map(|d| d.join("not-needed.toml"))
     }
 
+    /// The playstyle switches of the `/config` page (money farming).
+    #[must_use]
+    pub fn settings_path(&self) -> Option<PathBuf> {
+        self.state.as_ref().map(|d| d.join("settings.toml"))
+    }
+
     #[must_use]
     pub fn legacy_config(&self) -> Option<PathBuf> {
         self.legacy.as_ref().map(|d| d.join("config.toml"))
@@ -99,6 +105,7 @@ impl Files {
         }
         paths.extend(self.bis_path());
         paths.extend(self.not_needed_path());
+        paths.extend(self.settings_path());
         paths
     }
 }
@@ -227,7 +234,10 @@ mod tests {
         write(&dir.join("data/not-needed.toml"), "")?;
         let marked = files.fingerprint();
         assert_ne!(selected, marked, "a piece marked not needed");
-        let selected = marked;
+        write(&dir.join("data/settings.toml"), "money_farming = false\n")?;
+        let switched = files.fingerprint();
+        assert_ne!(marked, switched, "money farming switched off");
+        let selected = switched;
         write(&dir.join("shipped/builds/a.source.json"), "{}")?;
         assert_eq!(files.fingerprint(), selected, "only the build files count");
         std::fs::File::options()

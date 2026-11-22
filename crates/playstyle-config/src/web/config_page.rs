@@ -70,7 +70,8 @@ pub fn remove_character(text: &str, name: &str) -> Option<String> {
 }
 
 /// The config page's JSON: every character of the config and of `played` once, most recently
-/// played first, the never-seen ones after in config order; and every "not needed" mark.
+/// played first, the never-seen ones after in config order; every "not needed" mark; and the
+/// money farming switch.
 #[must_use]
 pub fn config_json(
     config: &crate::config::Settings,
@@ -86,7 +87,11 @@ pub fn config_json(
         .collect();
     characters.sort_by_key(|&(t, _)| std::cmp::Reverse(t));
     let characters: Vec<_> = characters.into_iter().map(|(_, json)| json).collect();
-    serde_json::json!({ "characters": characters, "not_needed": not_needed_json(config) })
+    serde_json::json!({
+        "characters": characters,
+        "not_needed": not_needed_json(config),
+        "money_farming": config.valuables.money,
+    })
 }
 
 /// Every mark of `not-needed.toml` by the build (or character) it was made for, in key order:

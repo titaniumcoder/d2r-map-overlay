@@ -73,6 +73,15 @@ pub trait Playstyle {
     where
         Self: Sized;
 
+    /// Turns money farming (the drops worth only vendor gold) on or off. The core serialises
+    /// the calls.
+    ///
+    /// # Errors
+    /// As [`Playstyle::select_build`].
+    fn set_money_farming(files: &Files, on: bool) -> anyhow::Result<()>
+    where
+        Self: Sized;
+
     /// The exact bytes of the in-game loot filter profile the player imports.
     fn loot_filter(files: &Files) -> Option<Vec<u8>>
     where

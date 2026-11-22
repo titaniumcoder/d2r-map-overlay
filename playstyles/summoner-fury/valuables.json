@@ -15,7 +15,8 @@
     "stats": "list of {stat, min[, skills][, tab]}, all must hold on the read item stats (identified items; an unidentified drop has none): skill_tab (any tab; tab = a skill tree name such as \"Shape Shifting\" narrows it), class_skills, single_skill (skills = names, any of them; empty = any), fcr, ias, life, mana, mf, gold_find, all_res (the lowest of the four), fire_res, cold_res, lightning_res, poison_res, elemental_res (the highest of fire, cold, lightning), max_damage (flat, any hand), attack_rating, fhr, frw, poison_damage (tooltip total: rate x length / 256), lightning_max_damage, fire_max_damage. A rule with stats never matches an item without them",
     "identified": "true/false = required; absent = ignore. false matches only unidentified items (no stats read yet); it goes with no stats or item_names",
     "own": "true = a keeper for the player's own use only (needs stats): no ring, coin or trade keep; the stash plan keeps it when the build values its stats",
-    "any_of": "[{min_count, stats: [[condition, ...], ...]}]: each group needs at least min_count entries holding; an entry holds when any of its conditions does (min_count 1 = an or). Like stats, never matches an item without read stats"
+    "any_of": "[{min_count, stats: [[condition, ...], ...]}]: each group needs at least min_count entries holding; an entry holds when any of its conditions does (min_count 1 = an or). Like stats, never matches an item without read stats",
+    "money": "true = a vendor-gold rule (wands, scepters, sorceress orbs and daggers sold for gold): a trade rule the /config page's \"money farming\" switch turns off; then it marks nothing and keeps nothing"
   },
   "rules": [
     {
@@ -2355,6 +2356,7 @@
     {
       "tier": "A",
       "category": "trade",
+      "money": true,
       "item_codes": [
         "7bw",
         "7gw",
@@ -2467,6 +2469,7 @@
     {
       "tier": "S",
       "category": "trade",
+      "money": true,
       "item_codes": [
         "7bw",
         "7gw",
@@ -2563,6 +2566,7 @@
     {
       "tier": "A",
       "category": "trade",
+      "money": true,
       "item_codes": [
         "7bw",
         "7gw",
@@ -2679,6 +2683,7 @@
     {
       "tier": "A",
       "category": "trade",
+      "money": true,
       "item_codes": [
         "7bw",
         "7gw",
@@ -2775,6 +2780,7 @@
     {
       "tier": "A",
       "category": "trade",
+      "money": true,
       "item_codes": [
         "7bw",
         "7gw",
@@ -2871,6 +2877,7 @@
     {
       "tier": "A",
       "category": "trade",
+      "money": true,
       "item_codes": [
         "ob1",
         "ob2",
@@ -2929,6 +2936,7 @@
     {
       "tier": "A",
       "category": "trade",
+      "money": true,
       "item_codes": [
         "7bw",
         "7gw",
@@ -2977,6 +2985,7 @@
     {
       "tier": "A",
       "category": "trade",
+      "money": true,
       "item_codes": [
         "7qs",
         "7sc",
@@ -3019,6 +3028,7 @@
     {
       "tier": "A",
       "category": "trade",
+      "money": true,
       "item_codes": [
         "7qs",
         "7sc",

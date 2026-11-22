@@ -371,6 +371,10 @@ struct Rule {
     /// keep; `tier` and `category` are unused. Needs `stats`.
     #[serde(default)]
     own: bool,
+    /// A vendor-gold rule (wands, scepters, orbs, daggers sold for gold): ignored while the
+    /// /config page's money farming switch is off ([`config::Valuables::money`]).
+    #[serde(default)]
+    money: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -406,12 +410,15 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
 
 /// The checks serde can't make: labels of at most 4 characters, `stats` conditions that pass
 /// [`StatNeed::check`] and `any_of` groups [`AnyOf::check`], no `stats`, `any_of` or
-/// `item_names` on an unidentified-only rule (such an item has neither), and `stats` on an
-/// own-use rule.
+/// `item_names` on an unidentified-only rule (such an item has neither), `stats` on an
+/// own-use rule, and a money rule a trade rule not for own use.
 fn validate(rules: &[Rule]) -> Result<(), String> {
     for r in rules {
         if r.own && r.stats.is_empty() {
             return Err(format!("{}: an own-use rule needs stats", r.name));
+        }
+        if r.money && (r.own || r.category != Category::Trade) {
+            return Err(format!("{}: a money rule is a trade rule, not own use", r.name));
         }
         if let Some(l) = r.label.as_ref().filter(|l| l.chars().count() > 4) {
             return Err(format!("{}: label {l:?} is longer than 4 characters", r.name));
@@ -492,6 +499,10 @@ fn name_unknown(rule: &Rule, name: Option<&str>) -> Option<bool> {
 }
 
 static EVERYTHING: LazyLock<config::Valuables> = LazyLock::new(config::Valuables::everything);
+static EVERYTHING_BUT_MONEY: LazyLock<config::Valuables> = LazyLock::new(|| config::Valuables {
+    money: false,
+    ..config::Valuables::everything()
+});
 
 /// The best rule matching `drop` among the tiers `enabled` turns on: highest tier first, then a
 /// certain match over an uncertain one, then the first rule in the file.
@@ -529,7 +540,7 @@ fn best_rule<'r>(
     let mut found: Option<(&Rule, bool)> = None;
     for rule in rules
         .iter()
-        .filter(|r| !r.own && enabled.enabled(r.category, r.tier))
+        .filter(|r| !r.own && (enabled.money || !r.money) && enabled.enabled(r.category, r.tier))
     {
         let Some(uncertain) = check(rule, drop, name) else {
             continue;
@@ -542,32 +553,36 @@ fn best_rule<'r>(
     found
 }
 
-/// The tiers the inventory keep list shows, whatever the config says for ground drops.
+/// The tiers the inventory keep list shows, whatever the config says for ground drops; the
+/// money rules when `money` (the money farming switch).
 #[must_use]
-pub fn keep_tiers() -> config::Valuables {
+pub fn keep_tiers(money: bool) -> config::Valuables {
     config::Valuables {
         trade: vec![Tier::S, Tier::A],
         twink: vec![Tier::S, Tier::A],
+        money,
     }
 }
 
-/// The `label` of the best rule of any tier matching `drop` as `name`, if that match is
-/// certain or the label is empty: an unidentified ring must not be tagged `SoJ`, but "no tag"
-/// names nothing.
+/// The `label` of the best rule of any tier matching `drop` as `name` (the money rules only
+/// when `money`), if that match is certain or the label is empty: an unidentified ring must not
+/// be tagged `SoJ`, but "no tag" names nothing.
 #[must_use]
-pub fn rule_label(drop: &ItemDrop, name: Option<&str>) -> Option<&'static str> {
-    match best_rule(&RULES, drop, name, &EVERYTHING)? {
+pub fn rule_label(drop: &ItemDrop, name: Option<&str>, money: bool) -> Option<&'static str> {
+    let enabled = if money { &EVERYTHING } else { &EVERYTHING_BUT_MONEY };
+    match best_rule(&RULES, drop, name, enabled)? {
         (rule, false) => rule.label.as_deref(),
         (rule, true) => rule.label.as_deref().filter(|l| l.is_empty()),
     }
 }
 
-/// Whether `item` matches an unidentified-only rule: identify it before judging it.
+/// Whether `item` matches an unidentified-only rule (a money rule only when `money`): identify
+/// it before judging it.
 #[must_use]
-pub fn worth_identifying(item: &ItemDrop) -> bool {
+pub fn worth_identifying(item: &ItemDrop, money: bool) -> bool {
     RULES
         .iter()
-        .any(|r| r.identified == Some(false) && check(r, item, None).is_some())
+        .any(|r| r.identified == Some(false) && (money || !r.money) && check(r, item, None).is_some())
 }
 
 /// Which kind of stats rule an identified item matches ([`stat_keeper`]).
@@ -743,6 +758,17 @@ mod tests {
             .filter(|r| !r.stats.is_empty() && !charm(r) && !jewelry(r))
             .collect();
         assert_eq!(skill_rules.len(), 8, "stat rules");
+        let money: Vec<&str> = RULES
+            .iter()
+            .filter(|r| r.money)
+            .map(|r| r.name.as_str())
+            .collect();
+        let mut want: Vec<&str> = skill_rules.iter().map(|r| r.name.as_str()).collect();
+        want.insert(0, CANDIDATES);
+        assert_eq!(
+            money, want,
+            "the money rules: the skill rules and the unidentified candidates"
+        );
         let charm_rules: Vec<&Rule> = RULES.iter().filter(|r| !r.stats.is_empty() && charm(r)).collect();
         assert_eq!(charm_rules.len(), 38, "charm stat rules");
         for r in charm_rules {
@@ -776,6 +802,46 @@ mod tests {
     }
 
     #[test]
+    fn a_money_rule_is_a_trade_rule() -> serde_json::Result<()> {
+        let rule = |category: &str| {
+            format!(
+                r#"{{"tier": "A", "category": "{category}", "item_codes": ["wnd"], "quality": "normal",
+                    "sockets": null, "ethereal": null, "name": "r", "money": true}}"#
+            )
+        };
+        assert_eq!(validate(&rules_of(&rule("trade"))?), Ok(()));
+        assert!(validate(&rules_of(&rule("twink"))?).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn money_farming_off_ignores_the_money_rules() {
+        const MAGIC: u32 = item_data::QUALITY_MAGIC;
+        let plus3 = rolled("wnd", MAGIC, &[(stat::SKILL_TAB, tab(2, 1), 3)]);
+        let mut unid = rolled("9kr", MAGIC, &[]);
+        unid.flags = 0;
+        let white = rolled(
+            "7ws",
+            item_data::QUALITY_NORMAL,
+            &[(stat::SINGLE_SKILL, skill("Fist of the Heavens"), 3)],
+        );
+        for d in [&plus3, &unid, &white] {
+            assert!(best(d, &keep_tiers(true)).is_some(), "{:?}: money on", d.code);
+            assert_eq!(best(d, &keep_tiers(false)), None, "{:?}: money off", d.code);
+            let off = config::Valuables {
+                money: false,
+                ..config::Valuables::everything()
+            };
+            assert_eq!(best(d, &off), None, "{:?}: no B fallback either", d.code);
+            assert_eq!(rule_label(d, None, false), None, "{:?}", d.code);
+        }
+        assert!(worth_identifying(&unid, true));
+        assert!(!worth_identifying(&unid, false), "nothing to identify it for");
+        let vex = drop("r26", item_data::QUALITY_NORMAL, 0, false);
+        assert!(best(&vex, &keep_tiers(false)).is_some(), "the other rules stay");
+    }
+
+    #[test]
     fn validation_rejects_bad_stat_conditions() -> serde_json::Result<()> {
         let rule = |extra: &str| {
             format!(
@@ -799,6 +865,10 @@ mod tests {
             (r#", "stats": [{"stat": "fcr", "min": 0}]"#, "min 0"),
             (r#", "label": "+3wnd""#, "5-character label"),
             (r#", "own": true"#, "an own-use rule without stats"),
+            (
+                r#", "money": true, "own": true, "stats": [{"stat": "fcr", "min": 3}]"#,
+                "an own-use money rule",
+            ),
             (
                 r#", "stats": [{"stat": "life", "skills": ["Bone Spear"], "min": 20}]"#,
                 "skills on life",
@@ -1039,11 +1109,11 @@ mod tests {
             .chain(scepter_cases())
             .chain(other_cases())
         {
-            let got = best(&d, &keep_tiers());
+            let got = best(&d, &keep_tiers(true));
             assert_eq!(got.as_ref().map(|h| (h.tier, h.rule.as_str())), want, "{what}");
             if let Some(h) = got {
                 assert!(!h.uncertain, "{what}: the stats decide, so certain");
-                assert_eq!(rule_label(&d, None), Some(""), "{what}: no tag");
+                assert_eq!(rule_label(&d, None, true), Some(""), "{what}: no tag");
             }
         }
     }
@@ -1220,11 +1290,11 @@ mod tests {
     }
 
     fn assert_best_of(d: &ItemDrop, want: Option<(Tier, &str)>, what: &str) {
-        let got = best(d, &keep_tiers());
+        let got = best(d, &keep_tiers(true));
         assert_eq!(got.as_ref().map(|h| (h.tier, h.rule.as_str())), want, "{what}");
         if want.is_some() {
             assert!(got.is_some_and(|h| !h.uncertain), "{what}: certain");
-            assert_eq!(rule_label(d, None), Some(""), "{what}: no tag");
+            assert_eq!(rule_label(d, None, true), Some(""), "{what}: no tag");
             assert_eq!(stat_keeper(d), Some(Keeper::Trade), "{what}");
         }
     }
@@ -1375,7 +1445,7 @@ mod tests {
         for code in CHARM_CODES {
             let mut d = charm(code, &[]);
             d.flags = 0;
-            assert!(worth_identifying(&d), "{code}");
+            assert!(worth_identifying(&d, true), "{code}");
             assert_eq!(stat_keeper(&d), None, "{code}: no stats");
             assert!(
                 best(&d, &all()).is_some_and(|h| h.uncertain),
@@ -1383,7 +1453,7 @@ mod tests {
             );
         }
         let identified_junk = charm("cm3", &[(stat::MAX_LIFE, 5)]);
-        assert!(!worth_identifying(&identified_junk));
+        assert!(!worth_identifying(&identified_junk, true));
         assert_eq!(best(&identified_junk, &all()), None, "identified junk: no ring");
     }
 
@@ -1432,8 +1502,8 @@ mod tests {
         for code in ["wnd", "7ws", "obf", "9kr", "dgr"] {
             let d = unid(code, MAGIC);
             assert_eq!(mark(&d), candidate, "{code}: coin, dashed ring");
-            assert_eq!(rule_label(&d, None), Some(""), "{code}: no tag");
-            assert!(worth_identifying(&d), "{code}");
+            assert_eq!(rule_label(&d, None, true), Some(""), "{code}: no tag");
+            assert!(worth_identifying(&d, true), "{code}");
         }
         assert_eq!(
             mark(&unid("obf", item_data::QUALITY_RARE)),
@@ -1444,12 +1514,12 @@ mod tests {
             "lsd", "am3", "am7", "dr8", "pa9", "ne1", "ba5", "7wb", "ktr", "wa1", "tkf",
         ] {
             assert_eq!(mark(&unid(code, MAGIC)), None, "{code}: vendors pay little");
-            assert!(!worth_identifying(&unid(code, MAGIC)), "{code}");
+            assert!(!worth_identifying(&unid(code, MAGIC), true), "{code}");
         }
 
         let junk = rolled("wnd", MAGIC, &[(stat::FCR, 0, 10)]);
         assert_eq!(mark(&junk), None, "identified junk wand: no mark");
-        assert!(!worth_identifying(&junk));
+        assert!(!worth_identifying(&junk, true));
         let plus3 = rolled("wnd", MAGIC, &[(stat::SKILL_TAB, tab(2, 1), 3)]);
         assert_eq!(
             mark(&plus3),
@@ -1630,12 +1700,14 @@ mod tests {
         let only_s = config::Valuables {
             trade: vec![Tier::S],
             twink: vec![Tier::S, Tier::A],
+            ..config::Valuables::default()
         };
         assert!(best(&vex, &only_s).is_some());
         assert_eq!(best(&lem, &only_s), None, "A trade is off");
         let no_trade = config::Valuables {
             trade: vec![],
             twink: vec![Tier::S, Tier::A],
+            ..config::Valuables::default()
         };
         assert_eq!(best(&vex, &no_trade), None);
         assert!(
@@ -1645,6 +1717,7 @@ mod tests {
         let twink_off = config::Valuables {
             trade: vec![Tier::S, Tier::A],
             twink: vec![],
+            ..config::Valuables::default()
         };
         assert_eq!(
             best(&drop("7vo", 2, 4, true), &twink_off),
@@ -1835,6 +1908,7 @@ mod tests {
                 let enabled = config::Valuables {
                     trade: trade.clone(),
                     twink: twink.clone(),
+                    ..config::Valuables::default()
                 };
                 let mut old: Vec<ItemDrop> = drops.iter().filter(was_candidate).cloned().collect();
                 let old_marks = apply(&mut old, &enabled);

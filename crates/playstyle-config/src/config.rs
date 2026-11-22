@@ -34,12 +34,17 @@ pub struct Settings {
     pub not_needed: crate::not_needed::Marks,
 }
 
-/// `[valuables]`: the tiers highlighted per category (see [`crate::valuables`]).
+/// `[valuables]`: the tiers highlighted per category (see [`crate::valuables`]), and whether
+/// the money rules count.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Valuables {
     pub trade: Vec<Tier>,
     pub twink: Vec<Tier>,
+    /// The money rules (vendor-gold wands, scepters, orbs, daggers) mark and keep: the /config
+    /// page's money farming switch (`settings.toml` in the data dir), no `[valuables]` key.
+    #[serde(skip)]
+    pub money: bool,
 }
 
 impl Default for Valuables {
@@ -47,6 +52,7 @@ impl Default for Valuables {
         Self {
             trade: vec![Tier::S, Tier::A],
             twink: vec![Tier::S, Tier::A],
+            money: true,
         }
     }
 }
@@ -59,6 +65,7 @@ impl Valuables {
         Self {
             trade: all.clone(),
             twink: all,
+            money: true,
         }
     }
 

@@ -13,8 +13,9 @@ const MAX: usize = 4;
 
 /// The map tag of `drop`, first match wins: a valuables rule's label, a charm, a socketed base
 /// ("5os", "e4os"), else the first letters of its name. Empty for a gem, rune or material.
+/// `money`: the money farming switch (the money rules' labels count).
 #[must_use]
-pub fn label(drop: &ItemDrop) -> String {
+pub fn label(drop: &ItemDrop, money: bool) -> String {
     let code = drop.code.as_deref().unwrap_or("");
     if matches!(drop.kind, DropKind::Gem(_) | DropKind::Rune(_)) || d2r_core::stash::tab_of(code).is_some() {
         return String::new();
@@ -22,7 +23,7 @@ pub fn label(drop: &ItemDrop) -> String {
     let unique_or_set = matches!(drop.quality, item_data::QUALITY_UNIQUE | item_data::QUALITY_SET);
     let name = identity(drop.quality, drop.flags, drop.unique_index)
         .or_else(|| names::sole_name(drop.quality, code));
-    if let Some(tag) = valuables::rule_label(drop, name) {
+    if let Some(tag) = valuables::rule_label(drop, name, money) {
         return short(tag);
     }
     if let DropKind::Charm { size, unique } = drop.kind {
@@ -139,7 +140,7 @@ mod tests {
             (drop("rin", DropKind::Unique, unique), "Ring"),
         ];
         for (d, want) in cases {
-            assert_eq!(label(&d), want, "{:?} {:?}", d.code, d.kind);
+            assert_eq!(label(&d, true), want, "{:?} {:?}", d.code, d.kind);
         }
     }
 

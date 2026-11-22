@@ -229,6 +229,14 @@ fn config_json_lists_every_not_needed_mark_by_build_the_stale_ones_too() {
     config.not_needed.clear();
     let json = config_json(&config, &GearInfo::default(), &d2r_core::played::Played::new());
     assert_eq!(json.get("not_needed"), Some(&serde_json::json!([])));
+    assert_eq!(json.get("money_farming"), Some(&serde_json::json!(true)));
+    config.valuables.money = false;
+    let json = config_json(&config, &GearInfo::default(), &d2r_core::played::Played::new());
+    assert_eq!(
+        json.get("money_farming"),
+        Some(&serde_json::json!(false)),
+        "the switch"
+    );
 }
 
 #[test]
