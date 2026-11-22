@@ -509,5 +509,7 @@ const stream = new EventSource("/api/live-stream");
 stream.onmessage = e => {
   try { render(JSON.parse(e.data)); } catch (err) { /* a partial event: the next one wins */ }
 };
-// EventSource retries on its own; the first frame after a reconnect only records (sounds).
-stream.onerror = () => { soundQuiet = true; };
+let streamLost = false;
+stream.onerror = () => { soundQuiet = true; streamLost = true; };
+const reloadAfterOverlayRestart = () => { if (streamLost) location.reload(); };
+stream.onopen = reloadAfterOverlayRestart;

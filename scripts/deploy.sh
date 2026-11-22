@@ -24,6 +24,14 @@ if ! sudo -n setcap cap_sys_ptrace=ep "$bin"; then
     exit 1
 fi
 
+dashboard_open() {
+    [ -n "$(ss -Htn state established '( sport = :8471 )')" ]
+}
+open_dashboard=true
+if dashboard_open; then
+    open_dashboard=false
+fi
+
 # Stop the old overlay before touching its snapshot, and wait until it is gone (its port 8471
 # must be free for the new one).
 pkill -x d2r-map-overlay || true
@@ -49,7 +57,11 @@ pid=$!
 for _ in $(seq 50); do
     if curl -s -o /dev/null http://localhost:8471/dashboard; then
         echo "deploy: overlay running (pid $pid), playstyles from $snapshot, log in $log"
-        xdg-open http://localhost:8471/dashboard > /dev/null 2>&1 || true
+        if $open_dashboard; then
+            xdg-open http://localhost:8471/dashboard > /dev/null 2>&1 || true
+        else
+            echo "deploy: dashboard already open; it reloads itself"
+        fi
         exit 0
     fi
     kill -0 "$pid" 2> /dev/null || break
