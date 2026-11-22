@@ -401,7 +401,7 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
   Effect (druid, caster weights): Ancients' Pledge scores 1.7 → 189.5, Stealth 3.2 → 93.7.
   Other list fields seen: `+0x00` owner unit (affix lists), `+0x78` the parent item's top list (on a rune's
   list), `+0x68/+0x70` sibling links (unused).
-- Valuables: playstyles/summoner-fury/valuables.json (67 rules, S/A/B, trade/twink; was research/
+- Valuables: playstyles/summoner-fury/valuables.json (86 rules, S/A/B, trade/twink; was research/
   until step 7) embedded; tiers per category in the playstyle's `playstyle.toml` `[valuables]`
   (default S+A both). Ground: trade ring by tier
   (S red, A orange, dashed = uncertain); since step 10 also keep (green) and farm (green + star)
@@ -409,6 +409,39 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
   gold coin on S/A trade rings (see Overlay). Inventory keep list (dashboard; formerly green lines on the overlay): certain
   S/A, uncertain only S — moved to the dashboard with the 2026-11-17 text-stack migration (see Overlay), the
   reader and its tiers unchanged. Unique/set names from src/item_names_data.rs (research/gen_item_names.py).
+- **Skill items** (user request 2026-11-22: "+3 modifiers on wands and similar things, those are the
+  valuable ones"; then: no map tag, only the ring and the gold coin, they are sold for gold "for my
+  repair costs"). A rule's optional `stats` list (`valuables::StatNeed`, all must hold on
+  `ItemDrop::stats`): `skill_tab` (188, any tab; param = class × 8 + tab), `class_skills` (83),
+  `single_skill` (107, `skills` = skills.txt names, any of them), `fcr` (105), `ias` (93), each with a
+  `min`; quality `rolled` = magic, rare or crafted. Checked at load (`valuables::validate`: known skill
+  names, `skills` only on `single_skill`, `min` > 0, labels ≤ 4 characters; a bad file = no
+  highlights). A stats rule never matches an item without read stats, so its match is certain. 19
+  rules, all trade with `label` "" (affix ranges from d2data magicprefix/magicsuffix: +3 tab is a
+  magic-only level-60 prefix, rares top out at +2 tab; 20 FCR "of the Magus" only on wands / staves /
+  scepters / orbs / circlets, amulets reach 10 FCR magic or rare):
+  - S: +3 tab + 20 FCR on wands, orbs, scepters, circlets; 2/20 (+2 class skills, 20 FCR) circlets
+    and amulets (crafted); +3 jav tab / +3 Lightning Fury / +3 Charged Strike javelins; +3 tab + +3
+    Battle Orders barbarian helms; +3 tab + +3 Fury / Tornado / Summon Grizzly pelts; +3 tab + +3
+    Lightning / Death Sentry claws.
+  - A: +3 tab on any class item (wands, necro heads, orbs, paladin shields, scepters, pelts, barbarian
+    helms, amazon bows / javelins / spears, claws); +3 tab amulets / circlets; +2 tab + 10 FCR and +2
+    class skills + 10 FCR amulets / circlets; +2 class skills or +2 tab with 20 FCR on wands, orbs,
+    scepters (the rare caster items); +3 single skills: orbs Fire Ball / Meteor / Lightning / Chain
+    Lightning / Blizzard / Frozen Orb, wands and heads Bone Spear / Corpse Explosion, javelins
+    Lightning Fury / Charged Strike, scepters Fist of the Heavens / Blessed Hammer, pelts Fury /
+    Tornado / Summon Grizzly, barbarian helms Battle Orders, claws Venom / Fade / Lightning / Death
+    Sentry.
+  - Unidentified drops: the online client gets no affixes before identify. Journal evidence
+    (2026-11-14..22): all 197 unidentified magic ground drops (charms) had affix ids 0 at ItemData
+    (rare `+0x42/+0x44`, magic `+0x48..+0x4E`), all 12 identified ones had one. The reader reads the stats of every magic /
+    rare / crafted ground drop (`Reader::item_drop`; before, only the player's own items), so the
+    rules fire for an identified drop and would fire for an unidentified one if its stats ever
+    show up; whether an unidentified item's stat array is empty or holds only base stats is not yet
+    seen live. An unidentified class item shows only the old B "Class-specific magic items" check-me
+    rule (dashed, off by default); once identified in the inventory, the keep list and the stash
+    plan (Keep · trade) see the rule. The rules are hand-added to the JSON like the labels;
+    `research/gen_valuables.py` has neither yet.
 
 ## Shrines and wells (2026-11-15)
 - Object units: unit block 2, static path position (+0x10/+0x14). ObjectData (unit +0x10) `+0x08` u8 = shrine type

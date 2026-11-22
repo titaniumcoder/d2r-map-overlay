@@ -1876,12 +1876,15 @@ impl<'a, M: ReadMem> Reader<'a, M> {
         Ok(item)
     }
 
-    /// The ground item `head` (unit at `addr`) as a drop, or `None` for a base without a known
-    /// code, which no playstyle rule can judge.
+    /// The ground item `head` (unit at `addr`) as a drop, with its stats when it is magic or
+    /// better, or `None` for a base without a known code, which no playstyle rule can judge.
     fn item_drop(&self, addr: u64, head: &UnitHead, items_table: Option<u64>) -> Result<Option<ItemDrop>> {
         let mut drop = self.item_fields(addr, head, items_table)?;
         if drop.kind == DropKind::Base && drop.code.is_none() {
             return Ok(None);
+        }
+        if magic_or_better(drop.quality) {
+            drop.stats = self.item_stats(addr, head.id);
         }
         let path = head.path.context("ground item has no path")?;
         drop.x = self.u32(path, static_path::X)?;

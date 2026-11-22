@@ -9,8 +9,10 @@ pub use d2r_core::guidance::{Category, Tier};
 
 use crate::config;
 use d2r_core::game::ItemDrop;
+use d2r_core::item_stats::{ItemStat, stat};
 use d2r_core::names::{self, identity, shown};
 use d2r_core::offsets::item_data;
+use d2r_core::skills_data;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -22,6 +24,8 @@ enum Quality {
     Rare,
     Set,
     Unique,
+    /// Magic, rare or crafted: an item with rolled affixes.
+    Rolled,
     Any,
 }
 
@@ -34,6 +38,7 @@ impl Quality {
             Self::Rare => raw == item_data::QUALITY_RARE,
             Self::Set => raw == item_data::QUALITY_SET,
             Self::Unique => raw == item_data::QUALITY_UNIQUE,
+            Self::Rolled => d2r_core::game::magic_or_better(raw),
             Self::Any => true,
         }
     }
@@ -47,6 +52,57 @@ enum Copies {
     All,
     /// One per unique/set name; further copies are give-aways.
     One,
+}
+
+/// The stats a rule's `stats` conditions look at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StatKind {
+    /// +skills to one tab, any class's.
+    SkillTab,
+    /// +class skills, any class.
+    ClassSkills,
+    /// +skill to one class skill (`skills` names them).
+    SingleSkill,
+    Fcr,
+    Ias,
+}
+
+impl StatKind {
+    const fn id(self) -> u16 {
+        match self {
+            Self::SkillTab => stat::SKILL_TAB,
+            Self::ClassSkills => stat::CLASS_SKILLS,
+            Self::SingleSkill => stat::SINGLE_SKILL,
+            Self::Fcr => stat::FCR,
+            Self::Ias => stat::IAS,
+        }
+    }
+}
+
+/// One `stats` condition: the item's best entry of `stat` (among `skills`) is at least `min`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StatNeed {
+    stat: StatKind,
+    /// `single_skill` only: skill names, any of them; empty = any skill.
+    #[serde(default)]
+    skills: Vec<String>,
+    min: i32,
+}
+
+impl StatNeed {
+    fn holds(&self, stats: &[ItemStat]) -> bool {
+        let id = self.stat.id();
+        let named = |s: &ItemStat| {
+            self.skills.is_empty()
+                || skills_data::name(s.param).is_some_and(|n| self.skills.iter().any(|w| w == n))
+        };
+        stats
+            .iter()
+            .filter(|s| s.id == id && named(s))
+            .any(|s| s.value >= self.min)
+    }
 }
 
 /// One rule of `valuables.json`.
@@ -75,6 +131,10 @@ struct Rule {
     /// The map tag of the rule's drops (`Shak`), `""` for none; absent: the built-in tags.
     #[serde(default)]
     label: Option<String>,
+    /// Conditions on the item's read stats, all needed; an item without stats (unidentified)
+    /// matches none.
+    #[serde(default)]
+    stats: Vec<StatNeed>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,7 +147,13 @@ const SCHEMA: u32 = 1;
 
 static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
     match serde_json::from_str::<RuleFile>(include_str!("../../../playstyles/summoner-fury/valuables.json")) {
-        Ok(f) if f.schema == SCHEMA => f.rules,
+        Ok(f) if f.schema == SCHEMA => match validate(&f.rules) {
+            Ok(()) => f.rules,
+            Err(e) => {
+                eprintln!("valuables.json: {e}; no drop highlights");
+                Vec::new()
+            }
+        },
         Ok(f) => {
             eprintln!(
                 "valuables.json: schema {} (expected {SCHEMA}); no drop highlights",
@@ -101,6 +167,32 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         }
     }
 });
+
+/// The checks serde can't make: labels of at most 4 characters, `stats` conditions with a
+/// positive `min`, `skills` only on `single_skill` and every skill name known.
+fn validate(rules: &[Rule]) -> Result<(), String> {
+    for r in rules {
+        if let Some(l) = r.label.as_ref().filter(|l| l.chars().count() > 4) {
+            return Err(format!("{}: label {l:?} is longer than 4 characters", r.name));
+        }
+        for need in &r.stats {
+            if need.min <= 0 {
+                return Err(format!("{}: stats min {} is not positive", r.name, need.min));
+            }
+            if need.stat != StatKind::SingleSkill && !need.skills.is_empty() {
+                return Err(format!("{}: skills only go with single_skill", r.name));
+            }
+            if let Some(n) = need
+                .skills
+                .iter()
+                .find(|n| !skills_data::SKILLS.iter().any(|s| s.name == n.as_str()))
+            {
+                return Err(format!("{}: unknown skill {n:?}", r.name));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Why a drop is highlighted: the best matching rule among the enabled tiers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -133,7 +225,8 @@ fn check(rule: &Rule, drop: &ItemDrop, name: Option<&str>) -> Option<bool> {
         && rule
             .sockets
             .is_none_or(|[lo, hi]| (lo..=hi).contains(&drop.sockets))
-        && rule.ethereal.is_none_or(|e| e == drop.ethereal);
+        && rule.ethereal.is_none_or(|e| e == drop.ethereal)
+        && rule.stats.iter().all(|need| need.holds(&drop.stats));
     if !fits {
         return None;
     }
@@ -352,19 +445,245 @@ mod tests {
         assert_eq!(parsed.schema, SCHEMA);
         assert_eq!(parsed.rules.len(), RULES.len());
         assert!(RULES.len() > 50, "{} rules", RULES.len());
-        for r in parsed
-            .rules
-            .iter()
-            .filter_map(|r| r.label.as_ref().map(|l| (&r.name, l)))
-        {
-            assert!(
-                r.1.chars().count() <= 4,
-                "label {:?} of {}: at most 4 characters",
-                r.1,
-                r.0
-            );
+        assert_eq!(validate(&parsed.rules), Ok(()));
+        let skill_rules: Vec<&Rule> = RULES.iter().filter(|r| !r.stats.is_empty()).collect();
+        assert!(skill_rules.len() >= 19, "{} stat rules", skill_rules.len());
+        for r in skill_rules {
+            assert_eq!(r.category, Category::Trade, "{}: sold, so trade", r.name);
+            assert!(r.tier >= Tier::A, "{}: A or S gets the coin", r.name);
+            assert_eq!(r.label.as_deref(), Some(""), "{}: ring and coin, no tag", r.name);
         }
         Ok(())
+    }
+
+    fn rules_of(json: &str) -> serde_json::Result<Vec<Rule>> {
+        serde_json::from_str::<RuleFile>(&format!(r#"{{"schema": 1, "rules": [{json}]}}"#)).map(|f| f.rules)
+    }
+
+    #[test]
+    fn validation_rejects_bad_stat_conditions() -> serde_json::Result<()> {
+        let rule = |extra: &str| {
+            format!(
+                r#"{{"tier": "A", "category": "trade", "item_codes": ["wnd"], "quality": "rolled",
+                    "sockets": null, "ethereal": null, "name": "r" {extra}}}"#
+            )
+        };
+        let ok = rules_of(&rule(
+            r#", "stats": [{"stat": "single_skill", "skills": ["Bone Spear"], "min": 3}]"#,
+        ))?;
+        assert_eq!(validate(&ok), Ok(()));
+        for (extra, what) in [
+            (
+                r#", "stats": [{"stat": "single_skill", "skills": ["Bone Spaer"], "min": 3}]"#,
+                "unknown skill",
+            ),
+            (
+                r#", "stats": [{"stat": "skill_tab", "skills": ["Bone Spear"], "min": 3}]"#,
+                "skills on a tab",
+            ),
+            (r#", "stats": [{"stat": "fcr", "min": 0}]"#, "min 0"),
+            (r#", "label": "+3wnd""#, "5-character label"),
+        ] {
+            assert!(validate(&rules_of(&rule(extra))?).is_err(), "{what}");
+        }
+        for extra in [
+            r#", "stats": [{"stat": "mf", "min": 3}]"#,
+            r#", "stats": [{"stat": "fcr", "min": 3, "max": 5}]"#,
+        ] {
+            assert!(rules_of(&rule(extra)).is_err(), "{extra}: serde rejects it");
+        }
+        Ok(())
+    }
+
+    /// An identified item of `code` and `quality` with `stats` (id, param, value).
+    fn rolled(code: &str, quality: u32, stats: &[(u16, u16, i32)]) -> ItemDrop {
+        let mut d = drop(code, quality, 0, false);
+        d.flags = item_data::FLAG_IDENTIFIED;
+        d.stats = stats
+            .iter()
+            .map(|&(id, param, value)| ItemStat {
+                id,
+                param,
+                value,
+                base: false,
+            })
+            .collect();
+        d
+    }
+
+    /// skills.txt id of `name`.
+    fn skill(name: &str) -> u16 {
+        skills_data::SKILLS
+            .iter()
+            .find(|s| s.name == name)
+            .map_or(u16::MAX, |s| s.id)
+    }
+
+    /// The `+skill tab` param: class × 8 + tab (0..=2).
+    const fn tab(class: u16, tab: u16) -> u16 {
+        class * 8 + tab
+    }
+
+    const MAGIC: u32 = item_data::QUALITY_MAGIC;
+    const RARE: u32 = item_data::QUALITY_RARE;
+    const CRAFTED: u32 = item_data::QUALITY_CRAFTED;
+
+    /// (item, expected best S/A rule (tier, name), what).
+    type SkillCase = (ItemDrop, Option<(Tier, &'static str)>, &'static str);
+
+    /// Wands and orbs.
+    fn caster_cases() -> Vec<SkillCase> {
+        let poison_bone = tab(2, 1);
+        vec![
+            (
+                rolled("7bw", MAGIC, &[(stat::SKILL_TAB, poison_bone, 3)]),
+                Some((Tier::A, "+3 skill tab class items")),
+                "+3 Poison and Bone Lich Wand",
+            ),
+            (
+                rolled("7bw", MAGIC, &[(stat::SKILL_TAB, poison_bone, 2)]),
+                None,
+                "+2 tab without FCR",
+            ),
+            (
+                rolled(
+                    "7bw",
+                    MAGIC,
+                    &[(stat::SKILL_TAB, poison_bone, 3), (stat::FCR, 0, 20)],
+                ),
+                Some((Tier::S, "+3 skill tab, 20 FCR caster items")),
+                "3/20 wand",
+            ),
+            (
+                rolled(
+                    "7bw",
+                    RARE,
+                    &[(stat::SKILL_TAB, poison_bone, 2), (stat::FCR, 0, 20)],
+                ),
+                Some((Tier::A, "+2 skill tab, 20 FCR caster items")),
+                "rare 2/20 wand",
+            ),
+            (
+                rolled("obf", MAGIC, &[(stat::SINGLE_SKILL, skill("Frozen Orb"), 3)]),
+                Some((Tier::A, "+3 money skill orbs")),
+                "+3 Frozen Orb",
+            ),
+            (
+                rolled("obf", MAGIC, &[(stat::SINGLE_SKILL, skill("Frozen Orb"), 2)]),
+                None,
+                "+2 Frozen Orb",
+            ),
+            (
+                rolled("obf", MAGIC, &[(stat::SINGLE_SKILL, skill("Warmth"), 3)]),
+                None,
+                "+3 Warmth: not a money skill",
+            ),
+        ]
+    }
+
+    /// Javelins, helms, pelts, circlets, amulets and a white wand.
+    fn other_cases() -> Vec<SkillCase> {
+        vec![
+            (
+                rolled(
+                    "amf",
+                    MAGIC,
+                    &[
+                        (stat::SKILL_TAB, tab(0, 2), 3),
+                        (stat::SINGLE_SKILL, skill("Lightning Fury"), 3),
+                        (stat::SINGLE_SKILL, skill("Charged Strike"), 3),
+                    ],
+                ),
+                Some((Tier::S, "+3/+3/+3 javelins")),
+                "+3/+3/+3 Matriarchal Javelin",
+            ),
+            (
+                rolled(
+                    "amf",
+                    RARE,
+                    &[
+                        (stat::SINGLE_SKILL, skill("Lightning Fury"), 3),
+                        (stat::IAS, 0, 40),
+                    ],
+                ),
+                Some((Tier::A, "+3 Lightning Fury / Charged Strike javelins")),
+                "rare +3 LF javelin",
+            ),
+            (
+                rolled(
+                    "ba5",
+                    MAGIC,
+                    &[
+                        (stat::SKILL_TAB, tab(4, 2), 3),
+                        (stat::SINGLE_SKILL, skill("Battle Orders"), 3),
+                    ],
+                ),
+                Some((Tier::S, "+3 Warcries / +3 Battle Orders helms")),
+                "+3 Warcries +3 BO helm",
+            ),
+            (
+                rolled("dr8", MAGIC, &[(stat::SINGLE_SKILL, skill("Fury"), 3)]),
+                Some((Tier::A, "+3 Fury / Tornado / Grizzly pelts")),
+                "+3 Fury pelt",
+            ),
+            (
+                rolled("ci3", RARE, &[(stat::CLASS_SKILLS, 5, 2), (stat::FCR, 0, 20)]),
+                Some((Tier::S, "2/20 circlets and amulets")),
+                "rare 2/20 diadem",
+            ),
+            (
+                rolled("amu", CRAFTED, &[(stat::CLASS_SKILLS, 1, 2), (stat::FCR, 0, 20)]),
+                Some((Tier::S, "2/20 circlets and amulets")),
+                "crafted 2/20 amulet",
+            ),
+            (
+                rolled(
+                    "amu",
+                    MAGIC,
+                    &[(stat::SKILL_TAB, tab(5, 2), 2), (stat::FCR, 0, 10)],
+                ),
+                Some((Tier::A, "+2 skill tab amulets and circlets with FCR")),
+                "+2 Elemental amulet of the Apprentice",
+            ),
+            (
+                rolled("amu", RARE, &[(stat::FCR, 0, 10), (stat::RES_FIRE, 0, 30)]),
+                None,
+                "rare amulet without skills: only the B rule",
+            ),
+            (
+                rolled("7bw", 2, &[(stat::SINGLE_SKILL, skill("Bone Spear"), 3)]),
+                None,
+                "white wand: not rolled",
+            ),
+        ]
+    }
+
+    #[test]
+    fn skill_items_match_on_their_stats() {
+        for (d, want, what) in caster_cases().into_iter().chain(other_cases()) {
+            let got = best(&d, &keep_tiers());
+            assert_eq!(got.as_ref().map(|h| (h.tier, h.rule.as_str())), want, "{what}");
+            if let Some(h) = got {
+                assert!(!h.uncertain, "{what}: the stats decide, so certain");
+                assert_eq!(rule_label(&d, None), Some(""), "{what}: no tag");
+            }
+        }
+    }
+
+    #[test]
+    fn unidentified_skill_items_without_stats_get_no_skill_rule() {
+        let mut unid = rolled("obf", item_data::QUALITY_MAGIC, &[]);
+        unid.flags = 0;
+        assert_eq!(
+            best(&unid, &all()).map(|h| (h.tier, h.rule, h.uncertain)),
+            Some((Tier::B, "Class-specific magic items".to_owned(), true)),
+            "only the B check-me rule"
+        );
+        assert_eq!(
+            best(&unid, &config::Valuables::default()),
+            None,
+            "B is off by default"
+        );
     }
 
     /// (item, expected (tier, category, uncertain), what).

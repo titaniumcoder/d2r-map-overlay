@@ -517,7 +517,8 @@ pub struct ItemDrop {
     /// uniqueitems / setitems row of a unique or set item.
     #[serde(default)]
     pub unique_index: Option<u32>,
-    /// The item's stats, read only for the player's own magic, rare and crafted items.
+    /// The item's stats, read only for magic, rare and crafted items (on the ground or the
+    /// player's own).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stats: Vec<crate::item_stats::ItemStat>,
     /// The first `item_data::HEAD_LEN` bytes of `ItemData` as hex, for checking offsets.
