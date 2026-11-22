@@ -1,18 +1,6 @@
-//! The ground-drop marks (`PLAN.md`, plugin refactor step 10): what each drop on the map is
-//! good for, in three kinds the core draws in its own style ([`MarkKind`]).
-//! - **Farm** / **Keep**: a unique or set the player's builds still want, by name, or by
-//!   quality and base while unidentified (uncertain); farm when it is a still-missing farm-list
-//!   entry. A white base for an open runeword need, better than the base kept for it. The same
-//!   rules as the item plan's "Keep · own" ([`stash_plan::Wants`]).
-//! - **Trade**: the valuables rules of the enabled tiers ([`valuables::best`]); a white base of
-//!   a twink rule below S is own gear, not a trade good (as in the item plan), so it is marked
-//!   only as a keep. A superior base is uncertain (dashed) while its enhanced defense (armor) or
-//!   enhanced damage (weapon) is unknown: the reader reads no stats of ground items, and the
-//!   roll decides its value.
-//! - An unidentified unique or set matched to a wanted piece only by its base is a guess (rule
-//!   "Raven Frost?"): an S or A trade match on the same drop keeps its trade ring.
-//!
-//! Magic and rare drops get no keep mark: their stats aren't known before pickup.
+//! The ground-drop marks: keep / farm from the builds' wants ([`stash_plan::Wants`]), trade from
+//! the valuables rules ([`valuables::best`]). Magic and rare drops get no keep mark: their stats
+//! aren't read before pickup.
 
 use crate::config;
 use crate::labels;
@@ -26,13 +14,10 @@ use d2r_core::socket_bases;
 
 use crate::stash_plan::{self, Wants};
 
-/// The marks of `drops` by drop id, from the valuables tiers `enabled` and the plan's `wants`;
-/// removes the drops that are only shown for a mark ([`DropKind::Base`]) when none applies.
-/// The reader keeps every base with a code, so this is the only filter on them.
+/// The marks of `drops` by drop id; removes the unmarked [`DropKind::Base`] drops (the reader
+/// keeps every base, this is their only filter).
 pub fn apply(drops: &mut Vec<ItemDrop>, enabled: &config::Valuables, wants: &Wants) -> Marks {
-    // White bases: twink rules below S are own gear, not trade goods.
-    let mut for_bases = enabled.clone();
-    for_bases.twink.retain(|&t| t == Tier::S);
+    let for_bases = tiers_for_white_bases(enabled);
     let mut marks = Marks::new();
     drops.retain(|d| {
         let Some(mark) = mark(d, (enabled, &for_bases), wants) else {
@@ -44,11 +29,15 @@ pub fn apply(drops: &mut Vec<ItemDrop>, enabled: &config::Valuables, wants: &Wan
     marks
 }
 
-/// The mark of one drop: a wanted piece first (the player's builds win over trade, as in the
-/// item plan), then an own base (never a trade-worthy one), then trade. A piece matched only
-/// by its base (unidentified: a guess) yields to an S or A trade match: the guess must not hide
-/// a stronger ring.
-/// `enabled`: the tiers for most drops, and for white bases.
+/// `enabled` without the twink tiers below S: such a white base is own gear, not a trade good.
+fn tiers_for_white_bases(enabled: &config::Valuables) -> config::Valuables {
+    let mut for_bases = enabled.clone();
+    for_bases.twink.retain(|&t| t == Tier::S);
+    for_bases
+}
+
+/// The mark of one drop: a wanted piece, then an own base, then trade. A piece guessed from an
+/// unidentified base yields to an S or A trade match.
 fn mark(
     drop: &ItemDrop,
     (enabled, for_bases): (&config::Valuables, &config::Valuables),
@@ -92,8 +81,7 @@ fn mark(
     trade()
 }
 
-/// A superior base whose enhanced roll wasn't read: enhanced defense on an armor, helm or
-/// shield, enhanced damage on a weapon. The roll decides what the base is worth.
+/// A superior base whose enhanced defense / damage roll wasn't read: the roll decides its worth.
 fn roll_unknown(drop: &ItemDrop) -> bool {
     const ROLLS: [u16; 3] = [
         stat::DEFENSE_PERCENT,
@@ -135,7 +123,6 @@ mod tests {
                 .get(&1)
                 .map(|m| m.uncertain)
         };
-        // Monarch 4os (armor, enhanced defense) and Berserker Axe 5os (weapon, enhanced damage).
         for code in ["uit", "7wa"] {
             let sockets = if code == "uit" { 4 } else { 5 };
             assert_eq!(

@@ -1,16 +1,5 @@
 //! The short map tag of a marked ground drop ([`d2r_core::guidance::Mark::label`]), at most
-//! [`MAX`] characters (user request, 2026-11-22: "add labels but short. 5os for a base with 5
-//! sockets. 3 to 4 letters"). First match wins:
-//! 1. the `label` of the best certain valuables rule ([`valuables::rule_label`]): `Shak`, `TalS`;
-//! 2. by kind: a charm's size ("GC") or unique name ("Anni");
-//! 3. a socketed base (not unique or set): "5os", ethereal "e4os";
-//! 4. the first letters of the item's name: the unique or set name (also of an unidentified one
-//!    whose base carries only that item, [`names::sole_name`]), else the base name.
-//!
-//! Gems, runes and materials (everything the stash's Gems / Materials / Runes tabs hold,
-//! [`d2r_core::stash::tab_of`]) get no tag at all (user,
-//! 2026-11-22: "for gems skip the label, useless", then "for the key of terror and runes too.
-//! just show it"): the in-game loot filter already names them, so the ring is enough.
+//! [`MAX`] characters; gems, runes and materials get none (the loot filter already names them).
 
 use d2r_core::game::ItemDrop;
 use d2r_core::items::{CharmSize, DropKind};
@@ -22,12 +11,11 @@ use crate::valuables;
 /// Most characters of a tag.
 const MAX: usize = 4;
 
-/// The map tag of `drop` (see the module docs); empty (no tag) for a gem, rune or material, or
-/// an item with neither code nor name.
+/// The map tag of `drop`, first match wins: a valuables rule's label, a charm, a socketed base
+/// ("5os", "e4os"), else the first letters of its name. Empty for a gem, rune or material.
 #[must_use]
 pub fn label(drop: &ItemDrop) -> String {
     let code = drop.code.as_deref().unwrap_or("");
-    // Everything the stash's Gems / Materials / Runes tabs hold (one list, `stash::tab_of`).
     if matches!(drop.kind, DropKind::Gem(_) | DropKind::Rune(_)) || d2r_core::stash::tab_of(code).is_some() {
         return String::new();
     }
@@ -135,7 +123,6 @@ mod tests {
             (drop("cm3", charm(CharmSize::Grand, false), magic), "GC"),
             (drop("cm2", charm(CharmSize::Large, false), magic), "LC"),
             (drop("cm1", charm(CharmSize::Small, false), magic), "SC"),
-            // Unidentified: the only unique on its base.
             (drop("cm1", charm(CharmSize::Small, true), unique), "Anni"),
             (drop("cm2", charm(CharmSize::Large, true), unique), "Torc"),
             (named("cm3", charm(CharmSize::Grand, true), unique, 359), "Ghee"),
@@ -145,11 +132,9 @@ mod tests {
                 drop("gpv", DropKind::Gem(d2r_core::items::GemColour::Amethyst), normal),
                 "",
             ),
-            // Rule labels: Shako (unidentified, its only unique), Griffon's, Tal Rasha's set.
             (drop("uap", DropKind::Unique, unique), "Shak"),
             (drop("ci3", DropKind::Unique, unique), "Grif"),
             (named("rin", DropKind::Unique, unique, 122), "SoJ"),
-            // An unidentified ring: any of many uniques, its base name only.
             (drop("rin", DropKind::Unique, unique), "Ring"),
         ];
         for (d, want) in cases {

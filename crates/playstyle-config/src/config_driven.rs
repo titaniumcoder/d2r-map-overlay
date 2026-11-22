@@ -1,5 +1,4 @@
-//! This build's playstyle: everything read from the playstyle folder's files (see
-//! [`crate::files`]).
+//! The playstyle read from the playstyle folder's files ([`crate::files`]).
 
 use d2r_core::build::{self, Damage};
 use d2r_core::game::{ItemDrop, Snapshot};
@@ -28,9 +27,7 @@ pub struct Extra<'a> {
     pub stage: Option<Stage<'a>>,
     /// The names of the current stage and its later ones, for the farm panel.
     pub chain: Vec<String>,
-    /// The route's current step, for the "Next" panel (`None` without a route, with the
-    /// character level or difficulty unknown, or with the quests unknown and the step
-    /// depending on them).
+    /// The route's current step, for the "Next" panel ([`advise`]).
     pub route: Option<route::Advice>,
 }
 
@@ -59,12 +56,6 @@ impl Playstyle for ConfigDriven {
         quests: Option<&QuestsDone>,
     ) -> EvaluationOf<'_, Self> {
         let config = &self.config;
-        // Damages: the character's own `[builds]` entry, else the selected build's, else its
-        // class's. `BiS`: inline slots when present, else the selected build's (user decision,
-        // 2026-11-17). A `switch_requires` group is met by the copies held in the shared stash
-        // (session-cached), by this character or worn by its mercenary, or when the character
-        // reached the stage before (played.json): the shared stash is unread each new game
-        // until opened, and a switch is one-way.
         let (class, level) = (Some(snap.player.class), snap.player.char_level);
         let holdings = snap.holdings();
         let owns = |item: &str| holdings.count(item);
@@ -72,13 +63,7 @@ impl Playstyle for ConfigDriven {
         let damages = config.damages_for_player(name, class, level, &owns, reached);
         let stage = config.stage(name, class, level, &owns, reached);
         let bis = config.resolved_bis(name, class, level, &owns, reached);
-        // Remember a stage further along (or off the remembered one's chain, e.g. a new
-        // selection); never one behind it (a level not yet read, an earlier stage).
-        let moved_on = stage
-            .map(|s| s.slug)
-            .filter(|&slug| !reached.is_some_and(|reached| config.leads_to(slug, reached)));
-        // The current stage and its later ones: the farm list drops what this character wears
-        // of them; the item plan keeps them.
+        let moved_on = stage_to_remember(config, stage, reached);
         let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
         let (items, wants) = stash_plan::for_snapshot(snap, config, &chain, bis.as_ref());
         let route = advise(config, snap, &holdings, damages, quests);
@@ -127,6 +112,18 @@ impl Playstyle for ConfigDriven {
     fn remove_character(files: &Files, name: &str) -> anyhow::Result<()> {
         files::remove_character(files, name)
     }
+}
+
+/// `stage` when it is further along than `reached` or off its chain (a new selection); never
+/// one behind it (a level not yet read must not undo the latch).
+fn stage_to_remember<'a>(
+    config: &Settings,
+    stage: Option<Stage<'a>>,
+    reached: Option<&str>,
+) -> Option<&'a str> {
+    stage
+        .map(|s| s.slug)
+        .filter(|&slug| !reached.is_some_and(|reached| config.leads_to(slug, reached)))
 }
 
 /// The route's current step for `snap`'s character ([`route::current`]); `None` without
@@ -179,12 +176,10 @@ mod tests {
             quiet: true,
             ..Files::default()
         });
-        // Normal 10: "Tristram or the Countess" needs no quests, so it shows unread too.
         for quests in [None, Some(&QuestsDone::default())] {
             let advice = playstyle.evaluate(&snap, None, quests).extra.route;
             assert_eq!(advice.map(|a| a.id).as_deref(), Some("normal-tristram"));
         }
-        // Normal 16: the canyon quests step can't be judged from an unread record.
         snap.player.char_level = Some(16);
         assert_eq!(
             playstyle.evaluate(&snap, None, None).extra.route,
@@ -202,9 +197,8 @@ mod tests {
     #[test]
     fn ground_drops_get_keep_farm_and_trade_marks() -> Result<()> {
         use d2r_core::guidance::MarkKind;
-        // The Flayer Jungle dump (a level-50 Summoner holding no Harmony) with five drops:
-        // a white 4os Hunter's Bow, a Monarch 4os, a Long Sword 0os, an unidentified unique ring
-        // and unidentified unique Heavy Gloves.
+        // Level-50 Summoner without Harmony; drops: Hunter's Bow 4os, Monarch 4os, Long Sword
+        // 0os, unidentified unique ring and Heavy Gloves.
         let snap: Snapshot =
             serde_json::from_str(include_str!("../../../tests/fixtures/flayer-marks-snapshot.json"))
                 .context("parsing fixture")?;
@@ -235,14 +229,11 @@ mod tests {
             vec![
                 (Some("hbw"), Some(MarkKind::Keep), Some("Harmony base"), false),
                 (Some("uit"), Some(MarkKind::Trade), Some("Monarch 4os"), false),
-                // Raven Frost or Manald Heal by its base, but the S unique-ring trade rule wins
-                // over a guess.
                 (Some("rin"), Some(MarkKind::Trade), Some("Stone of Jordan"), true),
                 (Some("vgl"), Some(MarkKind::Farm), Some("Bloodfist?"), true),
             ],
             "the Long Sword 0os is gone"
         );
-        // Without wants (before the first evaluation, another player unit): trade marks only.
         let mut drops = snap.drops;
         let marks = playstyle.mark_drops(&mut drops, &Wants::default());
         let kinds: Vec<_> = drops

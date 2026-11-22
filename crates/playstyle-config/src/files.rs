@@ -1,33 +1,6 @@
-//! A playstyle's files: where they are ([`Files`]), loading them into [`Settings`] ([`load`],
-//! [`reload`]) and the `/config` page's writes ([`select_build`], [`remove_character`]).
-//!
-//! A playstyle is a folder, `playstyles/<name>/` in the repo (shipped with the overlay; this
-//! build's is `summoner-fury`):
-//! - `playstyle.toml`: name, description, the `[valuables]` tiers, the `[damages]` defaults;
-//! - `builds/*.toml`: the build definitions (next to the `*.source.json` they are generated
-//!   from by `research/gen_build.py`);
-//! - `farm.toml`: the farm list;
-//! - `route.toml`: the leveling and farming route ([`crate::route`]);
-//! - `valuables.json`: the drop mark rules, compiled in ([`crate::valuables`]; no override);
-//! - `loot-filter.json`: a D2R in-game loot filter profile the player imports, served as is
-//!   ([`loot_filter`]; no old place).
-//!
-//! Each file is looked up in three places; the first that has it wins, per file (per build
-//! file in `builds/`):
-//! 1. the user's folder `~/.config/d2r-map-overlay/playstyle/` (same relative paths);
-//! 2. the old places, from before the folder layout (refactor step 7): `builds/` and
-//!    `farm.toml` in `~/.config/d2r-map-overlay/`, and `config.toml`'s `[valuables]` and
-//!    `[builds]` tables, each one present standing in for `playstyle.toml`'s `[valuables]` /
-//!    `[damages]`;
-//! 3. the shipped folder.
-//!
-//! The per-character build selection (`[bis.<name>]`) is state, not playstyle: `bis.toml` in
-//! the data dir (`~/.local/share/d2r-map-overlay/`, next to `played.json`), written by the
-//! `/config` page. An old `config.toml`'s `[bis]` entries are still read (`bis.toml` wins per
-//! character) and a selection that sits there is edited there.
-//!
-//! Where the files are is the core's [`Files`] (the shipped folder is read at run time from the
-//! workspace's `playstyles/`: a regenerated build file hot-reloads without a rebuild).
+//! A playstyle folder's files loaded into [`Settings`], and the `/config` page's writes to the
+//! per-character build selection (`bis.toml`). Per file, the user's folder wins over the old
+//! places (`~/.config/d2r-map-overlay/` before the folder layout) over the shipped folder.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -38,19 +11,24 @@ use anyhow::{Context, Result};
 use d2r_core::playstyle::{DIR_VAR, Files};
 
 use crate::config::{
-    Bis, Build, Builds, FarmGroup, Settings, Valuables, parse_build, parse_farm, parse_playstyle,
+    Bis, Build, Builds, FarmGroup, Settings, Tables, Valuables, parse_build, parse_farm, parse_playstyle,
     parse_tables,
 };
 use crate::route::{Route, parse_route};
 use crate::web::config_page;
 
-/// A new `bis.toml` (the comment heads the `[bis]` table, so it stays on top).
+/// A new `bis.toml`; the comment heads the `[bis]` table so it stays on top.
 const BIS_HEADER: &str = "# Each character's build selection: [bis.<name>] build = \"<build slug>\".\n\
                           # Written by the overlay's /config page.\n\
                           [bis]\n";
 
 /// Index of the old places in [`Files::layers`].
 const OLD_PLACES: usize = 1;
+
+/// The old place's name of the file `decide` picked, if it picked the old place.
+fn old_place(from: Option<usize>, name: &str) -> Option<String> {
+    (from == Some(OLD_PLACES)).then(|| name.to_owned())
+}
 
 /// One file's say on a setting.
 enum Say<T> {
@@ -62,7 +40,6 @@ enum Say<T> {
 }
 
 impl<T> Say<T> {
-    /// The part `pick` takes from the file (`None`: the file says nothing about it).
     fn part<U>(&self, pick: impl FnOnce(&T) -> Option<U>) -> Say<U> {
         match self {
             Self::Silent => Say::Silent,
@@ -72,8 +49,8 @@ impl<T> Say<T> {
     }
 }
 
-/// The first say, in precedence order, that isn't silent, and its index: its value, or
-/// `None` when that file is broken. The default (and no index) when no file speaks.
+/// The first non-silent say and its index (`None` value when that file is broken); the default
+/// when no file speaks.
 fn decide<T: Default>(says: impl IntoIterator<Item = Say<T>>) -> (Option<T>, Option<usize>) {
     for (i, say) in says.into_iter().enumerate() {
         match say {
@@ -85,8 +62,7 @@ fn decide<T: Default>(says: impl IntoIterator<Item = Say<T>>) -> (Option<T>, Opt
     (Some(T::default()), None)
 }
 
-/// Reads `path` and parses it with `parse` (warnings reported): silent when there is no
-/// such place or file.
+/// Reads and parses `path`, reporting warnings; silent when there is no such file.
 fn read<T>(
     files: &Files,
     path: Option<&Path>,
@@ -119,81 +95,82 @@ fn read<T>(
 
 /// One read of every file: `None` for a setting whose deciding file is broken.
 struct Loaded {
-    /// `playstyle.toml`'s `name` (the shipped or the user's file).
     name: Option<String>,
-    /// The same file's `filter_name` ([`crate::config::Tables::filter_name`]).
     filter_name: Option<String>,
     valuables: Option<Valuables>,
     damages: Option<Builds>,
     bis: Option<BTreeMap<String, Bis>>,
     build_defs: BTreeMap<String, Build>,
-    /// Whether a build file was unreadable or invalid ([`load_builds`]): a reload keeps the
-    /// current builds then.
+    /// A build file was unreadable or invalid: a reload keeps the current builds then.
     builds_broken: bool,
     farm: Option<Vec<FarmGroup>>,
     route: Option<Route>,
-    /// The old-place files in use (for the notice).
+    /// The old-place files in use, for the notice.
     old: Vec<String>,
 }
 
-fn read_all(files: &Files) -> Loaded {
-    let [user, _, shipped] = files.layers("playstyle.toml");
-    let user_toml = read(files, user.as_deref(), parse_playstyle);
-    let shipped_toml = read(files, shipped.as_deref(), parse_playstyle);
-    let legacy = read(files, files.legacy_config().as_deref(), parse_tables);
-    let mut old = Vec::new();
-    // A user `playstyle.toml` decides whole (a table it leaves out is the default); an old
-    // `config.toml` only with the tables it has.
-    let (valuables, from) = decide([
-        user_toml.part(|(_, t)| Some(t.valuables.clone().unwrap_or_default())),
-        legacy.part(|t| t.valuables.clone()),
-        shipped_toml.part(|(_, t)| Some(t.valuables.clone().unwrap_or_default())),
-    ]);
-    if from == Some(OLD_PLACES) {
-        old.push("config.toml [valuables]".to_owned());
-    }
-    let (damages, from) = decide([
-        user_toml.part(|(_, t)| Some(t.damages.clone().unwrap_or_default())),
-        legacy.part(|t| t.damages.clone()),
-        shipped_toml.part(|(_, t)| Some(t.damages.clone().unwrap_or_default())),
-    ]);
-    if from == Some(OLD_PLACES) && damages.as_ref().is_some_and(|d| *d != Builds::default()) {
-        old.push("config.toml [builds]".to_owned());
-    }
-    let (name, filter_name) = match (&user_toml, &shipped_toml) {
-        (Say::Value((name, tables)), _) | (Say::Silent, Say::Value((name, tables))) => {
-            (Some(name.clone()), tables.filter_name.clone())
+/// `playstyle.toml` of the user's and the shipped folder, and an old `config.toml`'s tables.
+struct PlaystyleTomls {
+    user: Say<(String, Tables)>,
+    legacy: Say<Tables>,
+    shipped: Say<(String, Tables)>,
+}
+
+impl PlaystyleTomls {
+    fn read(files: &Files) -> Self {
+        let [user, _, shipped] = files.layers("playstyle.toml");
+        let user = read(files, user.as_deref(), parse_playstyle);
+        let shipped = read(files, shipped.as_deref(), parse_playstyle);
+        let legacy = read(files, files.legacy_config().as_deref(), parse_tables);
+        Self {
+            user,
+            legacy,
+            shipped,
         }
-        _ => (None, None),
-    };
-    // The selections: an old config.toml's, then bis.toml's over them per character.
-    let state = read(files, files.bis_path().as_deref(), parse_tables);
-    let bis = match (legacy.part(|t| t.bis.clone()), state.part(|t| t.bis.clone())) {
-        (Say::Broken, _) | (_, Say::Broken) => None,
-        (from_old, from_state) => {
-            let mut bis = match from_old {
-                Say::Value(bis) => bis,
-                Say::Silent | Say::Broken => BTreeMap::new(),
-            };
-            if let Say::Value(newer) = from_state {
-                bis.extend(newer);
+    }
+
+    /// The table `pick` takes, and its index in the precedence order. A user `playstyle.toml`
+    /// decides whole (a table it leaves out is the default); an old `config.toml` only with
+    /// the tables it has.
+    fn table<T: Clone + Default>(&self, pick: impl Fn(&Tables) -> &Option<T>) -> (Option<T>, Option<usize>) {
+        decide([
+            self.user.part(|(_, t)| Some(pick(t).clone().unwrap_or_default())),
+            self.legacy.part(|t| pick(t).clone()),
+            self.shipped
+                .part(|(_, t)| Some(pick(t).clone().unwrap_or_default())),
+        ])
+    }
+
+    /// The deciding `playstyle.toml`'s `name` and `filter_name`.
+    fn names(&self) -> (Option<String>, Option<String>) {
+        match (&self.user, &self.shipped) {
+            (Say::Value((name, tables)), _) | (Say::Silent, Say::Value((name, tables))) => {
+                (Some(name.clone()), tables.filter_name.clone())
             }
-            Some(bis)
+            _ => (None, None),
         }
-    };
+    }
+}
+
+fn read_all(files: &Files) -> Loaded {
+    let tomls = PlaystyleTomls::read(files);
+    let mut old = Vec::new();
+    let (valuables, from) = tomls.table(|t| &t.valuables);
+    old.extend(old_place(from, "config.toml [valuables]"));
+    let (damages, from) = tomls.table(|t| &t.damages);
+    if damages.as_ref().is_some_and(|d| *d != Builds::default()) {
+        old.extend(old_place(from, "config.toml [builds]"));
+    }
+    let (name, filter_name) = tomls.names();
+    let bis = read_selections(files, &tomls.legacy);
     let (farm, from) = decide(
         files
             .layers("farm.toml")
             .iter()
             .map(|path| read(files, path.as_deref(), parse_farm)),
     );
-    if from == Some(OLD_PLACES) {
-        old.push("farm.toml".to_owned());
-    }
-    // No old place for the route: it is newer than the folder layout.
-    let [user_route, _, shipped_route] = files.layers("route.toml");
-    let (route, _) =
-        decide([user_route, shipped_route].map(|path| read(files, path.as_deref(), parse_route)));
+    old.extend(old_place(from, "farm.toml"));
+    let route = read_route(files);
     let (build_defs, builds_broken) = load_builds(files, &mut old);
     Loaded {
         name,
@@ -209,13 +186,54 @@ fn read_all(files: &Files) -> Loaded {
     }
 }
 
-/// Every build definition, keyed by lowercased build name: per file name, the user's file
-/// wins over the old place's over the shipped one. Only `*.toml` files count; an unreadable,
-/// invalid or nameless one is reported and skipped. Notes the old-place files used in `old`.
-/// With them whether a file was unreadable or invalid (a nameless one is no such failure).
+/// The build selections: an old `config.toml`'s, with `bis.toml`'s over them per character.
+fn read_selections(files: &Files, legacy: &Say<Tables>) -> Option<BTreeMap<String, Bis>> {
+    let state = read(files, files.bis_path().as_deref(), parse_tables);
+    match (legacy.part(|t| t.bis.clone()), state.part(|t| t.bis.clone())) {
+        (Say::Broken, _) | (_, Say::Broken) => None,
+        (from_old, from_state) => {
+            let mut bis = match from_old {
+                Say::Value(bis) => bis,
+                Say::Silent | Say::Broken => BTreeMap::new(),
+            };
+            if let Say::Value(newer) = from_state {
+                bis.extend(newer);
+            }
+            Some(bis)
+        }
+    }
+}
+
+/// `route.toml` of the user's, else the shipped folder (it has no old place).
+fn read_route(files: &Files) -> Option<Route> {
+    let [user_route, _, shipped_route] = files.layers("route.toml");
+    decide([user_route, shipped_route].map(|path| read(files, path.as_deref(), parse_route))).0
+}
+
+/// Every build definition, keyed by lowercased build name, and whether a file was unreadable
+/// or invalid (a nameless one is skipped, but no failure). Notes the old-place files in `old`.
 fn load_builds(files: &Files, old: &mut Vec<String>) -> (BTreeMap<String, Build>, bool) {
-    // File name → (place index, path); the shipped place first, so the better ones overwrite.
-    let mut chosen: BTreeMap<OsString, (usize, PathBuf)> = BTreeMap::new();
+    let mut builds = BTreeMap::new();
+    let mut broken = false;
+    for (file, (place, path)) in build_files(files) {
+        if place == OLD_PLACES {
+            old.push(format!("builds/{}", file.to_string_lossy()));
+        }
+        match read_build(files, &path) {
+            Ok(Some((slug, build))) => {
+                builds.insert(slug, build);
+            }
+            Ok(None) => {}
+            Err(()) => broken = true,
+        }
+    }
+    (builds, broken)
+}
+
+/// The `*.toml` files of every `builds/` folder by file name, with their place index: the
+/// user's wins over the old place's over the shipped one.
+fn build_files(files: &Files) -> BTreeMap<OsString, (usize, PathBuf)> {
+    let mut chosen = BTreeMap::new();
     for (i, dir) in files.layers("builds").into_iter().enumerate().rev() {
         let Some(entries) = dir.and_then(|d| std::fs::read_dir(d).ok()) else {
             continue;
@@ -227,38 +245,26 @@ fn load_builds(files: &Files, old: &mut Vec<String>) -> (BTreeMap<String, Build>
             }
         }
     }
-    let mut builds = BTreeMap::new();
-    let mut broken = false;
-    for (file, (place, path)) in chosen {
-        if place == OLD_PLACES {
-            old.push(format!("builds/{}", file.to_string_lossy()));
-        }
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) => {
-                files.say(format_args!("build {}: {e}; skipped", path.display()));
-                broken = true;
-                continue;
-            }
-        };
-        match parse_build(&text) {
-            Ok((slug, build, warnings)) => {
-                for w in warnings {
-                    files.say(format_args!("build {}: {w}", path.display()));
-                }
-                if slug.is_empty() {
-                    files.say(format_args!("build {}: no name; skipped", path.display()));
-                } else {
-                    builds.insert(slug, build);
-                }
-            }
-            Err(e) => {
-                files.say(format_args!("build {}: invalid, skipped:\n{e}", path.display()));
-                broken = true;
-            }
-        }
+    chosen
+}
+
+/// One build file's slug and build, reported problems aside; `Ok(None)` for a nameless one,
+/// `Err` for an unreadable or invalid one.
+fn read_build(files: &Files, path: &Path) -> Result<Option<(String, Build)>, ()> {
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        files.say(format_args!("build {}: {e}; skipped", path.display()));
+    })?;
+    let (slug, build, warnings) = parse_build(&text).map_err(|e| {
+        files.say(format_args!("build {}: invalid, skipped:\n{e}", path.display()));
+    })?;
+    for w in warnings {
+        files.say(format_args!("build {}: {w}", path.display()));
     }
-    (builds, broken)
+    if slug.is_empty() {
+        files.say(format_args!("build {}: no name; skipped", path.display()));
+        return Ok(None);
+    }
+    Ok(Some((slug, build)))
 }
 
 /// Tells which old-place files are in use: they hide the shipped ones of the same name.
@@ -279,7 +285,6 @@ fn note_old_places(files: &Files, old: &[String]) {
 pub fn load(files: &Files) -> Settings {
     let loaded = read_all(files);
     if loaded.name.is_none() && loaded.build_defs.is_empty() {
-        // No playstyle.toml and no build file anywhere: no folder found and no old files.
         files.say(format_args!(
             "error: playstyle: no playstyle files found (no playstyle folder, no user or old \
              files): no builds, stages or farm list; see README \"Playstyles\" ({DIR_VAR})"
@@ -303,12 +308,9 @@ pub fn load(files: &Files) -> Settings {
     }
 }
 
-/// Reloads `settings` after a change on disk. A setting whose deciding file is broken (a
-/// half-written file, a typo) keeps its current value, so a broken file never blanks the
-/// overlay; a removed file falls back to the next place (none left: the default). The build
-/// files reload together: while any of them is unreadable or invalid, every current build is
-/// kept (2026-11-20: a build file with a field the running binary didn't know yet dropped
-/// both builds, and the stash plan told the user to sell their Lawbringer bases).
+/// Reloads `settings` after a change on disk. A setting whose deciding file is broken keeps its
+/// current value; a removed file falls back to the next place. While any build file is broken,
+/// every current build is kept.
 pub fn reload(settings: &mut Settings, files: &Files) {
     let loaded = read_all(files);
     note_old_places(files, &loaded.old);
@@ -344,10 +346,8 @@ fn replace<T>(files: &Files, current: &mut T, new: Option<T>, what: &str) {
     }
 }
 
-/// The playstyle's loot filter profile (`loot-filter.json`): the exact bytes of the user's
-/// file, else the shipped one (no old place: it is newer than the folder layout). Read per
-/// request, so an edited override shows at once. `None` when neither place has it; an
-/// unreadable file is reported and the next place tried.
+/// The exact bytes of the user's `loot-filter.json`, else the shipped one (no old place); an
+/// unreadable file is reported and skipped.
 #[must_use]
 pub fn loot_filter(files: &Files) -> Option<Vec<u8>> {
     let [user, _, shipped] = files.layers("loot-filter.json");
@@ -364,10 +364,8 @@ pub fn loot_filter(files: &Files) -> Option<Vec<u8>> {
         })
 }
 
-/// What is wrong with the loot filter's name, if anything: its profile `name` (the JSON's
-/// top-level `"name"`, what the game shows) isn't `expected` (`playstyle.toml`'s
-/// `filter_name`), or the file isn't JSON with a name. `None` when it matches, when no name is
-/// expected or when there is no filter.
+/// Why the filter's top-level JSON `"name"` (what the game shows) isn't `expected`
+/// (`playstyle.toml`'s `filter_name`); `None` when it matches or either is missing.
 #[must_use]
 pub fn loot_filter_mismatch(filter: Option<&[u8]>, expected: Option<&str>) -> Option<String> {
     let (filter, expected) = (filter?, expected?);
@@ -392,9 +390,8 @@ fn warn_loot_filter(files: &Files, expected: Option<&str>) {
     }
 }
 
-/// Sets (`Some` slug) or clears (`None`) character `name`'s build selection, comments kept.
-/// It is written where it lives: an old `config.toml`'s `[bis.<name>]` when there is one,
-/// else `bis.toml` (created by the first selection).
+/// Sets or clears (`None`) character `name`'s build selection, comments kept: in an old
+/// `config.toml` when its `[bis.<name>]` is there, else in `bis.toml`.
 ///
 /// # Errors
 /// A file that can't be read or written, isn't valid TOML or whose `bis` entry isn't a table;
@@ -413,8 +410,7 @@ pub fn select_build(files: &Files, name: &str, build: Option<&str>) -> Result<()
     edit(&path, &text, |t| config_page::set_bis_selection(t, name, build))
 }
 
-/// Forgets character `name`'s selection and damage entries in `bis.toml` and an old
-/// `config.toml` (every spelling, comments kept).
+/// Forgets character `name`'s entries (every spelling) in `bis.toml` and an old `config.toml`.
 ///
 /// # Errors
 /// As [`select_build`]; an old `config.toml` is edited first, so a broken one changes
@@ -428,7 +424,6 @@ pub fn remove_character(files: &Files, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// The file's text; `None` when it doesn't exist.
 fn read_existing(path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
@@ -437,7 +432,6 @@ fn read_existing(path: &Path) -> Result<Option<String>> {
     }
 }
 
-/// Whether `text` has a `[bis.<name>]` entry (any spelling).
 fn has_bis_entry(text: &str, name: &str) -> bool {
     let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
         return false;
@@ -447,8 +441,7 @@ fn has_bis_entry(text: &str, name: &str) -> bool {
         .is_some_and(|bis| !config_page::matching_keys(bis.iter().map(|(k, _)| k), name).is_empty())
 }
 
-/// Writes `change(text)` over `path` (atomically, creating its folder), unless nothing
-/// changed.
+/// Writes `change(text)` over `path` atomically, unless nothing changed.
 fn edit(path: &Path, text: &str, change: impl FnOnce(&str) -> Option<String>) -> Result<()> {
     let changed = change(text).with_context(|| format!("{} is not valid TOML", path.display()))?;
     if changed == text {
@@ -468,7 +461,6 @@ mod tests {
     use anyhow::{Result, anyhow};
     use d2r_core::testutil::temp_dir;
 
-    /// The repo's shipped playstyle.
     fn shipped() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury")
     }
@@ -481,7 +473,6 @@ mod tests {
         Ok(())
     }
 
-    /// A one-group farm list for `target`.
     fn farm(target: &str) -> String {
         format!("[[farm]]\nfor = \"{target}\"\nitems = [{{ name = \"Smoke\", kind = \"runeword\" }}]\n")
     }
@@ -497,7 +488,6 @@ mod tests {
     #[test]
     fn the_shipped_playstyle_parses_and_chains() -> Result<()> {
         let dir = shipped();
-        // Every file parses without a warning.
         let ((name, tables), warnings) =
             parse_playstyle(&std::fs::read_to_string(dir.join("playstyle.toml"))?)?;
         assert_eq!((name.as_str(), warnings), ("Summoner Druid → Fury Druid", vec![]));
@@ -521,7 +511,6 @@ mod tests {
         assert!(dir.join("valuables.json").is_file(), "the compiled-in mark rules");
         let (_, warnings) = parse_route(&std::fs::read_to_string(dir.join("route.toml"))?)?;
         assert_eq!(warnings, Vec::<String>::new(), "route.toml");
-        // Loaded alone, the summoner is the druid's default and chains into Fury.
         let files = Files {
             shipped: Some(dir),
             ..Files::default()
@@ -582,13 +571,11 @@ mod tests {
             settings.route.step.iter().map(|s| s.id.clone()).collect()
         };
         write(&dir.join("shipped/route.toml"), &route("shipped"))?;
-        // Shipped only.
         let settings = load(&files);
         assert_eq!(route_ids(&settings), ["shipped"]);
         assert_eq!(settings.valuables.trade, [Tier::B]);
         assert_eq!(farm_targets(&settings), ["shipped"]);
         assert_eq!(settings.build_defs.len(), 3, "only the .toml files");
-        // The old places win over the shipped files: per file, per table.
         write(
             &dir.join("config/config.toml"),
             "[shrines]\nshow = []\n[valuables]\ntrade = [\"A\"]\n",
@@ -607,7 +594,6 @@ mod tests {
         assert_eq!(farm_targets(&settings), ["old"]);
         assert_eq!(notes_of(&settings, "b"), Some("old"));
         assert_eq!(notes_of(&settings, "a"), Some("shipped"));
-        // The user's folder wins over both, a whole file at a time.
         write(&dir.join("config/playstyle/playstyle.toml"), "name = \"U\"\n")?;
         write(&dir.join("config/playstyle/farm.toml"), &farm("user"))?;
         write(&dir.join("config/playstyle/builds/a.toml"), &build("A", "user"))?;
@@ -632,7 +618,6 @@ mod tests {
     #[test]
     fn the_old_places_still_load() -> Result<()> {
         let dir = temp_dir("playstyle-old")?;
-        // The setup from before the folder layout: everything next to config.toml.
         write(
             &dir.join("config.toml"),
             "# mine\n[valuables]\ntwink = []\n[shrines]\nshow = [\"skill\"]\n\
@@ -660,7 +645,6 @@ mod tests {
         assert_eq!(settings.bis.get("vex").map(|b| b.build.as_str()), Some("x build"));
         assert_eq!(settings.build_defs.keys().collect::<Vec<_>>(), ["x build"]);
         assert_eq!(farm_targets(&settings), ["X Build"]);
-        // The core reads the same file without a complaint.
         let config = d2r_core::config::load_from(&dir.join("config.toml"));
         assert_eq!(config.shrines.show, [12]);
         std::fs::remove_dir_all(&dir)?;
@@ -680,13 +664,11 @@ mod tests {
         let old_text = "# keep me\n[shrines]\nshow = []\n\n[bis.Old]\nbuild = \"a\"\n";
         write(&old, old_text)?;
         let selected = |name: &str| load(&files).bis.get(name).map(|b| b.build.clone());
-        // A new character: bis.toml (created, with its header); config.toml untouched.
         select_build(&files, "New One", Some("b"))?;
         assert_eq!(std::fs::read_to_string(&old)?, old_text);
         let text = std::fs::read_to_string(&bis)?;
         assert!(text.starts_with(BIS_HEADER), "{text}");
         assert_eq!(selected("new one").as_deref(), Some("b"));
-        // A character selected in config.toml: edited there, comments kept.
         select_build(&files, "OLD", Some("c"))?;
         let text = std::fs::read_to_string(&old)?;
         assert!(
@@ -695,25 +677,20 @@ mod tests {
         );
         assert!(!std::fs::read_to_string(&bis)?.contains("Old"));
         assert_eq!(selected("old").as_deref(), Some("c"));
-        // bis.toml wins over config.toml per character.
         write(&bis, &format!("{BIS_HEADER}[bis.old]\nbuild = \"z\"\n"))?;
         assert_eq!(selected("old").as_deref(), Some("z"));
-        // Clearing removes the entry; removing a character empties both files of it.
         select_build(&files, "new one", Some("b"))?;
         select_build(&files, "New One", None)?;
         assert_eq!(selected("new one"), None);
         remove_character(&files, "old")?;
         assert_eq!(load(&files).bis, BTreeMap::new());
         assert!(std::fs::read_to_string(&old)?.contains("# keep me"));
-        // Nothing to do: no write, no error.
         std::fs::remove_file(&bis)?;
         select_build(&files, "Nobody", None)?;
         remove_character(&files, "Nobody")?;
         assert!(!bis.exists(), "clearing nothing creates no file");
-        // A broken config.toml: the removal fails before anything changes.
         write(&old, "[bis\n")?;
         assert!(remove_character(&files, "x").is_err());
-        // No data dir: a selection can't be saved.
         let nowhere = Files::default();
         assert!(select_build(&nowhere, "X", Some("b")).is_err());
         std::fs::remove_dir_all(&dir)?;
@@ -737,7 +714,6 @@ mod tests {
             (settings.valuables.trade.as_slice(), farm_targets(&settings)),
             (&[Tier::S][..], vec!["old"])
         );
-        // Half-written farm list: the old list stays; the valuables reload.
         write(
             &dir.join("config/farm.toml"),
             "[[farm]]\nfor = \"B\"\nitems = [{ name = \"Sm",
@@ -746,20 +722,17 @@ mod tests {
         reload(&mut settings, &files);
         assert_eq!(farm_targets(&settings), ["old"], "kept");
         assert_eq!(settings.valuables.trade, [Tier::A]);
-        // A broken config.toml keeps the valuables; the fixed farm list reloads.
         write(&dir.join("config/config.toml"), "[valuables\n")?;
         write(&dir.join("config/farm.toml"), &farm("fixed"))?;
         reload(&mut settings, &files);
         assert_eq!(settings.valuables.trade, [Tier::A], "kept");
         assert_eq!(farm_targets(&settings), ["fixed"]);
-        // Removed: the next place's (the shipped list), then none.
         std::fs::remove_file(dir.join("config/farm.toml"))?;
         reload(&mut settings, &files);
         assert_eq!(farm_targets(&settings), ["shipped"]);
         std::fs::remove_file(dir.join("shipped/farm.toml"))?;
         reload(&mut settings, &files);
         assert_eq!(settings.farm, []);
-        // The first load of a broken file: the defaults.
         write(&dir.join("config/farm.toml"), "[[farm]]\nfor = 3\n")?;
         assert_eq!(load(&files).farm, []);
         assert_eq!(load(&files).valuables, Valuables::default());
@@ -797,7 +770,6 @@ mod tests {
             "blank pieces dropped"
         );
         assert_eq!(old, Vec::<String>::new(), "no old place used");
-        // No folder anywhere: no builds, no error.
         assert_eq!(load_builds(&Files::default(), &mut old), (BTreeMap::new(), false));
         std::fs::remove_dir_all(&dir)?;
         Ok(())
@@ -816,8 +788,6 @@ mod tests {
         };
         let mut settings = load(&files);
         assert_eq!(settings.build_defs.keys().collect::<Vec<_>>(), ["a", "b"]);
-        // A field this binary doesn't know (as `merc_acts` was for the running release):
-        // every current build stays, the other file's new content included only once fixed.
         write(&builds.join("a.toml"), "name = \"A\"\nmerc_wishes = [9]\n")?;
         write(&builds.join("b.toml"), "name = \"B2\"\n")?;
         reload(&mut settings, &files);
@@ -831,21 +801,18 @@ mod tests {
 
     #[test]
     fn the_loot_filter_is_the_users_file_else_the_shipped_one() -> Result<()> {
-        // The shipped profile, byte for byte.
         let shipped_files = Files {
             shipped: Some(shipped()),
             ..Files::default()
         };
         let bytes = std::fs::read(shipped().join("loot-filter.json"))?;
         assert_eq!(loot_filter(&shipped_files).as_deref(), Some(&bytes[..]));
-        // Its profile is named as playstyle.toml expects.
         let ((_, tables), _) = parse_playstyle(&std::fs::read_to_string(shipped().join("playstyle.toml"))?)?;
         assert_eq!(tables.filter_name.as_deref(), Some("Fury Druid"));
         assert_eq!(
             loot_filter_mismatch(Some(&bytes), tables.filter_name.as_deref()),
             None
         );
-        // The user's file wins; an old place doesn't count; nothing anywhere = None.
         let dir = temp_dir("playstyle-loot-filter")?;
         write(&dir.join("shipped/loot-filter.json"), "{\"name\": \"shipped\"}")?;
         write(&dir.join("config/loot-filter.json"), "{\"name\": \"old place\"}")?;
@@ -868,7 +835,6 @@ mod tests {
             loot_filter(&files).as_deref(),
             Some(&b"{\"name\": \"mine\"}\n"[..])
         );
-        // The name check: playstyle.toml's filter_name against the profile's name.
         assert_eq!(
             loot_filter_mismatch(Some(b"{\"name\": \"mine\"}"), Some("mine")),
             None
