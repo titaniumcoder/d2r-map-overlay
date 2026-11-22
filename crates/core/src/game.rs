@@ -70,6 +70,11 @@ pub struct Snapshot {
     pub player_candidates: Vec<Candidate>,
     #[serde(default, skip_serializing_if = "ChosenBy::is_first_candidate")]
     pub player_chosen_by: ChosenBy,
+    /// Whether the player is one of the account's own characters (has a save file,
+    /// [`crate::played::own_characters`]); `None` when the reader can't tell. Only an own
+    /// character is recorded in `played.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player_own: Option<bool>,
     pub level: Level,
     pub presets: Vec<Preset>,
     pub room_links: Vec<RoomLink>,

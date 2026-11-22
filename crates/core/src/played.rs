@@ -1,7 +1,7 @@
 //! `played.json`: when each character was last played (so the config page lists recent ones
 //! first) and the guide stage it last reached, which latches even while the stash is unread.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -111,6 +111,52 @@ pub fn plausible_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphabetic() || b == b'-' || b == b'_')
+}
+
+/// The account's own characters: the lowercased names of the save files in the game's save
+/// directory `dir` (a `.ctlo` appears when an online character is created, a `.d2s` for an
+/// offline one). Other players of a group game have none there. `None` when the directory can't
+/// be read or holds no character file, so a missing source never disowns everyone.
+#[must_use]
+pub fn own_characters(dir: &Path) -> Option<BTreeSet<String>> {
+    let own: BTreeSet<String> = fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(save_owner)
+                .map(str::to_lowercase)
+        })
+        .collect();
+    (!own.is_empty()).then_some(own)
+}
+
+/// Drops every entry of the file at `path` whose character is not in `own`
+/// ([`own_characters`]): other players a group game once recorded. Returns the dropped names; a
+/// missing file stays missing.
+///
+/// # Errors
+/// Fails when the file can't be written.
+pub fn retain_own(path: &Path, own: &BTreeSet<String>) -> Result<Vec<String>> {
+    let _guard = lock_file();
+    let Some(mut played) = read(path) else {
+        return Ok(Vec::new());
+    };
+    let mut dropped = Vec::new();
+    played.retain(|key, entry| {
+        let keep = own.contains(key);
+        if !keep {
+            dropped.push(entry.name.clone());
+        }
+        keep
+    });
+    if !dropped.is_empty() {
+        write(path, &played)?;
+        OUTSIDE_EDITS.fetch_add(1, Ordering::SeqCst);
+    }
+    Ok(dropped)
 }
 
 /// Last-played times from the save files in the game's save directory `dir` (newest file per
@@ -395,6 +441,69 @@ mod tests {
         assert_eq!(save_owner("Fulmina224078545.keyo"), None);
         assert_eq!(save_owner("Settings.json"), None);
         assert_eq!(save_owner("123.ctlo"), None);
+    }
+
+    #[test]
+    fn own_characters_are_the_save_files() -> Result<()> {
+        let saves = temp_dir("played-own")?;
+        fs::create_dir_all(&saves)?;
+        assert_eq!(
+            own_characters(&saves),
+            None,
+            "no character file: unknown, not nobody"
+        );
+        assert_eq!(own_characters(&saves.join("missing")), None);
+        for file in [
+            "Vex224417895.ctlo",
+            "Vex224417895.keyo",
+            "BigBadWolf224159493.ctlo",
+            "Wolfie.d2s",
+            "Settings.json",
+        ] {
+            fs::write(saves.join(file), "")?;
+        }
+        let own = own_characters(&saves).context("own characters")?;
+        assert_eq!(own.iter().collect::<Vec<_>>(), ["bigbadwolf", "vex", "wolfie"]);
+        fs::remove_dir_all(&saves)?;
+        Ok(())
+    }
+
+    #[test]
+    fn other_players_are_dropped_from_the_file() -> Result<()> {
+        let dir = temp_dir("played-retain-own")?;
+        let path = dir.join("played.json");
+        let own = BTreeSet::from(["vex".to_owned(), "bigbadwolf".to_owned()]);
+        assert_eq!(retain_own(&path, &own)?, Vec::<String>::new());
+        assert!(!path.exists(), "a missing file stays missing");
+        fs::create_dir_all(&dir)?;
+        fs::write(
+            &path,
+            r#"{"bigbadwolf":{"name":"BigBadWolf","t":1,"class":5,"stage":"summoner druid"},
+                "padres":{"name":"Padres","t":2,"class":2},
+                "vex":{"name":"Vex","t":3,"class":6,"level":19},
+                "zorken":{"name":"Zorken","t":4,"class":1}}"#,
+        )?;
+        let mut tracker = Tracker::open(Some(path.clone()), Played::new);
+        tracker.record("Vex", Some(6), 5, Instant::now());
+        tracker.reach("Vex", "fire wake assassin");
+        assert_eq!(retain_own(&path, &own)?, ["Padres", "Zorken"]);
+        let played = load(&path);
+        assert_eq!(played.keys().collect::<Vec<_>>(), ["bigbadwolf", "vex"]);
+        assert_eq!(
+            played.get("bigbadwolf").and_then(|e| e.stage.as_deref()),
+            Some("summoner druid"),
+            "own entries are untouched"
+        );
+        assert_eq!(
+            retain_own(&path, &own)?,
+            Vec::<String>::new(),
+            "nothing left to drop"
+        );
+        // The running tracker keeps its character's stage across the edit.
+        tracker.record("Vex", Some(6), 6, Instant::now() + WRITE_INTERVAL);
+        assert_eq!(tracker.reached("Vex"), Some("fire wake assassin"));
+        fs::remove_dir_all(&dir)?;
+        Ok(())
     }
 
     #[test]

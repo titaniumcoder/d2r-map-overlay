@@ -36,8 +36,12 @@ fn send(tx: &Sender<Msg>, msg: Msg) -> Result<(), UiGone> {
 }
 
 /// Notes the snapshot's player in `played.json`: seen now, with its level and the names its
-/// mercenary and it wear (the other characters' wants of the shared stash).
+/// mercenary and it wear (the other characters' wants of the shared stash). Not when it is no
+/// own character (another player of a group game, [`Snapshot::player_own`]).
 fn record_player(tracker: &mut played::Tracker, snap: &Snapshot) {
+    if snap.player_own == Some(false) {
+        return;
+    }
     let name = &snap.player.name;
     tracker.record(name, Some(snap.player.class), now_secs(), Instant::now());
     let worn = game::worn_names(&snap.equipped_items)
@@ -324,11 +328,13 @@ fn follow_game<P: Playstyle>(
     }
     let mut saver = game_file::Saver::new(state_path);
     let mut cow_stats = cows::Counter::open(cows::default_path(), journal::default_dir().as_deref());
+    let save_dir = reader.save_dir();
     let mut last_played = played::Tracker::open(played::default_path(), || {
-        reader
-            .save_dir()
-            .map_or_else(played::Played::new, |dir| played::seed_from_saves(&dir))
+        save_dir
+            .as_deref()
+            .map_or_else(played::Played::new, played::seed_from_saves)
     });
+    drop_other_players(save_dir.as_deref());
     let mut dedup = Dedup::default();
     let mut shown_marks = UiMarks::default();
     let mut sound_memory = sounds::Memory::default();
@@ -411,10 +417,32 @@ fn follow_game<P: Playstyle>(
     }
 }
 
+/// Drops the entries of `played.json` that are no own character (no save file in `saves`): other
+/// players of a group game an older overlay recorded. Nothing when the own characters are unknown.
+fn drop_other_players(saves: Option<&Path>) {
+    let (Some(path), Some(own)) = (played::default_path(), saves.and_then(played::own_characters)) else {
+        return;
+    };
+    match played::retain_own(&path, &own) {
+        Ok(dropped) if !dropped.is_empty() => {
+            eprintln!(
+                "played: dropped {dropped:?}: no save file in the game's save dir, so not own characters"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("played: dropping other players: {e:#}"),
+    }
+}
+
 fn log_new_game(snap: &Snapshot) {
+    let own = match snap.player_own {
+        Some(true) => "",
+        Some(false) => " (no own character: not recorded)",
+        None => " (own characters unknown)",
+    };
     eprintln!(
         "new game (previous player no longer present): remembered markers and kills cleared; \
-         player {:?} chosen by {} among {} candidates",
+         player {:?}{own} chosen by {} among {} candidates",
         snap.player.name,
         snap.player_chosen_by.label(),
         snap.player_candidates.len()
@@ -506,6 +534,29 @@ mod tests {
     fn fixture() -> Result<Snapshot> {
         let json = include_str!("../../../tests/fixtures/jail1-snapshot.json");
         serde_json::from_str(json).context("parsing fixture")
+    }
+
+    #[test]
+    fn only_an_own_or_unknown_player_is_recorded() -> Result<()> {
+        let dir = crate::testutil::temp_dir("live-record-own")?;
+        let path = dir.join("played.json");
+        let mut tracker = played::Tracker::open(Some(path.clone()), played::Played::new);
+        let mut snap = fixture()?;
+        snap.player.name = "Padres".to_owned();
+        snap.player_own = Some(false);
+        record_player(&mut tracker, &snap);
+        assert!(!path.exists(), "another player of a group game is not recorded");
+        snap.player.name = "Vex".to_owned();
+        for own in [None, Some(true)] {
+            snap.player_own = own;
+            // A fresh tracker: the same character's next write waits for the write interval.
+            let mut tracker = played::Tracker::open(Some(path.clone()), played::Played::new);
+            record_player(&mut tracker, &snap);
+            assert!(played::load(&path).contains_key("vex"), "{own:?}");
+            played::remove(&path, "vex")?;
+        }
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
     }
 
     fn speed() -> crate::game::SpeedStats {

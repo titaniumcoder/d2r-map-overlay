@@ -1,7 +1,7 @@
 //! Reads one snapshot of the game state into the core's model ([`d2r_core::game`]). Lists change
 //! while we read, so a bad entry is only a warning; only a missing player (or level) fails.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use d2r_core::game::{
@@ -331,11 +331,15 @@ fn player_items(
 }
 
 /// The candidate to use as the player and the rule that picked it, by precedence; `None` if no
-/// candidate fits.
+/// candidate fits. With the account's `own` characters known ([`d2r_core::played::own_characters`],
+/// lowercased), only own candidates take part after `--player`: the other players of a group game
+/// have no save file, so neither a stale previous choice nor an owner vote can pick one. No own
+/// candidate (a character whose save file isn't written yet): all of them, as without `own`.
 fn choose_player<'a>(
     candidates: &'a [Candidate],
     player_name: Option<&str>,
     previous: Option<u32>,
+    own: Option<&BTreeSet<String>>,
     scan: &ItemScan,
 ) -> Option<(&'a Candidate, ChosenBy)> {
     if let Some(name) = player_name {
@@ -344,16 +348,22 @@ fn choose_player<'a>(
             .find(|c| c.name == name)
             .map(|c| (c, ChosenBy::Name));
     }
-    if let Some(c) = previous.and_then(|id| candidates.iter().find(|c| c.id == id)) {
+    let is_own = |c: &Candidate| own.is_some_and(|own| own.contains(&c.name.to_lowercase()));
+    let pool: Vec<&Candidate> = if candidates.iter().any(is_own) {
+        candidates.iter().filter(|c| is_own(c)).collect()
+    } else {
+        candidates.iter().collect()
+    };
+    if let Some(c) = previous.and_then(|id| pool.iter().find(|c| c.id == id)) {
         return Some((c, ChosenBy::Previous));
     }
     let by_owner = |votes: &OwnerVotes, by: ChosenBy| {
         let owner = votes.winner()?;
-        candidates.iter().find(|c| c.id == owner).map(|c| (c, by))
+        pool.iter().find(|c| c.id == owner).map(|c| (*c, by))
     };
     by_owner(&scan.stash_owners, ChosenBy::StashOwner)
         .or_else(|| by_owner(&scan.inventory_owners, ChosenBy::InventoryOwner))
-        .or_else(|| candidates.first().map(|c| (c, ChosenBy::FirstCandidate)))
+        .or_else(|| pool.first().map(|c| (*c, ChosenBy::FirstCandidate)))
 }
 
 /// Whether the game is solo: one distinct player name (a stale duplicate unit doesn't count).
@@ -452,7 +462,8 @@ fn walk_level(r: &mut Reader<'_, impl ReadMem>, level_addr: u64, level_id: u32) 
 
 /// Reads one snapshot. `unit_table` is the hash table address from [`crate::image::Image::unit_table`];
 /// `items_table` is the item-code table from [`items::find_table`] (`None`: unique and set drops only).
-/// `previous` is the unit id of the player chosen before (see [`ChosenBy::Previous`]).
+/// `previous` is the unit id of the player chosen before (see [`ChosenBy::Previous`]); `own`
+/// the account's own characters, lowercased (`None`: unknown; see [`choose_player`]).
 ///
 /// # Errors
 /// Fails if no live player unit is found (or none named `player_name`), or the player's level
@@ -463,13 +474,14 @@ pub fn snapshot(
     items_table: Option<u64>,
     player_name: Option<&str>,
     previous: Option<u32>,
+    own: Option<&BTreeSet<String>>,
 ) -> Result<Snapshot> {
     let mut r = Reader::new(mem);
 
     let candidates = player_candidates(&mut r, unit_table);
     let candidate_ids: Vec<u32> = candidates.iter().map(|c| c.id).collect();
     let scan = r.items(unit_table, items_table, &candidate_ids);
-    let Some((chosen, chosen_by)) = choose_player(&candidates, player_name, previous, &scan) else {
+    let Some((chosen, chosen_by)) = choose_player(&candidates, player_name, previous, own, &scan) else {
         let names: Vec<&str> = candidates.iter().map(|c| c.name.as_str()).collect();
         match player_name {
             Some(name) => bail!("no live player named {name:?} (candidates: {names:?})"),
@@ -485,6 +497,7 @@ pub fn snapshot(
     let equipped_items = scan.equipped_items.get(&chosen.id).cloned().unwrap_or_default();
     let owned_names = scan.owned_names.get(&chosen.id).cloned().unwrap_or_default();
     let (runeword_copies, merc_worn) = held_copies(&scan, chosen.id, is_solo(&candidates));
+    let player_own = own.map(|own| own.contains(&chosen.name.to_lowercase()));
 
     let LevelWalk {
         mut level,
@@ -527,6 +540,7 @@ pub fn snapshot(
         stash_names,
         player_candidates: candidates,
         player_chosen_by: chosen_by,
+        player_own,
         level,
         presets,
         room_links,
@@ -2274,7 +2288,7 @@ mod tests {
 
     #[test]
     fn player_selection() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None, None, None)?;
+        let s = snapshot(&world()?, TABLE, None, None, None, None)?;
         assert_eq!(
             s.player.addr,
             Addr(P_ALICE),
@@ -2368,7 +2382,7 @@ mod tests {
     fn player_char_level_from_stat_12() -> Result<()> {
         // Strength, energy, then level among the player's stats.
         let m = world_with_player_stats(&[(0, 25), (1, 15), (stat_list::LEVEL, 34), (13, 9000)])?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(s.player.char_level, Some(34));
         assert_eq!(
             serde_json::to_value(&s)?.pointer("/player/char_level"),
@@ -2377,18 +2391,18 @@ mod tests {
 
         let m = world_with_player_stats(&[(stat_list::LEVEL, 34 << 8)])?;
         assert_eq!(
-            snapshot(&m, TABLE, None, None, None)?.player.char_level,
+            snapshot(&m, TABLE, None, None, None, None)?.player.char_level,
             Some(34),
             "shifted"
         );
 
         let m = world_with_player_stats(&[(0, 25)])?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(s.player.char_level, None, "no level stat");
 
         // The base world has no stat list on the player: no level, left out of the JSON.
         // (Its resists: see `player_own_resists_add_to_gear`.)
-        let s = snapshot(&world()?, TABLE, None, None, None)?;
+        let s = snapshot(&world()?, TABLE, None, None, None, None)?;
         assert_eq!(s.player.char_level, None);
         assert_eq!(serde_json::to_value(&s)?.pointer("/player/char_level"), None);
         Ok(())
@@ -2450,7 +2464,7 @@ mod tests {
             (STASH, ALICE_ID),
             (STASH, BOB_ID),
         ])?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_BOB), ChosenBy::StashOwner)
@@ -2466,14 +2480,14 @@ mod tests {
     #[test]
     fn inventory_owner_without_stash_items() -> Result<()> {
         let m = world_with_owned(&[(INVENTORY, BOB_ID), (INVENTORY, BOB_ID)])?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_BOB), ChosenBy::InventoryOwner)
         );
         // A stash owner that is no candidate falls through to the inventory vote.
         let m = world_with_owned(&[(STASH, 0x999), (INVENTORY, BOB_ID)])?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_BOB), ChosenBy::InventoryOwner)
@@ -2492,7 +2506,7 @@ mod tests {
             (STASH, tab),
             (STASH, BOB_ID),
         ])?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_BOB), ChosenBy::StashOwner)
@@ -2503,7 +2517,7 @@ mod tests {
     #[test]
     fn player_name_beats_the_owner_vote() -> Result<()> {
         let m = world_with_owned(&[(STASH, BOB_ID), (INVENTORY, BOB_ID)])?;
-        let s = snapshot(&m, TABLE, None, Some("Alice"), None)?;
+        let s = snapshot(&m, TABLE, None, Some("Alice"), None, None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_ALICE), ChosenBy::Name)
@@ -2515,20 +2529,56 @@ mod tests {
     fn previous_player_is_kept_while_a_candidate() -> Result<()> {
         // Alice was chosen before; the owner votes say Bob.
         let m = world_with_owned(&[(STASH, BOB_ID), (INVENTORY, BOB_ID)])?;
-        let s = snapshot(&m, TABLE, None, None, Some(ALICE_ID))?;
+        let s = snapshot(&m, TABLE, None, None, Some(ALICE_ID), None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_ALICE), ChosenBy::Previous)
         );
         // `--player` still wins over the previous choice.
-        let s = snapshot(&m, TABLE, None, Some("Bob"), Some(ALICE_ID))?;
+        let s = snapshot(&m, TABLE, None, Some("Bob"), Some(ALICE_ID), None)?;
         assert_eq!((s.player.addr, s.player_chosen_by), (Addr(P_BOB), ChosenBy::Name));
         // The previous player left (no such candidate): the vote decides again.
-        let s = snapshot(&m, TABLE, None, None, Some(0x999))?;
+        let s = snapshot(&m, TABLE, None, None, Some(0x999), None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_BOB), ChosenBy::StashOwner)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn only_own_characters_can_be_the_player() -> Result<()> {
+        // Group game: Bob owns the voted items and was even chosen before, but only Alice has a
+        // save file on this account.
+        let m = world_with_owned(&[(STASH, BOB_ID), (INVENTORY, BOB_ID)])?;
+        let alice = BTreeSet::from(["alice".to_owned()]);
+        let s = snapshot(&m, TABLE, None, None, None, Some(&alice))?;
+        assert_eq!(s.player.addr, Addr(P_ALICE));
+        assert_eq!(s.player_own, Some(true));
+        let s = snapshot(&m, TABLE, None, None, Some(BOB_ID), Some(&alice))?;
+        assert_eq!(
+            s.player.addr,
+            Addr(P_ALICE),
+            "a wrong previous choice doesn't stick"
+        );
+        // Among several own candidates the usual rules decide.
+        let both = BTreeSet::from(["alice".to_owned(), "bob".to_owned()]);
+        let s = snapshot(&m, TABLE, None, None, None, Some(&both))?;
+        assert_eq!(
+            (s.player.addr, s.player_chosen_by),
+            (Addr(P_BOB), ChosenBy::StashOwner)
+        );
+        // No own candidate (a save file not written yet): all of them, flagged as not own.
+        let carol = BTreeSet::from(["carol".to_owned()]);
+        let s = snapshot(&m, TABLE, None, None, None, Some(&carol))?;
+        assert_eq!(
+            (s.player.addr, s.player_chosen_by, s.player_own),
+            (Addr(P_BOB), ChosenBy::StashOwner, Some(false))
+        );
+        // `--player` still names anyone; unknown own characters say so.
+        let s = snapshot(&m, TABLE, None, Some("Bob"), None, Some(&alice))?;
+        assert_eq!((s.player.addr, s.player_own), (Addr(P_BOB), Some(false)));
+        assert_eq!(snapshot(&m, TABLE, None, None, None, None)?.player_own, None);
         Ok(())
     }
 
@@ -2539,7 +2589,7 @@ mod tests {
         let alice = world_with_owned(&[(STASH, ALICE_ID)])?;
         let mut session = d2r_core::session::Session::default();
         for (i, m) in [&bob, &alice, &bob, &alice].into_iter().enumerate() {
-            let mut s = snapshot(m, TABLE, None, None, session.player_id())?;
+            let mut s = snapshot(m, TABLE, None, None, session.player_id(), None)?;
             assert_eq!(s.player.addr, Addr(P_BOB), "tick {i}");
             assert!(!session.apply(&mut s).new_game, "tick {i}");
         }
@@ -2556,7 +2606,7 @@ mod tests {
             (STASH, item_data::NO_OWNER),
             (STASH, 0),
         ])?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(
             (s.player.addr, s.player_chosen_by),
             (Addr(P_ALICE), ChosenBy::FirstCandidate)
@@ -2624,7 +2674,7 @@ mod tests {
         // from gear), Fire Bolt 2 (another class's skill), Blessed Hammer 20.
         let nodes = [(0, 1), (219, 1), (96, 5), (98, 3), (99, 0), (36, 2), (112, 20)];
         alice_skills(&mut m, &nodes, 0, 3)?;
-        let s = snapshot(&m, TABLE, None, Some("Alice"), None)?;
+        let s = snapshot(&m, TABLE, None, Some("Alice"), None, None)?;
         assert_eq!(s.skills.points, vec![(96, 5), (98, 3), (112, 20)]);
         assert_eq!(
             (s.skills.left, s.skills.right),
@@ -2645,7 +2695,7 @@ mod tests {
             0x60,
             &[(skill::TXT, &UNMAPPED.to_le_bytes())],
         )?;
-        let s = snapshot(&m, TABLE, None, Some("Alice"), None)?;
+        let s = snapshot(&m, TABLE, None, Some("Alice"), None, None)?;
         assert_eq!(s.skills.points, vec![(96, 5)], "the readable entry stays");
         assert!(
             s.warnings.iter().any(|w| w.starts_with("skill ")),
@@ -2657,7 +2707,7 @@ mod tests {
 
     #[test]
     fn no_skill_list_is_empty_skills_without_a_warning() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None, Some("Alice"), None)?;
+        let s = snapshot(&world()?, TABLE, None, Some("Alice"), None, None)?;
         assert!(s.skills.is_empty());
         assert!(
             !s.warnings.iter().any(|w| w.contains("skill")),
@@ -2692,7 +2742,7 @@ mod tests {
         set_body(&mut m, I3, 2)?;
         base_items_table(&mut m)?;
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         assert_eq!(s.merc_worn, ["Harlequin Crest"]);
         assert_eq!(
             s.owned_names,
@@ -2743,7 +2793,7 @@ mod tests {
         patch(&mut m, I2, UNIT_SIZE, unit::INVENTORY, &INV0.to_le_bytes())?;
         base_items_table(&mut m)?;
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         assert_eq!(s.player_candidates.len(), 2, "Alice and Bob");
         assert!(s.merc_worn.is_empty(), "{:?}", s.merc_worn);
         assert!(s.runeword_copies.is_empty(), "{:?}", s.runeword_copies);
@@ -2757,7 +2807,7 @@ mod tests {
 
         // The same gear with Bob alone in the game counts.
         solo_bob(&mut m)?;
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         assert_eq!(s.merc_worn, ["Harlequin Crest", "Leaf"]);
         assert_eq!(s.runeword_copies, ["Leaf"]);
         assert_eq!(s.holdings().count("Harlequin Crest"), 1);
@@ -2827,7 +2877,7 @@ mod tests {
         patch(&mut m, I6, UNIT_SIZE, unit::INVENTORY, &INV0.to_le_bytes())?;
         base_items_table(&mut m)?;
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         assert_eq!(s.equipped, vec![(1, 7), (2, 5), (4, 2), (3, 4)]);
         assert_eq!(s.merc_equipped, vec![(3, 2)], "the merc's piece stays a pair");
         assert_eq!(s.merc_worn, ["Leaf"], "a merc-worn runeword is worn by the merc");
@@ -2928,7 +2978,7 @@ mod tests {
             (stat_list::RESIST_COLD, 20),
             (stat_list::RESIST_POISON, 20),
         ])?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         let all = SpeedStats {
             res_fire: 20,
             res_cold: 20,
@@ -2939,7 +2989,7 @@ mod tests {
         assert_eq!(s.player.speed, Some(all));
         // No resists on the list: nothing added (no gear: no speed stats at all).
         let m = world_with_player_stats(&[(stat_list::LEVEL, 68)])?;
-        assert_eq!(snapshot(&m, TABLE, None, None, None)?.player.speed, None);
+        assert_eq!(snapshot(&m, TABLE, None, None, None, None)?.player.speed, None);
         // The summing itself: shifted and negative values, other stats ignored.
         let minus_five = (-5i32).cast_unsigned();
         assert_eq!(
@@ -3009,7 +3059,7 @@ mod tests {
         );
         item_list(&mut m, foreign, ring_id + 1, 0x40, (affix_entries, 1), (0, 0), 0)?;
 
-        let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, None, Some("Bob"), None, None)?;
         let expected = SpeedStats {
             fcr: 25,
             fhr: 10,
@@ -3077,7 +3127,7 @@ mod tests {
         entries(&mut m, arr, &[(stat_list::RESIST_POISON, 11)]);
         base_items_table(&mut m)?;
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         let speed = s.player.speed.context("Bob's gear stats")?;
         assert_eq!(speed.res_poison, 11);
         assert!(
@@ -3129,7 +3179,7 @@ mod tests {
         m.add(entries, b);
         list(&mut m, foreign, ring_id + 1, entries, 1, 0)?;
 
-        let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, None, Some("Bob"), None, None)?;
         let ring = s.equipped_items.first().context("ring")?;
         assert_eq!(
             ring.stats,
@@ -3167,7 +3217,7 @@ mod tests {
         patch(&mut m, I1, UNIT_SIZE, unit::INVENTORY, &INV0.to_le_bytes())?;
         base_items_table(&mut m)?;
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         assert_eq!(s.owned_names, vec!["Leaf"]);
         assert!(s.equipped_items.is_empty(), "stashed, not worn");
         assert_eq!(worn_names(&s.equipped_items), Vec::<String>::new());
@@ -3188,7 +3238,7 @@ mod tests {
         set_body(&mut m, I2, 3)?;
         base_items_table(&mut m)?;
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Alice"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Alice"), None, None)?;
         assert_eq!(s.equipped, vec![(3, 4)], "only Alice's armour");
         assert_eq!(
             s.equipped_items.iter().map(|e| e.body).collect::<Vec<_>>(),
@@ -3199,7 +3249,7 @@ mod tests {
             "Bob's Shako is not Alice's: {:?}",
             s.owned_names
         );
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         assert_eq!(s.equipped, vec![(1, 7)]);
         assert_eq!(s.owned_names, vec!["Harlequin Crest"]);
         Ok(())
@@ -3226,18 +3276,18 @@ mod tests {
         let mut m = world()?;
         // R2 belongs to another level: the walk keeps R0, R1 and stops with a warning.
         room(&mut m, R2, (10, 26, 4, 4), 0, 0, L_OTHER, 0, 0)?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(s.level.rooms.len(), 2);
         assert!(s.warnings.iter().any(|w| w.contains("room walk stopped")));
         // A foreign first room means the level offsets are wrong: that's an error, not an empty map.
         level_struct(&mut m, LEVEL, 21, R_OTHER)?;
-        assert!(snapshot(&m, TABLE, None, None, None).is_err());
+        assert!(snapshot(&m, TABLE, None, None, None, None).is_err());
         Ok(())
     }
 
     #[test]
     fn level_rooms_in_world_tiles() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None, None, None)?;
+        let s = snapshot(&world()?, TABLE, None, None, None, None)?;
         assert_eq!(s.level.id, 21);
         assert_eq!(
             s.level.rooms,
@@ -3319,7 +3369,7 @@ mod tests {
         room(&mut m, R_OTHER2, (48, 60, 8, 8), 0, 0, L_OTHER, 0, 0)?;
         near_array(&mut m, NEAR0, &[R_OTHER, R1, 0, R_OTHER2, 0]);
         set_near(&mut m, R0, NEAR0, 5)?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         let from = rect(50, 100, 40, 30);
         let link = |to_room| BorderLink {
             from_room: from,
@@ -3344,12 +3394,12 @@ mod tests {
         near_array(&mut m, NEAR1, &[R_OTHER]);
         set_near(&mut m, R0, NEAR0, 2)?;
         set_near(&mut m, R1, NEAR1, 1)?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         let from: Vec<RoomRect> = s.border_links.iter().map(|l| l.from_room).collect();
         assert_eq!(from, vec![rect(50, 100, 40, 30), rect(90, 100, 40, 40)]);
         // Empty border links stay out of the JSON; filled ones round-trip.
         assert!(
-            serde_json::to_value(snapshot(&world()?, TABLE, None, None, None)?)?
+            serde_json::to_value(snapshot(&world()?, TABLE, None, None, None, None)?)?
                 .get("border_links")
                 .is_none()
         );
@@ -3369,7 +3419,7 @@ mod tests {
         }
         near_array(&mut m, NEAR0, &rooms);
         set_near(&mut m, R0, NEAR0, 100_000)?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(s.border_links.len(), 1, "the 64th entry is still read");
         assert!(
             s.warnings.iter().any(|w| w.contains("100000 near rooms")),
@@ -3386,7 +3436,7 @@ mod tests {
         set_near(&mut m, R0, UNMAPPED, 3)?;
         near_array(&mut m, NEAR1, &[UNMAPPED]);
         set_near(&mut m, R1, NEAR1, 1)?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(s.border_links, vec![]);
         assert_eq!(s.level.rooms.len(), 3, "the rooms are still read");
         assert!(
@@ -3410,7 +3460,7 @@ mod tests {
         room_with_preset(&mut m, R0, (10, 20, 8, 6), R1, ROOM1_0, LEVEL, PR_OBJ, RT0, LP0)?;
         room_with_preset(&mut m, R1, (18, 20, 8, 8), R2, 0, LEVEL, PR_MON, 0, UNMAPPED)?;
         put(&mut m, LP0, 0x10, &[(level_preset::ID, &525u32.to_le_bytes())])?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         let ids: Vec<Option<u32>> = s.level.rooms.iter().map(|r| r.preset).collect();
         assert_eq!(ids, vec![Some(525), None, None]);
         // Optional data: the unmapped record adds no warning (only the bad room-tile link does).
@@ -3424,7 +3474,7 @@ mod tests {
 
     #[test]
     fn presets_and_links() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None, None, None)?;
+        let s = snapshot(&world()?, TABLE, None, None, None, None)?;
         assert_eq!(
             s.presets,
             vec![
@@ -3475,7 +3525,7 @@ mod tests {
 
     #[test]
     fn monsters_and_items() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None, None, None)?;
+        let s = snapshot(&world()?, TABLE, None, None, None, None)?;
         let monster = |addr, txt, x, y, flags, name_seed| Monster {
             addr: Addr(addr),
             id: u32::try_from(addr >> 12).unwrap_or_default(),
@@ -3573,7 +3623,7 @@ mod tests {
     #[test]
     fn monster_desecrated_state() -> Result<()> {
         let m = world_with_states([Some(&[189]), Some(&[56, 188, 190]), None])?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         let flags: Vec<_> = s.monsters.iter().map(|m| (m.addr.0, m.desecrated)).collect();
         assert_eq!(flags, vec![(M0, true), (M1, false), (M2, false)]);
         assert!(
@@ -3584,7 +3634,7 @@ mod tests {
         assert!(!s.terrorized, "one desecrated monster is not enough");
 
         let m = world_with_states([Some(&[189]), Some(&[3, 189]), None])?;
-        assert!(snapshot(&m, TABLE, None, None, None)?.terrorized);
+        assert!(snapshot(&m, TABLE, None, None, None, None)?.terrorized);
         Ok(())
     }
 
@@ -3839,7 +3889,7 @@ mod tests {
         rich_item(&mut m, I4, (30, 3, 0, 0), &[(194, 3)], 0)?;
         base_items_table(&mut m)?;
 
-        let mut s = snapshot(&m, TABLE, Some(ITEMS), None, None)?;
+        let mut s = snapshot(&m, TABLE, Some(ITEMS), None, None, None)?;
         assert!(
             s.warnings.iter().all(|w| !w.starts_with("item")),
             "{:?}",
@@ -3938,7 +3988,7 @@ mod tests {
         set_owner(&mut m, I6, ALICE_ID)?;
         base_items_table(&mut m)?;
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         assert_eq!((s.ground_items, s.drops.len()), (0, 0));
         assert_eq!(s.inventory_items, 4, "page-0 stored items, any owner");
         let shako = s
@@ -4208,7 +4258,7 @@ mod tests {
         }
         m.add(ITEMS, b);
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         assert!(
             s.warnings.iter().all(|w| !w.contains("stash")),
             "{:?}",
@@ -4268,7 +4318,7 @@ mod tests {
     fn stash_tabs_without_items_still_show() -> Result<()> {
         use d2r_core::stash::{StashTab, TabKind};
         let m = world_with_tabs()?;
-        let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, None, Some("Bob"), None, None)?;
         let empty = |kind| StashTab { kind, items: vec![] };
         assert_eq!(
             s.stash,
@@ -4288,7 +4338,7 @@ mod tests {
     fn the_tab_list_header_is_found_at_either_offset_and_checked() -> Result<()> {
         use d2r_core::stash::TabKind;
         let kinds = |m: &FakeMem| -> Result<Vec<TabKind>> {
-            let s = snapshot(m, TABLE, None, Some("Bob"), None)?;
+            let s = snapshot(m, TABLE, None, Some("Bob"), None, None)?;
             Ok(s.stash.iter().map(|t| t.kind).collect())
         };
         let ui = vec![
@@ -4316,7 +4366,7 @@ mod tests {
         use d2r_core::stash::{StashTab, TabKind};
         let mut m = world_with_tabs()?;
         bob_tab_list(&mut m, 0x60, &[], 0)?;
-        let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, None, Some("Bob"), None, None)?;
         let pages: Vec<_> = s.stash.iter().map(|t| t.kind).collect();
         assert_eq!(
             pages,
@@ -4332,7 +4382,7 @@ mod tests {
         // No tab list and no live tab units (the stash not loaded): nothing, no warning.
         let mut m = world()?;
         bob_tab_list(&mut m, 0x60, &[], 0)?;
-        let s = snapshot(&m, TABLE, None, Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, None, Some("Bob"), None, None)?;
         assert_eq!(s.stash, Vec::<StashTab>::new());
         assert!(
             s.warnings.iter().all(|w| !w.contains("stash")),
@@ -4388,7 +4438,7 @@ mod tests {
         }
         m.add(ITEMS, b);
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         // Page-4 items of other owners (stale tab units) are left out.
         assert_eq!(
             item_plan(&s),
@@ -4406,7 +4456,7 @@ mod tests {
              stash in unit order"
         );
         // An empty list stays out of the JSON.
-        let mut quiet = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let mut quiet = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         quiet.owned_items.clear();
         let json = serde_json::to_string(&quiet)?;
         assert!(!json.contains("owned_items"), "{json}");
@@ -4432,7 +4482,7 @@ mod tests {
             .copy_from_slice(b"ghm ");
         m.add(ITEMS, b);
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None, None)?;
         assert_eq!(
             item_plan(&s),
             vec!["Sigon's Visor (stash → 3–4)", "Sigon's Visor (inv)"],
@@ -4493,11 +4543,11 @@ mod tests {
         // M1 (monstats 41 here) carries the store; M0 has no inventory.
         patch(&mut m, M1, UNIT_SIZE, unit::INVENTORY, &NPC_INV.to_le_bytes())?;
 
-        let s = snapshot(&m, TABLE, Some(ITEMS), None, None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), None, None, None)?;
         assert_eq!(s.shop, None, "level 21 is no town: the inventories aren't walked");
 
         level_struct(&mut m, LEVEL, 40, R0)?; // Lut Gholein
-        let s = snapshot(&m, TABLE, Some(ITEMS), None, None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), None, None, None)?;
         let shop = s.shop.context("a shop in town")?;
         assert_eq!((shop.npc_txt, shop.npc), (41, None), "not a vendor row");
         let names: Vec<_> = shop
@@ -4524,7 +4574,7 @@ mod tests {
     #[test]
     fn ground_drops() -> Result<()> {
         let m = world_with_items()?;
-        let s = snapshot(&m, TABLE, Some(ITEMS), None, None)?;
+        let s = snapshot(&m, TABLE, Some(ITEMS), None, None, None)?;
         assert_eq!(
             s.ground_items, 5,
             "I0 (mode 1) and I5 (mode 0) are not on the ground"
@@ -4553,7 +4603,7 @@ mod tests {
         );
 
         // Without the items table only quality tells: unique and set, no codes.
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(s.ground_items, 5);
         assert_eq!(
             s.drops,
@@ -4568,9 +4618,9 @@ mod tests {
     #[test]
     fn player_by_name() -> Result<()> {
         let mem = world()?;
-        let s = snapshot(&mem, TABLE, None, Some("Bob"), None)?;
+        let s = snapshot(&mem, TABLE, None, Some("Bob"), None, None)?;
         assert_eq!((s.player.addr, s.player.class, s.player.x), (Addr(P_BOB), 5, 95));
-        let err = snapshot(&mem, TABLE, None, Some("Ghost"), None)
+        let err = snapshot(&mem, TABLE, None, Some("Ghost"), None, None)
             .err()
             .context("stale player must not match")?;
         assert!(err.to_string().contains("\"Alice\", \"Bob\""), "{err}");
@@ -4582,7 +4632,7 @@ mod tests {
         let mut mem = world()?;
         table(&mut mem, &[(unit_table::PLAYER, 3, P_STALE)])?;
         unit(&mut mem, P_STALE, 0, 1, PD_STALE, 0, 0, 0)?;
-        let err = snapshot(&mem, TABLE, None, None, None)
+        let err = snapshot(&mem, TABLE, None, None, None, None)
             .err()
             .context("expected error")?;
         assert!(err.to_string().contains("not in a game?"), "{err}");
@@ -4597,7 +4647,7 @@ mod tests {
         table(&mut mem, &slots)?;
         unit(&mut mem, M2, 1, 42, MD0, ACT, PATH_M2, M2)?;
         unit_path(&mut mem, PATH_M2, 70, 120, ROOM1_0)?;
-        let s = snapshot(&mem, TABLE, None, None, None)?;
+        let s = snapshot(&mem, TABLE, None, None, None, None)?;
         assert_eq!(
             s.monsters.iter().map(|m| m.txt).collect::<Vec<_>>(),
             vec![40, 41, 42]
@@ -4610,7 +4660,7 @@ mod tests {
     fn unreadable_unit_is_a_warning() -> Result<()> {
         let mut mem = world()?;
         unit(&mut mem, M1, 1, 41, MD1, ACT, PATH_M1, UNMAPPED)?;
-        let s = snapshot(&mem, TABLE, None, None, None)?;
+        let s = snapshot(&mem, TABLE, None, None, None, None)?;
         assert_eq!(s.monsters.len(), 2);
         assert!(
             s.warnings
@@ -4689,7 +4739,7 @@ mod tests {
                 (unit::PATH, &UNMAPPED.to_le_bytes()),
             ],
         )?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         let shrine = |txt, code, used, x, y| Shrine {
             txt,
             code,
@@ -4722,7 +4772,7 @@ mod tests {
                 .all(|w| w.starts_with(&format!("object {O5:#x}")))
         );
         // Empty lists stay out of the JSON.
-        let v = serde_json::to_value(snapshot(&world()?, TABLE, None, None, None)?)?;
+        let v = serde_json::to_value(snapshot(&world()?, TABLE, None, None, None, None)?)?;
         assert!(v.get("shrines").is_none() && v.get("wells").is_none());
         let v = serde_json::to_value(&s)?;
         assert_eq!(
@@ -4747,7 +4797,7 @@ mod tests {
         // O4 opened jungle chest 183 (mode 2) → O5 closed jungle chest 181: only the opened one.
         object(&mut m, O4, (183, 2, 0), (5100, 5200), O5)?;
         object(&mut m, O5, (181, 0, 0), (5120, 5220), 0)?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         let op = |txt, x, y| OperatedObject { txt, x, y };
         assert_eq!(
             s.operated_objects,
@@ -4761,7 +4811,7 @@ mod tests {
             s.warnings
         );
         // Empty stays out of the JSON; a listed one round-trips.
-        let v = serde_json::to_value(snapshot(&world()?, TABLE, None, None, None)?)?;
+        let v = serde_json::to_value(snapshot(&world()?, TABLE, None, None, None, None)?)?;
         assert!(v.get("operated_objects").is_none());
         let v = serde_json::to_value(&s)?;
         assert_eq!(
@@ -4816,7 +4866,7 @@ mod tests {
         preset_unit(&mut m, PR_DUP0, preset::OBJECT, 119, 3, 4, PR_DUP1)?;
         preset_unit(&mut m, PR_DUP1, preset::OBJECT, 119, 3, 4, PR_DUP2)?;
         preset_unit(&mut m, PR_DUP2, preset::MONSTER, 119, 3, 4, 0)?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         let got: Vec<(PresetKind, u32, u32, u32)> =
             s.presets.iter().map(|p| (p.kind, p.txt, p.x, p.y)).collect();
         assert_eq!(
@@ -4848,7 +4898,7 @@ mod tests {
         const ACT_MISC: u64 = 0x23_0000;
         let mut m = world()?;
         // The act isn't mapped in the base world: no difficulty, no warning, not in the JSON.
-        let s = snapshot(&m, TABLE, None, None, None)?;
+        let s = snapshot(&m, TABLE, None, None, None, None)?;
         assert_eq!(s.difficulty, None);
         assert_eq!(serde_json::to_value(&s)?.pointer("/difficulty"), None);
         put(&mut m, ACT, 0x80, &[(act::MISC, &ACT_MISC.to_le_bytes())])?;
@@ -4859,7 +4909,7 @@ mod tests {
                 0x840,
                 &[(act_misc::DIFFICULTY, &raw.to_le_bytes())],
             )?;
-            let s = snapshot(&m, TABLE, None, None, None)?;
+            let s = snapshot(&m, TABLE, None, None, None, None)?;
             assert_eq!(s.difficulty, want, "raw {raw}");
         }
         Ok(())
@@ -4869,7 +4919,7 @@ mod tests {
     fn staff_tomb_via_act_misc() -> Result<()> {
         const ACT_MISC: u64 = 0x23_0000;
         let mut m = world()?;
-        assert_eq!(snapshot(&m, TABLE, None, None, None)?.staff_tomb, None);
+        assert_eq!(snapshot(&m, TABLE, None, None, None, None)?.staff_tomb, None);
         put(&mut m, ACT, 0x80, &[(act::MISC, &ACT_MISC.to_le_bytes())])?;
         // Only tomb levels count: 0 (outside Act 2) and other ids are `None`.
         for (raw, want) in [
@@ -4885,7 +4935,7 @@ mod tests {
                 0x840,
                 &[(act_misc::STAFF_TOMB_LEVEL, &raw.to_le_bytes())],
             )?;
-            let s = snapshot(&m, TABLE, None, None, None)?;
+            let s = snapshot(&m, TABLE, None, None, None, None)?;
             assert_eq!(s.staff_tomb, want, "raw {raw}");
         }
         Ok(())
@@ -4903,13 +4953,13 @@ mod tests {
 
     #[test]
     fn json_shape() -> Result<()> {
-        let s = snapshot(&world()?, TABLE, None, None, None)?;
+        let s = snapshot(&world()?, TABLE, None, None, None, None)?;
         let v = serde_json::to_value(&s)?;
         let at = |p: &str| v.pointer(p).cloned().unwrap_or_default();
         assert_eq!(at("/player/addr"), "0x201000");
         assert_eq!(at("/presets/0/kind"), "object");
         assert_eq!(at("/presets/2/kind"), 9);
-        let s = snapshot(&world_with_items()?, TABLE, Some(ITEMS), None, None)?;
+        let s = snapshot(&world_with_items()?, TABLE, Some(ITEMS), None, None, None)?;
         let v = serde_json::to_value(&s)?;
         assert_eq!(
             v.pointer("/drops/0"),

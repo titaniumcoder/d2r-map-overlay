@@ -685,6 +685,14 @@ delete old ones by hand. Use it to find more landmark patterns offline.
 - **Room2 near rooms** (+0x10 array, +0x18 count) give walk-through borders to adjacent levels → border arrows.
 - **Allies carry elite flags**: assassin traps have MonsterData 0x08; monstats `Align` set → never elite, never drawn.
 - **Player choice is sticky per game** (group games flip-flopped and wiped the per-game memory).
+- **Only own characters can be the player** (bug 2026-11-22: other players of group games, Padres,
+  Zorken, Eisenwille, were picked by the inventory-owner vote and recorded in `played.json`, so /config
+  listed them). The account's own characters are the save files in the game's save dir
+  (`played::own_characters`: `<Name><digits>.ctlo` appears when an online character is created,
+  `<Name>.d2s` offline; other players have none). The reader re-reads them at most every 10 s and,
+  after `--player`, lets only own candidates take part in the previous / stash-owner /
+  inventory-owner / first-candidate rules (no own candidate, e.g. a save file not written yet: all,
+  as before); `Snapshot::player_own` says whether the chosen one is own (`None`: save dir unknown).
 - **Stash**: page 3 = cube, 4 = stash. Personal stash items are owned by the player id. Shared stash pages are
   player-type units without an act, one per page; the shared ones of the current character have
   `Inventory(+0x90) +0x48` = the player's id. Other tab units in memory are stale (earlier characters, offline
@@ -849,8 +857,10 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   per-character BiS / Mercenary slot lists, the damages line and the free-text "Add character" form
   are gone, and with them the gear state the core published for them (`GearInfo`, `publish_gear`).
   "Characters" lists only the player's own characters: the keys of `played.json`, which the live loop
-  fills from the snapshot's own player only and seeds from the account's save files, so other players
-  of a group game never appear; a `[bis]` or `[builds]` entry alone no longer lists a name. Each row:
+  fills from the snapshot's player only when it is an own character (`Snapshot::player_own`, see
+  "Only own characters can be the player") and seeds from the account's save files; each start drops
+  entries without a save file (logged; skipped when the save dir is unreadable or holds no
+  character), so other players of a group game never appear; a `[bis]` or `[builds]` entry alone no longer lists a name. Each row:
   name, a build select (options of the character's class or of any class, labelled with the chain,
   "Summoner Druid → Fury Druid"; saved on change via `POST /api/bis`), class, current stage, played
   ago, delete. Legacy inline `[bis.<name>.slots]` in an old `bis.toml` still load and still win for

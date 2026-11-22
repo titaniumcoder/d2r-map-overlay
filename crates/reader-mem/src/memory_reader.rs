@@ -1,5 +1,6 @@
 //! [`MemoryReader`]: the game layer's [`GameReader`], over any [`Platform`].
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -23,6 +24,10 @@ const fn table_retry_delay(failures: u32) -> Duration {
         _ => Duration::from_secs(10),
     }
 }
+
+/// How long the own-character names read from the save dir are used before a re-read (a
+/// character created meanwhile gets its save file then).
+const OWN_REFRESH: Duration = Duration::from_secs(10);
 
 /// Reads the game through platform `P`. `Default` gives a detached reader using the offset
 /// cache at [`offset_cache::default_path`].
@@ -58,6 +63,9 @@ struct Attached<M> {
     panels: Option<u64>,
     /// The stash window was open at the last snapshot.
     stash_open: bool,
+    /// The account's own characters ([`d2r_core::played::own_characters`]) and when they were
+    /// read; `None` before the first read.
+    own: Option<(Option<BTreeSet<String>>, Instant)>,
 }
 
 impl<M> Attached<M> {
@@ -70,6 +78,7 @@ impl<M> Attached<M> {
             quests: QuestFlags::new(),
             panels,
             stash_open: false,
+            own: None,
             probe: if std::env::var_os(ui_probe::ENV).is_some() {
                 Probe::Wanted
             } else {
@@ -247,7 +256,18 @@ impl<P: Platform> GameReader for MemoryReader<P> {
 
     fn snapshot(&mut self, player: Option<&str>, previous: Option<u32>) -> Result<Snapshot> {
         let a = self.attached.as_mut().context("not attached to the game")?;
-        let snap = game::snapshot(&a.mem, a.table, a.items.base(), player, previous)?;
+        if a.own
+            .as_ref()
+            .is_none_or(|(_, read)| read.elapsed() >= OWN_REFRESH)
+        {
+            let own = self
+                .platform
+                .save_dir(a.pid)
+                .and_then(|dir| d2r_core::played::own_characters(&dir));
+            a.own = Some((own, Instant::now()));
+        }
+        let own = a.own.as_ref().and_then(|(own, _)| own.as_ref());
+        let snap = game::snapshot(&a.mem, a.table, a.items.base(), player, previous, own)?;
         let item_codes_needed = snap.ground_items > 0 || snap.inventory_items > 0;
         if item_codes_needed {
             a.items.search(&self.platform, a.pid);

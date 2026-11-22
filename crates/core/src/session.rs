@@ -708,6 +708,7 @@ mod tests {
             stash_names: vec![],
             player_candidates: vec![],
             player_chosen_by: crate::game::ChosenBy::FirstCandidate,
+            player_own: None,
             level: Level {
                 id: level,
                 bounds: None,
