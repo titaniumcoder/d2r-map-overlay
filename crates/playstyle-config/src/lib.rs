@@ -7,6 +7,7 @@ pub mod files;
 pub mod gear_score;
 pub mod labels;
 pub mod marks;
+pub mod not_needed;
 pub mod route;
 pub mod stash_plan;
 pub mod valuables;

@@ -315,6 +315,8 @@ pub struct Build {
     pub tips: Vec<Tip>,
     /// One line per level range.
     pub stats_plan: Vec<String>,
+    /// The pieces `not-needed.toml` took out of this build ([`crate::not_needed::apply`]).
+    pub not_needed: Vec<String>,
 }
 
 impl Build {
@@ -443,6 +445,9 @@ pub struct FarmGroup {
     #[serde(rename = "for")]
     pub target: String,
     pub items: Vec<FarmItem>,
+    /// The entries `not-needed.toml` took out ([`crate::not_needed::apply`]).
+    #[serde(skip)]
+    pub not_needed: Vec<String>,
 }
 
 /// One farm-list entry: a unique, set or runeword by name, or a rolled item (`kind = "rolled"`:
@@ -1085,6 +1090,7 @@ pub fn parse_build(text: &str) -> Result<(String, Build, Vec<String>), toml::de:
             recipes: raw.recipes,
             tips,
             stats_plan: clean_pieces(&raw.stats_plan),
+            not_needed: Vec::new(),
         },
         warnings,
     ))

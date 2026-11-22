@@ -14,6 +14,7 @@ use crate::config::{
     Bis, Build, Builds, FarmGroup, Settings, Tables, Valuables, parse_build, parse_farm, parse_playstyle,
     parse_tables,
 };
+use crate::not_needed;
 use crate::route::{Route, parse_route};
 use crate::web::config_page;
 
@@ -163,7 +164,7 @@ fn read_all(files: &Files) -> Loaded {
     }
     let (name, filter_name) = tomls.names();
     let bis = read_selections(files, &tomls.legacy);
-    let (farm, from) = decide(
+    let (mut farm, from) = decide(
         files
             .layers("farm.toml")
             .iter()
@@ -171,7 +172,11 @@ fn read_all(files: &Files) -> Loaded {
     );
     old.extend(old_place(from, "farm.toml"));
     let route = read_route(files);
-    let (build_defs, builds_broken) = load_builds(files, &mut old);
+    let (mut build_defs, builds_broken) = load_builds(files, &mut old);
+    let marked = read(files, files.not_needed_path().as_deref(), not_needed::parse);
+    if let Say::Value(marked) = marked {
+        not_needed::apply(&marked, &mut build_defs, farm.as_deref_mut().unwrap_or_default());
+    }
     Loaded {
         name,
         filter_name,
@@ -424,6 +429,19 @@ pub fn remove_character(files: &Files, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Marks `piece` of build `build` not needed (`needed = false`) or needed again in
+/// `not-needed.toml`, comments kept; the hot reload then applies it.
+///
+/// # Errors
+/// The file can't be read or written or isn't valid TOML; no data dir.
+pub fn set_not_needed(files: &Files, build: &str, piece: &str, needed: bool) -> Result<()> {
+    let path = files
+        .not_needed_path()
+        .context("no data directory ($XDG_DATA_HOME and $HOME unset)")?;
+    let text = read_existing(&path)?.unwrap_or_else(|| not_needed::HEADER.to_owned());
+    edit(&path, &text, |t| not_needed::set(t, build, piece, needed))
+}
+
 fn read_existing(path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
@@ -458,7 +476,7 @@ mod tests {
     use super::*;
     use crate::config::owns_nothing;
     use crate::valuables::Tier;
-    use anyhow::{Result, anyhow};
+    use anyhow::{Context, Result, anyhow};
     use d2r_core::testutil::temp_dir;
 
     fn shipped() -> PathBuf {
@@ -693,6 +711,65 @@ mod tests {
         assert!(remove_character(&files, "x").is_err());
         let nowhere = Files::default();
         assert!(select_build(&nowhere, "X", Some("b")).is_err());
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn not_needed_marks_are_written_atomically_and_applied_on_load() -> Result<()> {
+        let dir = temp_dir("playstyle-not-needed")?;
+        let files = Files {
+            shipped: Some(shipped()),
+            state: Some(dir.join("data")),
+            quiet: true,
+            ..Files::default()
+        };
+        let path = dir.join("data/not-needed.toml");
+        let fury = |settings: &Settings| -> Result<(bool, bool, bool, Vec<String>)> {
+            let build = settings.build_defs.get("fury druid").context("fury build")?;
+            let group = settings
+                .farm
+                .iter()
+                .find(|g| g.target == "Fury Druid")
+                .context("fury farm group")?;
+            let in_body = build
+                .slots
+                .get("body")
+                .is_some_and(|p| p.iter().any(|e| e.starts_with("Duress@")));
+            let farmed = group.items.iter().any(|i| i.name == "Duress");
+            let recipe = build.recipes.iter().any(|r| r.name == "Duress");
+            Ok((in_body, farmed, recipe, build.not_needed.clone()))
+        };
+        assert_eq!(fury(&load(&files))?, (true, true, true, vec![]));
+        set_not_needed(&files, "Fury Druid", "Duress", false)?;
+        set_not_needed(&files, "Fury Druid", "No Such Piece", false)?;
+        let text = std::fs::read_to_string(&path)?;
+        assert!(text.starts_with(not_needed::HEADER), "{text}");
+        assert!(
+            !dir.join("data/not-needed.toml.tmp").exists(),
+            "renamed into place"
+        );
+        let marked = load(&files);
+        assert_eq!(
+            fury(&marked)?,
+            (false, false, false, vec!["Duress".to_owned()]),
+            "the unknown name is ignored"
+        );
+        let summoner = marked.build_defs.get("summoner druid").context("summoner")?;
+        assert!(summoner.not_needed.is_empty(), "per build");
+        set_not_needed(&files, "fury druid", "duress", true)?;
+        assert_eq!(fury(&load(&files))?, (true, true, true, vec![]), "undone");
+        // A failed write leaves the file as it was: the temporary name is taken by a folder.
+        let before = std::fs::read_to_string(&path)?;
+        std::fs::create_dir(dir.join("data/not-needed.toml.tmp"))?;
+        assert!(set_not_needed(&files, "Fury Druid", "Oath", false).is_err());
+        assert_eq!(std::fs::read_to_string(&path)?, before);
+        std::fs::remove_dir(dir.join("data/not-needed.toml.tmp"))?;
+        // A broken file marks nothing and isn't overwritten.
+        write(&path, "\"Fury Druid\" = [\n")?;
+        assert_eq!(fury(&load(&files))?, (true, true, true, vec![]));
+        assert!(set_not_needed(&files, "Fury Druid", "Oath", false).is_err());
+        assert!(set_not_needed(&Files::default(), "Fury Druid", "Oath", false).is_err());
         std::fs::remove_dir_all(&dir)?;
         Ok(())
     }

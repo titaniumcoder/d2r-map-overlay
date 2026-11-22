@@ -74,9 +74,9 @@ pub const fn farm_status(count: u32, stashed: u32, carried: u32) -> FarmStatus {
 }
 
 /// The farm list section, `null` without one: per farm group (build, in farm-list order) its
-/// still-missing entries, each with where to farm it ([`where_text`]); the entries held
-/// (`held`, for the pickup sound), the runes still needed over the whole list (in rune order)
-/// and the bosses worth farming.
+/// still-missing entries, each with where to farm it ([`where_text`]), and the ones marked not
+/// needed (`not_needed`, for the undo); the entries held (`held`, for the pickup sound), the
+/// runes still needed over the whole list (in rune order) and the bosses worth farming.
 #[must_use]
 pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
     if info.farm.is_empty() {
@@ -86,21 +86,21 @@ pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
     let mut wanted = RuneNeeds::new();
     let mut held: Vec<serde_json::Value> = Vec::new();
     let mut counted: Vec<(&str, bool)> = Vec::new();
-    let groups: Vec<(&str, Vec<Needed>)> = info
+    let groups: Vec<(&FarmGroup, Vec<Needed>)> = info
         .farm
         .iter()
         .map(|group| {
             let needed = collect_group(group, info, &materials, &mut wanted, &mut counted, &mut held);
-            (group.target.as_str(), needed)
+            (group, needed)
         })
         .collect();
     let spots = Spots::new(info, &materials);
     let groups: Vec<serde_json::Value> = groups
         .into_iter()
-        .filter(|(_, needed)| !needed.is_empty())
-        .map(|(target, needed)| {
+        .filter(|(group, needed)| !needed.is_empty() || !group.not_needed.is_empty())
+        .map(|(group, needed)| {
             let items: Vec<serde_json::Value> = needed.iter().map(|n| needed_json(n, &spots)).collect();
-            serde_json::json!({ "for": target, "items": items })
+            serde_json::json!({ "for": group.target, "items": items, "not_needed": group.not_needed })
         })
         .collect();
     let runes = rune_needs_json(wanted, &materials, &stash_materials(info));

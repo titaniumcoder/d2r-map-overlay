@@ -2744,6 +2744,117 @@ fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
 }
 
 #[test]
+fn farm_leaves_out_pieces_marked_not_needed_and_lists_them_for_the_undo() -> Result<()> {
+    let mut farm = fury_farm()?;
+    let marked = crate::not_needed::NotNeeded::from([(
+        "fury druid".to_owned(),
+        vec!["Raven Frost".to_owned(), "Bulwark".to_owned()],
+    )]);
+    crate::not_needed::apply(&marked, &mut BTreeMap::new(), &mut farm);
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.farm = &farm;
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    let names: Vec<String> = farm_needed(&json).into_iter().map(|(_, n)| n).collect();
+    assert_eq!(names, ["Fortitude", "Ribcracker", "Lawbringer", "Smoke"]);
+    assert_eq!(
+        json.pointer("/farm/groups/0/not_needed"),
+        Some(&serde_json::json!(["Raven Frost", "Bulwark"]))
+    );
+    let rune_for: Vec<&str> = json
+        .pointer("/farm/runes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|r| {
+            r.get("for")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert!(!rune_for.contains(&"Bulwark"), "no runes for it: {rune_for:?}");
+    // Every entry marked: the group stays, empty, so the undo is still there.
+    let all = fury_farm()?
+        .iter()
+        .flat_map(|g| g.items.iter().map(|i| i.name.clone()))
+        .collect();
+    let mut farm = fury_farm()?;
+    crate::not_needed::apply(
+        &crate::not_needed::NotNeeded::from([("fury druid".to_owned(), all)]),
+        &mut BTreeMap::new(),
+        &mut farm,
+    );
+    info.farm = &farm;
+    let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
+    assert_eq!(
+        farm_groups(&json),
+        [("Fury Druid".to_owned(), Vec::<String>::new())]
+    );
+    Ok(())
+}
+
+#[test]
+fn gear_grid_and_upgrades_leave_out_pieces_marked_not_needed() -> Result<()> {
+    let mut build = crate::config::Build {
+        name: "Fury Druid".to_owned(),
+        slots: [(
+            "helm".to_owned(),
+            vec!["Jalal's Mane@42".to_owned(), "Harlequin Crest@62".to_owned()],
+        )]
+        .into(),
+        ..crate::config::Build::default()
+    };
+    build
+        .extras
+        .insert("charms".to_owned(), vec!["Annihilus@70".to_owned()]);
+    let mut builds = BTreeMap::from([("fury druid".to_owned(), build)]);
+    let marked = crate::not_needed::NotNeeded::from([(
+        "fury druid".to_owned(),
+        vec!["Harlequin Crest".to_owned(), "Annihilus".to_owned()],
+    )]);
+    crate::not_needed::apply(&marked, &mut builds, &mut []);
+    let build = builds.get("fury druid").context("the build stays")?;
+    let bis = crate::config::Bis {
+        build: build.name.clone(),
+        slots: build.slots.clone(),
+        merc_slots: build.merc_slots.clone(),
+    };
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.bis = Some(&bis);
+    info.build = Some(build);
+    // An owned Harlequin Crest would be an upgrade to wear; marked, it isn't.
+    let owned = ["Harlequin Crest".to_owned()];
+    info.live.owned = &owned;
+    info.live.char_level = Some(70);
+    let gear = gear_json(&info);
+    let helm: Vec<_> = gear
+        .pointer("/columns/0/pieces")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p.get("name")?.as_str())
+        .collect();
+    assert_eq!(helm, ["Jalal's Mane"]);
+    assert_eq!(gear.get("extras"), Some(&serde_json::json!([])));
+    assert_eq!(
+        gear.get("not_needed"),
+        Some(&serde_json::json!(["Harlequin Crest", "Annihilus"]))
+    );
+    let upgrades = upgrades_json(&info);
+    assert!(upgrades.is_empty(), "{upgrades:?}");
+    let unmarked = crate::config::Bis {
+        slots: [("helm".to_owned(), vec!["Harlequin Crest@62".to_owned()])].into(),
+        ..bis.clone()
+    };
+    info.bis = Some(&unmarked);
+    assert_eq!(upgrades_json(&info).len(), 1, "the check above can fail");
+    Ok(())
+}
+
+#[test]
 fn farm_status_rule() {
     assert_eq!(farm_status(1, 1, 0), FarmStatus::Done);
     assert_eq!(farm_status(1, 2, 1), FarmStatus::Done, "extra copies stay done");

@@ -470,7 +470,8 @@ pub fn unique_set_qlvl(name: &str) -> Option<u32> {
         .min()
 }
 
-/// The gear grid section: the character's columns, the mercenary's and the build's extras.
+/// The gear grid section: the character's columns, the mercenary's and the build's extras, and
+/// the build's pieces marked not needed (`not_needed`, for the undo).
 #[must_use]
 pub fn gear_json(info: &PanelInfo) -> serde_json::Value {
     let mut columns: Vec<_> = GRID_COLUMNS
@@ -504,6 +505,7 @@ pub fn gear_json(info: &PanelInfo) -> serde_json::Value {
         "tips": tips_json(info),
         "merc": merc_columns(info),
         "extras": extras,
+        "not_needed": info.build.map_or(&[][..], |b| b.not_needed.as_slice()),
     })
 }
 

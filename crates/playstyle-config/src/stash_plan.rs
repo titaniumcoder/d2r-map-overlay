@@ -1214,6 +1214,7 @@ mod tests {
         use crate::config::{FarmGroup, FarmItem, FarmSlot};
         let config = Settings {
             farm: vec![FarmGroup {
+                not_needed: Vec::new(),
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
                     name: "Insight".to_owned(),
@@ -1986,6 +1987,7 @@ mod tests {
             },
         );
         config.farm = vec![FarmGroup {
+            not_needed: Vec::new(),
             target: "Fury".to_owned(),
             items: vec![FarmItem {
                 name: "Insight".to_owned(),
@@ -2056,6 +2058,7 @@ mod tests {
         use crate::config::{FarmGroup, FarmItem, FarmSlot};
         let config = Settings {
             farm: vec![FarmGroup {
+                not_needed: Vec::new(),
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
                     name: "Harmony".to_owned(),
@@ -2157,6 +2160,7 @@ mod tests {
         use d2r_core::stash::StashItem;
         let config = Settings {
             farm: vec![FarmGroup {
+                not_needed: Vec::new(),
                 target: "Fury".to_owned(),
                 items: vec![FarmItem {
                     name: "Harmony".to_owned(),
@@ -2495,6 +2499,56 @@ mod tests {
                 vec![row(name, Spot::Page(1), Action::Keep(Side::Own), 1)]
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn a_piece_marked_not_needed_is_neither_kept_nor_given_a_base() -> anyhow::Result<()> {
+        // User decision 2026-11-22: the player removes pieces they no longer want by hand.
+        let fury_needs = |config: &Settings| -> anyhow::Result<Needs> {
+            let def = config
+                .build_defs
+                .get("fury druid")
+                .ok_or_else(|| anyhow::anyhow!("no fury druid"))?;
+            let bis = Bis {
+                build: def.name.clone(),
+                slots: def.slots.clone(),
+                merc_slots: def.merc_slots.clone(),
+            };
+            let chain = ["fury druid".to_owned()];
+            Ok(Needs::from_config(config, &chain, Some(&bis), 5, &[], &|_| 0))
+        };
+        let wants = |needs: &Needs, name: &str| {
+            (
+                needs.pieces.iter().any(|(n, c)| same_name(n, name) && *c > 0),
+                needs.bases.iter().any(|b| b.word.name == name),
+            )
+        };
+        let tomb_reaver = [at(named("7pa", item_data::QUALITY_UNIQUE, 298), Spot::Page(1))];
+        let mut config = shipped();
+        let needs = fury_needs(&config)?;
+        assert_eq!(wants(&needs, "Grief"), (true, true));
+        assert_eq!(wants(&needs, "Tomb Reaver"), (true, false));
+        let kept = rows(&tomb_reaver, &needs);
+        assert_eq!(
+            kept,
+            vec![row("Tomb Reaver", Spot::Page(1), Action::Keep(Side::Own), 1)]
+        );
+        let marked = crate::not_needed::NotNeeded::from([(
+            "fury druid".to_owned(),
+            vec!["Grief".to_owned(), "Tomb Reaver".to_owned()],
+        )]);
+        crate::not_needed::apply(&marked, &mut config.build_defs, &mut config.farm);
+        let needs = fury_needs(&config)?;
+        assert_eq!(wants(&needs, "Grief"), (false, false), "no Grief base kept");
+        assert_eq!(wants(&needs, "Tomb Reaver"), (false, false));
+        assert!(
+            rows(&tomb_reaver, &needs)
+                .iter()
+                .all(|(_, _, action, _)| *action != Action::Keep(Side::Own)),
+            "falls through to the trade / sell rules: {:?}",
+            rows(&tomb_reaver, &needs)
+        );
         Ok(())
     }
 
