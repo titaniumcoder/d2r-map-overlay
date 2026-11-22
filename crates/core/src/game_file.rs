@@ -120,8 +120,6 @@ mod tests {
                 wsm: None,
                 strength: None,
                 dexterity: None,
-                states: None,
-                newest_state: None,
             },
             equipped: vec![],
             merc_equipped: vec![],
@@ -158,7 +156,6 @@ mod tests {
             trail: vec![],
             skills: crate::game::Skills::default(),
             shop: None,
-            buff_research: None,
             warnings: vec![],
         }
     }

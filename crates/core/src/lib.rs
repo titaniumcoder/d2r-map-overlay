@@ -4,8 +4,6 @@
 pub mod affixes_data;
 pub mod bases_data;
 pub mod breakpoints;
-pub mod buff_strip;
-pub mod buffs;
 pub mod build;
 pub mod config;
 pub mod cows;
@@ -43,7 +41,6 @@ pub mod shop;
 pub mod skills_data;
 pub mod socket_bases;
 pub mod stash;
-pub mod states_data;
 #[cfg(any(test, feature = "testutil"))]
 pub mod testutil;
 pub mod tombs;

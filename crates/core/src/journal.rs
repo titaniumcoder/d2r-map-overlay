@@ -9,9 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::buffs;
 use crate::config::SHRINE_NAMES;
-use crate::game::{Bounds, PresetKind, Room, Snapshot, StatListDump};
+use crate::game::{Bounds, PresetKind, Room, Snapshot};
 use crate::guidance::{Category, Tier};
 use crate::guidance::{MarkKind, Marks};
 use crate::items::DropKind;
@@ -150,24 +149,7 @@ pub enum Event {
     /// The shared-stash tab units were first seen live in a game (`captured`, with the tab
     /// and item counts) or the session's stash cache was dropped (a new game; counts 0).
     Stash { captured: bool, tabs: u32, items: u32 },
-    /// The player's shown states (all but [`buffs::HIDDEN`]) changed, with a raw dump of the
-    /// player's stat-list chain for the buff tracker research. At most [`MAX_BUFF_EVENTS`] a game.
-    Buffs {
-        level: u32,
-        added: Vec<u32>,
-        added_names: Vec<&'static str>,
-        removed: Vec<u32>,
-        removed_names: Vec<&'static str>,
-        states: Vec<u32>,
-        states_copy: Vec<u32>,
-        lists: Vec<StatListDump>,
-        full: Vec<(u16, u16, u32)>,
-        truncated: bool,
-    },
 }
-
-/// Most `buffs` events written per game: each carries a few KB of raw stat lists.
-pub const MAX_BUFF_EVENTS: usize = 200;
 
 /// Rooms sharing a preset id: how many and their bounding box (world tiles, max exclusive).
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -235,11 +217,6 @@ pub struct Recorder {
     wells: HashSet<(u32, u32, u32)>,
     /// Levels seen terrorized.
     terror: HashSet<u32>,
-    /// The player's shown states (without [`buffs::HIDDEN`]) at the last `buffs` event;
-    /// `None` before the first in this game.
-    buff_states: Option<Vec<u32>>,
-    /// `buffs` events written this game.
-    buff_events: usize,
 }
 
 impl Recorder {
@@ -268,7 +245,6 @@ impl Recorder {
         self.mercs_seen(snap, snap.level.id, &mut out);
         self.drops(snap, marks, &mut out);
         self.objects(snap, &mut out);
-        self.buffs(snap, &mut out);
         out
     }
 
@@ -346,44 +322,6 @@ impl Recorder {
                 });
             }
         }
-    }
-
-    /// The `buffs` event when the player's shown states changed since the last one (up to
-    /// [`MAX_BUFF_EVENTS`] per game). Nothing with the states unread or without the reader's
-    /// raw dump (it is only read when the shown states changed).
-    fn buffs(&mut self, snap: &Snapshot, out: &mut Vec<Event>) {
-        let (Some(states), Some(research)) = (&snap.player.states, &snap.buff_research) else {
-            return;
-        };
-        if self.buff_events >= MAX_BUFF_EVENTS {
-            return;
-        }
-        let shown = buffs::shown(states);
-        let before = self.buff_states.as_deref().unwrap_or_default();
-        if self.buff_states.is_some() && before == shown.as_slice() {
-            return;
-        }
-        let added: Vec<u32> = shown.iter().copied().filter(|id| !before.contains(id)).collect();
-        let removed: Vec<u32> = before.iter().copied().filter(|id| !shown.contains(id)).collect();
-        let names = |ids: &[u32]| {
-            ids.iter()
-                .map(|&id| buffs::state_name(id).unwrap_or("?"))
-                .collect()
-        };
-        out.push(Event::Buffs {
-            level: snap.level.id,
-            added_names: names(&added),
-            removed_names: names(&removed),
-            added,
-            removed,
-            states: states.clone(),
-            states_copy: research.states_copy.clone(),
-            lists: research.lists.clone(),
-            full: research.full.clone(),
-            truncated: research.truncated,
-        });
-        self.buff_states = Some(shown);
-        self.buff_events += 1;
     }
 
     /// The drop events of `snap`, once per item unit, each with its mark from `marks`.
@@ -711,8 +649,6 @@ mod tests {
                 wsm: None,
                 strength: None,
                 dexterity: None,
-                states: None,
-                newest_state: None,
             },
             equipped: vec![],
             merc_equipped: vec![],
@@ -749,7 +685,6 @@ mod tests {
             trail: vec![],
             skills: crate::game::Skills::default(),
             shop: None,
-            buff_research: None,
             warnings: vec![],
         }
     }
@@ -796,7 +731,6 @@ mod tests {
                 Event::Terror { .. } => "terror",
                 Event::Merc { .. } => "merc",
                 Event::Stash { .. } => "stash",
-                Event::Buffs { .. } => "buffs",
             })
             .collect()
     }
@@ -892,74 +826,6 @@ mod tests {
             kinds(&r.observe(&next, &Marks::default())),
             vec!["level", "terror"],
             "a new game"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn buffs_event_on_shown_state_changes() -> Result<()> {
-        use crate::game::{BuffResearch, StatListDump};
-        let mut r = Recorder::default();
-        let mut s = snap(1, 39);
-        // No raw dump (no stat list): never an event.
-        s.player.states = Some(vec![32]);
-        assert_eq!(kinds(&r.observe(&s, &Marks::default())), vec!["level"]);
-        s.buff_research = Some(BuffResearch {
-            states_copy: vec![32],
-            lists: vec![StatListDump {
-                addr: Addr(0x90_0000),
-                owner_type: 0,
-                owner_id: 1,
-                flags: 0x8000_0000,
-                head: "00ff".into(),
-                count: 1,
-                entries: vec![(0, 12, 30)],
-            }],
-            full: vec![(0, 12, 30)],
-            truncated: false,
-        });
-        let first = r.observe(&s, &Marks::default());
-        let ev = first.first().context("first buffs event")?;
-        assert_eq!(
-            serde_json::to_value(ev)?,
-            json!({"ev": "buffs", "level": 39, "added": [32], "added_names": ["battleorders"],
-                "removed": [], "removed_names": [], "states": [32], "states_copy": [32],
-                "lists": [{"addr": "0x900000", "owner_type": 0, "owner_id": 1,
-                    "flags": 0x8000_0000_u32, "head": "00ff", "count": 1, "entries": [[0, 12, 30]]}],
-                "full": [[0, 12, 30]], "truncated": false}),
-            "the game's first snapshot is a change from nothing"
-        );
-        assert!(r.observe(&s, &Marks::default()).is_empty(), "unchanged");
-        // Unread states (a failed read the reader could not cover): no event, no change.
-        s.player.states = None;
-        assert!(r.observe(&s, &Marks::default()).is_empty(), "unread");
-        s.player.states = Some(vec![32]);
-        assert!(r.observe(&s, &Marks::default()).is_empty(), "back, unchanged");
-        // A hidden state (justhit) coming and going is no change.
-        s.player.states = Some(vec![32, 86]);
-        assert!(r.observe(&s, &Marks::default()).is_empty(), "hidden state");
-        // Battle Orders gone, Feral Rage and Lower Resist on.
-        s.player.states = Some(vec![61, 86, 120]);
-        let ev = r.observe(&s, &Marks::default());
-        let v = serde_json::to_value(ev.first().context("change event")?)?;
-        assert_eq!(v.get("added"), Some(&json!([61, 120])));
-        assert_eq!(v.get("added_names"), Some(&json!(["lowerresist", "feralrage"])));
-        assert_eq!(v.get("removed"), Some(&json!([32])));
-        assert_eq!(v.get("states"), Some(&json!([61, 86, 120])), "hidden ones listed");
-        // The per-game cap.
-        for i in 0..MAX_BUFF_EVENTS {
-            s.player.states = Some(vec![u32::try_from(i % 2)?]);
-            r.observe(&s, &Marks::default());
-        }
-        s.player.states = Some(vec![5]);
-        assert!(r.observe(&s, &Marks::default()).is_empty(), "capped");
-        // A new game starts over, with the current states as added.
-        let mut next = snap(2, 39);
-        next.player.states = Some(vec![5]);
-        next.buff_research = s.buff_research.clone();
-        assert_eq!(
-            kinds(&r.observe(&next, &Marks::default())),
-            vec!["level", "buffs"]
         );
         Ok(())
     }

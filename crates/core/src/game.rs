@@ -125,8 +125,6 @@ pub struct Snapshot {
     /// The vendor trade window open right now; read in towns only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shop: Option<crate::shop::Shop>,
-    #[serde(skip)]
-    pub buff_research: Option<BuffResearch>,
     pub warnings: Vec<String>,
 }
 
@@ -163,47 +161,6 @@ pub fn has_state(flags: &[u8], state: u32) -> bool {
         .ok()
         .and_then(|i| dwords.get(i))
         .is_some_and(|&d| u32::from_le_bytes(d) & (1 << (state % 32)) != 0)
-}
-
-/// The states set in the state bitfield `flags`, ascending.
-#[must_use]
-pub fn active_states(flags: &[u8]) -> Vec<u32> {
-    let (dwords, _) = flags.as_chunks::<4>();
-    (0u32..)
-        .zip(dwords)
-        .flat_map(|(i, &d)| {
-            let d = u32::from_le_bytes(d);
-            (0..32)
-                .filter(move |bit| d & (1 << bit) != 0)
-                .map(move |bit| i * 32 + bit)
-        })
-        .collect()
-}
-
-/// Raw dump of the player's stat lists for the buff tracker research (journal `buffs` event).
-#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
-pub struct BuffResearch {
-    /// States decoded from the bitfield's second copy (`stat_list::STATE_FLAGS_COPY`).
-    pub states_copy: Vec<u32>,
-    /// Every list of the player's chain, in chain order (capped by the reader).
-    pub lists: Vec<StatListDump>,
-    /// The top list's aggregated array, `(layer, stat id, value)`.
-    pub full: Vec<(u16, u16, u32)>,
-    /// The chain or a list's entries were cut at the reader's caps.
-    pub truncated: bool,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct StatListDump {
-    pub addr: Addr,
-    pub owner_type: u32,
-    pub owner_id: u32,
-    pub flags: u32,
-    /// Hex of the list's first [`crate::offsets::stat_list::DUMP_LEN`] bytes (fewer if unreadable).
-    pub head: String,
-    pub count: u64,
-    /// `(layer, stat id, value)` entries, at most the reader's per-list cap.
-    pub entries: Vec<(u16, u16, u32)>,
 }
 
 #[must_use]
@@ -243,24 +200,6 @@ pub struct Player {
     pub strength: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dexterity: Option<u32>,
-    /// Active states (states.txt ids, ascending); `None` when unread, so the live reader can carry
-    /// the last value over a failed read.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub states: Option<Vec<u32>>,
-    /// The state list most recently attached to the player's stats: a new one each time a
-    /// state is (re)applied, which is how a refreshed buff shows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub newest_state: Option<StateList>,
-}
-
-/// A state's own stat list.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StateList {
-    pub list: Addr,
-    /// states.txt row.
-    pub state: u32,
-    /// `(stat id, value)`.
-    pub stats: Vec<(u16, u32)>,
 }
 
 /// The player's speed stats and elemental resistances summed over equipped items and charms;

@@ -5,11 +5,10 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use d2r_core::game::{
-    Addr, BorderLink, Bounds, BuffResearch, Candidate, ChosenBy, Equipped, ItemDrop, Level, Monster,
-    OperatedObject, Place, Player, Preset, PresetKind, Room, RoomLink, RoomPos, RoomRect, Shrine, Skills,
-    Snapshot, SpeedStats, StatListDump, StateList, Well, active_states, char_level_from_raw,
-    difficulty_from_raw, has_state, identified_unique_or_set, is_shrine_object, is_terrorized, is_town,
-    is_well_object, magic_or_better, maybe_white_base,
+    Addr, BorderLink, Bounds, Candidate, ChosenBy, Equipped, ItemDrop, Level, Monster, OperatedObject, Place,
+    Player, Preset, PresetKind, Room, RoomLink, RoomPos, RoomRect, Shrine, Skills, Snapshot, SpeedStats,
+    Well, char_level_from_raw, difficulty_from_raw, has_state, identified_unique_or_set, is_shrine_object,
+    is_terrorized, is_town, is_well_object, magic_or_better, maybe_white_base,
 };
 use d2r_core::items::{self, DropKind};
 use d2r_core::objects::is_consumable_quest_object;
@@ -22,13 +21,6 @@ use d2r_core::reader::ReadMem;
 use d2r_core::skills_data;
 use d2r_core::stash::{self, StashTab};
 
-const MAX_BUFF_LISTS: usize = 32;
-/// Entries kept per dumped list (its `count` still says how many it has).
-const MAX_BUFF_ENTRIES: usize = 64;
-/// Rough JSON budget of one `buffs` dump, so a journal line stays a few dozen KB.
-const MAX_BUFF_DUMP_BYTES: usize = 32 * 1024;
-/// Rough JSON bytes of one dumped stat entry.
-const BUFF_DUMP_BYTES_PER_ENTRY: usize = 24;
 const MAX_UNITS_PER_TYPE: usize = 1000;
 const MAX_ROOMS: usize = 5000;
 const MAX_PRESETS_PER_ROOM: usize = 500;
@@ -542,16 +534,8 @@ pub fn snapshot(
         trail: Vec::new(),
         skills,
         shop,
-        buff_research: None, // read on demand by [`buff_research`]
-
         warnings: r.into_warnings(),
     })
-}
-
-/// The raw stat-list dump of the player unit at `player` for the journal's `buffs` event;
-/// `None` without a stat list. Only a change of the shown states needs it.
-pub fn buff_research(mem: &impl ReadMem, player: u64) -> Option<BuffResearch> {
-    Reader::new(mem).buff_research(player)
 }
 
 /// Drops repeated presets, keeping the first of each: a Room2's preset list can hold repeats.
@@ -970,8 +954,6 @@ impl<'a, M: ReadMem> Reader<'a, M> {
             wsm: None,
             strength: self.stat(addr, stat_list::STRENGTH).ok().flatten(),
             dexterity: self.stat(addr, stat_list::DEXTERITY).ok().flatten(),
-            states: self.states(addr, stat_list::STATE_FLAGS),
-            newest_state: self.newest_state_list(addr),
         };
         Ok((player, level))
     }
@@ -1240,82 +1222,6 @@ impl<'a, M: ReadMem> Reader<'a, M> {
             .is_ok_and(|flags| has_state(&flags, state))
     }
 
-    /// The unit's active states from the state bitfield at `at` in its stat list
-    /// ([`stat_list::STATE_FLAGS`] or its copy); `None` when unread (not "no states").
-    fn states(&self, addr: u64, at: u64) -> Option<Vec<u32>> {
-        let list = self.ptr(addr, unit::STATS).ok().flatten()?;
-        self.bytes(list, at, stat_list::STATE_FLAG_DWORDS * 4)
-            .ok()
-            .map(|flags| active_states(&flags))
-    }
-
-    /// The list newest attached to the unit's top stat list, if it is a state's and still
-    /// attached; unreadable is `None`, silently (it is read every tick).
-    fn newest_state_list(&self, addr: u64) -> Option<StateList> {
-        let top = self.ptr(addr, unit::STATS).ok().flatten()?;
-        let list = self.ptr(top, stat_list::NEXT).ok().flatten()?;
-        let state = self.u32(list, stat_list::STATE).ok()?;
-        let attached = self.ptr(list, stat_list::PARENT).ok().flatten() == Some(top);
-        if state == 0 || !attached {
-            return None;
-        }
-        let entries = self.stat_entries(list).ok()?;
-        Some(StateList {
-            list: Addr(list),
-            state,
-            stats: entries
-                .into_iter()
-                .map(|(_, stat, value)| (stat, value))
-                .collect(),
-        })
-    }
-
-    /// The player's raw stat lists for the journal's `buffs` event; `None` without a stat list.
-    /// Research data: unreadable parts end the dump silently.
-    fn buff_research(&self, player: u64) -> Option<BuffResearch> {
-        let top = self.ptr(player, unit::STATS).ok().flatten()?;
-        let (lists, truncated) = self.stat_list_chain_dumps(top);
-        Some(BuffResearch {
-            states_copy: self
-                .states(player, stat_list::STATE_FLAGS_COPY)
-                .unwrap_or_default(),
-            lists,
-            full: self
-                .aggregated_entries(top)
-                .and_then(Result::ok)
-                .unwrap_or_default(),
-            truncated,
-        })
-    }
-
-    /// Dumps of the lists chained from `top` along [`stat_list::NEXT`] up to a cycle, an
-    /// unreadable list, [`MAX_BUFF_LISTS`] or [`MAX_BUFF_DUMP_BYTES`]; true if any was cut short.
-    fn stat_list_chain_dumps(&self, top: u64) -> (Vec<StatListDump>, bool) {
-        let mut seen = HashSet::new();
-        let mut lists = Vec::new();
-        let mut truncated = false;
-        let mut budget = MAX_BUFF_DUMP_BYTES;
-        let mut cur = Some(top);
-        while let Some(list) = cur {
-            if !seen.insert(list) {
-                break;
-            }
-            let Some(dump) = self.stat_list_dump(list) else {
-                break;
-            };
-            let size = dump.head.len() + dump.entries.len() * BUFF_DUMP_BYTES_PER_ENTRY;
-            if lists.len() >= MAX_BUFF_LISTS || size > budget {
-                truncated = true;
-                break;
-            }
-            budget -= size;
-            truncated |= usize::try_from(dump.count).map_or(true, |n| n > dump.entries.len());
-            lists.push(dump);
-            cur = self.ptr(list, stat_list::NEXT).ok().flatten();
-        }
-        (lists, truncated)
-    }
-
     /// The aggregated stat array of the list at `list` (base, affixes, runeword and socketed
     /// items, modifiers applied); `None` unless the list has [`stat_list::FLAG_FULL_STATS`].
     fn aggregated_entries(&self, list: u64) -> Option<Result<Vec<(u16, u16, u32)>>> {
@@ -1353,36 +1259,6 @@ impl<'a, M: ReadMem> Reader<'a, M> {
             .into_iter()
             .flat_map(|l| self.stat_entries(l).unwrap_or_default())
             .collect()
-    }
-
-    /// One list of [`Reader::buff_research`]; `None` if not even its header up to
-    /// [`stat_list::NEXT`] is readable.
-    fn stat_list_dump(&self, list: u64) -> Option<StatListDump> {
-        let short = usize::try_from(stat_list::NEXT).ok()? + 8;
-        let head = self
-            .bytes(list, 0, stat_list::DUMP_LEN)
-            .or_else(|_| self.bytes(list, 0, short))
-            .ok()?;
-        let u32_at = |off: u64| {
-            let off = usize::try_from(off).ok()?;
-            let b = head.get(off..off + 4)?;
-            Some(u32::from_le_bytes(b.try_into().ok()?))
-        };
-        Some(StatListDump {
-            addr: Addr(list),
-            owner_type: u32_at(stat_list::OWNER_TYPE).unwrap_or(0),
-            owner_id: u32_at(stat_list::OWNER_ID).unwrap_or(0),
-            flags: u32_at(stat_list::FLAGS).unwrap_or(0),
-            head: hex(&head),
-            count: self.u64(list, stat_list::COUNT).unwrap_or(0),
-            entries: self.stat_entries(list).map_or_else(
-                |_| Vec::new(),
-                |mut e| {
-                    e.truncate(MAX_BUFF_ENTRIES);
-                    e
-                },
-            ),
-        })
     }
 
     /// The shrines, wells and operated consumable quest objects among the loaded object units;
@@ -3616,275 +3492,6 @@ mod tests {
         let others = state_field(others);
         assert!(!has_state(&others, state::DESECRATED));
         assert!(has_state(&others, 188) && has_state(&others, 0) && has_state(&others, 255));
-    }
-
-    #[test]
-    fn active_states_decode_every_bit() {
-        // Bits 0 and 31 of dword 0, Battle Orders (32) in dword 1, desecrated (189) and the
-        // last bit (255).
-        let flags = state_field([0x8000_0001, 1, 0, 0, 0, 0x2000_0000, 0, 0x8000_0000]);
-        assert_eq!(active_states(&flags), [0, 31, 32, 189, 255]);
-        assert_eq!(active_states(&state_field([0; 8])), [0u32; 0]);
-        let every: Vec<u32> = (0..256).collect();
-        assert_eq!(active_states(&state_field([u32::MAX; 8])), every);
-        // A short field: only its whole dwords count.
-        assert_eq!(active_states(&[1, 0, 0, 0, 0xFF]), [0]);
-        for &id in &active_states(&flags) {
-            assert!(has_state(&flags, id), "agrees with has_state: {id}");
-        }
-    }
-
-    /// The player Alice with a top stat list (Battle Orders and Feral Rage set, Feral Rage
-    /// only in the second copy, an aggregated array) chained to a buff-like list that chains
-    /// back to the top (a cycle).
-    fn world_with_player_buffs() -> Result<FakeMem> {
-        use d2r_core::reader::ReadMem;
-        const TOP: u64 = 0x90_0000;
-        const BUFF: u64 = 0x91_0000;
-        const TOP_ENTRIES: u64 = 0x92_0000;
-        const BUFF_ENTRIES: u64 = 0x92_1000;
-        const FULL: u64 = 0x92_2000;
-        let mut m = world()?;
-        let mut alice = vec![0u8; UNIT_SIZE];
-        m.read(P_ALICE, &mut alice)?;
-        let off = usize::try_from(unit::STATS)?;
-        alice
-            .get_mut(off..off + 8)
-            .context("stats field in unit")?
-            .copy_from_slice(&TOP.to_le_bytes());
-        m.add(P_ALICE, alice);
-        put(
-            &mut m,
-            TOP,
-            0xB70,
-            &[
-                (stat_list::OWNER_TYPE, &unit_table::PLAYER.to_le_bytes()),
-                (stat_list::OWNER_ID, &7u32.to_le_bytes()),
-                (stat_list::FLAGS, &stat_list::FLAG_FULL_STATS.to_le_bytes()),
-                (stat_list::ENTRIES, &TOP_ENTRIES.to_le_bytes()),
-                (stat_list::COUNT, &1u64.to_le_bytes()),
-                (stat_list::NEXT, &BUFF.to_le_bytes()),
-                (stat_list::FULL_ENTRIES, &FULL.to_le_bytes()),
-                (stat_list::FULL_COUNT, &2u64.to_le_bytes()),
-                (stat_list::STATE_FLAGS, &state_field([0, 1, 0, 0, 0, 0, 0, 0])),
-                (
-                    stat_list::STATE_FLAGS_COPY,
-                    &state_field([0, 1, 0, 0x0100_0000, 0, 0, 0, 0]),
-                ),
-            ],
-        )?;
-        // The buff list is only 0xE0 bytes long: its dump falls back to the short header.
-        put(
-            &mut m,
-            BUFF,
-            0xE0,
-            &[
-                (stat_list::OWNER_TYPE, &unit_table::PLAYER.to_le_bytes()),
-                (stat_list::OWNER_ID, &7u32.to_le_bytes()),
-                (stat_list::FLAGS, &0x40u32.to_le_bytes()),
-                (0x14, &120u32.to_le_bytes()),
-                (stat_list::ENTRIES, &BUFF_ENTRIES.to_le_bytes()),
-                (stat_list::COUNT, &2u64.to_le_bytes()),
-                (stat_list::NEXT, &TOP.to_le_bytes()),
-            ],
-        )?;
-        entries(&mut m, TOP_ENTRIES, &[(stat_list::LEVEL, 30)]);
-        entries(&mut m, BUFF_ENTRIES, &[(stat_list::IAS, 18), (stat_list::FHR, 9)]);
-        entries(&mut m, FULL, &[(stat_list::LEVEL, 30), (stat_list::IAS, 18)]);
-        Ok(m)
-    }
-
-    #[test]
-    fn player_states_and_buff_research() -> Result<()> {
-        let m = world_with_player_buffs()?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
-        assert_eq!(s.player.addr.0, P_ALICE);
-        assert_eq!(
-            s.player.states,
-            Some(vec![32]),
-            "Battle Orders from the first copy"
-        );
-        assert_eq!(
-            serde_json::to_value(&s)?.pointer("/player/states"),
-            Some(&serde_json::json!([32]))
-        );
-        assert_eq!(
-            s.buff_research, None,
-            "the snapshot leaves the dump to the caller"
-        );
-        let r = buff_research(&m, P_ALICE).context("research dump")?;
-        assert!(!r.truncated);
-        assert_eq!(r.states_copy, [32, 120]);
-        assert_eq!(r.full, [(0, stat_list::LEVEL, 30), (0, stat_list::IAS, 18)]);
-        let got: Vec<_> = r
-            .lists
-            .iter()
-            .map(|l| (l.addr.0, l.owner_type, l.owner_id, l.flags, l.count, l.head.len()))
-            .collect();
-        assert_eq!(
-            got,
-            [
-                (
-                    0x90_0000,
-                    unit_table::PLAYER,
-                    7,
-                    stat_list::FLAG_FULL_STATS,
-                    1,
-                    stat_list::DUMP_LEN * 2
-                ),
-                (0x91_0000, unit_table::PLAYER, 7, 0x40, 2, 0xD8 * 2),
-            ],
-            "the cycle back to the top list ends the chain"
-        );
-        let buff = r.lists.get(1).context("buff list")?;
-        assert_eq!(buff.entries, [(0, stat_list::IAS, 18), (0, stat_list::FHR, 9)]);
-        assert_eq!(buff.head.get(0x28..0x30), Some("78000000"), "u32 120 at +0x14");
-        assert!(
-            !s.warnings.iter().any(|w| w.contains("stat")),
-            "research data warns about nothing: {:?}",
-            s.warnings
-        );
-
-        // No stat list: states unread (not empty), no dump, no warning.
-        let m = world()?;
-        assert_eq!(snapshot(&m, TABLE, None, None, None)?.player.states, None);
-        assert_eq!(buff_research(&m, P_ALICE), None);
-        // A stat list too short for the bitfield (a failed read): unread too.
-        let m = world_with_player_stats(&[(stat_list::LEVEL, 30)])?;
-        assert_eq!(snapshot(&m, TABLE, None, None, None)?.player.states, None);
-        Ok(())
-    }
-
-    /// The experience shrine's list as recorded live (journal 2026-11-22, list 0x8a9355a0 of
-    /// top list 0x2c764510): state 137, one stat (85 = 50), parent at +0x78.
-    const RECORDED_XP_SHRINE_LIST: &str = concat!(
-        "503de6640000000000000000a12c00a1ffffffffffffffffffffffff00000000",
-        "8900000000000000000000000000000090548ae8000000000100000000000000",
-        "0100000000000000000000000000000000000000000000000000000000000000",
-        "000000000000000090a9822c0000000000000000000000001045762c00000000",
-        "0100000000000000000000000000000000000000000000000000000000000000",
-        "0000000000000000010000000000000000000000000000000000000000000000",
-        "000000000000000000000000000000005001e76400000000040000008b8bdc36",
-        "ffffffffffffffffffffffff4000000000000000000000000000000000000000",
-    );
-
-    fn unhex(text: &str) -> Result<Vec<u8>> {
-        let digits = text.as_bytes();
-        digits
-            .chunks(2)
-            .map(|pair| Ok(u8::from_str_radix(std::str::from_utf8(pair)?, 16)?))
-            .collect()
-    }
-
-    /// Alice whose top list's newest list is the recorded experience-shrine list, with its
-    /// entries pointer and parent moved to this world (`parent` replaces the top list there).
-    fn world_with_newest_list(header: &str, parent: Option<u64>) -> Result<FakeMem> {
-        use d2r_core::reader::ReadMem;
-        const TOP: u64 = 0x90_0000;
-        const LIST: u64 = 0x91_0000;
-        const LIST_ENTRIES: u64 = 0x92_0000;
-        let mut m = world()?;
-        let mut alice = vec![0u8; UNIT_SIZE];
-        m.read(P_ALICE, &mut alice)?;
-        let off = usize::try_from(unit::STATS)?;
-        alice
-            .get_mut(off..off + 8)
-            .context("stats field in unit")?
-            .copy_from_slice(&TOP.to_le_bytes());
-        m.add(P_ALICE, alice);
-        put(&mut m, TOP, 0xB70, &[(stat_list::NEXT, &LIST.to_le_bytes())])?;
-        let mut list = unhex(header)?;
-        let mut set = |off: u64, value: u64| -> Result<()> {
-            let off = usize::try_from(off)?;
-            list.get_mut(off..off + 8)
-                .context("pointer inside the header")?
-                .copy_from_slice(&value.to_le_bytes());
-            Ok(())
-        };
-        set(stat_list::ENTRIES, LIST_ENTRIES)?;
-        set(stat_list::PARENT, parent.unwrap_or(TOP))?;
-        m.add(LIST, list);
-        entries(&mut m, LIST_ENTRIES, &[(85, 50)]);
-        Ok(m)
-    }
-
-    #[test]
-    fn newest_state_list_from_a_recorded_header() -> Result<()> {
-        assert_eq!(unhex(RECORDED_XP_SHRINE_LIST)?.len(), stat_list::DUMP_LEN);
-        let m = world_with_newest_list(RECORDED_XP_SHRINE_LIST, None)?;
-        let s = snapshot(&m, TABLE, None, None, None)?;
-        assert_eq!(
-            s.player.newest_state,
-            Some(StateList {
-                list: Addr(0x91_0000),
-                state: 137,
-                stats: vec![(85, 50)],
-            })
-        );
-
-        let freed = world_with_newest_list(RECORDED_XP_SHRINE_LIST, Some(0))?;
-        assert_eq!(
-            snapshot(&freed, TABLE, None, None, None)?.player.newest_state,
-            None,
-            "a freed list (parent 0) is no state's"
-        );
-        let mut untagged = unhex(RECORDED_XP_SHRINE_LIST)?;
-        let state = usize::try_from(stat_list::STATE)?;
-        untagged.get_mut(state..state + 4).context("state field")?.fill(0);
-        let untagged = hex(&untagged);
-        let m = world_with_newest_list(&untagged, None)?;
-        assert_eq!(
-            snapshot(&m, TABLE, None, None, None)?.player.newest_state,
-            None,
-            "the run toggle's list carries no state"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn buff_research_caps_entries_and_bytes() -> Result<()> {
-        use d2r_core::reader::ReadMem;
-        const FIRST: u64 = 0xA0_0000;
-        const ENTRIES: u64 = 0xB0_0000;
-        let mut m = world()?;
-        let mut alice = vec![0u8; UNIT_SIZE];
-        m.read(P_ALICE, &mut alice)?;
-        let off = usize::try_from(unit::STATS)?;
-        alice
-            .get_mut(off..off + 8)
-            .context("stats field in unit")?
-            .copy_from_slice(&FIRST.to_le_bytes());
-        m.add(P_ALICE, alice);
-        // 40 chained lists of 100 entries each, all sharing one entry array.
-        for i in 0..40u64 {
-            let at = FIRST + i * 0x1000;
-            put(
-                &mut m,
-                at,
-                stat_list::DUMP_LEN,
-                &[
-                    (stat_list::ENTRIES, &ENTRIES.to_le_bytes()),
-                    (stat_list::COUNT, &100u64.to_le_bytes()),
-                    (stat_list::NEXT, &(at + 0x1000).to_le_bytes()),
-                ],
-            )?;
-        }
-        let stats: Vec<(u16, u32)> = (0..100).map(|i| (i, 1)).collect();
-        entries(&mut m, ENTRIES, &stats);
-        let r = buff_research(&m, P_ALICE).context("dump")?;
-        assert!(r.truncated);
-        assert!(
-            r.lists
-                .iter()
-                .all(|l| l.entries.len() == MAX_BUFF_ENTRIES && l.count == 100)
-        );
-        // 0x100 header bytes as hex (512) + 64 entries × 24 = 2048 per list.
-        assert_eq!(
-            r.lists.len(),
-            MAX_BUFF_DUMP_BYTES / 2048,
-            "the byte budget ends the walk"
-        );
-        Ok(())
     }
 
     /// `M0` → `M1` → `M2`, each with a stat list whose state bitfield has `bits` set (`None`: an

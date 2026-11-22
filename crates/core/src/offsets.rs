@@ -353,13 +353,7 @@ pub mod stat_list {
     pub const FCR: u16 = 105;
     /// ptr to the unit's next stat list (base list → magic-affix list → …; [`OWNER_TYPE`] /
     /// [`OWNER_ID`] tell whose). The player's own list is base-only, without item stats.
-    /// On the player's top list: the newest list attached to it (a state's, or the run
-    /// toggle's); that list's own `+0xD0` is no link.
     pub const NEXT: u64 = 0xD0;
-    /// u32 state id (states.txt row) of a state's own list; 0 on other lists.
-    pub const STATE: u64 = 0x20;
-    /// ptr to the owner's top list; 0 once the list is freed.
-    pub const PARENT: u64 = 0x78;
     /// u32 list flags.
     pub const FLAGS: u64 = 0x1C;
     /// [`FLAGS`] bit of a unit's top list, which also carries the aggregated [`FULL_ENTRIES`].
@@ -372,13 +366,9 @@ pub mod stat_list {
     /// `n % 32` of dword `n / 32` (states.txt rows).
     pub const STATE_FLAGS: u64 = 0xB30;
     pub const STATE_FLAG_DWORDS: usize = 8;
-    /// A second copy of [`STATE_FLAGS`]; only journaled, to learn whether it lags or mirrors.
-    pub const STATE_FLAGS_COPY: u64 = 0xB50;
     /// u32 owner unit type and unit id of a list (see [`NEXT`]).
     pub const OWNER_TYPE: u64 = 0x08;
     pub const OWNER_ID: u64 = 0x0C;
-    /// Bytes of each of the player's lists copied into the journal's `buffs` event.
-    pub const DUMP_LEN: usize = 0x100;
 }
 
 /// State ids (states.txt rows), bits of [`stat_list::STATE_FLAGS`].

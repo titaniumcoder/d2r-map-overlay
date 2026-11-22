@@ -1,6 +1,5 @@
-//! Click-through Wayland layer-shell windows: the map in the top-right corner and the timed-buff
-//! strip below the character. `SIGUSR1` toggles both (the surfaces take no keyboard, so a
-//! compositor binding sends it).
+//! Click-through Wayland layer-shell window that shows a rendered [`Pixmap`] in the top-right
+//! corner. `SIGUSR1` toggles it (the surface takes no keyboard, so a compositor binding sends it).
 
 use std::io::{ErrorKind, Read};
 use std::os::unix::net::UnixStream;
@@ -25,8 +24,6 @@ use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_registry, registry_handlers};
 use tiny_skia::Pixmap;
 
-use crate::buff_strip;
-
 /// px from the right screen edge.
 const MARGIN: i32 = 20;
 /// px below the top edge: clears D2R's own clock and area-name lines.
@@ -37,10 +34,8 @@ const MARGIN_TOP: i32 = 70;
 pub enum Msg {
     /// Also ends a [`Msg::Hide`].
     Frame(Pixmap),
-    /// No usable game state (menu, loading screen, game exited), or a town: hides the map.
+    /// No usable game state (menu, loading screen, game exited).
     Hide,
-    /// The timed-buff strip; `None` hides it.
-    Buffs(Option<Pixmap>),
     /// The game window has keyboard focus.
     Focus(bool),
 }
@@ -66,7 +61,16 @@ pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
     let layer_shell = LayerShell::bind(&globals, &qh).context("compositor lacks zwlr_layer_shell_v1")?;
     let shm = Shm::bind(&globals, &qh).context("wl_shm not available")?;
 
-    let (map, strip) = create_panels(&compositor, &layer_shell, &qh, (width, height))?;
+    let layer = layer_shell.create_layer_surface(
+        &qh,
+        compositor.create_surface(&qh),
+        Layer::Overlay,
+        Some("d2r-map-overlay"),
+        None,
+    );
+    // Click-through: an empty input region sends pointer events to the window below.
+    let region = Region::new(&compositor).context("creating the input region")?;
+    layer.set_input_region(Some(region.wl_region()));
 
     let frame_bytes = usize::try_from(u64::from(width) * u64::from(height) * 4)?;
     let pool = SlotPool::new(frame_bytes, &shm).context("creating the shm pool")?;
@@ -75,10 +79,14 @@ pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
         outputs: OutputState::new(&globals, &qh),
         shm,
         pool,
+        layer,
         conn: conn.clone(),
-        map,
-        strip,
+        size: (width, height),
+        frame: None,
+        dirty: false,
         vis: Visibility::default(),
+        surface: Surface::Unmapped,
+        buffer: None,
         closed: false,
         error: None,
     };
@@ -134,35 +142,6 @@ pub fn run(messages: Channel<Msg>, (width, height): (u32, u32)) -> Result<()> {
     overlay.error.map_or(Ok(()), Err)
 }
 
-/// The map's and the buff strip's click-through surfaces, not yet committed.
-fn create_panels(
-    compositor: &CompositorState,
-    layer_shell: &LayerShell,
-    qh: &QueueHandle<Overlay>,
-    map_size: (u32, u32),
-) -> Result<(Panel, Panel)> {
-    // Click-through: an empty input region sends pointer events to the window below.
-    let region = Region::new(compositor).context("creating the input region")?;
-    let layer = |namespace: &str| {
-        let layer = layer_shell.create_layer_surface(
-            qh,
-            compositor.create_surface(qh),
-            Layer::Overlay,
-            Some(namespace),
-            None,
-        );
-        layer.set_input_region(Some(region.wl_region()));
-        layer
-    };
-    let map = Panel::new(layer("d2r-map-overlay"), Place::TopRight, map_size);
-    let strip = Panel::new(
-        layer("d2r-buff-strip"),
-        Place::Centre,
-        (buff_strip::WIDTH, buff_strip::HEIGHT),
-    );
-    Ok((map, strip))
-}
-
 /// Premultiplied RGBA to `wl_shm` ARGB8888 (little-endian: bytes B, G, R, A).
 pub fn rgba_to_argb8888(rgba: &[u8], out: &mut [u8]) {
     for (dst, &[r, g, b, a]) in out.as_chunks_mut::<4>().0.iter_mut().zip(rgba.as_chunks::<4>().0) {
@@ -192,18 +171,12 @@ impl Visibility {
                 self.hidden = false;
             }
             Msg::Hide => self.hidden = true,
-            Msg::Buffs(_) => {}
             Msg::Focus(focused) => self.focused = *focused,
         }
     }
 
     const fn visible(self) -> bool {
         self.focused && self.has_frame && !self.hidden && !self.user_hidden
-    }
-
-    /// The strip shows in towns too, where the map hides.
-    const fn strip_visible(self, has_strip: bool) -> bool {
-        self.focused && has_strip && !self.user_hidden
     }
 }
 
@@ -240,73 +213,80 @@ const fn plan(surface: Surface, visible: bool, dirty: bool) -> (Action, Surface)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Place {
-    /// Below D2R's clock and area-name lines.
-    TopRight,
-    /// Screen centre (no anchors); see [`buff_strip`].
-    Centre,
-}
-
-/// One layer surface and the frame it shows.
-struct Panel {
+struct Overlay {
+    registry: RegistryState,
+    outputs: OutputState,
+    shm: Shm,
+    pool: SlotPool,
     layer: LayerSurface,
-    place: Place,
+    conn: Connection,
     size: (u32, u32),
     frame: Option<Pixmap>,
     /// `frame` changed since it was last presented.
     dirty: bool,
+    vis: Visibility,
     surface: Surface,
     /// The buffer on screen; kept alive while the compositor may read it.
     buffer: Option<Buffer>,
+    closed: bool,
+    error: Option<anyhow::Error>,
 }
 
-impl Panel {
-    const fn new(layer: LayerSurface, place: Place, size: (u32, u32)) -> Self {
-        Self {
-            layer,
-            place,
-            size,
-            frame: None,
-            dirty: false,
-            surface: Surface::Unmapped,
-            buffer: None,
+impl std::fmt::Debug for Overlay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Overlay")
+            .field("size", &self.size)
+            .field("vis", &self.vis)
+            .field("surface", &self.surface)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Overlay {
+    fn handle(&mut self, msg: Msg) {
+        self.vis.on_msg(&msg);
+        if let Msg::Frame(frame) = msg {
+            self.frame = Some(frame);
+            self.dirty = true;
         }
+        self.sync();
     }
 
-    fn show(&mut self, frame: Option<Pixmap>) {
-        self.frame = frame;
-        self.dirty = true;
+    fn toggle(&mut self) {
+        self.vis.user_hidden = !self.vis.user_hidden;
+        eprintln!(
+            "SIGUSR1: map {}",
+            if self.vis.user_hidden { "hidden" } else { "shown" }
+        );
+        self.sync();
     }
 
-    /// One step towards `visible`.
-    fn sync(&mut self, visible: bool, pool: &mut SlotPool) -> Result<()> {
-        let (action, next) = plan(self.surface, visible, self.dirty);
+    /// Stops the loop on failure.
+    fn sync(&mut self) {
+        let (action, next) = plan(self.surface, self.vis.visible(), self.dirty);
         let done = match action {
             Action::Nothing => Ok(()),
             Action::CommitEmpty => {
                 self.commit_empty();
                 Ok(())
             }
-            Action::Present => self.present(pool),
+            Action::Present => self.present(),
             Action::Unmap => {
                 self.unmap();
                 Ok(())
             }
         };
         self.surface = next;
-        done
+        if let Err(e) = done.and_then(|()| self.conn.flush().context("flushing the Wayland connection")) {
+            self.error = Some(e.context("updating the overlay"));
+            self.closed = true;
+        }
     }
 
     /// The protocol resets a layer surface on unmap, so this runs before every (re)map.
     fn commit_empty(&self) {
-        match self.place {
-            Place::TopRight => {
-                self.layer.set_anchor(Anchor::TOP | Anchor::RIGHT);
-                self.layer.set_margin(MARGIN_TOP, MARGIN, 0, 0);
-            }
-            Place::Centre => self.layer.set_anchor(Anchor::empty()),
-        }
+        self.layer.set_anchor(Anchor::TOP | Anchor::RIGHT);
+        self.layer.set_margin(MARGIN_TOP, MARGIN, 0, 0);
         self.layer.set_size(self.size.0, self.size.1);
         self.layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         self.layer.commit();
@@ -318,7 +298,7 @@ impl Panel {
         self.buffer = None;
     }
 
-    fn present(&mut self, pool: &mut SlotPool) -> Result<()> {
+    fn present(&mut self) -> Result<()> {
         let Some(frame) = &self.frame else {
             bail!("present without a frame");
         };
@@ -329,7 +309,8 @@ impl Panel {
             self.size = (w, h);
         }
         let (wi, hi) = (i32::try_from(w)?, i32::try_from(h)?);
-        let (buffer, canvas) = pool
+        let (buffer, canvas) = self
+            .pool
             .create_buffer(wi, hi, wi * 4, wl_shm::Format::Argb8888)
             .context("allocating a shm buffer")?;
         if canvas.len() != frame.data().len() {
@@ -349,78 +330,6 @@ impl Panel {
         self.dirty = false;
         Ok(())
     }
-
-    /// The configure that answers [`Panel::commit_empty`] arrived; true if it was awaited.
-    fn configured(&mut self, configure: &LayerSurfaceConfigure) -> bool {
-        if configure.new_size != self.size && configure.new_size != (0, 0) {
-            eprintln!(
-                "compositor sized an overlay surface {:?}, drawing {:?}",
-                configure.new_size, self.size
-            );
-        }
-        // Later configures need no action: the next frame is drawn at our size anyway.
-        let awaited = self.surface == Surface::AwaitingConfigure;
-        if awaited {
-            self.surface = Surface::Configured;
-        }
-        awaited
-    }
-}
-
-struct Overlay {
-    registry: RegistryState,
-    outputs: OutputState,
-    shm: Shm,
-    pool: SlotPool,
-    conn: Connection,
-    map: Panel,
-    strip: Panel,
-    vis: Visibility,
-    closed: bool,
-    error: Option<anyhow::Error>,
-}
-
-impl std::fmt::Debug for Overlay {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Overlay")
-            .field("map", &(self.map.size, self.map.surface))
-            .field("strip", &(self.strip.size, self.strip.surface))
-            .field("vis", &self.vis)
-            .finish_non_exhaustive()
-    }
-}
-
-impl Overlay {
-    fn handle(&mut self, msg: Msg) {
-        self.vis.on_msg(&msg);
-        match msg {
-            Msg::Frame(frame) => self.map.show(Some(frame)),
-            Msg::Buffs(strip) => self.strip.show(strip),
-            Msg::Hide | Msg::Focus(_) => {}
-        }
-        self.sync();
-    }
-
-    fn toggle(&mut self) {
-        self.vis.user_hidden = !self.vis.user_hidden;
-        eprintln!(
-            "SIGUSR1: overlay {}",
-            if self.vis.user_hidden { "hidden" } else { "shown" }
-        );
-        self.sync();
-    }
-
-    /// Stops the loop on failure.
-    fn sync(&mut self) {
-        let map = self.map.sync(self.vis.visible(), &mut self.pool);
-        let strip_visible = self.vis.strip_visible(self.strip.frame.is_some());
-        let strip = self.strip.sync(strip_visible, &mut self.pool);
-        let done = map.and(strip);
-        if let Err(e) = done.and_then(|()| self.conn.flush().context("flushing the Wayland connection")) {
-            self.error = Some(e.context("updating the overlay"));
-            self.closed = true;
-        }
-    }
 }
 
 impl LayerShellHandler for Overlay {
@@ -432,16 +341,19 @@ impl LayerShellHandler for Overlay {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        layer: &LayerSurface,
+        _: &LayerSurface,
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        let panel = if *layer == self.strip.layer {
-            &mut self.strip
-        } else {
-            &mut self.map
-        };
-        if panel.configured(&configure) {
+        if configure.new_size != self.size && configure.new_size != (0, 0) {
+            eprintln!(
+                "compositor sized the overlay {:?}, drawing {:?}",
+                configure.new_size, self.size
+            );
+        }
+        // Later configures need no action: the next frame is drawn at our size anyway.
+        if self.surface == Surface::AwaitingConfigure {
+            self.surface = Surface::Configured;
             self.sync();
         }
     }
@@ -563,22 +475,6 @@ mod tests {
         v.user_hidden = false;
         assert!(v.visible(), "switched back on");
         Ok(())
-    }
-
-    #[test]
-    fn the_strip_shows_in_town_but_follows_focus_and_the_user_switch() {
-        let mut v = Visibility::default();
-        v.on_msg(&Msg::Focus(true));
-        v.on_msg(&Msg::Hide);
-        assert!(v.strip_visible(true), "a town hides only the map");
-        assert!(!v.strip_visible(false), "no strip, nothing to show");
-        v.on_msg(&Msg::Buffs(None));
-        assert!(!v.visible(), "a strip message doesn't end the map's hide");
-        v.user_hidden = true;
-        assert!(!v.strip_visible(true), "the switch hides both");
-        v.user_hidden = false;
-        v.on_msg(&Msg::Focus(false));
-        assert!(!v.strip_visible(true), "unfocused");
     }
 
     #[test]

@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use d2r_core::buffs;
 use d2r_core::game::Snapshot;
 use d2r_core::reader::{Attach, GameReader};
 use d2r_core::{items, quests};
@@ -52,53 +51,6 @@ struct Attached<M> {
     table: u64,
     items: ItemsTable,
     quests: QuestFlags,
-    buffs: BuffGate,
-}
-
-/// The player's states across ticks: a failed read keeps the last states of the same game, and
-/// the journal's raw stat-list dump is read only when the shown states ([`buffs::shown`]) change.
-#[derive(Debug, Default)]
-struct BuffGate {
-    /// (player unit id, act address): the journal's game key.
-    game: Option<(u32, Option<u64>)>,
-    last: Option<Vec<u32>>,
-    /// The shown states at the last dump.
-    dumped: Option<Vec<u32>>,
-}
-
-impl BuffGate {
-    const fn new() -> Self {
-        Self {
-            game: None,
-            last: None,
-            dumped: None,
-        }
-    }
-
-    /// Fills unread states in `snap` from the last read ones of the same game; true if the
-    /// shown states are known and differ from the last dump's.
-    fn settle(&mut self, snap: &mut Snapshot) -> bool {
-        let game = (snap.player.id, snap.player.act.map(|a| a.0));
-        if self.game != Some(game) {
-            *self = Self {
-                game: Some(game),
-                ..Self::new()
-            };
-        }
-        match &snap.player.states {
-            Some(states) => self.last = Some(states.clone()),
-            None => snap.player.states.clone_from(&self.last),
-        }
-        snap.player
-            .states
-            .as_deref()
-            .is_some_and(|s| self.dumped.as_deref() != Some(buffs::shown(s).as_slice()))
-    }
-
-    /// Records that `snap`'s states were dumped.
-    fn dumped(&mut self, snap: &Snapshot) {
-        self.dumped = snap.player.states.as_deref().map(buffs::shown);
-    }
 }
 
 impl<M> Attached<M> {
@@ -109,7 +61,6 @@ impl<M> Attached<M> {
             table,
             items: ItemsTable::NotSearched,
             quests: QuestFlags::new(),
-            buffs: BuffGate::new(),
         }
     }
 }
@@ -236,13 +187,7 @@ impl<P: Platform> GameReader for MemoryReader<P> {
 
     fn snapshot(&mut self, player: Option<&str>, previous: Option<u32>) -> Result<Snapshot> {
         let a = self.attached.as_mut().context("not attached to the game")?;
-        let mut snap = game::snapshot(&a.mem, a.table, a.items.base(), player, previous)?;
-        if a.buffs.settle(&mut snap) {
-            snap.buff_research = game::buff_research(&a.mem, snap.player.addr.0);
-            if snap.buff_research.is_some() {
-                a.buffs.dumped(&snap);
-            }
-        }
+        let snap = game::snapshot(&a.mem, a.table, a.items.base(), player, previous)?;
         let item_codes_needed = snap.ground_items > 0 || snap.inventory_items > 0;
         if item_codes_needed {
             a.items.search(&self.platform, a.pid);
@@ -430,68 +375,6 @@ mod tests {
 
     use crate::image::Image;
     use d2r_core::testutil::FakeMem;
-
-    #[test]
-    fn buff_gate_covers_failed_reads_and_dumps_on_change() -> Result<()> {
-        let mut snap: Snapshot =
-            serde_json::from_str(include_str!("../../../tests/fixtures/jail1-snapshot.json"))?;
-        let mut gate = BuffGate::new();
-        let tick = |states: Option<Vec<u32>>, g: &mut BuffGate, snap: &mut Snapshot| {
-            snap.player.states = states;
-            let changed = g.settle(snap);
-            if changed {
-                g.dumped(snap);
-            }
-            (changed, snap.player.states.clone())
-        };
-        assert_eq!(
-            tick(None, &mut gate, &mut snap),
-            (false, None),
-            "unread before any read"
-        );
-        assert_eq!(
-            tick(Some(vec![32]), &mut gate, &mut snap),
-            (true, Some(vec![32])),
-            "first read"
-        );
-        assert_eq!(
-            tick(Some(vec![32]), &mut gate, &mut snap),
-            (false, Some(vec![32])),
-            "unchanged"
-        );
-        assert_eq!(
-            tick(None, &mut gate, &mut snap),
-            (false, Some(vec![32])),
-            "a failed read is carried over"
-        );
-        assert_eq!(
-            tick(Some(vec![32, 86]), &mut gate, &mut snap),
-            (false, Some(vec![32, 86])),
-            "a hidden state (justhit) is no change"
-        );
-        assert_eq!(
-            tick(Some(vec![32, 120]), &mut gate, &mut snap),
-            (true, Some(vec![32, 120])),
-            "a new buff"
-        );
-        assert_eq!(
-            tick(Some(vec![]), &mut gate, &mut snap),
-            (true, Some(vec![])),
-            "every buff gone"
-        );
-        snap.player.id += 1;
-        assert_eq!(
-            tick(None, &mut gate, &mut snap),
-            (false, None),
-            "new game, unread"
-        );
-        assert_eq!(
-            tick(Some(vec![]), &mut gate, &mut snap),
-            (true, Some(vec![])),
-            "new game"
-        );
-        Ok(())
-    }
 
     /// A platform with no game (`pid: None`) or one whose memory can't be opened.
     #[derive(Debug, Clone, Default)]

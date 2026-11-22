@@ -163,8 +163,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   - `+0x34` file index is only trusted with the identified flag (unknown whether filled before identify).
   - Magic suffix id 0 is taken as "none", unsettled: magicsuffix row 0 is "of Health".
   - Stat ids `level` (12), `strength` (0), `dexterity` (2) on the player's list are not yet live-verified (the
-    reader also accepts level shifted left by 8). A second state bitfield copy at stat list `+0xB50` is only
-    journaled, to learn whether it lags or mirrors `+0xB30`.
+    reader also accepts level shifted left by 8). A second state bitfield copy sits at stat list `+0xB50`
+    (unread; whether it lags or mirrors `+0xB30` is unknown).
   - Terror Zone state `desecrated` (189): not yet checked that monsters of a normal area have it clear (state 56
     `terror` is an unrelated fear effect).
   - Breakpoints: the per-class frame bases reproduce every classic breakpoint table; the Warlock row is assumed
@@ -182,7 +182,8 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
 
 - **State stat lists and buff timing** (journal 2026-11-22, 137 `buffs` events over four games,
   summoner druid: Heart of Wolverine, Meditation merc aura, shrines, potions, chill, Amplify
-  Damage; scripts were throwaway Python over `grep '"ev":"buffs"'`):
+  Damage; scripts were throwaway Python over `grep '"ev":"buffs"'`; the event and the buff
+  tracker were removed the same day, see the backlog item):
   - A state's own list carries its state id as **u32 `+0x20`** (high confidence: 38 attached
     lists, every one matching the state that was set: 137 shrine_experience, 128 shrine_armor,
     148 wolverine, 48 meditation, 11 cold, 9 amplifydamage, 105 alignment, 98, 49, 44, 33 …;
@@ -213,7 +214,7 @@ Crates: `smithay-client-toolkit` (layer-shell, shm), `tiny-skia`, `serde`+`toml`
   - Feral Rage stacks and Cyclone Armor absorb: no data yet (summoner). The Feral Rage list's
     skills.txt stats are velocitypercent and lifedrain min/max, none of them a stack count; the
     count may be a stat of its own or skill-side. Cyclone Armor's absorb should be its list's
-    `bonearmor` stat (132; skills.txt sets it ×256). Both read from the newest list when it is theirs.
+    `bonearmor` stat (132; skills.txt sets it ×256).
 
 - **Quest flags** (live 2026-11-18, druid "Elemental" clvl 21 Normal, probe `research/quests.py`):
   PlayerData `+0x40/+0x48/+0x50` point to per-difficulty quest BitBuffers, but on the client they
@@ -428,8 +429,7 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
 
 ## Research journal
 Live mode appends deduped events to `~/.local/share/d2r-map-overlay/journal/YYYY-MM-DD.jsonl` (UTC date):
-level (room pieces), arrival, marker (+ piece), link, elite monster, killed, drop, and `buffs` (the
-player's state changes with a raw stat-list dump; see the buff tracker backlog item). Files are never rotated;
+level (room pieces), arrival, marker (+ piece), link, elite monster, killed, drop. Files are never rotated;
 delete old ones by hand. Use it to find more landmark patterns offline.
 - **Junk: assassin traps as elites.** Traps (txt 410) carry MonsterData 0x08, so the journal logged them as elite
   `monster`/`killed` events. Commit 4a31d77 fixed this only in the renderer; the journal recorder still filters by
@@ -796,34 +796,12 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   exists: the user's "Act 5 Normal gives ~no XP before 25" is the clvl < 25 table against mlvl
   24+ (grey up to clvl 15). The clvl 70+ penalty (976…5/1024) is the same everywhere and left out
   of the colouring (it would grey every area from clvl 86). No D2R patch is known to change this.
-- Timed-buff strip (user decision 2026-11-22: buffs go in the game overlay, not the dashboard;
-  only timed ones): a second click-through layer surface (`overlay::Panel`, namespace
-  `d2r-buff-strip`) with no anchors, so the compositor centres it; the strip is drawn
-  `buff_strip::BELOW_CENTRE` = 70 px below the surface's middle (= the screen centre, a bit below
-  the character) and the upper half stays transparent, so no screen size is needed. Entries
-  side by side, centred, 15 px outlined text: `BO 1:42`, `FR ×3 12s`, `CA`, `XP 1:10`, green,
-  orange under 10 s. Unmapped when no timed buff is active. Shown in towns too (only the map
-  hides there), hidden without focus, without a game, and by the `SIGUSR1` switch with the map.
-  Buffs and tags (`buffs::TIMED`): BO, BC, SH (Shout), FR, CA, XP and the map's shrine tags
-  (ARM, CMB, RFI, RCO, RLI, RPO, SKL, MRC, STA), potions Thaw, Anti, Stam. Not debuffs, healing
-  or mana potions, auras, Oak Sage / Heart of Wolverine or shapes.
-  Countdown (`buffs::Tracker`, fed every tick in `live::Strip`): the client has no expiry frame,
-  so the clock starts when the state appears, or restarts when a new list of it becomes the
-  newest attached list (a recast). Length: the game tables for shrines, potions and Feral Rage
-  (20 s); BO/BC/Shout depend on the caster's levels, so they show no time until one ran out,
-  then the length of that last run (kept across games, re-learned on every expiry); Cyclone
-  Armor is untimed. A buff past its end yet still set (renewed unseen, e.g. a recast whose list
-  reused the old address) shows its tag without time. A new game or a tick without a game
-  drops the running clocks unlearned (learned lengths stay). Known limits: a warcry cut short
-  by death is learned as that short length until a full run expires again; a recast is missed
-  when another state's list is attached in the same 200 ms tick (only the newest list is
-  read).
 - Visible only while the Hyprland active window class is `steam_app_battlenet` with title `Diablo II: Resurrected`.
 - User toggle (user request, 2026-11-18): `SIGUSR1` flips a "hidden by user" switch
   (`overlay::Visibility::user_hidden`); the reader and dashboard go on; a restart starts visible.
   signal-hook's self-pipe handler (safe, process-wide, so no thread can take the signal's default
   terminate action) writes a byte to a socket pair the calloop loop watches; each byte toggles and
-  logs `SIGUSR1: overlay hidden|shown` (map and buff strip). Hotkey: `pkill -USR1 -x d2r-map-overlay` (comm is exactly the
+  logs `SIGUSR1: map hidden|shown`. Hotkey: `pkill -USR1 -x d2r-map-overlay` (comm is exactly the
   15-char name); suggested binding SUPER+CTRL+M (SUPER+SHIFT+M is Omarchy's Music), see README.
 
 ## Permissions
@@ -1268,14 +1246,7 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
 - [x] **M4b item drops**: implemented 2026-11-14 (items table found live; static path verified with a gem). Quality values live-confirmed 2026-11-17: set (5) on quest item `qui` and small charm `sml`, unique (7) on quest item `spc` — all with `unique_index` 0 (unidentified/no name), consistent with the index-only-when-identified rule. Named drops confirmed from the journal 2026-11-18: identified dirk `dir` = unique row 40 The Diggler; `bsd`/`gts`/`brs` = set rows 13/14/15 Isenhart's Lightbrand/Parry/Case; `chn` = set row 26 Cathan's Mesh.
 - [ ] **Cleanup**: remove D2RMH exe/launcher (`~/.local/bin/d2rmh`); keep classic 1.13c files for phase 2.
 - [x] **Map toggle** (2026-11-18): `SIGUSR1` hides/shows the map; key binding left to the user's Hyprland config.
-- [ ] **Backlog: buff tracker** (user, 2026-11-18: "later"; v1 approved 2026-11-22; now the overlay's timed-buff strip): first a dashboard Buffs panel — active states from the state bits at stat list `+0xB30`, the buff's own stat list (tagged with its state id) for values like Cyclone Armor's remaining absorb or Feral Rage stacks, and a countdown from the list's expiry frame vs the game frame counter (counter not yet found). Needs one recorded session.
-  - [x] v1 landed 2026-11-22 (not yet live-verified; the state bits are verified on monsters only, not on the player): `crates/core/src/states_data.rs` (all 232 D2R states.txt rows, `research/gen_states.py` from blizzhackers/d2data); `buffs.rs` (curated set with display names: druid, warcries, auras received, shrines, potions as good; curses and effects on the player as bad; `HIDDEN` per-hit internals 18/86/102/121/185/216); `Player::states` read every tick (`--dump` JSON `player.states`); a core dashboard panel `buffs` under Next (good chips, bad highlighted red, uncurated `state <id> <name>` muted; each line has `stacks` / `seconds_left`, `null` for now). Not per playstyle: the dashboard has no per-playstyle panel switch, so it is a core panel like Skills and Vendor.
-  - [x] Research recording: journal event `buffs` (grep `"ev":"buffs"`) whenever the shown states change (the first snapshot of a game too; at most 200 per game): `added` / `removed` (+ `*_names`), all `states`, `states_copy` (the second bitfield at `+0xB50`), `lists` = the player's chain from unit `+0x88` along `+0xD0` (≤ 32 lists and a ~32 KB budget: `addr`, `owner_type`, `owner_id`, `flags`, `head` = hex of the first 0x100 bytes, `count`, `entries` `[layer, stat, value]`, at most 64 per list), `full` = the top list's aggregated array, `truncated` = a cap was hit. The live reader reads the dump only when the shown states changed (`BuffGate` in `memory_reader.rs`), and a failed state read keeps the last states (`Player::states` is `None` when unread), so one bad read neither flickers the panel nor logs every buff as removed.
-  - [ ] Live session: cast Oak Sage / Cyclone Armor / Feral Rage (stack it up), take BO and a shrine, get cursed; then check that `states` match the game, whether the buff lists show up in the `+0xD0` chain (else look for them via other pointers in `head`), which header field holds the state id and the expiry frame, and where Feral Rage's stacks and Cyclone Armor's absorb sit.
-  - [x] Recorded session analysed 2026-11-22 (Memory layer, "State stat lists and buff timing"): state id at list `+0x20`, newest list at top `+0xD0`, no expiry frame or frame counter on the client.
-  - [x] Moved to the game overlay 2026-11-22 (user: "that has lost nothing on the dashboard"): dashboard panel, `LiveInfo::states` and the curated `buffs::BUFFS` list removed; timed buffs only, as a strip below the character (Overlay section).
-  - [ ] Live check of the strip: shrine and potion countdowns against the game, BO/BC/Shout learned after one expiry, a recast renewing the time.
-  - [ ] Fury session: Feral Rage's stack stat (`buffs::FERAL_RAGE_STACKS`, now `None`) and Cyclone Armor's absorb (expected stat 132 `bonearmor` ×256 in its list) from a `buffs` journal event while stacking / after a hit.
+- [x] ~~**Backlog: buff tracker**~~ **dropped** (user decision 2026-11-22: "remove it completely the buffs. it is not worth tracking"; Feral Rage is watched in game). Tried the same day: a dashboard Buffs panel from the player's state bits at stat list `+0xB30`, a journal `buffs` event with raw stat-list dumps (findings in Memory layer, "State stat lists and buff timing"), then a timed-buff strip as a second overlay surface. Not worth it: the client only learns that a state was set or cleared, the timer runs on the server, so countdowns could only be guessed from the game tables or the last run. All of it is removed (states table, `buffs.rs`, `buff_strip.rs`, `Player::states`, the reader's dump); git history before the removal commit has it. The state bitfield read for the Terror Zone `desecrated` state stays.
 - [ ] **Backlog: good areas at 75+** (user, 2026-11-20: "we will bring it back when we are level 75 to show us good areas, nothing else, especially when terrorized"): from character level 75 on, a dashboard panel that lists only the areas good for the build, terrorized ones especially. The old level-band "Where to go" panel was removed the same day. Useful leftovers: `levels_data::IMMUNITIES` (per area and difficulty: monster types and immune counts per damage type), `build::rate` (Good / Neutral / Bad for the build, already colours the overlay's info line), and the Terror Zone reading (`game::is_terrorized` from the monsters' `state::DESECRATED`, per visited level only; `Session` keeps the levels seen terrorized this game; no reader for the current zone list yet). `build::bad_reason` (the immune-damage tooltip text) was deleted with the panel; it is in git history (before 2026-11-20's removal commit).
 - [ ] **Phase 2 (separate plan)**: map seed RE → d2mapapi-backed full markers from entry.
 
