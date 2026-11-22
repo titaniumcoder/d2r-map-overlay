@@ -11,6 +11,7 @@ use d2r_core::game::Snapshot;
 use d2r_core::reader::{Attach, GameReader};
 use d2r_core::{items, quests};
 
+use crate::ui_probe::{self, UiProbe};
 use crate::{Platform, game, offset_cache};
 
 /// Wait before the next unit-table attempt after `failures` failed ones: 2 s, 5 s, then 10 s.
@@ -51,16 +52,58 @@ struct Attached<M> {
     table: u64,
     items: ItemsTable,
     quests: QuestFlags,
+    probe: Probe,
 }
 
 impl<M> Attached<M> {
-    const fn new(pid: u32, mem: M, table: u64) -> Self {
+    fn new(pid: u32, mem: M, table: u64) -> Self {
         Self {
             pid,
             mem,
             table,
             items: ItemsTable::NotSearched,
             quests: QuestFlags::new(),
+            probe: if std::env::var_os(ui_probe::ENV).is_some() {
+                Probe::Wanted
+            } else {
+                Probe::Off
+            },
+        }
+    }
+}
+
+/// The research [`UiProbe`]: off unless [`ui_probe::ENV`] is set; opened on the first town
+/// tick, off for good after a failure (logged).
+#[derive(Debug)]
+enum Probe {
+    Off,
+    Wanted,
+    On(UiProbe),
+}
+
+impl Probe {
+    fn tick<P: Platform>(&mut self, platform: &P, pid: u32, mem: &P::Mem, snap: &Snapshot) {
+        if matches!(self, Self::Wanted) && d2r_core::game::is_town(snap.level.id) {
+            let opened = platform.find_image(pid, mem).and_then(|image| {
+                let dir = d2r_core::journal::data_dir().context("no data directory")?;
+                UiProbe::open(image, mem, &dir)
+            });
+            *self = match opened {
+                Ok(probe) => {
+                    eprintln!("UI probe: writing {}", probe.path().display());
+                    Self::On(probe)
+                }
+                Err(e) => {
+                    eprintln!("UI probe off: {e:#}");
+                    Self::Off
+                }
+            };
+        }
+        if let Self::On(probe) = self
+            && let Err(e) = probe.tick(mem, snap)
+        {
+            eprintln!("UI probe off: {e:#}");
+            *self = Self::Off;
         }
     }
 }
@@ -192,6 +235,7 @@ impl<P: Platform> GameReader for MemoryReader<P> {
         if item_codes_needed {
             a.items.search(&self.platform, a.pid);
         }
+        a.probe.tick(&self.platform, a.pid, &a.mem, &snap);
         Ok(snap)
     }
 

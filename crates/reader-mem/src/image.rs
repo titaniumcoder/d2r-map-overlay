@@ -305,14 +305,23 @@ impl Image {
     /// # Errors
     /// Fails if `.data` can't be read or the search doesn't find exactly one record pair.
     pub fn quest_flags_global(&self, mem: &impl ReadMem) -> Result<u64> {
-        let header = self.header(mem, None)?;
-        let (rva, vsize) = section(&header, b".data").context("no .data section in the PE header")?;
-        let len = usize::try_from(vsize)?.min(usize::try_from(self.size.saturating_sub(u64::from(rva)))?);
-        let data = self.read_alias(mem, u64::from(rva), len)?;
-        let found = find_quest_flags(mem, &data, u64::from(rva))?;
+        let (rva, len) = self.data_section(mem)?;
+        let data = self.read_alias(mem, rva, len)?;
+        let found = find_quest_flags(mem, &data, rva)?;
         self.live_base
             .checked_add(found)
             .context("quest flags address overflow")
+    }
+
+    /// `.data`'s RVA and length (cut at the image end).
+    ///
+    /// # Errors
+    /// The header can't be read or has no `.data` section.
+    pub fn data_section(&self, mem: &impl ReadMem) -> Result<(u64, usize)> {
+        let header = self.header(mem, None)?;
+        let (rva, vsize) = section(&header, b".data").context("no .data section in the PE header")?;
+        let len = usize::try_from(vsize)?.min(usize::try_from(self.size.saturating_sub(u64::from(rva)))?);
+        Ok((u64::from(rva), len))
     }
 
     /// [`find_unit_table`] over `.data`, taken from `image` if it was read.
