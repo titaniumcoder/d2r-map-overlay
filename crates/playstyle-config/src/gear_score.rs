@@ -116,7 +116,8 @@ pub struct Profile {
 
 impl Profile {
     /// Whether one of the character's skills is on tab `param` (class × 8 + tab).
-    fn plans_tab(&self, param: u16) -> bool {
+    #[must_use]
+    pub fn plans_tab(&self, param: u16) -> bool {
         self.skills
             .iter()
             .filter_map(|&id| skills_data::skill(id))
@@ -189,6 +190,9 @@ pub fn teleport_wanted(holdings: &Holdings<'_>) -> bool {
         .any(|i| i.runeword && enigma(&i.name));
     !on_own_pages && !holdings.owned.iter().any(|n| enigma(n))
 }
+
+/// Small, large and grand charm codes.
+const CHARMS: [&str; 3] = ["cm1", "cm2", "cm3"];
 
 const CASTER_KINDS: [&str; 3] = ["staf", "wand", "orb"];
 
@@ -457,6 +461,17 @@ fn parts(piece: Piece<'_>, who: &Profile) -> BTreeMap<Part, f64> {
     {
         let two_handed = d2r_core::weapons_data::two_handed(b.code).unwrap_or(false);
         add(Part::Damage, avg_damage(stats, b.kind, two_handed, who.class));
+    }
+    if piece.code.is_some_and(|c| CHARMS.contains(&c)) {
+        // A charm's flat damage adds to whatever weapon swings: half of it to the average.
+        let flat = |ids: [u16; 3]| {
+            ids.map(|id| sum(stats, id, false))
+                .into_iter()
+                .fold(0.0, f64::max)
+        };
+        let min = flat([stat::MIN_DAMAGE, stat::MIN_DAMAGE_2H, stat::THROW_MIN]);
+        let max = flat([stat::MAX_DAMAGE, stat::MAX_DAMAGE_2H, stat::THROW_MAX]);
+        add(Part::Damage, f64::midpoint(min, max));
     }
     out
 }

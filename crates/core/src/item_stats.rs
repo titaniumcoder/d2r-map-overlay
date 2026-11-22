@@ -42,8 +42,9 @@ impl ItemStat {
 
     /// The stats of an item's aggregated array, which already has ED% applied: defense and the
     /// damage pairs in `base_ids` become base values, ED% entries are dropped, and so are damage
-    /// stats the base lacks (the game writes a flat bonus to every pair; keeping them would make a
-    /// two-hander look one-handed).
+    /// stats a weapon's base lacks (the game writes a flat bonus to every pair; keeping them would
+    /// make a two-hander look one-handed). An item without base damage (a charm, a ring) keeps
+    /// its flat damage as modifiers: "+3 to Maximum Damage" on a charm.
     #[must_use]
     pub fn from_totals(entries: &[(u16, u16, u32)], base_ids: &[u16]) -> Vec<Self> {
         const DAMAGE: [u16; 6] = [
@@ -59,14 +60,16 @@ impl ItemStat {
             stat::MAX_DAMAGE_PERCENT,
             stat::MIN_DAMAGE_PERCENT,
         ];
+        let weapon = base_ids.iter().any(|id| DAMAGE.contains(id));
         entries
             .iter()
             .filter_map(|&(param, id, raw)| {
                 let damage = DAMAGE.contains(&id);
-                if ED.contains(&id) || (damage && !base_ids.contains(&id)) {
+                if ED.contains(&id) || (damage && weapon && !base_ids.contains(&id)) {
                     return None;
                 }
-                Some(Self::from_raw(param, id, raw, damage || id == stat::DEFENSE))
+                let base = (damage && weapon) || id == stat::DEFENSE;
+                Some(Self::from_raw(param, id, raw, base))
             })
             .collect()
     }
@@ -99,9 +102,17 @@ pub mod stat {
     pub const RES_POISON: u16 = 45;
     /// Elemental damage (min, max) pairs: fire, lightning, magic, cold.
     pub const ELEMENTAL: [(u16, u16); 4] = [(48, 49), (50, 51), (52, 53), (54, 55)];
+    pub const FIRE_MAX: u16 = 49;
+    pub const LIGHTNING_MAX: u16 = 51;
+    /// Poison damage: min and max rate in 1/256 per frame, length in frames (25 per second);
+    /// the tooltip's total is rate × length / 256 (a prefix and a suffix add both).
+    pub const POISON_MIN: u16 = 57;
+    pub const POISON_MAX: u16 = 58;
+    pub const POISON_LENGTH: u16 = 59;
     pub const LIFE_LEECH: u16 = 60;
     pub const MANA_LEECH: u16 = 62;
     pub const REPLENISH_LIFE: u16 = 74;
+    pub const GOLD_FIND: u16 = 79;
     pub const MAGIC_FIND: u16 = 80;
     /// +class skills; param = class.
     pub const CLASS_SKILLS: u16 = 83;
@@ -134,5 +145,30 @@ mod tests {
         assert_eq!(ItemStat::from_raw(0, 68, 0xFFFF_FFFB, true).value, -5);
         assert_eq!(ItemStat::from_raw(0, stat::MAX_LIFE, 20 << 8, false).value, 20);
         assert_eq!(ItemStat::from_raw(0, stat::RES_FIRE, 15, false).value, 15);
+    }
+
+    #[test]
+    fn totals_keep_flat_damage_only_where_the_base_has_none() {
+        let flat_max = [
+            (0, stat::MAX_DAMAGE, 3),
+            (0, stat::MAX_DAMAGE_2H, 3),
+            (0, stat::THROW_MAX, 3),
+        ];
+        let charm = ItemStat::from_totals(&flat_max, &[]);
+        assert_eq!(charm.len(), 3, "a charm's +3 max damage stays");
+        assert!(charm.iter().all(|s| !s.base && s.value == 3), "as modifiers");
+        let sword = [
+            (0, stat::MIN_DAMAGE_2H, 10),
+            (0, stat::MAX_DAMAGE_2H, 23),
+            (0, stat::MAX_DAMAGE, 3),
+            (0, stat::THROW_MAX, 3),
+        ];
+        let two_hander = ItemStat::from_totals(&sword, &[stat::MIN_DAMAGE_2H, stat::MAX_DAMAGE_2H]);
+        let ids: Vec<(u16, bool)> = two_hander.iter().map(|s| (s.id, s.base)).collect();
+        assert_eq!(
+            ids,
+            vec![(stat::MIN_DAMAGE_2H, true), (stat::MAX_DAMAGE_2H, true)],
+            "a weapon keeps only its base's pairs"
+        );
     }
 }

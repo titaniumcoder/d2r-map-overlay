@@ -437,7 +437,7 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
     `tkni`, not the Gidbinn quest items). The javelin, spear, bow, pelt, barbarian helm, paladin
     shield, necro head, claw, grimoire, amulet and circlet skill rules are gone (12 rules); the
     pre-existing circlet, amulet and jewel trade rules stay. A `rules_parse` test holds every stat
-    rule to those 48 bases.
+    rule but the charms' to those 48 bases.
   - 8 rules, all trade with `label` "" (affix ranges from d2data magicprefix/magicsuffix: +3 tab is
     a magic-only level-60 prefix, rares top out at +2 tab; 20 FCR "of the Magus" only on wands /
     staves / scepters / orbs; daggers (`knif`) roll +1..+3 to the necromancer Poison and Bone tab
@@ -475,6 +475,47 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
     Replaces the B "Class-specific magic items" rule. Staves are not candidates. The rules are
     hand-added to the JSON like the labels;
     `research/gen_valuables.py` has neither yet.
+- **Charms** (user request 2026-11-22: "mark me charms too. we follow this basic rules" +
+  "everything else: sell it directly. and then naturally the charms for the summoner and fury,
+  we keep them for real"). 38 hand-added magic charm rules (cm1 small, cm2 large, cm3 grand),
+  all trade with `label` "", after the three generic magic charm rules:
+  - Stat vocabulary added to `valuables::StatKind` (itemstatcost ids): `life` 7, `mana` 9, `mf`
+    80, `gold_find` 79, `all_res` (the lowest of 39/41/43/45), `fire_res` 39, `cold_res` 43,
+    `lightning_res` 41, `poison_res` 45, `elemental_res` (the highest of 39/41/43),
+    `max_damage` (highest of 22/24/160), `attack_rating` 19, `fhr` 99, `frw` 96,
+    `poison_damage` (tooltip total: rate 58 × length 59 / 256, rounded; a prefix and a suffix
+    add both: Pestilent of Anthrax 385 × 300 → 451, Toxic of Anthrax 291 × 275 → 313),
+    `lightning_max_damage` 51, `fire_max_damage` 49.
+  - The reader's aggregated stats dropped every damage stat a base list lacks, so a charm lost
+    its "+3 to Maximum Damage": `ItemStat::from_totals` now drops them only on items whose base
+    list has a damage pair (weapons); elsewhere they stay as modifiers.
+  - S: 3/20/20 SC, 5 all res + 20 life SC, 313+ poison SC, skiller GC + 30 life / 12 FHR /
+    7 FRW / 35 gold find (any tab; the user: "massive"), 10/70/35 GC. A: SC 7 MF, 20 life,
+    5 all res, 11 fire/cold/lightning res, 11 poison res, 17 mana, 10 gold; SC 2+ max / 10+ AR
+    with 15 life, 5 FHR, 3 FRW or 7 MF; 5 all res with 7 MF / 5 FHR / 3 FRW; 10 fire/cold/
+    lightning res with 15 life / 7 MF / 5 FHR; 15 mana + 15 life; 100+ poison; lightning max
+    80+ (up to 2-99), fire max 35+ (up to 26-42); GC plain skillers (meta or not), 10/60,
+    13+ max with AR, 38 gold + Sharp max/AR or 8 all res, 14 all res; LC 6/30/30 and 8 all res
+    + 30 life (every other LC is vendor trash). Combination rules come before single-stat ones
+    in the file, so the shown rule is the most specific of a tier.
+  - Own use only: a rule with `"own": true` (validated: needs `stats`) never rings, coins or
+    keeps for trade (`best_rule` skips it); the stash plan reads it through
+    `valuables::stat_keeper`. One rule: 6% MF small charms (user: "6% keep for self only").
+  - Stash plan (`stash_plan::charm_action`, before the trade check, for identified magic
+    charms): **keep own** when the builds use it: a skiller of a tab the stage chain plans
+    skills on (`gear_score::Profile::plans_tab`; the summoner chain plans Summoning,
+    Shape Shifting and Elemental (Arctic Blast, Cyclone Armor), the Fury stage Summoning (Oak
+    Sage) and Shape Shifting), or a trade-rule keeper whose gear score reaches
+    `gear_score::MIN_GAIN` (8: life, resistances, FHR, FRW, mana for a caster, max damage and
+    AR for a fighter: charm flat damage now scores, half of it as average damage), or an
+    own-rule keeper scoring at all. Else **keep trade** for a certain S/A match (7% MF, gold
+    find, poison, off-build skillers, 10/60 GC for the caster), else **sell** ("no keeper
+    stats"). Charms in the inventory stay left alone; unique charms keep the old path.
+  - Magic charms drop UNIDENTIFIED (journal evidence above): the stat rules only judge
+    identified charms (inventory, stash, a charm identified on the ground). The three generic
+    magic charm rules (A grand, B small, B large, `needs_stats`) now carry `identified: false`:
+    on the ground nothing changes (the same dashed ring), an identified charm is judged by the
+    stat rules only, and the stash plan gives an unidentified charm no line (identify first).
 
 ## Shrines and wells (2026-11-15)
 - Object units: unit block 2, static path position (+0x10/+0x14). ObjectData (unit +0x10) `+0x08` u8 = shrine type
@@ -1181,6 +1222,8 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   keeper anywhere else → "→ 3–4". Charms in the inventory and the materials tab stay out.
   The dashboard shows the place part of every move in red (user, 2026-11-20); the live JSON
   sends each entry's `name`, `count`, `place`, `target`, `wrong_place`, `reason` beside `text`.
+- **Charms** (2026-11-22): identified magic charms are keep own / keep trade / sell by the
+  charm rules (see "Skill items" → Charms); unidentified ones get no line.
 - **Sell**: extra copies of own bases, worse bases for a runeword whose better base is held,
   plain bases nobody needs (twink-A ones included), uniques/sets no rule wants.
   **Give away**: B-only uniques/sets and extra keep-one copies (Sigon's).

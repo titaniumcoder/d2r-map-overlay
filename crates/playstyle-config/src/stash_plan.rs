@@ -130,7 +130,11 @@ impl Scoring {
                 level: None,
                 strength: None,
                 dexterity: None,
-                skills: planned_skills(snap, &builds, class),
+                skills: planned_skills(
+                    snap.skills.points.iter().map(|&(id, _)| id).collect(),
+                    &builds,
+                    class,
+                ),
                 weapon,
                 caster: gear_score::is_caster(class, weapon),
                 teleport: gear_score::teleport_wanted(&snap.holdings()),
@@ -187,9 +191,9 @@ fn worn_weapon_kind(snap: &Snapshot) -> Option<&'static str> {
         .map(|b| b.kind)
 }
 
-/// The character's allocated skills plus every skill the `builds` plan for `class`.
-fn planned_skills(snap: &Snapshot, builds: &[&Build], class: u32) -> Vec<u16> {
-    let mut skills: Vec<u16> = snap.skills.points.iter().map(|&(id, _)| id).collect();
+/// The character's `allocated` skills plus every skill the `builds` plan for `class`.
+fn planned_skills(allocated: Vec<u16>, builds: &[&Build], class: u32) -> Vec<u16> {
+    let mut skills = allocated;
     for target in builds.iter().flat_map(|b| &b.skill_plan) {
         let planned = d2r_core::skills_data::SKILLS
             .iter()
@@ -1021,6 +1025,9 @@ fn decide_rest(
     if valuables::worth_identifying(&h.item) {
         return None;
     }
+    if magic_charm(&h.item) {
+        return charm_action(h, scoring);
+    }
     if trade_worthy(&h.item) && !keeps_teleport(&h.item, scoring) {
         let action = match valuables::keep_one_name(&h.item) {
             Some(name) if kept_one.contains(&name) => Action::GiveAway,
@@ -1045,6 +1052,48 @@ fn decide_rest(
         Verdict::GiveAway => Action::GiveAway,
     };
     Some((action, None))
+}
+
+/// A magic (not unique) charm.
+const fn magic_charm(item: &ItemDrop) -> bool {
+    matches!(item.kind, DropKind::Charm { unique: false, .. }) && item.quality == item_data::QUALITY_MAGIC
+}
+
+/// The action for a stored magic charm (user rule, 2026-11-22): own use when the builds use
+/// it, else a trade keep when a valuables rule wants it, else sold. None while its stats are
+/// unread.
+fn charm_action(h: &Held, scoring: &Scoring) -> Option<Decided> {
+    if !judgeable(&h.item) {
+        return None;
+    }
+    Some(if own_charm(&h.item, &scoring.profile) {
+        (keep_or_move(Side::Own, h.spot), None)
+    } else if trade_worthy(&h.item) {
+        (keep_or_move(Side::Trade, h.spot), None)
+    } else {
+        (Action::Sell, Some("no keeper stats"))
+    })
+}
+
+/// Whether the builds use `charm`: a skiller of a tab they plan skills on (any other skiller is
+/// a trade good); else a valuables keeper whose gear score for `who` reaches
+/// [`gear_score::MIN_GAIN`] (life, resistances, FHR, max damage for a fighter, mana for a
+/// caster), or any score for an own-use rule's keeper (a 6% MF small charm).
+fn own_charm(charm: &ItemDrop, who: &Profile) -> bool {
+    let mut tabs = charm.stats.iter().filter(|s| s.id == stat::SKILL_TAB).peekable();
+    if tabs.peek().is_some() {
+        return tabs.any(|s| who.plans_tab(s.param));
+    }
+    let piece = Piece {
+        code: charm.code.as_deref(),
+        stats: &charm.stats,
+    };
+    let (total, _) = gear_score::scores(piece, who);
+    match valuables::stat_keeper(charm) {
+        Some(valuables::Keeper::Trade) => total >= gear_score::MIN_GAIN,
+        Some(valuables::Keeper::Own) => total > 0.0,
+        None => false,
+    }
 }
 
 fn merge_advice(items: &[Held], actions: Vec<Option<Decided>>) -> Vec<Advice> {
@@ -1878,29 +1927,156 @@ mod tests {
         );
     }
 
-    #[test]
-    fn charms_and_jewels_are_kept_when_they_score_at_all() {
-        let mut charm = rolled("cm1", QUALITY_MAGIC, &[(stat::RES_FIRE, 0, 8)]);
-        charm.kind = DropKind::Charm {
-            size: d2r_core::items::CharmSize::Small,
-            unique: false,
+    /// An identified magic charm of `code` with `stats` (id, param, value).
+    fn charm(code: &str, stats: &[(u16, u16, i32)]) -> ItemDrop {
+        let size = match code {
+            "cm1" => d2r_core::items::CharmSize::Small,
+            "cm2" => d2r_core::items::CharmSize::Large,
+            _ => d2r_core::items::CharmSize::Grand,
         };
-        let jewel = rolled("jew", QUALITY_MAGIC, &[(LIGHT_RADIUS, 0, 1)]);
+        ItemDrop {
+            kind: DropKind::Charm { size, unique: false },
+            ..rolled(code, QUALITY_MAGIC, stats)
+        }
+    }
+
+    /// The druid of the shipped stage `stage` (its chain's planned skills), a caster or not.
+    fn shipped_druid(stage: &str, caster: bool) -> Scoring {
+        let config = shipped();
+        let chain = config.stage_chain(stage);
+        let builds: Vec<&Build> = chain_builds(&config, &chain).collect();
+        Scoring {
+            profile: Profile {
+                class: 5,
+                skills: planned_skills(Vec::new(), &builds, 5),
+                caster,
+                ..Profile::default()
+            },
+            ..Scoring::default()
+        }
+    }
+
+    /// The `+1 to <tab>` stat of `class`'s tab `tab` (0..=2).
+    const fn skiller(class: u16, tab: u16) -> (u16, u16, i32) {
+        (stat::SKILL_TAB, class * 8 + tab, 1)
+    }
+
+    const MAX_DMG_3: [(u16, u16, i32); 3] = [
+        (stat::MAX_DAMAGE, 0, 3),
+        (stat::MAX_DAMAGE_2H, 0, 3),
+        (stat::THROW_MAX, 0, 3),
+    ];
+
+    #[test]
+    fn charms_the_druid_builds_use_are_kept_for_real() {
+        let summoner = shipped_druid("summoner druid", true);
+        let fury = shipped_druid("fury druid", false);
+        let summoning = charm("cm3", &[skiller(5, 0)]);
+        let shape_shifting = charm("cm3", &[skiller(5, 1)]);
+        let combat = charm("cm3", &[skiller(3, 0)]);
+        let one = |c: &ItemDrop, s: &Scoring| judged(&[at(c.clone(), Spot::Page(3))], s);
+        let own = |name: &str| vec![(name.to_owned(), Spot::Page(3), Action::Move(Side::Own), None)];
+        let trade = |name: &str| vec![(name.to_owned(), Spot::Page(3), Action::Keep(Side::Trade), None)];
         assert_eq!(
-            judged(
-                &[
-                    at(charm.clone(), Spot::Stash),
-                    at(charm, Spot::Inventory),
-                    at(jewel, Spot::Page(2)),
-                ],
-                &druid()
-            ),
+            one(&summoning, &summoner),
+            own("Magic Grand Charm"),
+            "summoner: Summoning skiller"
+        );
+        assert_eq!(
+            one(&shape_shifting, &summoner),
+            own("Magic Grand Charm"),
+            "the chain's Fury stage plans Shape Shifting"
+        );
+        assert_eq!(
+            one(&shape_shifting, &fury),
+            own("Magic Grand Charm"),
+            "Fury: Shape Shifting"
+        );
+        assert_eq!(
+            one(&summoning, &fury),
+            own("Magic Grand Charm"),
+            "Fury: Oak Sage is Summoning"
+        );
+        let elemental = charm("cm3", &[skiller(5, 2)]);
+        assert_eq!(
+            one(&elemental, &summoner),
+            own("Magic Grand Charm"),
+            "summoner: Arctic Blast, Cyclone Armor"
+        );
+        assert_eq!(
+            one(&elemental, &fury),
+            trade("Magic Grand Charm"),
+            "the Fury stage alone plans no Elemental"
+        );
+        assert_eq!(
+            one(&combat, &summoner),
+            trade("Magic Grand Charm"),
+            "Paladin Combat skiller: a trade good"
+        );
+
+        let mut small = MAX_DMG_3.to_vec();
+        small.extend([(stat::ATTACK_RATING, 0, 20), (stat::MAX_LIFE, 0, 20)]);
+        assert_eq!(
+            one(&charm("cm1", &small), &fury),
+            own("Magic Small Charm"),
+            "3/20/20: life and damage"
+        );
+        let res = [
+            (stat::RES_FIRE, 0, 5),
+            (stat::RES_COLD, 0, 5),
+            (stat::RES_LIGHTNING, 0, 5),
+            (stat::RES_POISON, 0, 5),
+        ];
+        assert_eq!(
+            one(&charm("cm1", &res), &summoner),
+            own("Magic Small Charm"),
+            "5 all res"
+        );
+        let gc_10_60 = charm(
+            "cm3",
+            &[
+                (stat::MAX_DAMAGE, 0, 10),
+                (stat::MAX_DAMAGE_2H, 0, 10),
+                (stat::THROW_MAX, 0, 10),
+                (stat::ATTACK_RATING, 0, 60),
+            ],
+        );
+        assert_eq!(
+            one(&gc_10_60, &fury),
+            own("Magic Grand Charm"),
+            "10/60: the Fury fights"
+        );
+        assert_eq!(
+            one(&gc_10_60, &summoner),
+            trade("Magic Grand Charm"),
+            "10/60: a caster sells it"
+        );
+        let gold = charm("cm1", &[(stat::GOLD_FIND, 0, 10)]);
+        assert_eq!(
+            one(&gold, &fury),
+            trade("Magic Small Charm"),
+            "gold find: no build stat"
+        );
+    }
+
+    #[test]
+    fn six_mf_is_kept_for_own_use_and_seven_for_trade() {
+        let summoner = shipped_druid("summoner druid", true);
+        let mf = |n| at(charm("cm1", &[(stat::MAGIC_FIND, 0, n)]), Spot::Stash);
+        assert_eq!(
+            judged(&[mf(6), mf(7), mf(5)], &summoner),
             vec![
                 (
-                    "Magic Jewel".to_owned(),
-                    Spot::Page(2),
+                    "Magic Small Charm".to_owned(),
+                    Spot::Stash,
                     Action::Sell,
-                    Some("no build stats")
+                    Some("no keeper stats")
+                ),
+                (
+                    "Magic Small Charm".to_owned(),
+                    Spot::Stash,
+                    Action::Move(Side::Trade),
+                    None
                 ),
                 (
                     "Magic Small Charm".to_owned(),
@@ -1909,7 +2085,74 @@ mod tests {
                     None
                 ),
             ],
-            "the carried charm stays out"
+            "5% sold, 7% to the trade pages, 6% kept"
+        );
+    }
+
+    #[test]
+    fn other_charms_are_sold_and_unidentified_ones_get_no_advice() {
+        let fury = shipped_druid("fury druid", false);
+        let large = charm("cm2", &[(stat::MAX_LIFE, 0, 35)]);
+        let mut unid = charm("cm3", &[]);
+        unid.flags = 0;
+        let mut weak = MAX_DMG_3.to_vec();
+        weak.push((stat::ATTACK_RATING, 0, 20));
+        assert_eq!(
+            judged(
+                &[
+                    at(large, Spot::Page(4)),
+                    at(unid, Spot::Stash),
+                    at(charm("cm1", &[(stat::RES_FIRE, 0, 8)]), Spot::Stash),
+                    at(charm("cm1", &weak), Spot::Page(1)),
+                    at(charm("cm1", &[(stat::MAX_LIFE, 0, 20)]), Spot::Inventory),
+                ],
+                &fury
+            ),
+            vec![
+                (
+                    "Magic Large Charm".to_owned(),
+                    Spot::Page(4),
+                    Action::Sell,
+                    Some("no keeper stats")
+                ),
+                (
+                    "Magic Small Charm".to_owned(),
+                    Spot::Stash,
+                    Action::Sell,
+                    Some("no keeper stats")
+                ),
+                (
+                    "Magic Small Charm".to_owned(),
+                    Spot::Page(1),
+                    Action::Sell,
+                    Some("no keeper stats")
+                ),
+            ],
+            "a plain 35 life large charm, 8 fire res and a lifeless 3/20: vendor trash; the \
+             unidentified grand charm: identify first; the carried charm stays out"
+        );
+    }
+
+    #[test]
+    fn jewels_are_kept_when_they_score_at_all() {
+        let jewel = rolled("jew", QUALITY_MAGIC, &[(LIGHT_RADIUS, 0, 1)]);
+        let res = rolled("jew", QUALITY_MAGIC, &[(stat::RES_FIRE, 0, 8)]);
+        assert_eq!(
+            judged(&[at(jewel, Spot::Page(2)), at(res, Spot::Stash)], &druid()),
+            vec![
+                (
+                    "Magic Jewel".to_owned(),
+                    Spot::Page(2),
+                    Action::Sell,
+                    Some("no build stats")
+                ),
+                (
+                    "Magic Jewel".to_owned(),
+                    Spot::Stash,
+                    Action::Keep(Side::Own),
+                    None
+                ),
+            ]
         );
     }
 

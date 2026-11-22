@@ -66,21 +66,80 @@ enum StatKind {
     SingleSkill,
     Fcr,
     Ias,
+    Life,
+    Mana,
+    /// Magic find %.
+    Mf,
+    /// Extra gold %.
+    GoldFind,
+    /// The lowest of the four resistances ("All Resistances +5").
+    AllRes,
+    FireRes,
+    ColdRes,
+    LightningRes,
+    PoisonRes,
+    /// The highest of fire, cold and lightning resistance.
+    ElementalRes,
+    /// Flat maximum damage (one-handed, two-handed or thrown, whichever is highest).
+    MaxDamage,
+    AttackRating,
+    Fhr,
+    Frw,
+    /// The tooltip's poison total: rate × length / 256, rounded ("+451 poison damage over 12
+    /// seconds").
+    PoisonDamage,
+    /// Maximum lightning / fire damage.
+    LightningMaxDamage,
+    FireMaxDamage,
 }
 
 impl StatKind {
-    const fn id(self) -> u16 {
+    /// The stat ids whose best entry is the amount; empty for the computed kinds.
+    const fn ids(self) -> &'static [u16] {
         match self {
-            Self::SkillTab => stat::SKILL_TAB,
-            Self::ClassSkills => stat::CLASS_SKILLS,
-            Self::SingleSkill => stat::SINGLE_SKILL,
-            Self::Fcr => stat::FCR,
-            Self::Ias => stat::IAS,
+            Self::SkillTab => &[stat::SKILL_TAB],
+            Self::ClassSkills => &[stat::CLASS_SKILLS],
+            Self::SingleSkill => &[stat::SINGLE_SKILL],
+            Self::Fcr => &[stat::FCR],
+            Self::Ias => &[stat::IAS],
+            Self::Life => &[stat::MAX_LIFE],
+            Self::Mana => &[stat::MAX_MANA],
+            Self::Mf => &[stat::MAGIC_FIND],
+            Self::GoldFind => &[stat::GOLD_FIND],
+            Self::FireRes => &[stat::RES_FIRE],
+            Self::ColdRes => &[stat::RES_COLD],
+            Self::LightningRes => &[stat::RES_LIGHTNING],
+            Self::PoisonRes => &[stat::RES_POISON],
+            Self::ElementalRes => &[stat::RES_FIRE, stat::RES_COLD, stat::RES_LIGHTNING],
+            Self::MaxDamage => &[stat::MAX_DAMAGE, stat::MAX_DAMAGE_2H, stat::THROW_MAX],
+            Self::AttackRating => &[stat::ATTACK_RATING],
+            Self::Fhr => &[stat::FHR],
+            Self::Frw => &[stat::FRW],
+            Self::LightningMaxDamage => &[stat::LIGHTNING_MAX],
+            Self::FireMaxDamage => &[stat::FIRE_MAX],
+            Self::AllRes | Self::PoisonDamage => &[],
         }
     }
 }
 
-/// One `stats` condition: the item's best entry of `stat` (among `skills`) is at least `min`.
+/// The best value among `stats` entries of `ids` that `keep` lets through; 0 for none.
+fn best_value(stats: &[ItemStat], ids: &[u16], keep: impl Fn(&ItemStat) -> bool) -> i32 {
+    stats
+        .iter()
+        .filter(|s| ids.contains(&s.id) && keep(s))
+        .map(|s| s.value)
+        .max()
+        .unwrap_or(0)
+}
+
+/// The tooltip's poison damage total of `stats`, rounded: max rate × length / 256.
+fn poison_total(stats: &[ItemStat]) -> i32 {
+    let rate = i64::from(best_value(stats, &[stat::POISON_MAX], |_| true));
+    let frames = i64::from(best_value(stats, &[stat::POISON_LENGTH], |_| true));
+    i32::try_from((rate * frames + 128) / 256).unwrap_or(i32::MAX)
+}
+
+/// One `stats` condition: the item's amount of `stat` (among `skills`) is at least `min`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StatNeed {
@@ -93,15 +152,25 @@ struct StatNeed {
 
 impl StatNeed {
     fn holds(&self, stats: &[ItemStat]) -> bool {
-        let id = self.stat.id();
         let named = |s: &ItemStat| {
             self.skills.is_empty()
                 || skills_data::name(s.param).is_some_and(|n| self.skills.iter().any(|w| w == n))
         };
-        stats
-            .iter()
-            .filter(|s| s.id == id && named(s))
-            .any(|s| s.value >= self.min)
+        let amount = match self.stat {
+            StatKind::AllRes => [
+                stat::RES_FIRE,
+                stat::RES_COLD,
+                stat::RES_LIGHTNING,
+                stat::RES_POISON,
+            ]
+            .into_iter()
+            .map(|id| best_value(stats, &[id], |_| true))
+            .min()
+            .unwrap_or(0),
+            StatKind::PoisonDamage => poison_total(stats),
+            kind => best_value(stats, kind.ids(), named),
+        };
+        amount >= self.min
     }
 }
 
@@ -138,6 +207,10 @@ struct Rule {
     /// `None` ignores it; `Some(false)` matches only unidentified items.
     #[serde(default)]
     identified: Option<bool>,
+    /// A keeper for the player's own use only (a 6% MF small charm): no ring, coin or trade
+    /// keep; `tier` and `category` are unused. Needs `stats`.
+    #[serde(default)]
+    own: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -172,10 +245,14 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
 });
 
 /// The checks serde can't make: labels of at most 4 characters, `stats` conditions with a
-/// positive `min`, `skills` only on `single_skill` and every skill name known, and no `stats`
-/// or `item_names` on an unidentified-only rule (such an item has neither).
+/// positive `min`, `skills` only on `single_skill` and every skill name known, no `stats`
+/// or `item_names` on an unidentified-only rule (such an item has neither), and `stats` on an
+/// own-use rule.
 fn validate(rules: &[Rule]) -> Result<(), String> {
     for r in rules {
+        if r.own && r.stats.is_empty() {
+            return Err(format!("{}: an own-use rule needs stats", r.name));
+        }
         if let Some(l) = r.label.as_ref().filter(|l| l.chars().count() > 4) {
             return Err(format!("{}: label {l:?} is longer than 4 characters", r.name));
         }
@@ -296,7 +373,10 @@ fn best_rule<'r>(
     enabled: &config::Valuables,
 ) -> Option<(&'r Rule, bool)> {
     let mut found: Option<(&Rule, bool)> = None;
-    for rule in rules.iter().filter(|r| enabled.enabled(r.category, r.tier)) {
+    for rule in rules
+        .iter()
+        .filter(|r| !r.own && enabled.enabled(r.category, r.tier))
+    {
         let Some(uncertain) = check(rule, drop, name) else {
             continue;
         };
@@ -334,6 +414,26 @@ pub fn worth_identifying(item: &ItemDrop) -> bool {
     RULES
         .iter()
         .any(|r| r.identified == Some(false) && check(r, item, None).is_some())
+}
+
+/// Which kind of stats rule an identified item matches ([`stat_keeper`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Keeper {
+    /// A trade rule's (any tier): the stats are worth selling.
+    Trade,
+    /// Only an own-use rule's (`"own": true`).
+    Own,
+}
+
+/// The best kind of `stats` rule `item` matches, of any tier; `None` for none (a charm worth
+/// nothing to anyone).
+#[must_use]
+pub fn stat_keeper(item: &ItemDrop) -> Option<Keeper> {
+    RULES
+        .iter()
+        .filter(|r| !r.stats.is_empty() && check(r, item, None).is_some())
+        .map(|r| if r.own { Keeper::Own } else { Keeper::Trade })
+        .min_by_key(|k| *k != Keeper::Trade)
 }
 
 /// What to call `item` in the lists: its unique/set name if known; else "eth", the base name
@@ -469,8 +569,20 @@ mod tests {
         assert_eq!(parsed.rules.len(), RULES.len());
         assert!(RULES.len() > 50, "{} rules", RULES.len());
         assert_eq!(validate(&parsed.rules), Ok(()));
-        let skill_rules: Vec<&Rule> = RULES.iter().filter(|r| !r.stats.is_empty()).collect();
+        let charm = |r: &&Rule| r.item_codes.iter().all(|c| CHARM_CODES.contains(&c.as_str()));
+        let skill_rules: Vec<&Rule> = RULES
+            .iter()
+            .filter(|r| !r.stats.is_empty() && !charm(r))
+            .collect();
         assert_eq!(skill_rules.len(), 8, "stat rules");
+        let charm_rules: Vec<&Rule> = RULES.iter().filter(|r| !r.stats.is_empty() && charm(r)).collect();
+        assert_eq!(charm_rules.len(), 38, "charm stat rules");
+        for r in charm_rules {
+            assert_eq!(r.quality, Quality::Magic, "{}", r.name);
+            assert_eq!(r.category, Category::Trade, "{}: sold, so trade", r.name);
+            assert!(r.own || r.tier >= Tier::A, "{}: A or S", r.name);
+            assert_eq!(r.label.as_deref(), Some(""), "{}: no tag", r.name);
+        }
         for r in skill_rules {
             let vendor = |c: &String| {
                 d2r_core::bases_data::base(c)
@@ -487,6 +599,8 @@ mod tests {
         }
         Ok(())
     }
+
+    const CHARM_CODES: [&str; 3] = ["cm1", "cm2", "cm3"];
 
     fn rules_of(json: &str) -> serde_json::Result<Vec<Rule>> {
         serde_json::from_str::<RuleFile>(&format!(r#"{{"schema": 1, "rules": [{json}]}}"#)).map(|f| f.rules)
@@ -515,6 +629,11 @@ mod tests {
             ),
             (r#", "stats": [{"stat": "fcr", "min": 0}]"#, "min 0"),
             (r#", "label": "+3wnd""#, "5-character label"),
+            (r#", "own": true"#, "an own-use rule without stats"),
+            (
+                r#", "stats": [{"stat": "life", "skills": ["Bone Spear"], "min": 20}]"#,
+                "skills on life",
+            ),
             (
                 r#", "identified": false, "stats": [{"stat": "fcr", "min": 3}]"#,
                 "stats on an unidentified-only rule",
@@ -526,8 +645,12 @@ mod tests {
         ] {
             assert!(validate(&rules_of(&rule(extra))?).is_err(), "{what}");
         }
+        let charm = rules_of(&rule(
+            r#", "own": true, "stats": [{"stat": "all_res", "min": 5}, {"stat": "poison_damage", "min": 100}]"#,
+        ))?;
+        assert_eq!(validate(&charm), Ok(()));
         for extra in [
-            r#", "stats": [{"stat": "mf", "min": 3}]"#,
+            r#", "stats": [{"stat": "luck", "min": 3}]"#,
             r#", "stats": [{"stat": "fcr", "min": 3, "max": 5}]"#,
         ] {
             assert!(rules_of(&rule(extra)).is_err(), "{extra}: serde rejects it");
@@ -735,6 +858,231 @@ mod tests {
                 assert_eq!(rule_label(&d, None), Some(""), "{what}: no tag");
             }
         }
+    }
+
+    /// An identified magic charm of `code` with `stats` (id, value).
+    fn charm(code: &str, stats: &[(u16, i32)]) -> ItemDrop {
+        let stats: Vec<(u16, u16, i32)> = stats.iter().map(|&(id, v)| (id, 0, v)).collect();
+        let mut d = rolled(code, MAGIC, &stats);
+        d.kind = DropKind::Charm {
+            size: match code {
+                "cm1" => d2r_core::items::CharmSize::Small,
+                "cm2" => d2r_core::items::CharmSize::Large,
+                _ => d2r_core::items::CharmSize::Grand,
+            },
+            unique: false,
+        };
+        d
+    }
+
+    /// "+N to Maximum Damage" as the aggregated array holds it (all three pairs) and `ar`.
+    fn max_ar(max: i32, ar: i32) -> Vec<(u16, i32)> {
+        vec![
+            (stat::MAX_DAMAGE, max),
+            (stat::MAX_DAMAGE_2H, max),
+            (stat::THROW_MAX, max),
+            (stat::ATTACK_RATING, ar),
+        ]
+    }
+
+    /// "All Resistances +n" (the four stats) and `more`.
+    fn all_res(n: i32, more: &[(u16, i32)]) -> Vec<(u16, i32)> {
+        let mut v = vec![
+            (stat::RES_FIRE, n),
+            (stat::RES_COLD, n),
+            (stat::RES_LIGHTNING, n),
+            (stat::RES_POISON, n),
+        ];
+        v.extend_from_slice(more);
+        v
+    }
+
+    /// A poison affix pair's stats: rate (min = max) and length in frames.
+    fn poison(rate: i32, frames: i32) -> Vec<(u16, i32)> {
+        vec![
+            (stat::POISON_MIN, rate),
+            (stat::POISON_MAX, rate),
+            (stat::POISON_LENGTH, frames),
+        ]
+    }
+
+    /// `v` with `more` added.
+    fn and(mut v: Vec<(u16, i32)>, more: &[(u16, i32)]) -> Vec<(u16, i32)> {
+        v.extend_from_slice(more);
+        v
+    }
+
+    /// Asserts the best S/A rule of a `code` charm with `stats`, a certain match without a tag.
+    fn assert_best(code: &str, stats: &[(u16, i32)], want: Option<(Tier, &str)>, what: &str) {
+        assert_best_of(&charm(code, stats), want, what);
+    }
+
+    fn assert_best_of(d: &ItemDrop, want: Option<(Tier, &str)>, what: &str) {
+        let got = best(d, &keep_tiers());
+        assert_eq!(got.as_ref().map(|h| (h.tier, h.rule.as_str())), want, "{what}");
+        if want.is_some() {
+            assert!(got.is_some_and(|h| !h.uncertain), "{what}: certain");
+            assert_eq!(rule_label(d, None), Some(""), "{what}: no tag");
+            assert_eq!(stat_keeper(d), Some(Keeper::Trade), "{what}");
+        }
+    }
+
+    const LIFE: u16 = stat::MAX_LIFE;
+
+    #[test]
+    fn small_charm_single_stats() {
+        let a = |rule| Some((Tier::A, rule));
+        assert_best("cm1", &[(stat::MAGIC_FIND, 7)], a("7 MF small charms"), "7 MF");
+        assert_best("cm1", &[(stat::MAGIC_FIND, 6)], None, "6 MF: own use, no mark");
+        assert_best("cm1", &[(LIFE, 20)], a("20 life small charms"), "20 life");
+        assert_best("cm1", &[(LIFE, 19)], None, "19 life");
+        assert_best("cm1", &all_res(5, &[]), a("5 all res small charms"), "5@");
+        assert_best("cm1", &all_res(4, &[]), None, "4@");
+        let three = [(stat::RES_FIRE, 5), (stat::RES_COLD, 5), (stat::RES_LIGHTNING, 5)];
+        assert_best("cm1", &three, None, "three res is no all res");
+        let res = a("11 fire, cold or lightning res small charms");
+        assert_best("cm1", &[(stat::RES_LIGHTNING, 11)], res, "11 lightning res");
+        assert_best("cm1", &[(stat::RES_FIRE, 11)], res, "11 fire res");
+        let poison_res = a("11 poison res small charms");
+        assert_best("cm1", &[(stat::RES_POISON, 11)], poison_res, "11 poison res");
+        assert_best(
+            "cm1",
+            &[(stat::MAX_MANA, 17)],
+            a("17 mana small charms"),
+            "17 mana",
+        );
+        assert_best(
+            "cm1",
+            &[(stat::GOLD_FIND, 10)],
+            a("10 gold find small charms"),
+            "10 gold",
+        );
+        assert_best("cm2", &[(stat::MAGIC_FIND, 7)], None, "a 7 MF large charm");
+        assert_eq!(
+            stat_keeper(&charm("cm1", &[(stat::MAGIC_FIND, 6)])),
+            Some(Keeper::Own)
+        );
+        assert_eq!(stat_keeper(&charm("cm1", &[(stat::MAGIC_FIND, 5)])), None);
+    }
+
+    #[test]
+    fn small_charm_dual_stats() {
+        let s = |rule| Some((Tier::S, rule));
+        let a = |rule| Some((Tier::A, rule));
+        let top = and(max_ar(3, 20), &[(LIFE, 20)]);
+        assert_best("cm1", &top, s("3/20/20 small charms"), "3/20/20");
+        let low = and(max_ar(2, 14), &[(LIFE, 16)]);
+        assert_best("cm1", &low, a("Max damage / AR / life small charms"), "2/14/16");
+        let fhr = and(max_ar(3, 20), &[(stat::FHR, 5)]);
+        assert_best("cm1", &fhr, a("Max damage / AR / FHR small charms"), "3/20 5 FHR");
+        assert_best("cm1", &max_ar(3, 20), None, "plain 3/20");
+        let res_life = all_res(5, &[(LIFE, 20)]);
+        assert_best(
+            "cm1",
+            &res_life,
+            s("5 all res, 20 life small charms"),
+            "5@ 20 life",
+        );
+        let res_frw = all_res(5, &[(stat::FRW, 3)]);
+        assert_best("cm1", &res_frw, a("5 all res, FRW small charms"), "5@ 3 FRW");
+        let cold_life = [(stat::RES_COLD, 10), (LIFE, 15)];
+        assert_best(
+            "cm1",
+            &cold_life,
+            a("10 res, life small charms"),
+            "10 cold 15 life",
+        );
+        let mana_life = [(stat::MAX_MANA, 15), (LIFE, 15)];
+        assert_best("cm1", &mana_life, a("Mana, life small charms"), "15 mana 15 life");
+    }
+
+    #[test]
+    fn small_charm_elemental_damage() {
+        let s = |rule| Some((Tier::S, rule));
+        let a = |rule| Some((Tier::A, rule));
+        let fortune = s("313+ poison small charms");
+        assert_best("cm1", &poison(385, 300), fortune, "Pestilent of Anthrax: 451");
+        assert_best(
+            "cm1",
+            &poison(291, 275),
+            fortune,
+            "Toxic of Anthrax: 312.6 shows 313",
+        );
+        let decent = a("100+ poison small charms");
+        assert_best("cm1", &poison(299, 150), decent, "Pestilent: 175");
+        assert_best("cm1", &poison(128, 100), None, "Envenomed: 50");
+        let light = a("High lightning damage small charms");
+        assert_best("cm1", &[(stat::LIGHTNING_MAX, 99)], light, "1-99 lightning");
+        let fire = a("High fire damage small charms");
+        assert_best("cm1", &[(stat::FIRE_MAX, 42)], fire, "26-42 fire");
+    }
+
+    /// A grand charm with `+1 to <class's tab t>` and `more`.
+    fn skiller(class: u16, t: u16, more: &[(u16, i32)]) -> ItemDrop {
+        let mut d = charm("cm3", more);
+        d.stats.push(ItemStat {
+            id: stat::SKILL_TAB,
+            param: tab(class, t),
+            value: 1,
+            base: false,
+        });
+        d
+    }
+
+    #[test]
+    fn grand_charms() {
+        let s = |rule| Some((Tier::S, rule));
+        let a = |rule| Some((Tier::A, rule));
+        let plain = a("Skiller grand charms");
+        assert_best_of(&skiller(3, 0, &[]), plain, "Paladin Combat skiller");
+        assert_best_of(&skiller(5, 1, &[]), plain, "Shape Shifting skiller");
+        let life = skiller(1, 2, &[(LIFE, 40)]);
+        assert_best_of(&life, s("Skiller, life grand charms"), "Cold skiller 40 life");
+        let fhr = skiller(7, 0, &[(stat::FHR, 12)]);
+        assert_best_of(&fhr, s("Skiller, FHR grand charms"), "Warlock skiller 12 FHR");
+        let top = and(max_ar(10, 76), &[(LIFE, 38)]);
+        assert_best("cm3", &top, s("10/70/35 grand charms"), "10/76/38");
+        assert_best("cm3", &max_ar(10, 62), a("10/60 grand charms"), "10/62");
+        assert_best("cm3", &max_ar(9, 76), None, "9/76");
+        assert_best("cm3", &max_ar(14, 55), a("13 max damage grand charms"), "14/55");
+        let res = all_res(14, &[(stat::RES_FIRE, 15)]);
+        assert_best("cm3", &res, a("14 all res grand charms"), "14@");
+        let gold = all_res(9, &[(stat::GOLD_FIND, 39)]);
+        assert_best(
+            "cm3",
+            &gold,
+            a("38 gold find, all res grand charms"),
+            "9@ 39 gold",
+        );
+        assert_best("cm3", &[(LIFE, 45)], None, "plain 45 life grand charm");
+    }
+
+    #[test]
+    fn large_charms() {
+        let a = |rule| Some((Tier::A, rule));
+        let sharp = and(max_ar(6, 40), &[(LIFE, 32)]);
+        assert_best("cm2", &sharp, a("6/30/30 large charms"), "6/40/32");
+        let res = all_res(8, &[(LIFE, 30)]);
+        assert_best("cm2", &res, a("8 all res, life large charms"), "8@ 30 life");
+        assert_best("cm2", &max_ar(6, 40), None, "6/40 without life: vendor trash");
+        assert_best("cm2", &[(LIFE, 35)], None, "35 life: vendor trash");
+    }
+
+    #[test]
+    fn unidentified_charms_are_only_candidates() {
+        for code in CHARM_CODES {
+            let mut d = charm(code, &[]);
+            d.flags = 0;
+            assert!(worth_identifying(&d), "{code}");
+            assert_eq!(stat_keeper(&d), None, "{code}: no stats");
+            assert!(
+                best(&d, &all()).is_some_and(|h| h.uncertain),
+                "{code}: the dashed ring stays"
+            );
+        }
+        let identified_junk = charm("cm3", &[(stat::MAX_LIFE, 5)]);
+        assert!(!worth_identifying(&identified_junk));
+        assert_eq!(best(&identified_junk, &all()), None, "identified junk: no ring");
     }
 
     const CANDIDATES: &str = "Unidentified magic wands, scepters, orbs and daggers";

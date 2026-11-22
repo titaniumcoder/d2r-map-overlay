@@ -12,8 +12,9 @@
     "tiers": "S always highlight, A highlight, B optional",
     "precedence": "if several rules match, use the highest tier",
     "keep": "\"one\" = one copy per item name is worth keeping across inventory, cube and stashes; further copies are give-aways. Absent = every copy counts",
-    "stats": "list of {stat, min[, skills]}, all must hold on the read item stats (identified items; an unidentified drop has none): skill_tab (any tab), class_skills, single_skill (skills = names, any of them; empty = any), fcr, ias. A rule with stats never matches an item without them",
-    "identified": "true/false = required; absent = ignore. false matches only unidentified items (no stats read yet); it goes with no stats or item_names"
+    "stats": "list of {stat, min[, skills]}, all must hold on the read item stats (identified items; an unidentified drop has none): skill_tab (any tab), class_skills, single_skill (skills = names, any of them; empty = any), fcr, ias, life, mana, mf, gold_find, all_res (the lowest of the four), fire_res, cold_res, lightning_res, poison_res, elemental_res (the highest of fire, cold, lightning), max_damage (flat, any hand), attack_rating, fhr, frw, poison_damage (tooltip total: rate x length / 256), lightning_max_damage, fire_max_damage. A rule with stats never matches an item without them",
+    "identified": "true/false = required; absent = ignore. false matches only unidentified items (no stats read yet); it goes with no stats or item_names",
+    "own": "true = a keeper for the player's own use only (needs stats): no ring, coin or trade keep; the stash plan keeps it when the build values its stats"
   },
   "rules": [
     {
@@ -889,11 +890,12 @@
       "sockets": null,
       "ethereal": null,
       "name": "Magic grand charms",
-      "note": "Skillers (+1 skill tab) and 20+ life skillers are the value; most are trash. Needs identified stats.",
+      "note": "Skillers (+1 skill tab) and 20+ life skillers are the value; most are trash. Unidentified only (magic charms drop unidentified); identified, the stat rules below decide.",
       "needs_stats": true,
       "base_names": [
         "Grand Charm"
-      ]
+      ],
+      "identified": false
     },
     {
       "tier": "B",
@@ -905,11 +907,12 @@
       "sockets": null,
       "ethereal": null,
       "name": "Magic small charms",
-      "note": "Valuable: 5 all res, 20 life, 7 MF, 3/20/20. Needs stats.",
+      "note": "Valuable: 5 all res, 20 life, 7 MF, 3/20/20. Unidentified only (magic charms drop unidentified); identified, the stat rules below decide.",
       "needs_stats": true,
       "base_names": [
         "Small Charm"
-      ]
+      ],
+      "identified": false
     },
     {
       "tier": "B",
@@ -921,8 +924,974 @@
       "sockets": null,
       "ethereal": null,
       "name": "Magic large charms",
-      "note": "Only 5-6 max dmg/20-35 life (sharp) sells. Needs stats.",
+      "note": "Only 5-6 max dmg/20-35 life (sharp) sells. Unidentified only (magic charms drop unidentified); identified, the stat rules below decide.",
       "needs_stats": true,
+      "base_names": [
+        "Large Charm"
+      ],
+      "identified": false
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "3/20/20 small charms",
+      "note": "Fine of Vita: the top small charm (user list 2026-11-22).",
+      "stats": [
+        {
+          "stat": "max_damage",
+          "min": 3
+        },
+        {
+          "stat": "attack_rating",
+          "min": 20
+        },
+        {
+          "stat": "life",
+          "min": 20
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "5 all res, 20 life small charms",
+      "note": "Shimmering of Vita.",
+      "stats": [
+        {
+          "stat": "all_res",
+          "min": 5
+        },
+        {
+          "stat": "life",
+          "min": 20
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "313+ poison small charms",
+      "note": "Toxic/Pestilent with Anthrax: 313, 377, 451 poison (tooltip total rate x length / 256).",
+      "stats": [
+        {
+          "stat": "poison_damage",
+          "min": 313
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Max damage / AR / life small charms",
+      "note": "Fine (1-3 max, 10-20 AR) with 15-20 life.",
+      "stats": [
+        {
+          "stat": "max_damage",
+          "min": 2
+        },
+        {
+          "stat": "attack_rating",
+          "min": 10
+        },
+        {
+          "stat": "life",
+          "min": 15
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Max damage / AR / FHR small charms",
+      "note": "Fine with 5% FHR.",
+      "stats": [
+        {
+          "stat": "max_damage",
+          "min": 2
+        },
+        {
+          "stat": "attack_rating",
+          "min": 10
+        },
+        {
+          "stat": "fhr",
+          "min": 5
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Max damage / AR / FRW small charms",
+      "note": "Fine with 3% FRW.",
+      "stats": [
+        {
+          "stat": "max_damage",
+          "min": 2
+        },
+        {
+          "stat": "attack_rating",
+          "min": 10
+        },
+        {
+          "stat": "frw",
+          "min": 3
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Max damage / AR / MF small charms",
+      "note": "Fine with 7% MF.",
+      "stats": [
+        {
+          "stat": "max_damage",
+          "min": 2
+        },
+        {
+          "stat": "attack_rating",
+          "min": 10
+        },
+        {
+          "stat": "mf",
+          "min": 7
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "5 all res, MF small charms",
+      "note": "Shimmering with 7% MF.",
+      "stats": [
+        {
+          "stat": "all_res",
+          "min": 5
+        },
+        {
+          "stat": "mf",
+          "min": 7
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "5 all res, FHR small charms",
+      "note": "Shimmering with 5% FHR.",
+      "stats": [
+        {
+          "stat": "all_res",
+          "min": 5
+        },
+        {
+          "stat": "fhr",
+          "min": 5
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "5 all res, FRW small charms",
+      "note": "Shimmering with 3% FRW.",
+      "stats": [
+        {
+          "stat": "all_res",
+          "min": 5
+        },
+        {
+          "stat": "frw",
+          "min": 3
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "10 res, life small charms",
+      "note": "10-11 fire/lightning/cold res with 15-20 life.",
+      "stats": [
+        {
+          "stat": "elemental_res",
+          "min": 10
+        },
+        {
+          "stat": "life",
+          "min": 15
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "10 res, MF small charms",
+      "note": "10-11 fire/lightning/cold res with 7% MF.",
+      "stats": [
+        {
+          "stat": "elemental_res",
+          "min": 10
+        },
+        {
+          "stat": "mf",
+          "min": 7
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "10 res, FHR small charms",
+      "note": "10-11 fire/lightning/cold res with 5% FHR.",
+      "stats": [
+        {
+          "stat": "elemental_res",
+          "min": 10
+        },
+        {
+          "stat": "fhr",
+          "min": 5
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Mana, life small charms",
+      "note": "Serpent's 15-17 mana with 15-20 life.",
+      "stats": [
+        {
+          "stat": "mana",
+          "min": 15
+        },
+        {
+          "stat": "life",
+          "min": 15
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "7 MF small charms",
+      "note": "of Good Luck 6-7%: 7 sells; 6 is an own-use keeper.",
+      "stats": [
+        {
+          "stat": "mf",
+          "min": 7
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "20 life small charms",
+      "note": "of Vita 16-20.",
+      "stats": [
+        {
+          "stat": "life",
+          "min": 20
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "5 all res small charms",
+      "note": "Shimmering 3-5.",
+      "stats": [
+        {
+          "stat": "all_res",
+          "min": 5
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "11 fire, cold or lightning res small charms",
+      "note": "Ruby/Sapphire/Amber 10-11 (lightning and fire sell best).",
+      "stats": [
+        {
+          "stat": "elemental_res",
+          "min": 11
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "11 poison res small charms",
+      "note": "Emerald 10-11 (sells less).",
+      "stats": [
+        {
+          "stat": "poison_res",
+          "min": 11
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "17 mana small charms",
+      "note": "Serpent's 13-17.",
+      "stats": [
+        {
+          "stat": "mana",
+          "min": 17
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "10 gold find small charms",
+      "note": "of Greed 5-10.",
+      "stats": [
+        {
+          "stat": "gold_find",
+          "min": 10
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "100+ poison small charms",
+      "note": "Poison damage 100+ is decent.",
+      "stats": [
+        {
+          "stat": "poison_damage",
+          "min": 100
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "High lightning damage small charms",
+      "note": "Shocking with Storms up to 2-99: rare.",
+      "stats": [
+        {
+          "stat": "lightning_max_damage",
+          "min": 80
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "High fire damage small charms",
+      "note": "Flaming with Incineration up to 26-42: rare.",
+      "stats": [
+        {
+          "stat": "fire_max_damage",
+          "min": 35
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "B",
+      "category": "trade",
+      "item_codes": [
+        "cm1"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "6 MF small charms (own use)",
+      "own": true,
+      "note": "User: 6% MF keeps for self only, never sold; kept when the build values MF.",
+      "stats": [
+        {
+          "stat": "mf",
+          "min": 6
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Small Charm"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Skiller, life grand charms",
+      "note": "+1 skill tab with 30-45 life: massive.",
+      "stats": [
+        {
+          "stat": "skill_tab",
+          "min": 1
+        },
+        {
+          "stat": "life",
+          "min": 30
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Skiller, FHR grand charms",
+      "note": "+1 skill tab with 12% FHR: massive.",
+      "stats": [
+        {
+          "stat": "skill_tab",
+          "min": 1
+        },
+        {
+          "stat": "fhr",
+          "min": 12
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Skiller, FRW grand charms",
+      "note": "+1 skill tab with 7% FRW: massive.",
+      "stats": [
+        {
+          "stat": "skill_tab",
+          "min": 1
+        },
+        {
+          "stat": "frw",
+          "min": 7
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Skiller, gold find grand charms",
+      "note": "+1 skill tab with 35-40% gold find: massive.",
+      "stats": [
+        {
+          "stat": "skill_tab",
+          "min": 1
+        },
+        {
+          "stat": "gold_find",
+          "min": 35
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "S",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "10/70/35 grand charms",
+      "note": "Sharp of Vita: the top melee grand charm.",
+      "stats": [
+        {
+          "stat": "max_damage",
+          "min": 10
+        },
+        {
+          "stat": "attack_rating",
+          "min": 70
+        },
+        {
+          "stat": "life",
+          "min": 35
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Skiller grand charms",
+      "note": "+1 to a skill tab: almost always worth keeping; the meta tabs (Paladin Combat, Sorceress Lightning/Cold/Fire, Amazon Javelin, Necromancer Poison and Bone, Assassin Traps, Warlock) sell even plain.",
+      "stats": [
+        {
+          "stat": "skill_tab",
+          "min": 1
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "10/60 grand charms",
+      "note": "Sharp 10 max damage with 60+ AR (with FHR, FRW or gold find even better).",
+      "stats": [
+        {
+          "stat": "max_damage",
+          "min": 10
+        },
+        {
+          "stat": "attack_rating",
+          "min": 60
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "13 max damage grand charms",
+      "note": "Sharp of Maiming: 13-14 max damage with AR.",
+      "stats": [
+        {
+          "stat": "max_damage",
+          "min": 13
+        },
+        {
+          "stat": "attack_rating",
+          "min": 1
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "38 gold find, max damage grand charms",
+      "note": "38-40% gold find on a Sharp grand charm.",
+      "stats": [
+        {
+          "stat": "gold_find",
+          "min": 38
+        },
+        {
+          "stat": "max_damage",
+          "min": 7
+        },
+        {
+          "stat": "attack_rating",
+          "min": 49
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "38 gold find, all res grand charms",
+      "note": "38-40% gold find on a Shimmering grand charm.",
+      "stats": [
+        {
+          "stat": "gold_find",
+          "min": 38
+        },
+        {
+          "stat": "all_res",
+          "min": 8
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm3"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "14 all res grand charms",
+      "note": "Shimmering 14-15 (with life, FHR or FRW even better).",
+      "stats": [
+        {
+          "stat": "all_res",
+          "min": 14
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Grand Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm2"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "6/30/30 large charms",
+      "note": "Sharp of Vita: 6 max damage, 30-48 AR, 30-35 life.",
+      "stats": [
+        {
+          "stat": "max_damage",
+          "min": 6
+        },
+        {
+          "stat": "attack_rating",
+          "min": 30
+        },
+        {
+          "stat": "life",
+          "min": 30
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Large Charm"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "cm2"
+      ],
+      "quality": "magic",
+      "sockets": null,
+      "ethereal": null,
+      "name": "8 all res, life large charms",
+      "note": "Shimmering 8 with 30-35 life. Every other large charm is vendor trash.",
+      "stats": [
+        {
+          "stat": "all_res",
+          "min": 8
+        },
+        {
+          "stat": "life",
+          "min": 30
+        }
+      ],
+      "label": "",
       "base_names": [
         "Large Charm"
       ]
