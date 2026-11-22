@@ -2555,8 +2555,7 @@ mod tests {
 
     #[test]
     fn shared_stash_pseudo_owners_do_not_vote() -> Result<()> {
-        // Four items of a shared stash tab (pseudo-owner, no player) and one of Bob's: before,
-        // the tab id won the stash vote and the choice fell through; now only Bob votes.
+        // Four items of a shared stash tab (pseudo-owner, no player) and one of Bob's.
         let tab = 0x7777;
         let m = world_with_owned(&[
             (STASH, tab),
@@ -2586,7 +2585,7 @@ mod tests {
 
     #[test]
     fn previous_player_is_kept_while_a_candidate() -> Result<()> {
-        // Alice was chosen first; the owner votes now alternate (here: all Bob's). Alice stays.
+        // Alice was chosen before; the owner votes say Bob.
         let m = world_with_owned(&[(STASH, BOB_ID), (INVENTORY, BOB_ID)])?;
         let s = snapshot(&m, TABLE, None, None, Some(ALICE_ID))?;
         assert_eq!(
@@ -2621,7 +2620,7 @@ mod tests {
 
     #[test]
     fn ground_and_unowned_items_dont_vote() -> Result<()> {
-        // Ground items "owned" by Bob (live they carry NO_OWNER) and stash items without owner.
+        // Ground items "owned" by Bob and stash items without owner.
         let m = world_with_owned(&[
             (GROUND, BOB_ID),
             (GROUND, BOB_ID),
@@ -3029,8 +3028,7 @@ mod tests {
 
     #[test]
     fn gear_stats_read_the_aggregated_array() -> Result<()> {
-        // Live 2026-11-19: Ancients' Pledge's resists sat only in its top list's aggregated
-        // array (+0xE8); the list chained after it is a socketed rune's (another item id).
+        // Runeword resists sit only in the aggregated array; the next list is a socketed rune's.
         let mut m = world()?;
         let full = stat_list::FLAG_FULL_STATS;
         unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
@@ -3164,8 +3162,7 @@ mod tests {
 
     #[test]
     fn item_stats_walk_past_an_empty_base_list() -> Result<()> {
-        // Live 2026-11-18: a magic ring's base list was empty (count 0, no entries) and its
-        // affixes (+5 fire res) sat in the next list; then the chain ran into another owner's.
+        // An empty base list, the affixes (+5 fire res) in the next, then another owner's list.
         let mut m = world()?;
         unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
         stored_item(
@@ -3221,8 +3218,7 @@ mod tests {
 
     #[test]
     fn a_stashed_runeword_is_owned_but_not_worn() -> Result<()> {
-        // User report 2026-11-18: a Stealth in the private stash got no ✓. Here Bob's private
-        // stash (page 4) holds a finished Leaf (Tir, Ral) on a Crystal Sword.
+        // Bob's private stash (page 4) holds a finished Leaf (Tir, Ral) on a Crystal Sword.
         let mut m = world()?;
         let id = item_data::FLAG_IDENTIFIED;
         unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
@@ -3252,7 +3248,6 @@ mod tests {
 
     #[test]
     fn only_the_chosen_players_gear_counts_in_a_group_game() -> Result<()> {
-        // Live 2026-11-17: in a public game the other players' equipped items filled the grid.
         let mut m = world()?;
         let id = item_data::FLAG_IDENTIFIED;
         unit(&mut m, I0, 4, 600, ID0, ACT, 0, I1)?;
@@ -3301,7 +3296,7 @@ mod tests {
     #[test]
     fn room_walk_stops_at_foreign_level() -> Result<()> {
         let mut m = world()?;
-        // R2 now claims to belong to another level: the walk keeps R0, R1 and stops with a warning.
+        // R2 belongs to another level: the walk keeps R0, R1 and stops with a warning.
         room(&mut m, R2, (10, 26, 4, 4), 0, 0, L_OTHER, 0, 0)?;
         let s = snapshot(&m, TABLE, None, None, None)?;
         assert_eq!(s.level.rooms.len(), 2);
@@ -3424,7 +3419,7 @@ mod tests {
         let s = snapshot(&m, TABLE, None, None, None)?;
         let from: Vec<RoomRect> = s.border_links.iter().map(|l| l.from_room).collect();
         assert_eq!(from, vec![rect(50, 100, 40, 30), rect(90, 100, 40, 40)]);
-        // Empty border links stay out of the JSON (fixtures unchanged); filled ones round-trip.
+        // Empty border links stay out of the JSON; filled ones round-trip.
         assert!(
             serde_json::to_value(snapshot(&world()?, TABLE, None, None, None)?)?
                 .get("border_links")
@@ -3492,7 +3487,7 @@ mod tests {
         assert_eq!(ids, vec![Some(525), None, None]);
         // Optional data: the unmapped record adds no warning (only the bad room-tile link does).
         assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
-        // `None` is left out of the JSON, so old fixtures and dumps stay as they were.
+        // `None` is left out of the JSON.
         let v = serde_json::to_value(&s.level.rooms)?;
         assert_eq!(v.pointer("/0/preset"), Some(&serde_json::json!(525)));
         assert_eq!(v.pointer("/1/preset"), None);
@@ -3586,7 +3581,7 @@ mod tests {
 
     #[test]
     fn state_bits() {
-        // State 189: dword 5, mask 0x2000_0000 (the live terrorized cows).
+        // State 189: dword 5, mask 0x2000_0000.
         let flags = state_field([0, 0, 0, 0, 0, 0x2000_0000, 0, 0]);
         assert!(has_state(&flags, state::DESECRATED));
         assert!(!has_state(&flags, 188));
@@ -3905,7 +3900,7 @@ mod tests {
             ],
         )?;
         put(mem, data, 0x20, &[(item_data::QUALITY, &quality.to_le_bytes())])?;
-        // A dynamic path's u16 x/y offsets hold something else on a static path (live: 22407, 0).
+        // A dynamic path's u16 x/y offsets hold something else on a static path.
         put(
             mem,
             path,
@@ -4359,9 +4354,8 @@ mod tests {
     const BOB_TABS: [(u32, u8); 4] = [(0x205, 0), (0x203, 0), (TAB_GONE_ID, 0), (0x206, 1)];
 
     /// [`world`] plus the tab units: `TAB2`, `TAB0` and `TAB_M` name Bob their inventory
-    /// owner (live), `TAB1` names Alice (stale while playing Bob). The unit table holds them
-    /// in another order than Bob's tab list (`TAB2`, `TAB0`, [`TAB_GONE_ID`], `TAB_M`), which
-    /// is the UI order. No tab has items; the tests chain them in ([`tab_inventory`]).
+    /// owner, `TAB1` names Alice (stale). The unit table order differs from Bob's tab list (the
+    /// UI order). No tab has items yet ([`tab_inventory`]).
     fn world_with_tabs() -> Result<FakeMem> {
         let mut m = world()?;
         table(
@@ -4521,7 +4515,7 @@ mod tests {
             TabKind::Page(3),
             TabKind::Materials,
         ];
-        // The header one qword later (live in the second game): `+0x60` is null.
+        // The header one qword later: `+0x60` is null.
         let mut m = world_with_tabs()?;
         bob_tab_list(&mut m, 0x68, &BOB_TABS, 4)?;
         assert_eq!(kinds(&m)?, ui);
@@ -4613,7 +4607,7 @@ mod tests {
         m.add(ITEMS, b);
 
         let s = snapshot(&m, TABLE, Some(ITEMS), Some("Bob"), None)?;
-        // Other-owner page-4 items are not the shared stash (stale units); left out for now.
+        // Page-4 items of other owners (stale tab units) are left out.
         assert_eq!(
             item_plan(&s),
             vec!["Gravenspine (inv)", "Gravenspine (cube)", "Magefist (stash)"]
@@ -4886,7 +4880,7 @@ mod tests {
         let mut slots = BASE_SLOTS.to_vec();
         slots.push((unit_table::OBJECT, 5, O0));
         table(&mut m, &slots)?;
-        // O0 used health shrine (236, live) → O1 skill shrine → O2 used well → O3 chest →
+        // O0 used health shrine (236) → O1 skill shrine → O2 used well → O3 chest →
         // O4 shrine object without a shrine type → O5 well with an unreadable path.
         object(&mut m, O0, (236, 2, 2), (5100, 5200), O1)?;
         object(&mut m, O1, (2, 0, 12), (5110, 5210), O2)?;
@@ -4935,7 +4929,7 @@ mod tests {
                 .iter()
                 .all(|w| w.starts_with(&format!("object {O5:#x}")))
         );
-        // Older dumps without the fields still load; empty lists stay out of the JSON.
+        // Empty lists stay out of the JSON.
         let v = serde_json::to_value(snapshot(&world()?, TABLE, None, None, None)?)?;
         assert!(v.get("shrines").is_none() && v.get("wells").is_none());
         let v = serde_json::to_value(&s)?;
@@ -4987,7 +4981,6 @@ mod tests {
         assert!(SHRINE_OBJECTS.len() > 50 && WELL_OBJECTS.len() > 5);
         assert!(SHRINE_OBJECTS.is_sorted_by(|a, b| a < b), "sorted, unique");
         assert!(WELL_OBJECTS.is_sorted_by(|a, b| a < b), "sorted, unique");
-        // 236 "health wellforhell" was a Health shrine live (2026-11-15).
         for txt in [2, 236, 249, 81, 83] {
             assert!(is_shrine_object(txt) && !is_well_object(txt), "{txt}");
         }
@@ -5135,7 +5128,7 @@ mod tests {
         assert_eq!(v.pointer("/drops/2/kind"), Some(&serde_json::json!("unique")));
         // The ItemData hex is journal-only.
         assert!(v.pointer("/drops/0/item_data_head").is_none());
-        // An older dump's highlight (marks moved to `guidance::Marks`) is ignored on load.
+        // A dump's legacy `highlight` field is ignored on load.
         let mut old = v.clone();
         if let Some(d) = old
             .pointer_mut("/drops/0")
