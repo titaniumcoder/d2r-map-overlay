@@ -863,7 +863,7 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   against what it would replace: `verdict` without the vendor's build plan (no lost FCR/FHR
   breakpoint, `MIN_GAIN`) = "better" and an equip upgrade, `MIN_GAIN` or more below = struck,
   else neutral; an unowned one (or one without stats: runewords, the merc's) is neutral (dimmed
-  only when too high) and never "findable". Ring column unchanged. The merc stays the Act 5 2x Lawbringer (the guide's Act 2 Might
+  only when too high) and never "findable". Ring column unchanged. A worn piece is never struck in its own column (`"neutral"` with its ✓, no "wear now"), though its level equals the equipped one. The merc stays the Act 5 2x Lawbringer (the guide's Act 2 Might
   merc is not taken). Open: magic charm types (Sharp / Shimmering / Fine ... of Vita) have no
   build-file form.
 - **Summoner guide and merc alternatives (user, 2026-11-22: "did you do it for the summoner

@@ -511,8 +511,11 @@ fn gear_grid_states_and_equipped_headers() {
         amulet.get("equipped").cloned().unwrap_or_default(),
         serde_json::json!([{ "name": "Harlequin Crest", "level": 62 }])
     );
-    // 62 ≤ 62 → worse even though the piece is the same item.
-    assert_eq!(piece_states(amulet).first().map(|p| p.2.as_str()), Some("worse"),);
+    // 62 ≤ 62, but the piece is the worn item itself: never struck.
+    assert_eq!(
+        piece_states(amulet).first().map(|p| p.2.as_str()),
+        Some("neutral"),
+    );
     // Weapons: an equipped runeword is uncomparable; 55 is above the 47 gate.
     let weapons = column_of(&gear, "Weapons");
     assert_eq!(
@@ -585,7 +588,11 @@ fn gear_grid_merges_the_ring_slots() {
             .filter_map(|x| x.get("state").and_then(|val| val.as_str()))
             .collect()
     });
-    assert_eq!(states, ["worse", "worse", "better"]);
+    assert_eq!(
+        states,
+        ["neutral", "worse", "better"],
+        "the worn Dwarf Star is not struck"
+    );
 }
 
 #[test]
@@ -1971,7 +1978,7 @@ fn guide_alternatives_are_judged_by_owned_stats_not_by_list_position() -> Result
         states(&json),
         [
             "Jalal's Mane: better",
-            "Lore: worse",
+            "Lore: neutral",
             "Druid pelt: worse",
             "Harlequin Crest: neutral",
             "Ravenlore: neutral",
@@ -2047,7 +2054,7 @@ fn an_owned_alternative_scoring_lower_is_no_upgrade_over_the_worn_core_piece() -
     assert_eq!(
         column_states(&json, 2),
         [
-            ("Laying of Hands".to_owned(), "worse".to_owned()),
+            ("Laying of Hands".to_owned(), "neutral".to_owned()),
             ("Soul Drainer".to_owned(), "worse".to_owned())
         ]
     );
@@ -2079,7 +2086,7 @@ fn ring_column_alternatives_keep_the_level_rule() -> Result<()> {
     assert_eq!(
         column_states(&json, ring),
         [
-            ("Raven Frost".to_owned(), "worse".to_owned()),
+            ("Raven Frost".to_owned(), "neutral".to_owned()),
             ("Nagelring".to_owned(), "worse".to_owned())
         ]
     );
@@ -3507,6 +3514,6 @@ fn merc_guide_alternatives_are_not_struck_below_the_worn_piece() {
         .iter()
         .filter_map(|p| p.get("state")?.as_str())
         .collect();
-    // Insight is worn (its own level beats it, as in every column); Harmony was struck before.
-    assert_eq!(states, ["worse", "neutral", "worse"], "{gear}");
+    // Insight is worn: never struck; Harmony was struck before.
+    assert_eq!(states, ["neutral", "neutral", "worse"], "{gear}");
 }

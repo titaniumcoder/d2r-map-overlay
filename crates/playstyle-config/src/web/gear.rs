@@ -829,8 +829,9 @@ fn two_handed_equipped(info: &PanelInfo) -> bool {
         .is_some_and(|two| two)
 }
 
-/// The build's pieces of one grid column with their [`piece_state`], best first. Outgrown
-/// pieces leave unless worn; a `"worse"` piece never gets the `now` ("wear now") badge.
+/// The build's pieces of one grid column with their [`piece_state`] (a worn one `"neutral"`
+/// instead of `"worse"`), best first. Outgrown pieces leave unless worn; a worn or `"worse"`
+/// piece never gets the `now` ("wear now") badge.
 #[must_use]
 pub fn grid_pieces(
     pieces: &[String],
@@ -860,7 +861,11 @@ fn grid_piece(
     }
     let name = d2r_core::info::piece_name(piece);
     let req = d2r_core::info::piece_level(piece);
-    let state = piece_state(req, equipped_level, lvl);
+    // The worn piece is never struck in its own column.
+    let state = match piece_state(req, equipped_level, lvl) {
+        "worse" if is_worn => "neutral",
+        state => state,
+    };
     let mut json = serde_json::json!({
         "piece": piece,
         "name": name,
@@ -880,7 +885,7 @@ fn grid_piece(
         // The missing-rune remark is moot once the runeword is made.
         obj.remove("notes");
     }
-    add_level_window(&mut json, piece, req, state != "worse", info);
+    add_level_window(&mut json, piece, req, state != "worse" && !is_worn, info);
     Some(json)
 }
 
