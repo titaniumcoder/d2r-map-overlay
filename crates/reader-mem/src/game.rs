@@ -1,9 +1,5 @@
-//! Reads one snapshot of the game state (player, level layout, presets, monsters, ground drops,
-//! nearby shrines and wells) into the core's model ([`d2r_core::game`]).
-//!
-//! Lists in game memory change under us while we read, so a single bad pointer deep in a
-//! list only skips that entry and is recorded in `Snapshot::warnings`; only a missing
-//! player (or its level) fails the snapshot.
+//! Reads one snapshot of the game state into the core's model ([`d2r_core::game`]). Lists change
+//! while we read, so a bad entry is only a warning; only a missing player (or level) fails.
 
 use std::collections::{HashMap, HashSet};
 
@@ -26,54 +22,51 @@ use d2r_core::reader::ReadMem;
 use d2r_core::skills_data;
 use d2r_core::stash::{self, StashTab};
 
-/// Most of the player's stat lists dumped for the journal's `buffs` event.
 const MAX_BUFF_LISTS: usize = 32;
-/// Most entries kept per dumped list (its `count` still says how many it has).
+/// Entries kept per dumped list (its `count` still says how many it has).
 const MAX_BUFF_ENTRIES: usize = 64;
-/// Rough JSON byte budget of one dump's lists (hex header plus about 24 bytes per entry);
-/// the chain walk stops once it is spent. Bounds a `buffs` journal line to a few dozen KB.
+/// Rough JSON budget of one `buffs` dump, so a journal line stays a few dozen KB.
 const MAX_BUFF_DUMP_BYTES: usize = 32 * 1024;
-/// Most units walked per unit type (over all hash slots).
+/// Rough JSON bytes of one dumped stat entry.
+const BUFF_DUMP_BYTES_PER_ENTRY: usize = 24;
 const MAX_UNITS_PER_TYPE: usize = 1000;
-/// Most rooms walked per level.
 const MAX_ROOMS: usize = 5000;
-/// Most presets walked per room.
 const MAX_PRESETS_PER_ROOM: usize = 500;
-/// Most stat-list entries read per item (a socketed rare has a few dozen).
+/// A socketed rare has a few dozen.
 const MAX_ITEM_STATS: u64 = 512;
-/// Most room-tile links walked per room.
+/// An item's own stat lists (base, affixes, ...) walked along [`stat_list::NEXT`].
+const MAX_ITEM_STAT_LISTS: usize = 8;
 const MAX_LINKS_PER_ROOM: usize = 100;
-/// Most near-room entries read per room (`room2::NEAR_COUNT`); live counts are around 9.
+/// Seen: around 9.
 const MAX_NEAR_ROOMS: u32 = 64;
-/// Warnings kept in the snapshot; the rest are only counted.
 const MAX_WARNINGS: usize = 50;
-/// Most items read per shared-stash tab (a tab holds 10×10; the gems/runes/materials tab had
-/// 49 stacks live); a runaway chain means a misread, and the warnings tell the rest.
+/// A tab holds 10×10; the materials tab had 49 stacks.
 const MAX_STASH_ITEMS_PER_TAB: usize = 100;
-/// Most nodes walked in the player's shared-stash tab list (live: 6).
+/// Seen: 6.
 const MAX_STASH_TABS: usize = 16;
-/// Most items one item can hold in its sockets (6 in D2R).
 const MAX_SOCKETS: usize = 6;
-/// Most items walked in a vendor NPC's inventory chain (live: ~60 at Ormus); a runaway
-/// chain means a misread.
+/// Seen: ~60 at Ormus.
 const MAX_SHOP_ITEMS: usize = 300;
-/// Most nodes walked in the player's skill list (live: 19; a class has 30 skills, plus the
-/// basic ones and gear-granted skills of other classes).
+/// Seen: 19 (a class's 30 skills plus basic and gear-granted ones).
 const MAX_SKILLS: usize = 128;
 
 /// Agreeing owner ids (`item_data::OWNER`) after which a storage page stops voting.
 const OWNER_VOTES: u32 = 8;
 
-/// Shrine types (shrines.txt codes, see `config::SHRINE_NAMES`) of a real shrine; 0 is "none".
+/// Shrine types (shrines.txt codes) of a real shrine; 0 is "none".
 const SHRINE_TYPES: std::ops::RangeInclusive<u8> = 1..=22;
 
-/// The plain value of a raw stat: most D2 stats are stored as-is, but some (life, mana, level…)
-/// in 1/256 units — a value far above the stat's realistic maximum with 8 trailing zeros is such
-/// an encoding. Good enough for the guide stats (FCR/IAS/FHR/resists, all ≤ 255 in practice).
-///
-/// The raw word is a two's-complement `i32` (a -10 resist reads `0xFFFF_FFF6`); only positive
-/// values are 1/256-decoded, since a negative one like -256 (`0xFFFF_FF00`) also has 8 trailing
-/// zeros but is a plain value.
+/// `item_data::BODY` of the right-hand weapon.
+const WEAPON_BODY_SLOT: u8 = 4;
+const CHARM_CODES: [&str; 3] = ["cm1", "cm2", "cm3"];
+
+/// True for an `item_data::BODY` value of a worn item (0 and 255 are "not worn").
+const fn is_worn(body: u8) -> bool {
+    body != 0 && body != 255
+}
+
+/// The plain value of a raw stat word (two's-complement `i32`): some stats are stored in 1/256
+/// units, recognised as a positive value above 255 with 8 trailing zeros.
 const fn plain_stat_from_raw(raw: u32) -> i32 {
     let value = raw.cast_signed();
     if value > 255 && value.trailing_zeros() >= 8 {
@@ -86,32 +79,51 @@ const fn plain_stat_from_raw(raw: u32) -> i32 {
 /// Adds the resists on the player's own list ([`Reader::own_resists`]: the quest resists) to
 /// `player`'s gear sums, and warns when the player's aggregated array disagrees with the result.
 fn add_own_resists(r: &mut Reader<'_, impl ReadMem>, player: &mut Player, addr: u64) {
-    let (own, full) = r.own_resists(addr);
+    let (own, aggregated) = r.own_resists(addr);
     if own != [0; 4] {
-        let speed = player.speed.get_or_insert_default();
-        let [fire, cold, lightning, poison] = own;
-        speed.res_fire = speed.res_fire.saturating_add(fire);
-        speed.res_cold = speed.res_cold.saturating_add(cold);
-        speed.res_lightning = speed.res_lightning.saturating_add(lightning);
-        speed.res_poison = speed.res_poison.saturating_add(poison);
+        add_resists(player.speed.get_or_insert_default(), own);
     }
-    // Cross-check (shows in `--dump`): the player's aggregated array, if it has one, should
-    // hold the character-screen values before the difficulty penalty, i.e. gear + own.
-    if let Some(full) = full {
-        let read = player.speed.map_or([0; 4], |s| {
-            [s.res_fire, s.res_cold, s.res_lightning, s.res_poison]
-        });
-        if full != read {
-            r.warn(format!(
-                "player resists: aggregated array {full:?} vs gear + own list {read:?} \
-                 (fire/cold/lightning/poison)"
-            ));
+    let summed = player.speed.map_or([0; 4], |s| {
+        [s.res_fire, s.res_cold, s.res_lightning, s.res_poison]
+    });
+    if let Some(aggregated) = aggregated
+        && aggregated != summed
+    {
+        r.warn(format!(
+            "player resists: aggregated array {aggregated:?} vs gear + own list {summed:?} \
+             (fire/cold/lightning/poison)"
+        ));
+    }
+}
+
+const fn add_resists(speed: &mut SpeedStats, [fire, cold, lightning, poison]: [i32; 4]) {
+    speed.res_fire = speed.res_fire.saturating_add(fire);
+    speed.res_cold = speed.res_cold.saturating_add(cold);
+    speed.res_lightning = speed.res_lightning.saturating_add(lightning);
+    speed.res_poison = speed.res_poison.saturating_add(poison);
+}
+
+/// Adds the speed and resist stats among `entries` (`{layer, id, raw}`) to `acc`.
+fn add_speed_stats(acc: &mut SpeedStats, entries: &[(u16, u16, u32)]) {
+    for &(_, id, raw) in entries {
+        let value = plain_stat_from_raw(raw);
+        match id {
+            stat_list::RESIST_FIRE => acc.res_fire = acc.res_fire.saturating_add(value),
+            stat_list::RESIST_COLD => acc.res_cold = acc.res_cold.saturating_add(value),
+            stat_list::RESIST_LIGHTNING => {
+                acc.res_lightning = acc.res_lightning.saturating_add(value);
+            }
+            stat_list::RESIST_POISON => acc.res_poison = acc.res_poison.saturating_add(value),
+            stat_list::IAS => acc.ias = acc.ias.saturating_add(value),
+            stat_list::FHR => acc.fhr = acc.fhr.saturating_add(value),
+            stat_list::FCR => acc.fcr = acc.fcr.saturating_add(value),
+            _ => {}
         }
     }
 }
 
 /// The four resists summed over stat `entries` (`{layer, id, raw}`), as
-/// `[fire, cold, lightning, poison]` ([`SpeedStats`] order).
+/// `[fire, cold, lightning, poison]`.
 fn resists_of(entries: &[(u16, u16, u32)]) -> [i32; 4] {
     let mut out = [0i32; 4];
     for &(_, id, raw) in entries {
@@ -162,7 +174,8 @@ impl OwnerVotes {
     }
 }
 
-/// What one walk over the item units found.
+/// What one walk over the item units found. Per-owner maps are keyed by candidate unit id: the
+/// player is chosen only after the scan, and in a group game every player's items are units.
 #[derive(Debug, Default)]
 struct ItemScan {
     /// Item units on the ground (shown or not).
@@ -171,41 +184,45 @@ struct ItemScan {
     drops: Vec<ItemDrop>,
     /// All items on the inventory page, with their owner id (`None` if unreadable).
     inventory: Vec<(ItemDrop, Option<u32>)>,
-    /// Stored items on the cube and stash pages that are identified uniques or sets
-    /// ([`identified_unique_or_set`]) or white runeword bases ([`stored_kept`]), any owner: the owner filter needs the chosen player.
-    /// Inventory items are in `inventory`.
+    /// Cube and stash items kept by [`stored_kept`], any owner.
     stored: Vec<Stored>,
     stash_owners: OwnerVotes,
     inventory_owners: OwnerVotes,
-    /// Speed/resist stats summed over each owner's equipped items and carried charms, from each
-    /// item's aggregated stat array (the guide's numbers; the player's own stat list is
-    /// base-only, no item stats).
+    /// Speed/resist stats summed over equipped items and carried charms.
     gear: HashMap<u32, SpeedStats>,
-    /// True once an item without the aggregated array fell back to the chain walk (warned once
-    /// per scan, see [`Reader::accumulate_gear`]).
+    /// The chain-walk fallback of [`Reader::accumulate_gear`] is warned once per scan.
     gear_fallback_warned: bool,
-    /// The equipped weapon's WSM per owner (the guide's IAS note).
+    /// The equipped weapon's WSM.
     weapons: HashMap<u32, i32>,
-    /// Display names of identified unique/set items per owning candidate (equipped, carried,
-    /// stashed): the `BiS` list marks owned pieces with a ✓. Keyed by owner because the
-    /// player is chosen only after the scan — in a group game every candidate's items are
-    /// units (live 2026-11-17: other players' gear showed in the grid).
+    /// Identified unique/set and runeword names (equipped, carried, stashed).
     owned_names: HashMap<u32, Vec<String>>,
-    /// Each candidate's equipped `(body slot, quality)` pairs (the `BiS` "already better"
-    /// check: set/unique quality there hides the slot).
+    /// Equipped `(body slot, quality)` pairs.
     equipped: HashMap<u32, Vec<(u8, u32)>>,
-    /// The same items, enriched for the dashboard's gear grid ([`d2r_core::game::Equipped`]): one per
-    /// body slot (weapon and swap weapon share body 4, like the pairs), per candidate. The
-    /// mercenary's gear has no grid.
+    /// The equipped items for the gear grid, one per body slot.
     equipped_items: HashMap<u32, Vec<Equipped>>,
-    /// The same for the mercenary's gear (owner `NO_OWNER`).
+    /// The mercenary's (owner `NO_OWNER`) equipped `(body slot, quality)` pairs.
     merc_equipped: Vec<(u8, u32)>,
-    /// One name per runeword copy, per owning candidate (worn, carried, cubed, private stash)
-    /// and under `NO_OWNER` for the mercenary's worn ones: [`Snapshot::runeword_copies`].
+    /// One name per runeword copy; the mercenary's worn ones under `NO_OWNER`.
     runeword_copies: HashMap<u32, Vec<String>>,
-    /// The identified unique/set and runeword names the mercenary wears:
-    /// [`Snapshot::merc_worn`].
     merc_worn: Vec<String>,
+}
+
+impl ItemScan {
+    /// Counts `owner` of an item on storage `page` in that page's vote; only `candidates` vote,
+    /// so a shared-stash tab's pseudo-owner never wins.
+    fn vote(&mut self, page: Option<u8>, owner: Option<u32>, candidates: &[u32]) {
+        let votes = match page {
+            Some(item_data::PAGE_STASH) => &mut self.stash_owners,
+            Some(item_data::PAGE_INVENTORY) => &mut self.inventory_owners,
+            _ => return,
+        };
+        if let Some(owner) = owner
+            && !votes.done()
+            && candidates.contains(&owner)
+        {
+            votes.add(owner);
+        }
+    }
 }
 
 /// Appends `name` to `names` unless it is there already ([`d2r_core::names::same_name`]).
@@ -226,6 +243,38 @@ struct TabRef {
     kind: stash::TabKind,
 }
 
+/// The tab list's `(tab unit id, advanced)` `nodes` as tabs: normal pages numbered 1-based in
+/// list order, the advanced node the materials tab, each with its unit from `units` if loaded.
+fn tabs_in_list_order(nodes: Vec<(u32, bool)>, units: &[(u32, u64)]) -> Vec<TabRef> {
+    let mut page = 0u8;
+    nodes
+        .into_iter()
+        .map(|(id, advanced)| {
+            let kind = if advanced {
+                stash::TabKind::Materials
+            } else {
+                page = page.saturating_add(1);
+                stash::TabKind::Page(page)
+            };
+            let addr = units.iter().find(|&&(u, _)| u == id).map(|&(_, a)| a);
+            TabRef { id, addr, kind }
+        })
+        .collect()
+}
+
+/// The tab `units` as normal pages in their order.
+fn tabs_in_unit_order(units: Vec<(u32, u64)>) -> Vec<TabRef> {
+    units
+        .into_iter()
+        .enumerate()
+        .map(|(i, (id, addr))| TabRef {
+            id,
+            addr: Some(addr),
+            kind: stash::TabKind::Page(u8::try_from(i + 1).unwrap_or(u8::MAX)),
+        })
+        .collect()
+}
+
 /// A stored item with its `item_data::PAGE` and `item_data::OWNER`.
 #[derive(Debug)]
 struct Stored {
@@ -234,9 +283,7 @@ struct Stored {
     owner: u32,
 }
 
-/// Whether a stored item read in full is kept in [`Snapshot::owned_items`]: an identified
-/// unique or set, a magic / rare / crafted item ([`magic_or_better`]), or a white item whose
-/// code is a weapon or armor base that can have sockets ([`d2r_core::socket_bases::socketable`]).
+/// Whether a stored item read in full is kept in [`Snapshot::owned_items`].
 fn stored_kept(item: &ItemDrop) -> bool {
     identified_unique_or_set(item.quality, item.flags)
         || magic_or_better(item.quality)
@@ -248,26 +295,20 @@ fn stored_kept(item: &ItemDrop) -> bool {
 }
 
 /// Where a stored item on `page` with `owner` is, for the player with unit id `player`; `None`
-/// if it isn't the player's. Pages 0 (inventory), 3 (cube) and 4 (stash) count when the player
-/// owns the item; page 4 also when one of the player's `shared_tabs` owns it.
+/// if it isn't the player's. Stale tab units of other characters own stash items too, so only
+/// the player's own `shared_tabs` count.
 fn place(page: u8, owner: u32, player: u32, shared_tabs: &[u32]) -> Option<Place> {
     match page {
         item_data::PAGE_INVENTORY if owner == player => Some(Place::Inventory),
         item_data::PAGE_CUBE if owner == player => Some(Place::Cube),
         item_data::PAGE_STASH if owner == player => Some(Place::Stash),
-        // Page-4 items of other owners: only the player's own shared-stash tab units count
-        // ([`Reader::shared_tabs`]). Stale tab units from other characters or the offline shared
-        // stash are left out (live 2026-11-15: BigWolf's Gravenspine showed up while playing Vex).
         item_data::PAGE_STASH if shared_tabs.contains(&owner) => Some(Place::Shared),
         _ => None,
     }
 }
 
-/// The items of unit id `player` with their place, the one set both the keep list and the spare
-/// lists are computed from (a keep-one item is kept once across all places): the `inventory`
-/// items it owns (in a group game the other players' inventory items are units too) and the
-/// `stored` cube and stash items that are its own ([`place`], with the unit ids of its
-/// `shared_tabs`).
+/// The items of unit id `player` with their place, from the scan's `inventory` and `stored`
+/// items: the one set the keep list and the spare lists are computed from.
 fn player_items(
     inventory: Vec<(ItemDrop, Option<u32>)>,
     stored: Vec<Stored>,
@@ -283,9 +324,8 @@ fn player_items(
     inv.chain(stashed).collect()
 }
 
-/// The candidate to use as the player and the rule that picked it; `None` if no candidate fits
-/// (none named `player_name`, or no candidates at all). Precedence: `player_name`, then the
-/// `previous` unit id while it is still a candidate, then the owner votes, then the first.
+/// The candidate to use as the player and the rule that picked it, by precedence; `None` if no
+/// candidate fits.
 fn choose_player<'a>(
     candidates: &'a [Candidate],
     player_name: Option<&str>,
@@ -310,8 +350,7 @@ fn choose_player<'a>(
         .or_else(|| candidates.first().map(|c| (c, ChosenBy::FirstCandidate)))
 }
 
-/// Whether the game is solo: one distinct player name among the candidates (a stale duplicate
-/// unit of the same player must not make a solo game look like a group game).
+/// Whether the game is solo: one distinct player name (a stale duplicate unit doesn't count).
 fn is_solo(candidates: &[Candidate]) -> bool {
     candidates
         .iter()
@@ -321,10 +360,8 @@ fn is_solo(candidates: &[Candidate]) -> bool {
         == 1
 }
 
-/// The chosen player's runeword copies and the merc's worn uniques/sets
-/// ([`Snapshot::runeword_copies`], [`Snapshot::merc_worn`]). Merc gear can't be tied to the
-/// local player's own merc (PLAN.md, "Merc gear caveat"): with other players in the game it
-/// may be theirs, so it counts only when `solo`.
+/// The chosen player's runeword copies and the merc's worn names. Merc gear counts only when
+/// `solo`: nothing ties it to the local player's merc (PLAN.md, "Merc gear caveat").
 fn held_copies(scan: &ItemScan, player: u32, solo: bool) -> (Vec<String>, Vec<String>) {
     let owners: &[u32] = if solo {
         &[player, item_data::NO_OWNER]
@@ -354,9 +391,7 @@ fn player_candidates<M: ReadMem>(r: &mut Reader<'_, M>, unit_table: u64) -> Vec<
     candidates
 }
 
-/// Walks `level_addr`'s rooms and collects the level, its presets and links. The Room2 chain
-/// must stay inside this level (as in research/rooms.py); a stop at the first room is an error.
-/// The walk's collected data.
+/// What [`walk_level`] collected.
 struct LevelWalk {
     level: Level,
     presets: Vec<Preset>,
@@ -364,6 +399,8 @@ struct LevelWalk {
     border_links: Vec<BorderLink>,
 }
 
+/// Walks `level_addr`'s Room2 chain while it stays inside this level (as in research/rooms.py);
+/// a first room of another level is an error.
 fn walk_level(r: &mut Reader<'_, impl ReadMem>, level_addr: u64, level_id: u32) -> Result<LevelWalk> {
     let Some(first_room) = r.ptr(level_addr, level::FIRST_ROOM2)? else {
         bail!("level {level_addr:#x} has no first room");
@@ -376,8 +413,6 @@ fn walk_level(r: &mut Reader<'_, impl ReadMem>, level_addr: u64, level_id: u32) 
     };
     let (mut presets, mut room_links, mut border_links) = (Vec::new(), Vec::new(), Vec::new());
     for (i, room_addr) in rooms.into_iter().enumerate() {
-        // The Room2 chain must stay inside this level (as in research/rooms.py); stop where it
-        // leaves.
         let owner = r.ptr(room_addr, room2::LEVEL);
         if !matches!(owner, Ok(Some(a)) if a == level_addr) {
             if i == 0 {
@@ -423,14 +458,9 @@ pub fn snapshot(
     player_name: Option<&str>,
     previous: Option<u32>,
 ) -> Result<Snapshot> {
-    let mut r = Reader {
-        mem,
-        warnings: Vec::new(),
-        suppressed: 0,
-    };
+    let mut r = Reader::new(mem);
 
     let candidates = player_candidates(&mut r, unit_table);
-    // Items first: their owner ids tell which candidate is the local player.
     let candidate_ids: Vec<u32> = candidates.iter().map(|c| c.id).collect();
     let scan = r.items(unit_table, items_table, &candidate_ids);
     let Some((chosen, chosen_by)) = choose_player(&candidates, player_name, previous, &scan) else {
@@ -441,8 +471,6 @@ pub fn snapshot(
         }
     };
     let (mut player, level_addr) = r.player(chosen.addr.0).context("reading the player")?;
-    // The guide's numbers: the chosen player's equipped items and carried charms, plus the
-    // resists on the player's own (base) list: Anya's scrolls, +10 all per difficulty.
     player.speed = scan.gear.get(&chosen.id).copied();
     add_own_resists(&mut r, &mut player, chosen.addr.0);
     player.wsm = scan.weapons.get(&chosen.id).copied();
@@ -461,20 +489,12 @@ pub fn snapshot(
     level.bounds = bounds(&level.rooms);
     dedup_presets(&mut presets);
 
-    let mut monsters = Vec::new();
-    for addr in r.units(unit_table, unit_table::MONSTER) {
-        match r.monster(addr) {
-            Ok(m) => monsters.push(m),
-            Err(e) => r.warn(format!("monster {addr:#x}: {e:#}")),
-        }
-    }
+    let monsters = r.monsters(unit_table);
     let (shrines, wells, operated_objects) = r.objects(unit_table);
     let inventory_items = u32::try_from(scan.inventory.len()).unwrap_or(u32::MAX);
     let tabs = r.shared_tabs(unit_table, chosen.addr.0, chosen.id);
     let stash = r.stash(&tabs, items_table);
     let stash_names = stash::stash_names(&stash);
-    // The materials tab's stacks are owned by nobody (`NO_OWNER`), so only the normal pages'
-    // items reach the spare lists through these ids; gems and runes are never spare anyway.
     let shared_tabs: Vec<u32> = tabs.iter().map(|t| t.id).collect();
     let owned_items = player_items(scan.inventory, scan.stored, chosen.id, &shared_tabs);
     let held_materials = stash::held_materials(owned_items.iter().map(|(item, _)| item));
@@ -483,7 +503,6 @@ pub fn snapshot(
     let staff_tomb = player.act.and_then(|a| r.staff_tomb(a.0));
     let terrorized = is_terrorized(&monsters);
     let skills = r.skills(chosen.addr.0, player.class);
-    // Vendors stand in towns only; elsewhere the monsters' inventories aren't walked.
     let shop = if is_town(player.level_id) {
         r.shop(monsters.iter().map(|m| m.addr.0), items_table)
     } else {
@@ -523,28 +542,19 @@ pub fn snapshot(
         trail: Vec::new(),
         skills,
         shop,
-        // Read on demand by `buff_research` (the live reader only when the states changed).
-        buff_research: None,
+        buff_research: None, // read on demand by [`buff_research`]
+
         warnings: r.into_warnings(),
     })
 }
 
-/// The raw stat-list dump of the player unit at `player` for the journal's `buffs` event
-/// ([`BuffResearch`]); `None` without a stat list. Separate from [`snapshot`] because only a
-/// change of the shown states needs it (the live reader decides; `--dump` never reads it).
+/// The raw stat-list dump of the player unit at `player` for the journal's `buffs` event;
+/// `None` without a stat list. Only a change of the shown states needs it.
 pub fn buff_research(mem: &impl ReadMem, player: u64) -> Option<BuffResearch> {
-    let r = Reader {
-        mem,
-        warnings: Vec::new(),
-        suppressed: 0,
-    };
-    r.buff_research(player)
+    Reader::new(mem).buff_research(player)
 }
 
-/// Drops repeated presets (same kind, txt and position), keeping the first of each.
-///
-/// Live (Dry Hills, 2026-11-14) the same preset came back 3–5 times: a Room2's preset list is
-/// reachable more than once or holds repeats.
+/// Drops repeated presets, keeping the first of each: a Room2's preset list can hold repeats.
 fn dedup_presets(presets: &mut Vec<Preset>) {
     let mut seen = HashSet::new();
     presets.retain(|p| seen.insert(p.clone()));
@@ -590,7 +600,15 @@ struct Reader<'a, M: ReadMem> {
     suppressed: usize,
 }
 
-impl<M: ReadMem> Reader<'_, M> {
+impl<'a, M: ReadMem> Reader<'a, M> {
+    const fn new(mem: &'a M) -> Self {
+        Self {
+            mem,
+            warnings: Vec::new(),
+            suppressed: 0,
+        }
+    }
+
     fn warn(&mut self, msg: String) {
         if self.warnings.len() < MAX_WARNINGS {
             self.warnings.push(msg);
@@ -751,31 +769,13 @@ impl<M: ReadMem> Reader<'_, M> {
         Ok(String::from_utf8_lossy(raw.get(..end).unwrap_or_default()).into_owned())
     }
 
-    /// The player's live shared-stash tabs in the game's UI order: the tab list of the player
-    /// unit's own inventory ([`Reader::tab_list`]), each node's unit id looked up among the
-    /// tab units (other player-type units **without an act** whose inventory names `player`
-    /// as owner, [`inventory::OWNER_ID`]; research note §3.1/§3.3). Normal pages are numbered
-    /// 1-based in list order; the node's [`stash_tab_node::ADVANCED`] byte marks the
-    /// gems/runes/materials tab. A node whose unit isn't (yet) in the table is an empty tab, so
-    /// the page numbers never shift. If the list is unreadable or empty while tab units exist,
-    /// the tab units are used in unit-table order (pages only) with a warning.
+    /// The player's shared-stash tabs in the game's UI order ([`Reader::tab_list`]), each with
+    /// its tab unit if loaded (a missing one is an empty tab, so page numbers never shift).
+    /// Without a tab list, the tab units in unit-table order (pages only) with a warning.
     fn shared_tabs(&mut self, unit_table: u64, player_addr: u64, player: u32) -> Vec<TabRef> {
-        let units: Vec<(u32, u64)> = self
-            .units(unit_table, unit_table::PLAYER)
-            .into_iter()
-            .filter_map(|addr| {
-                // The act check is hardening: today nothing else player-type names the player
-                // as inventory owner, but a phantom tab here would shift every page.
-                let id = self.u32(addr, unit::ID).ok()?;
-                let inv = self.ptr(addr, unit::INVENTORY).ok()??;
-                (id != player
-                    && self.ptr(addr, unit::ACT).ok()?.is_none()
-                    && self.u32(inv, inventory::OWNER_ID).ok()? == player)
-                    .then_some((id, addr))
-            })
-            .collect();
-        let nodes = match self.tab_list(player_addr) {
-            Ok(nodes) if !nodes.is_empty() => nodes,
+        let units = self.tab_units(unit_table, player);
+        match self.tab_list(player_addr) {
+            Ok(nodes) if !nodes.is_empty() => tabs_in_list_order(nodes, &units),
             listed => {
                 if !units.is_empty() {
                     let why = listed
@@ -786,37 +786,29 @@ impl<M: ReadMem> Reader<'_, M> {
                          no materials tab"
                     ));
                 }
-                return units
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, (id, addr))| TabRef {
-                        id,
-                        addr: Some(addr),
-                        kind: stash::TabKind::Page(u8::try_from(i + 1).unwrap_or(u8::MAX)),
-                    })
-                    .collect();
+                tabs_in_unit_order(units)
             }
-        };
-        let mut page = 0u8;
-        nodes
+        }
+    }
+
+    /// `(unit id, address)` of the player's shared-stash tab units: other player-type units
+    /// without an act whose inventory names `player` as owner ([`inventory::OWNER_ID`]).
+    fn tab_units(&mut self, unit_table: u64, player: u32) -> Vec<(u32, u64)> {
+        self.units(unit_table, unit_table::PLAYER)
             .into_iter()
-            .map(|(id, advanced)| {
-                let kind = if advanced {
-                    stash::TabKind::Materials
-                } else {
-                    page = page.saturating_add(1);
-                    stash::TabKind::Page(page)
-                };
-                let addr = units.iter().find(|&&(u, _)| u == id).map(|&(_, a)| a);
-                TabRef { id, addr, kind }
+            .filter_map(|addr| {
+                let id = self.u32(addr, unit::ID).ok()?;
+                let inv = self.ptr(addr, unit::INVENTORY).ok()??;
+                (id != player
+                    && self.ptr(addr, unit::ACT).ok()?.is_none()
+                    && self.u32(inv, inventory::OWNER_ID).ok()? == player)
+                    .then_some((id, addr))
             })
             .collect()
     }
 
-    /// The `(tab unit id, advanced)` nodes of the shared-stash tab list in the inventory of the
-    /// player unit at `player_addr`, list order: the first [`inventory::TAB_LIST`] header whose
-    /// walk checks out ([`Reader::tab_nodes`]); empty when none does (the stash not loaded, or
-    /// the layout moved again).
+    /// The `(tab unit id, advanced)` nodes of the shared-stash tab list in the player's
+    /// inventory, from the first [`inventory::TAB_LIST`] header that checks out; empty if none.
     fn tab_list(&self, player_addr: u64) -> Result<Vec<(u32, bool)>> {
         let inv = self.ptr_req(player_addr, unit::INVENTORY, "player inventory")?;
         let Some(nodes) = inventory::TAB_LIST
@@ -836,10 +828,8 @@ impl<M: ReadMem> Reader<'_, M> {
             .collect()
     }
 
-    /// The node addresses of the tab list whose header is at `header`, if it is one: a count
-    /// of 1..=[`MAX_STASH_TABS`], and the walk from the first node reaches the last node in
-    /// exactly that many steps and ends there. Silent: a candidate header that isn't one is
-    /// expected, not news.
+    /// The node addresses of the tab list whose header is at `header`, if it is one: the walk
+    /// from the first node reaches the last in exactly `count` (1..=[`MAX_STASH_TABS`]) steps.
     fn tab_nodes(&self, header: u64) -> Option<Vec<u64>> {
         let first = self.ptr(header, 0).ok()??;
         let last = self.ptr(header, inventory::TAB_LIST_LAST).ok()??;
@@ -860,11 +850,8 @@ impl<M: ReadMem> Reader<'_, M> {
         (cur == last && ends).then_some(nodes)
     }
 
-    /// The shared-stash `tabs` with their items, read through each tab unit's inventory chain
-    /// ([`inventory::FIRST_ITEM`], then [`item_data::NEXT_IN_INVENTORY`]); the materials tab's
-    /// items also get their stack size ([`item_data::QUANTITY`]). Unreadable items are skipped
-    /// without a warning (optional data); a broken or runaway chain warns once per tab
-    /// ([`MAX_STASH_ITEMS_PER_TAB`]).
+    /// The shared-stash `tabs` with their items (stack sizes on the materials tab); unreadable
+    /// items are skipped silently.
     fn stash(&mut self, tabs: &[TabRef], items_table: Option<u64>) -> Vec<StashTab> {
         tabs.iter()
             .map(|tab| {
@@ -882,7 +869,6 @@ impl<M: ReadMem> Reader<'_, M> {
                         .filter(|_| materials)
                         .and_then(|d| self.u32(d, item_data::QUANTITY).ok());
                     let mut entry = stash::stash_item(&item, quantity);
-                    // A runeword goes by its name (the `BiS` ✓ and the stash panel).
                     if let Some(word) = self.runeword_name(addr, &head, item.flags, items_table) {
                         entry.name = word;
                     }
@@ -896,16 +882,24 @@ impl<M: ReadMem> Reader<'_, M> {
             .collect()
     }
 
-    /// The item unit addresses of the tab unit at `tab`, in its inventory's chain order.
+    /// The first item in the inventory of the unit at `owner` (`None` if unreadable).
+    fn first_inventory_item(&self, owner: u64) -> Option<u64> {
+        let inv = self.ptr(owner, unit::INVENTORY).ok().flatten()?;
+        self.ptr(inv, inventory::FIRST_ITEM).ok().flatten()
+    }
+
+    /// The item after `item` in its inventory chain (the link sits in its `ItemData`).
+    fn next_in_inventory(&self, item: u64) -> Result<Option<u64>> {
+        let data = self.ptr_req(item, unit::UNIT_DATA, "item data")?;
+        self.ptr(data, item_data::NEXT_IN_INVENTORY)
+    }
+
+    /// The item unit addresses of the tab unit at `tab`, in its inventory's chain order; a
+    /// broken, cyclic or runaway chain warns.
     fn tab_items(&mut self, tab: u64) -> Vec<u64> {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
-        let first = self
-            .ptr(tab, unit::INVENTORY)
-            .ok()
-            .flatten()
-            .and_then(|inv| self.ptr(inv, inventory::FIRST_ITEM).ok().flatten());
-        let mut cur = first;
+        let mut cur = self.first_inventory_item(tab);
         while let Some(item) = cur {
             if !seen.insert(item) {
                 self.warn(format!("stash tab {tab:#x}: item chain cycles at {item:#x}"));
@@ -919,11 +913,7 @@ impl<M: ReadMem> Reader<'_, M> {
                 break;
             }
             out.push(item);
-            // The next link lives in the item's `ItemData`, not in the unit itself.
-            cur = match self
-                .ptr_req(item, unit::UNIT_DATA, "item data")
-                .and_then(|d| self.ptr(d, item_data::NEXT_IN_INVENTORY))
-            {
+            cur = match self.next_in_inventory(item) {
                 Ok(next) => next,
                 Err(e) => {
                     self.warn(format!(
@@ -970,15 +960,13 @@ impl<M: ReadMem> Reader<'_, M> {
             y,
             level_id: self.u32(level, level::ID)?,
             act: head.act.map(Addr),
-            // Optional data like `room_preset`: an unreadable stat list is no level, not an error.
             char_level: self
                 .stat(addr, stat_list::LEVEL)
                 .ok()
                 .flatten()
                 .and_then(char_level_from_raw),
-            // Gear speed/resist stats are summed from the equipped items in `snapshot` (the
-            // player's stat list is base-only, no item stats), plus its own quest resists.
-            speed: None,
+            speed: None, // summed from the gear in [`snapshot`]
+
             wsm: None,
             strength: self.stat(addr, stat_list::STRENGTH).ok().flatten(),
             dexterity: self.stat(addr, stat_list::DEXTERITY).ok().flatten(),
@@ -987,52 +975,54 @@ impl<M: ReadMem> Reader<'_, M> {
         Ok((player, level))
     }
 
-    /// The player's skill allocation ([`Skills`]). A read error is a warning: an unreadable list
-    /// leaves the allocation empty, an unreadable entry is skipped, so a bad skill list never
-    /// fails the snapshot.
+    /// The player's skill allocation. Read errors are warnings: an unreadable list is no
+    /// allocation, an unreadable entry is skipped.
     fn skills(&mut self, player_addr: u64, class: u32) -> Skills {
-        let header = match self.ptr(player_addr, unit::SKILLS) {
-            Ok(Some(header)) => header,
+        let (header, first) = match self.skill_list(player_addr) {
+            Ok(Some(list)) => list,
             Ok(None) => return Skills::default(),
             Err(e) => {
                 self.warn(format!("skill list: {e:#}"));
                 return Skills::default();
             }
         };
-        let first = match self.ptr(header, skills::FIRST) {
-            Ok(first) => first,
-            Err(e) => {
-                self.warn(format!("skill list: {e:#}"));
-                return Skills::default();
-            }
+        Skills {
+            points: self.class_skill_points(first, class),
+            left: self.skill_button(header, skills::LEFT),
+            right: self.skill_button(header, skills::RIGHT),
+        }
+    }
+
+    /// The skill list header of the player and its first node; `None` without a list.
+    fn skill_list(&self, player_addr: u64) -> Result<Option<(u64, Option<u64>)>> {
+        let Some(header) = self.ptr(player_addr, unit::SKILLS)? else {
+            return Ok(None);
         };
+        Ok(Some((header, self.ptr(header, skills::FIRST)?)))
+    }
+
+    /// `(skills.txt id, hard points)` of the allocated skills of `class` in the list from
+    /// `first`; basic skills and other classes' gear-granted skills are left out.
+    fn class_skill_points(&mut self, first: Option<u64>, class: u32) -> Vec<(u16, u8)> {
         let mut points = Vec::new();
         for node in self.walk(first, skill::NEXT, MAX_SKILLS, "skill") {
             match self.skill_points(node) {
-                // Basic skills (Attack, scrolls) and gear-granted skills of other classes are
-                // in the list too; only the class's own allocated skills count.
                 Ok((id, hard)) => {
                     let own = skills_data::skill(id).is_some_and(|s| u32::from(s.class) == class);
                     if hard > 0 && own {
                         points.push((id, hard));
                     }
                 }
-                // One unreadable entry is skipped; the rest of the allocation still shows.
                 Err(e) => self.warn(format!("skill {node:#x}: {e:#}")),
             }
         }
-        // The buttons are a nice-to-have: an unreadable one is just not marked.
-        let button = |off| {
-            self.ptr(header, off)
-                .ok()
-                .flatten()
-                .and_then(|node| self.skill_id(node).ok())
-        };
-        Skills {
-            points,
-            left: button(skills::LEFT),
-            right: button(skills::RIGHT),
-        }
+        points
+    }
+
+    /// The skill on the mouse button at `off` of the list `header`; `None` if unreadable.
+    fn skill_button(&self, header: u64, off: u64) -> Option<u16> {
+        let node = self.ptr(header, off).ok().flatten()?;
+        self.skill_id(node).ok()
     }
 
     /// The skills.txt id of a skill node.
@@ -1070,22 +1060,19 @@ impl<M: ReadMem> Reader<'_, M> {
         })
     }
 
-    /// The room's level-preset id. Optional data: a null or unreadable record is `None`, not a
-    /// warning (it would repeat for every room).
+    /// The room's level-preset id; unreadable is `None`, silently (it would repeat every room).
     fn room_preset(&self, room: u64) -> Option<u32> {
         let record = self.ptr(room, room2::LEVEL_PRESET).ok().flatten()?;
         self.u32(record, level_preset::ID).ok()
     }
 
-    /// The game's difficulty via act → `ActMisc`. Optional data like [`Reader::room_preset`]: an
-    /// unreadable chain is `None`, not a warning.
+    /// The game's difficulty via act → `ActMisc`.
     fn difficulty(&self, act_addr: u64) -> Option<u8> {
         let misc = self.ptr(act_addr, act::MISC).ok().flatten()?;
         difficulty_from_raw(self.u16(misc, act_misc::DIFFICULTY).ok()?)
     }
 
-    /// The real Tal Rasha's Tomb via act → `ActMisc`, like [`Reader::difficulty`]; `None` unless
-    /// it is a tomb level (outside Act 2 the field is 0).
+    /// The real Tal Rasha's Tomb level via act → `ActMisc` (0 outside Act 2: `None`).
     fn staff_tomb(&self, act_addr: u64) -> Option<u32> {
         let misc = self.ptr(act_addr, act::MISC).ok().flatten()?;
         let level = self.u32(misc, act_misc::STAFF_TOMB_LEVEL).ok()?;
@@ -1140,9 +1127,8 @@ impl<M: ReadMem> Reader<'_, M> {
         })
     }
 
-    /// Records every near room (`room2::NEAR`) of `room` that belongs to another level than
-    /// `level_addr`, skipping links already in `out`. Unreadable arrays and entries become
-    /// warnings; a null array is no near rooms.
+    /// Records the link to every near room of `room` in another level than `level_addr`,
+    /// skipping links already in `out` (a level has a few hundred at most).
     fn border_links(&mut self, room: u64, level_addr: u64, from: &Room, out: &mut Vec<BorderLink>) {
         let from_room = RoomRect {
             x: from.x,
@@ -1150,14 +1136,32 @@ impl<M: ReadMem> Reader<'_, M> {
             w: from.w,
             h: from.h,
         };
+        for near in self.near_rooms(room) {
+            match self.border_link(near, level_addr, from_room) {
+                Ok(Some(link)) if !out.contains(&link) => out.push(link),
+                Ok(_) => {}
+                Err(e) => self.warn(format!("near room {near:#x}: {e:#}")),
+            }
+        }
+    }
+
+    /// The Room2 pointers in `room`'s near-room array (`room2::NEAR`), nulls and garbage
+    /// skipped; unreadable arrays warn, a null array is none.
+    fn near_rooms(&mut self, room: u64) -> Vec<u64> {
         let array = match self.ptr(room, room2::NEAR) {
             Ok(Some(a)) => a,
-            Ok(None) => return,
-            Err(e) => return self.warn(format!("room {room:#x} near rooms: {e:#}")),
+            Ok(None) => return Vec::new(),
+            Err(e) => {
+                self.warn(format!("room {room:#x} near rooms: {e:#}"));
+                return Vec::new();
+            }
         };
         let count = match self.u32(room, room2::NEAR_COUNT) {
             Ok(n) => n,
-            Err(e) => return self.warn(format!("room {room:#x} near count: {e:#}")),
+            Err(e) => {
+                self.warn(format!("room {room:#x} near count: {e:#}"));
+                return Vec::new();
+            }
         };
         if count > MAX_NEAR_ROOMS {
             self.warn(format!(
@@ -1165,22 +1169,11 @@ impl<M: ReadMem> Reader<'_, M> {
             ));
         }
         let len = usize::try_from(count.min(MAX_NEAR_ROOMS)).unwrap_or(0) * 8;
-        let bytes = match self.bytes(array, 0, len) {
-            Ok(b) => b,
-            Err(e) => return self.warn(format!("room {room:#x} near rooms: {e:#}")),
-        };
-        for &raw in bytes.as_chunks::<8>().0 {
-            let near = u64::from_le_bytes(raw);
-            // Nulls (and garbage) after the real entries are skipped, like `ReadMem::read_ptr`.
-            if !d2r_core::reader::is_user_ptr(near) {
-                continue;
-            }
-            match self.border_link(near, level_addr, from_room) {
-                // Many rooms share a neighbour pair's list entries; a level has a few hundred
-                // links at most, so a linear check is cheap.
-                Ok(Some(link)) if !out.contains(&link) => out.push(link),
-                Ok(_) => {}
-                Err(e) => self.warn(format!("near room {near:#x}: {e:#}")),
+        match self.bytes(array, 0, len) {
+            Ok(bytes) => le_user_ptrs(&bytes),
+            Err(e) => {
+                self.warn(format!("room {room:#x} near rooms: {e:#}"));
+                Vec::new()
             }
         }
     }
@@ -1205,6 +1198,18 @@ impl<M: ReadMem> Reader<'_, M> {
         }))
     }
 
+    /// The loaded monster units; unreadable ones warn.
+    fn monsters(&mut self, unit_table: u64) -> Vec<Monster> {
+        let mut monsters = Vec::new();
+        for addr in self.units(unit_table, unit_table::MONSTER) {
+            match self.monster(addr) {
+                Ok(m) => monsters.push(m),
+                Err(e) => self.warn(format!("monster {addr:#x}: {e:#}")),
+            }
+        }
+        monsters
+    }
+
     fn monster(&self, addr: u64) -> Result<Monster> {
         let head = self.unit_head(addr, unit_table::MONSTER)?;
         let (x, y) = self.pos(head.path.context("monster has no path")?)?;
@@ -1224,9 +1229,8 @@ impl<M: ReadMem> Reader<'_, M> {
         })
     }
 
-    /// True if the unit at `addr` has `state` set in its stat list's state bitfield. Optional
-    /// data like [`Reader::room_preset`]: no stat list or an unreadable bitfield is no state, not
-    /// a warning (it would repeat for every monster).
+    /// True if the unit at `addr` has `state` set in its stat list's state bitfield; unreadable
+    /// is false, silently (it would repeat for every monster).
     fn has_state(&self, addr: u64, state: u32) -> bool {
         let Ok(Some(list)) = self.ptr(addr, unit::STATS) else {
             return false;
@@ -1235,9 +1239,8 @@ impl<M: ReadMem> Reader<'_, M> {
             .is_ok_and(|flags| has_state(&flags, state))
     }
 
-    /// The unit's active states, decoded from the state bitfield at `at` in its stat list
-    /// ([`stat_list::STATE_FLAGS`] or its copy). `None` (not a warning) when no stat list or
-    /// an unreadable bitfield: unread, not "no states".
+    /// The unit's active states from the state bitfield at `at` in its stat list
+    /// ([`stat_list::STATE_FLAGS`] or its copy); `None` when unread (not "no states").
     fn states(&self, addr: u64, at: u64) -> Option<Vec<u32>> {
         let list = self.ptr(addr, unit::STATS).ok().flatten()?;
         self.bytes(list, at, stat_list::STATE_FLAG_DWORDS * 4)
@@ -1245,12 +1248,27 @@ impl<M: ReadMem> Reader<'_, M> {
             .map(|flags| active_states(&flags))
     }
 
-    /// The player's raw stat lists for the journal's `buffs` event ([`BuffResearch`]): the
-    /// chain from the unit's own list along [`stat_list::NEXT`], at most [`MAX_BUFF_LISTS`]
-    /// lists and [`MAX_BUFF_DUMP_BYTES`], stopping silently at a cycle or an unreadable list
-    /// (research data: no warnings). `None` without a stat list.
+    /// The player's raw stat lists for the journal's `buffs` event; `None` without a stat list.
+    /// Research data: unreadable parts end the dump silently.
     fn buff_research(&self, player: u64) -> Option<BuffResearch> {
         let top = self.ptr(player, unit::STATS).ok().flatten()?;
+        let (lists, truncated) = self.stat_list_chain_dumps(top);
+        Some(BuffResearch {
+            states_copy: self
+                .states(player, stat_list::STATE_FLAGS_COPY)
+                .unwrap_or_default(),
+            lists,
+            full: self
+                .aggregated_entries(top)
+                .and_then(Result::ok)
+                .unwrap_or_default(),
+            truncated,
+        })
+    }
+
+    /// Dumps of the lists chained from `top` along [`stat_list::NEXT`] up to a cycle, an
+    /// unreadable list, [`MAX_BUFF_LISTS`] or [`MAX_BUFF_DUMP_BYTES`]; true if any was cut short.
+    fn stat_list_chain_dumps(&self, top: u64) -> (Vec<StatListDump>, bool) {
         let mut seen = HashSet::new();
         let mut lists = Vec::new();
         let mut truncated = false;
@@ -1263,7 +1281,7 @@ impl<M: ReadMem> Reader<'_, M> {
             let Some(dump) = self.stat_list_dump(list) else {
                 break;
             };
-            let size = dump.head.len() + dump.entries.len() * 24;
+            let size = dump.head.len() + dump.entries.len() * BUFF_DUMP_BYTES_PER_ENTRY;
             if lists.len() >= MAX_BUFF_LISTS || size > budget {
                 truncated = true;
                 break;
@@ -1273,21 +1291,46 @@ impl<M: ReadMem> Reader<'_, M> {
             lists.push(dump);
             cur = self.ptr(list, stat_list::NEXT).ok().flatten();
         }
-        let flags = self.u32(top, stat_list::FLAGS).unwrap_or(0);
-        let full = if flags & stat_list::FLAG_FULL_STATS == 0 {
-            Vec::new()
-        } else {
-            self.stat_array(top, stat_list::FULL_ENTRIES, stat_list::FULL_COUNT)
-                .unwrap_or_default()
-        };
-        Some(BuffResearch {
-            states_copy: self
-                .states(player, stat_list::STATE_FLAGS_COPY)
-                .unwrap_or_default(),
-            lists,
-            full,
-            truncated,
-        })
+        (lists, truncated)
+    }
+
+    /// The aggregated stat array of the list at `list` (base, affixes, runeword and socketed
+    /// items, modifiers applied); `None` unless the list has [`stat_list::FLAG_FULL_STATS`].
+    fn aggregated_entries(&self, list: u64) -> Option<Result<Vec<(u16, u16, u32)>>> {
+        let flags = self.u32(list, stat_list::FLAGS).unwrap_or(0);
+        (flags & stat_list::FLAG_FULL_STATS != 0)
+            .then(|| self.stat_array(list, stat_list::FULL_ENTRIES, stat_list::FULL_COUNT))
+    }
+
+    /// True if the stat list at `list` belongs to the item unit with id `id`.
+    fn is_item_list_of(&self, list: u64, id: u32) -> bool {
+        matches!(
+            (self.u32(list, stat_list::OWNER_TYPE), self.u32(list, stat_list::OWNER_ID)),
+            (Ok(ty), Ok(owner)) if ty == unit_table::ITEM && owner == id
+        )
+    }
+
+    /// The item `id`'s own stat lists: `list` (the base list), then [`stat_list::NEXT`] while
+    /// the next one is still the item's (the chain then runs into other owners' lists).
+    fn own_item_lists(&self, list: u64, id: u32) -> Vec<u64> {
+        let mut out = Vec::new();
+        let mut cur = list;
+        while out.len() < MAX_ITEM_STAT_LISTS && self.is_item_list_of(cur, id) {
+            out.push(cur);
+            match self.u64(cur, stat_list::NEXT) {
+                Ok(next) if next != 0 => cur = next,
+                _ => break,
+            }
+        }
+        out
+    }
+
+    /// The entries of item `id`'s own lists from `list` on; unreadable lists add none.
+    fn own_item_chain_entries(&self, list: u64, id: u32) -> Vec<(u16, u16, u32)> {
+        self.own_item_lists(list, id)
+            .into_iter()
+            .flat_map(|l| self.stat_entries(l).unwrap_or_default())
+            .collect()
     }
 
     /// One list of [`Reader::buff_research`]; `None` if not even its header up to
@@ -1368,7 +1411,6 @@ impl<M: ReadMem> Reader<'_, M> {
         } else {
             None
         };
-        // Objects have a static path, like items.
         let path = head.path.context("object has no path")?;
         let (x, y) = (self.u32(path, static_path::X)?, self.u32(path, static_path::Y)?);
         let txt = head.txt;
@@ -1386,10 +1428,8 @@ impl<M: ReadMem> Reader<'_, M> {
         )))
     }
 
-    /// The items on the ground, those worth showing, the items in the inventory (all of them,
-    /// position 0,0; the keep list picks from them), and the owner votes of the stash and
-    /// inventory items. Only owners among the player `candidates` (unit ids) vote: the shared
-    /// stash tabs' pseudo-owners must never win the stash vote.
+    /// One walk over all item units (ground, stored, equipped, cursor, belt) into an
+    /// [`ItemScan`]. Only owners among the player `candidates` (unit ids) are collected.
     fn items(&mut self, unit_table: u64, items_table: Option<u64>, candidates: &[u32]) -> ItemScan {
         let mut scan = ItemScan::default();
         for addr in self.units(unit_table, unit_table::ITEM) {
@@ -1400,118 +1440,163 @@ impl<M: ReadMem> Reader<'_, M> {
                     continue;
                 }
             };
-            // Stash, cube, equipped, cursor and belt items are units too: the ground and the
-            // inventory count, the stash and inventory vote on the owner, and the inventory,
-            // cube and stash give the spare lists.
-            let page = if head.mode == item_mode::STORED {
-                self.page(&head)
-            } else {
-                None
-            };
-            // An unreadable owner just doesn't vote, and its item can't be listed as spare.
-            let owner = match page {
-                Some(item_data::PAGE_INVENTORY | item_data::PAGE_CUBE | item_data::PAGE_STASH) => {
-                    head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok())
-                }
-                _ => None,
-            };
-            let votes = match page {
-                Some(item_data::PAGE_STASH) => Some(&mut scan.stash_owners),
-                Some(item_data::PAGE_INVENTORY) => Some(&mut scan.inventory_owners),
-                _ => None,
-            };
-            if let (Some(votes), Some(owner)) = (votes.filter(|v| !v.done()), owner)
-                && candidates.contains(&owner)
-            {
-                votes.add(owner);
+            let page = self.stored_page(&head);
+            let owner = self.storage_owner(&head, page);
+            scan.vote(page, owner, candidates);
+            if let Some(owner) = owner {
+                self.collect_stored(&mut scan, addr, &head, page, owner, items_table);
             }
-            // Cube and stash: only the identified uniques and sets, magic or better items and the
-            // white runeword bases are read in full (the playstyle's keep / sell / move lists judge only those).
-            if let (Some(p @ (item_data::PAGE_CUBE | item_data::PAGE_STASH)), Some(owner)) = (page, owner)
-                && self.is_read_in_full(&head, items_table)
-            {
-                match self.owned_item_fields(addr, &head, items_table) {
-                    Ok(item) if stored_kept(&item) => scan.stored.push(Stored { item, page: p, owner }),
-                    Ok(_) => {}
-                    Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
-                }
-            }
-            let found = match head.mode {
-                item_mode::ON_GROUND => {
-                    scan.ground = scan.ground.saturating_add(1);
-                    self.item_drop(addr, &head, items_table)
-                        .map(|d| d.map(|d| (d, true)))
-                }
-                item_mode::STORED if page == Some(item_data::PAGE_INVENTORY) => self
-                    .owned_item_fields(addr, &head, items_table)
-                    .map(|d| Some((d, false))),
-                _ => Ok(None),
-            };
-            match found {
-                Ok(Some((d, true))) => scan.drops.push(d),
-                Ok(Some((d, false))) => scan.inventory.push((d, owner)),
-                Ok(None) => {}
-                Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
-            }
-            // The guide's speed/resist stats: equipped items and carried charms of a candidate
-            // (the player's own stat list is base-only; item stats live on the items).
-            if let Some(owner) = self.gear_owner(&head, page, items_table)
-                && candidates.contains(&owner)
-            {
-                let fell_back = self.accumulate_gear(addr, &head, scan.gear.entry(owner).or_default());
-                if fell_back && !scan.gear_fallback_warned {
-                    scan.gear_fallback_warned = true;
-                    self.warn(format!(
-                        "item {addr:#x}: stat list without the aggregated array, gear stats from \
-                         the chain walk (runeword/socket stats missing)"
-                    ));
-                }
-                self.capture_weapon_wsm(&head, owner, items_table, &mut scan.weapons);
-            }
-            // Owned identified unique/set items and runewords (worn, carried, cubed or in the
-            // private stash): the `BiS` list marks owned pieces with a ✓. The mercenary's worn
-            // runewords (owner `NO_OWNER`, equipped) count as copies and, like its worn uniques
-            // and sets, go to its own worn list (not `owned_names`). CAVEAT (PLAN.md, "Merc gear"): nothing ties such
-            // an item to the local player's own merc, so [`snapshot`] drops both when other
-            // players are in the game.
-            let item_owner = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok());
-            let merc_worn = item_owner == Some(item_data::NO_OWNER) && self.equipped_slot(&head).is_some();
-            if let Some(owner) = item_owner
-                && (merc_worn || candidates.contains(&owner))
-            {
-                let quality = self.equipped_quality(&head);
-                if matches!(quality, Some(item_data::QUALITY_UNIQUE | item_data::QUALITY_SET)) {
-                    let name = self.item_fields(addr, &head, items_table).ok().and_then(|d| {
-                        d2r_core::names::unique_set_name_parts(d.quality, d.flags, d.unique_index)
-                            .map(str::to_owned)
-                    });
-                    match name {
-                        Some(name) if merc_worn => scan.merc_worn.push(name),
-                        Some(name) => push_unique_name(scan.owned_names.entry(owner).or_default(), name),
-                        None => {}
-                    }
-                } else {
-                    let flags = head.unit_data.and_then(|d| self.u32(d, item_data::FLAGS).ok());
-                    if let Some(name) = flags.and_then(|f| self.runeword_name(addr, &head, f, items_table)) {
-                        scan.runeword_copies.entry(owner).or_default().push(name.clone());
-                        if merc_worn {
-                            scan.merc_worn.push(name);
-                        } else {
-                            push_unique_name(scan.owned_names.entry(owner).or_default(), name);
-                        }
-                    }
-                }
-            }
-            // Equipped pieces by owner kind, for the `BiS` per-slot display.
+            self.collect_ground_or_inventory(&mut scan, addr, &head, page, owner, items_table);
+            self.collect_gear_stats(&mut scan, addr, &head, page, items_table, candidates);
+            self.collect_owned_names(&mut scan, addr, &head, items_table, candidates);
             self.collect_equipped(&mut scan, addr, &head, items_table, candidates);
         }
         scan
     }
 
-    /// The equipped item of `head` into the `BiS` per-slot display lists: the
-    /// `(body slot, quality)` pair of the player or the mercenary (the old list), and —
-    /// for the player — the enriched [`Equipped`] for the dashboard's gear grid (code,
-    /// runeword bit, unique/set name), one per body slot like the pairs.
+    /// The storage page of a stored item; `None` for any other item mode.
+    fn stored_page(&self, head: &UnitHead) -> Option<u8> {
+        if head.mode == item_mode::STORED {
+            self.page(head)
+        } else {
+            None
+        }
+    }
+
+    /// The owner of an item on the inventory, cube or stash `page`; an unreadable owner is
+    /// `None` (no vote, not spare).
+    fn storage_owner(&self, head: &UnitHead, page: Option<u8>) -> Option<u32> {
+        match page {
+            Some(item_data::PAGE_INVENTORY | item_data::PAGE_CUBE | item_data::PAGE_STASH) => {
+                head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok())
+            }
+            _ => None,
+        }
+    }
+
+    /// A cube or stash item into `scan.stored` if [`stored_kept`]; only the items the
+    /// playstyle's lists can judge are read in full.
+    fn collect_stored(
+        &mut self,
+        scan: &mut ItemScan,
+        addr: u64,
+        head: &UnitHead,
+        page: Option<u8>,
+        owner: u32,
+        items_table: Option<u64>,
+    ) {
+        let Some(page @ (item_data::PAGE_CUBE | item_data::PAGE_STASH)) = page else {
+            return;
+        };
+        if !self.is_read_in_full(head, items_table) {
+            return;
+        }
+        match self.owned_item_fields(addr, head, items_table) {
+            Ok(item) if stored_kept(&item) => scan.stored.push(Stored { item, page, owner }),
+            Ok(_) => {}
+            Err(e) => self.warn(format!("item {addr:#x}: {e:#}")),
+        }
+    }
+
+    /// A ground item into `scan.drops` (if worth showing) and an inventory item into
+    /// `scan.inventory`.
+    fn collect_ground_or_inventory(
+        &mut self,
+        scan: &mut ItemScan,
+        addr: u64,
+        head: &UnitHead,
+        page: Option<u8>,
+        owner: Option<u32>,
+        items_table: Option<u64>,
+    ) {
+        let read = match head.mode {
+            item_mode::ON_GROUND => {
+                scan.ground = scan.ground.saturating_add(1);
+                self.item_drop(addr, head, items_table).map(|drop| {
+                    scan.drops.extend(drop);
+                })
+            }
+            item_mode::STORED if page == Some(item_data::PAGE_INVENTORY) => self
+                .owned_item_fields(addr, head, items_table)
+                .map(|item| scan.inventory.push((item, owner))),
+            _ => Ok(()),
+        };
+        if let Err(e) = read {
+            self.warn(format!("item {addr:#x}: {e:#}"));
+        }
+    }
+
+    /// The speed/resist stats and weapon WSM of a candidate's equipped item or carried charm.
+    fn collect_gear_stats(
+        &mut self,
+        scan: &mut ItemScan,
+        addr: u64,
+        head: &UnitHead,
+        page: Option<u8>,
+        items_table: Option<u64>,
+        candidates: &[u32],
+    ) {
+        let Some(owner) = self
+            .gear_owner(head, page, items_table)
+            .filter(|o| candidates.contains(o))
+        else {
+            return;
+        };
+        let fell_back = self.accumulate_gear(addr, head, scan.gear.entry(owner).or_default());
+        if fell_back && !scan.gear_fallback_warned {
+            scan.gear_fallback_warned = true;
+            self.warn(format!(
+                "item {addr:#x}: stat list without the aggregated array, gear stats from \
+                 the chain walk (runeword/socket stats missing)"
+            ));
+        }
+        self.capture_weapon_wsm(head, owner, items_table, &mut scan.weapons);
+    }
+
+    /// The name of a candidate's identified unique/set or runeword item into its
+    /// `owned_names` (a runeword also into its `runeword_copies`). What the mercenary wears
+    /// (owner `NO_OWNER`, equipped) goes to `merc_worn` instead, its runewords under `NO_OWNER`.
+    fn collect_owned_names(
+        &self,
+        scan: &mut ItemScan,
+        addr: u64,
+        head: &UnitHead,
+        items_table: Option<u64>,
+        candidates: &[u32],
+    ) {
+        let item_owner = head.unit_data.and_then(|d| self.u32(d, item_data::OWNER).ok());
+        let merc_worn = item_owner == Some(item_data::NO_OWNER) && self.equipped_slot(head).is_some();
+        let Some(owner) = item_owner.filter(|o| merc_worn || candidates.contains(o)) else {
+            return;
+        };
+        let quality = self.equipped_quality(head);
+        if matches!(quality, Some(item_data::QUALITY_UNIQUE | item_data::QUALITY_SET)) {
+            match self.unique_or_set_name(addr, head, items_table) {
+                Some(name) if merc_worn => scan.merc_worn.push(name),
+                Some(name) => push_unique_name(scan.owned_names.entry(owner).or_default(), name),
+                None => {}
+            }
+            return;
+        }
+        let flags = head.unit_data.and_then(|d| self.u32(d, item_data::FLAGS).ok());
+        if let Some(name) = flags.and_then(|f| self.runeword_name(addr, head, f, items_table)) {
+            scan.runeword_copies.entry(owner).or_default().push(name.clone());
+            if merc_worn {
+                scan.merc_worn.push(name);
+            } else {
+                push_unique_name(scan.owned_names.entry(owner).or_default(), name);
+            }
+        }
+    }
+
+    /// The display name of an identified unique or set item.
+    fn unique_or_set_name(&self, addr: u64, head: &UnitHead, items_table: Option<u64>) -> Option<String> {
+        let d = self.item_fields(addr, head, items_table).ok()?;
+        d2r_core::names::unique_set_name_parts(d.quality, d.flags, d.unique_index).map(str::to_owned)
+    }
+
+    /// The equipped item of `head` into its owner's `(body slot, quality)` pairs (the
+    /// mercenary's into `merc_equipped`) and, for a candidate, the gear grid's [`Equipped`].
     fn collect_equipped(
         &self,
         scan: &mut ItemScan,
@@ -1542,24 +1627,16 @@ impl<M: ReadMem> Reader<'_, M> {
         if !merc {
             let items = scan.equipped_items.entry(owner).or_default();
             if items.iter().all(|e| e.body != slot) {
-                // A worn runeword is in `owned_names` already (the owned-items pass).
                 items.push(self.equipped_item(addr, head, slot, quality, items_table));
             }
         }
     }
 
-    /// The `item_data::BODY` slot of an equipped item (`None` when not equipped).
-    fn head_body_slot(&self, head: &UnitHead) -> Option<u8> {
-        head.unit_data
-            .and_then(|d| self.u8(d, item_data::BODY).ok())
-            .filter(|&b| b != 0 && b != 255)
-    }
-
-    /// The `item_data::BODY` slot of an equipped item (`None` when not equipped).
+    /// The `item_data::BODY` slot of an equipped item (`None` when not equipped or unreadable).
     fn equipped_slot(&self, head: &UnitHead) -> Option<u8> {
         let data = head.unit_data?;
         let body = self.u8(data, item_data::BODY).ok()?;
-        (body != 0 && body != 255).then_some(body)
+        is_worn(body).then_some(body)
     }
 
     /// The `item_data::QUALITY` of an item (`None` if unreadable).
@@ -1567,11 +1644,8 @@ impl<M: ReadMem> Reader<'_, M> {
         head.unit_data.and_then(|d| self.u32(d, item_data::QUALITY).ok())
     }
 
-    /// The enriched equipped item of `head` (body slot `slot`, quality `quality`) for the
-    /// dashboard's gear grid: the item code from the items table, the `FLAGS` runeword bit
-    /// and, for an identified unique/set, its display name and `FILE_INDEX` row; for a
-    /// runeword, its name from the socketed runes ([`Reader::socketed_codes`]). The
-    /// individual reads are optional: a missing items table only leaves the code out.
+    /// The equipped item of `head` (body slot `slot`, quality `quality`) for the gear grid;
+    /// unreadable parts are left out.
     fn equipped_item(
         &self,
         addr: u64,
@@ -1584,10 +1658,8 @@ impl<M: ReadMem> Reader<'_, M> {
             .unit_data
             .and_then(|d| self.u32(d, item_data::FLAGS).ok())
             .unwrap_or(0);
-        // `FILE_INDEX` is only filled once identified, so it is trusted (and kept) only
-        // together with the name the identity path resolves from it.
-        // The raw index: `*ID` 0 is a real row (The Gnasher), so no `!= 0` filter here —
-        // `unique_set_name_parts` gates on FLAG_IDENTIFIED instead.
+        // `FILE_INDEX` is filled only once identified, so it is kept only with the name resolved
+        // from it; row 0 is real (The Gnasher), so no `!= 0` filter.
         let file_index = head
             .unit_data
             .and_then(|d| self.u32(d, item_data::FILE_INDEX).ok());
@@ -1609,12 +1681,8 @@ impl<M: ReadMem> Reader<'_, M> {
         }
     }
 
-    /// The open trade window: the first of the monster units at `npcs` (a vendor NPC) whose
-    /// inventory chain
-    /// ([`unit::INVENTORY`], [`inventory::FIRST_ITEM`], then [`item_data::NEXT_IN_INVENTORY`])
-    /// holds items flagged [`item_data::FLAG_IN_STORE`]. Live 2026-11-18 (Ormus): the chain is
-    /// only filled while the window is open. Optional data: unreadable links end the walk
-    /// without a warning.
+    /// The open trade window: the first of the monster units at `npcs` whose inventory chain
+    /// holds items flagged [`item_data::FLAG_IN_STORE`] (filled only while the window is open).
     fn shop(
         &self,
         mut npcs: impl Iterator<Item = u64>,
@@ -1631,15 +1699,11 @@ impl<M: ReadMem> Reader<'_, M> {
         })
     }
 
-    /// The store items in the inventory chain of the monster unit at `npc` (empty for a
-    /// monster without an inventory or with only its own gear).
+    /// The store items in the inventory chain of the monster unit at `npc`; unreadable links
+    /// end the walk, a runaway chain is a misread (empty).
     fn store_items(&self, npc: u64, items_table: Option<u64>) -> Vec<d2r_core::shop::ShopItem> {
         let mut out = Vec::new();
-        let mut cur = self
-            .ptr(npc, unit::INVENTORY)
-            .ok()
-            .flatten()
-            .and_then(|inv| self.ptr(inv, inventory::FIRST_ITEM).ok().flatten());
+        let mut cur = self.first_inventory_item(npc);
         let mut walked = 0;
         while let Some(item) = cur {
             walked += 1;
@@ -1647,7 +1711,6 @@ impl<M: ReadMem> Reader<'_, M> {
                 break;
             };
             if walked > MAX_SHOP_ITEMS {
-                // A runaway or cyclic chain: a misread, not a shop.
                 return Vec::new();
             }
             if let Ok(flags) = self.u32(data, item_data::FLAGS)
@@ -1678,65 +1741,36 @@ impl<M: ReadMem> Reader<'_, M> {
         Some(entry)
     }
 
-    /// The stat entries of the item unit at `item` (unit id `id`), for the gear score. Its top
-    /// stat list ([`unit::STATS`]) normally carries the aggregated array
-    /// ([`stat_list::FULL_ENTRIES`], flag [`stat_list::FLAG_FULL_STATS`]): base, affixes,
-    /// runeword and socketed runes/gems, each once, ED% already applied; it is read through
-    /// [`d2r_core::item_stats::ItemStat::from_totals`], which needs the base list's stat ids (the
-    /// top list's own entries) to pick the damage pairs the base carries. Live 2026-11-19 (worn,
-    /// carried, stash and merc items: all had the flag; store items assumed the same).
-    ///
-    /// Fallback without the flag (never seen live): the stat-list chain (the top list = base
-    /// list, then [`stat_list::NEXT`] while a list is still an item list owned by `id`), which
-    /// misses runeword and socket stats. Live 2026-11-18 (level-4 amazon): the base list holds
-    /// the rolled base defense (31), damage (21/22, 23/24, 159/160) and durability, the next
-    /// list the affixes; the chain then runs into other owners' lists. Optional data: an
-    /// unreadable list ends the walk.
+    /// The stat entries of the item unit at `item` (unit id `id`), for the gear score: its
+    /// aggregated array, with the base list's stat ids to pick the base's damage pairs. Without
+    /// the array (or a readable base list), the item's own list chain, which misses runeword
+    /// and socket stats.
     fn item_stats(&self, item: u64, id: u32) -> Vec<d2r_core::item_stats::ItemStat> {
-        let mut out = Vec::new();
-        let Some(mut list) = self.ptr(item, unit::STATS).unwrap_or(None) else {
-            return out;
+        let Some(list) = self.ptr(item, unit::STATS).unwrap_or(None) else {
+            return Vec::new();
         };
-        let own = matches!(
-            (self.u32(list, 0x08), self.u32(list, 0x0C)),
-            (Ok(ty), Ok(owner)) if ty == unit_table::ITEM && owner == id
-        );
-        let flags = self.u32(list, stat_list::FLAGS).unwrap_or(0);
-        if own
-            && flags & stat_list::FLAG_FULL_STATS != 0
-            && let Ok(full) = self.stat_array(list, stat_list::FULL_ENTRIES, stat_list::FULL_COUNT)
-            // An unreadable base list would drop every damage stat: walk the chain instead.
+        if self.is_item_list_of(list, id)
+            && let Some(Ok(full)) = self.aggregated_entries(list)
             && let Ok(base) = self.stat_entries(list)
         {
             let base_ids: Vec<u16> = base.into_iter().map(|(_, stat, _)| stat).collect();
             return d2r_core::item_stats::ItemStat::from_totals(&full, &base_ids);
         }
-        for i in 0..8 {
-            let (Ok(ty), Ok(owner)) = (self.u32(list, 0x08), self.u32(list, 0x0C)) else {
-                break;
-            };
-            if ty != unit_table::ITEM || owner != id {
-                break;
-            }
+        let mut out = Vec::new();
+        for (i, list) in self.own_item_lists(list, id).into_iter().enumerate() {
             let Ok(entries) = self.stat_entries(list) else {
                 break;
             };
             out.extend(entries.into_iter().map(|(param, stat, raw)| {
                 d2r_core::item_stats::ItemStat::from_raw(param, stat, raw, i == 0)
             }));
-            match self.u64(list, stat_list::NEXT) {
-                Ok(next) if next != 0 => list = next,
-                _ => break,
-            }
         }
         out
     }
 
     /// The runeword name of the item at `addr` (flags `flags`): `None` unless it carries the
-    /// [`item_data::FLAG_RUNEWORD`] bit and its socketed runes ([`Reader::socketed_codes`])
-    /// spell a known runeword ([`stash::runeword_by_runes`]). Live 2026-11-18 on worn items.
-    /// The base's item code picks between runewords sharing their runes ("Hustle (weapon)"
-    /// vs "Hustle (armor)").
+    /// [`item_data::FLAG_RUNEWORD`] bit and its socketed runes spell a known runeword. The
+    /// base's code picks between runewords sharing their runes ("Hustle (weapon)" / "(armor)").
     fn runeword_name(
         &self,
         addr: u64,
@@ -1750,21 +1784,13 @@ impl<M: ReadMem> Reader<'_, M> {
         stash::runeword_by_runes(&runes, base.as_deref()).map(|w| w.name.to_owned())
     }
 
-    /// The item codes of what is socketed in the item at `addr`, in socket order: the
-    /// item's own `Inventory` chain ([`unit::INVENTORY`], [`inventory::FIRST_ITEM`], then
-    /// [`item_data::NEXT_IN_INVENTORY`]), as for a stash tab. Live 2026-11-18: a Stealth
-    /// body armour chained r07 then r05, a Leaf staff r03 then r08. Optional data: an
-    /// unreadable link or code ends the list early (the runeword then stays unnamed).
+    /// The item codes of what is socketed in the item at `addr`, in socket order (its own
+    /// inventory chain). An unreadable link ends the list early; a runaway chain is empty.
     fn socketed_codes(&self, addr: u64, items_table: u64) -> Vec<String> {
         let mut out = Vec::new();
-        let mut cur = self
-            .ptr(addr, unit::INVENTORY)
-            .ok()
-            .flatten()
-            .and_then(|inv| self.ptr(inv, inventory::FIRST_ITEM).ok().flatten());
+        let mut cur = self.first_inventory_item(addr);
         while let Some(item) = cur {
             if out.len() >= MAX_SOCKETS {
-                // A runaway or cyclic chain: more than any item can hold.
                 return Vec::new();
             }
             let Ok(txt) = self.u32(item, unit::TXT) else {
@@ -1774,36 +1800,30 @@ impl<M: ReadMem> Reader<'_, M> {
                 break;
             };
             out.push(items::code_text(code));
-            cur = self
-                .ptr(item, unit::UNIT_DATA)
-                .ok()
-                .flatten()
-                .and_then(|d| self.ptr(d, item_data::NEXT_IN_INVENTORY).ok().flatten());
+            cur = self.next_in_inventory(item).ok().flatten();
         }
         out
     }
 
-    /// The owner whose gear stats `item` contributes to: the player's equipped items (body slot)
-    /// and carried charms (inventory page, charm codes), by `item_data::OWNER`.
+    /// The owner whose gear stats the item contributes to, if it is equipped or a charm in
+    /// the inventory.
     fn gear_owner(&self, head: &UnitHead, page: Option<u8>, items_table: Option<u64>) -> Option<u32> {
         let data = head.unit_data?;
         let owner = self.u32(data, item_data::OWNER).ok()?;
         let body = self.u8(data, item_data::BODY).ok()?;
-        if body != 0 && body != 255 {
+        if is_worn(body) {
             return Some(owner);
         }
         if page == Some(item_data::PAGE_INVENTORY) {
             let code = items::read_code(self.mem, items_table?, head.txt)?;
-            let code = items::code_text(code);
-            if matches!(code.as_str(), "cm1" | "cm2" | "cm3") {
+            if CHARM_CODES.contains(&items::code_text(code).as_str()) {
                 return Some(owner);
             }
         }
         None
     }
 
-    /// The equipped weapon's WSM per owner (the guide's IAS note): the weapon is the body-4
-    /// item of `owner`, its code looked up in the items table, the WSM in `weapons_data`.
+    /// Records the WSM of `owner`'s equipped weapon (`weapons_data`) in `out`, once per owner.
     fn capture_weapon_wsm(
         &self,
         head: &UnitHead,
@@ -1816,7 +1836,7 @@ impl<M: ReadMem> Reader<'_, M> {
             .unit_data
             .and_then(|d| self.u32(d, item_data::OWNER).ok())
             .is_some_and(|o| o == owner);
-        if self.head_body_slot(head) != Some(4) || already || !owned_by_player {
+        if self.equipped_slot(head) != Some(WEAPON_BODY_SLOT) || already || !owned_by_player {
             return;
         }
         let Some(code) = items_table.and_then(|t| items::read_code(self.mem, t, head.txt)) else {
@@ -1827,96 +1847,49 @@ impl<M: ReadMem> Reader<'_, M> {
         }
     }
 
-    /// Adds the speed/resist stats of `item` to `acc`, from its top stat list's aggregated
-    /// array ([`stat_list::FULL_ENTRIES`]): base, affixes, runeword and socketed runes/gems.
-    /// Live 2026-11-19: walking the owner-matching chain instead missed every runeword and
-    /// socket stat (they hang off the socketed items' own lists and a runeword list outside that
-    /// chain), so Ancients' Pledge added no resists. A top list without
-    /// [`stat_list::FLAG_FULL_STATS`] (never seen live) falls back to that chain walk (base
-    /// list, then [`stat_list::NEXT`] while the list is still this item's); returns true then,
-    /// so the caller can warn.
+    /// Adds the speed/resist stats of `item` to `acc` from its aggregated array (the owner
+    /// chain misses runeword and socket stats). Without the array it falls back to the item's
+    /// own list chain and returns true, so the caller can warn.
     fn accumulate_gear(&self, item: u64, head: &UnitHead, acc: &mut SpeedStats) -> bool {
         let Some(list) = self.ptr(item, unit::STATS).unwrap_or(None) else {
             return false;
         };
-        let own = |list: u64| {
-            matches!(
-                (self.u32(list, 0x08), self.u32(list, 0x0C)),
-                (Ok(ty), Ok(owner)) if ty == unit_table::ITEM && owner == head.id
-            )
-        };
-        if !own(list) {
+        if !self.is_item_list_of(list, head.id) {
             return false;
         }
-        let flags = self.u32(list, stat_list::FLAGS).unwrap_or(0);
-        let (entries, fell_back) = if flags & stat_list::FLAG_FULL_STATS != 0 {
-            let full = self.stat_array(list, stat_list::FULL_ENTRIES, stat_list::FULL_COUNT);
-            (full.unwrap_or_default(), false)
-        } else {
-            let mut entries = Vec::new();
-            let mut cur = list;
-            for _ in 0..8 {
-                if !own(cur) {
-                    break;
-                }
-                entries.extend(self.stat_entries(cur).unwrap_or_default());
-                match self.u64(cur, stat_list::NEXT) {
-                    Ok(next) if next != 0 => cur = next,
-                    _ => break,
-                }
-            }
-            (entries, true)
-        };
-        for (_, id, value) in entries {
-            let value = plain_stat_from_raw(value);
-            match id {
-                stat_list::RESIST_FIRE => acc.res_fire = acc.res_fire.saturating_add(value),
-                stat_list::RESIST_COLD => acc.res_cold = acc.res_cold.saturating_add(value),
-                stat_list::RESIST_LIGHTNING => {
-                    acc.res_lightning = acc.res_lightning.saturating_add(value);
-                }
-                stat_list::RESIST_POISON => acc.res_poison = acc.res_poison.saturating_add(value),
-                stat_list::IAS => acc.ias = acc.ias.saturating_add(value),
-                stat_list::FHR => acc.fhr = acc.fhr.saturating_add(value),
-                stat_list::FCR => acc.fcr = acc.fcr.saturating_add(value),
-                _ => {}
-            }
-        }
+        let aggregated = self.aggregated_entries(list);
+        let fell_back = aggregated.is_none();
+        let entries = aggregated.map_or_else(
+            || self.own_item_chain_entries(list, head.id),
+            Result::unwrap_or_default,
+        );
+        add_speed_stats(acc, &entries);
         fell_back
     }
 
-    /// The resists on the player unit's own stat list (`[fire, cold, lightning, poison]`,
-    /// [`resists_of`] its base entries at [`stat_list::ENTRIES`]) and, when the list has
-    /// [`stat_list::FLAG_FULL_STATS`], those of its aggregated array. The base list holds no
-    /// item stats (PLAN.md "Stat lists"), so adding it to the gear sums counts nothing twice;
-    /// what it holds are the permanent quest resists (Anya's scroll, +10 all per difficulty).
-    /// Optional data: unreadable is `[0; 4]` / `None`.
+    /// The resists on the player unit's own stat list and on its aggregated array, if any. The
+    /// own list holds no item stats, only permanent quest resists (Anya's scrolls); unreadable
+    /// is `[0; 4]` / `None`.
     fn own_resists(&self, player: u64) -> ([i32; 4], Option<[i32; 4]>) {
         let Some(list) = self.ptr(player, unit::STATS).unwrap_or(None) else {
             return ([0; 4], None);
         };
         let own = self.stat_entries(list).map_or([0; 4], |e| resists_of(&e));
-        let flags = self.u32(list, stat_list::FLAGS).unwrap_or(0);
-        let full = (flags & stat_list::FLAG_FULL_STATS != 0)
-            .then(|| {
-                self.stat_array(list, stat_list::FULL_ENTRIES, stat_list::FULL_COUNT)
-                    .ok()
-            })
-            .flatten()
+        let aggregated = self
+            .aggregated_entries(list)
+            .and_then(Result::ok)
             .map(|e| resists_of(&e));
-        (own, full)
+        (own, aggregated)
     }
 
-    /// All `{layer, stat id, value}` entries of the stat list at `list` (a `StatList` address,
-    /// not a unit: the entries sit at `stat_list::ENTRIES`, the count at `stat_list::COUNT`).
-    /// An empty list (count 0) is `Ok(vec![])` without touching its entries pointer: live
-    /// 2026-11-18 a magic ring's base list was empty and its affix list came next.
+    /// All `{layer, stat id, value}` entries of the stat list at `list`; an empty list (count 0,
+    /// e.g. a magic ring's base list) is `Ok(vec![])` without touching its entries pointer.
     fn stat_entries(&self, list: u64) -> Result<Vec<(u16, u16, u32)>> {
         self.stat_array(list, stat_list::ENTRIES, stat_list::COUNT)
     }
 
     /// The `{layer, stat id, value}` array whose pointer sits at `list + entries_at` and whose
-    /// u64 count at `list + count_at` ([`stat_list::ENTRIES`] or [`stat_list::FULL_ENTRIES`]).
+    /// u64 count at `list + count_at`.
     fn stat_array(&self, list: u64, entries_at: u64, count_at: u64) -> Result<Vec<(u16, u16, u32)>> {
         let count = self.u64(list, count_at)?;
         if count == 0 {
@@ -1945,11 +1918,8 @@ impl<M: ReadMem> Reader<'_, M> {
             .collect())
     }
 
-    /// True if the stored item `head` is an identified unique or set
-    /// ([`identified_unique_or_set`]), magic or better ([`magic_or_better`]), or a white item
-    /// ([`maybe_white_base`]) whose code (from `items_table`) is a socketable base: potions,
-    /// tomes, keys, gems and runes are left out before the full read. False if its quality or
-    /// flags are unreadable.
+    /// True if the stored item `head` may pass [`stored_kept`], judged before the full read from
+    /// its quality, flags and code; false if unreadable.
     fn is_read_in_full(&self, head: &UnitHead, items_table: Option<u64>) -> bool {
         let white_base = || {
             items_table
@@ -1989,7 +1959,6 @@ impl<M: ReadMem> Reader<'_, M> {
             quality,
             flags,
             ethereal: flags & item_data::FLAG_ETHEREAL != 0,
-            // Optional data like `room_preset`: an unreadable stat list counts as no sockets.
             sockets: self.sockets(addr).unwrap_or(0),
             unique_index,
             stats: Vec::new(),
@@ -2010,15 +1979,12 @@ impl<M: ReadMem> Reader<'_, M> {
     }
 
     /// The ground item `head` (unit at `addr`) as a drop, or `None` for a base without a known
-    /// code (not a unique, set, gem, rune or charm, and the items table not found yet): no
-    /// playstyle rule can judge it. Which bases are shown is decided later
-    /// (`d2r_playstyle_config::valuables::apply`).
+    /// code, which no playstyle rule can judge.
     fn item_drop(&self, addr: u64, head: &UnitHead, items_table: Option<u64>) -> Result<Option<ItemDrop>> {
         let mut drop = self.item_fields(addr, head, items_table)?;
         if drop.kind == DropKind::Base && drop.code.is_none() {
             return Ok(None);
         }
-        // Items have a static path: u32 position at other offsets than a moving unit's path.
         let path = head.path.context("ground item has no path")?;
         drop.x = self.u32(path, static_path::X)?;
         drop.y = self.u32(path, static_path::Y)?;
@@ -2042,24 +2008,10 @@ impl<M: ReadMem> Reader<'_, M> {
         let Some(list) = self.ptr(unit_addr, unit::STATS)? else {
             return Ok(None);
         };
-        let count = self.u64(list, stat_list::COUNT)?;
-        if count == 0 {
-            return Ok(None);
-        }
-        if count > MAX_ITEM_STATS {
-            bail!("stat list {list:#x}: {count} entries");
-        }
-        let entries = self.ptr_req(list, stat_list::ENTRIES, "stat entries")?;
-        // count <= MAX_ITEM_STATS, so the byte length fits any usize.
-        let len = usize::try_from(count * stat_list::STAT_SIZE)?;
-        let bytes = self
-            .mem
-            .read_bytes(entries, len)
-            .with_context(|| format!("reading {count} stats at {entries:#x}"))?;
-        let (stats, _) = bytes.as_chunks::<8>();
-        Ok(stats.iter().find_map(|&[_, _, id0, id1, v0, v1, v2, v3]| {
-            (u16::from_le_bytes([id0, id1]) == id).then(|| u32::from_le_bytes([v0, v1, v2, v3]))
-        }))
+        let entries = self.stat_entries(list)?;
+        Ok(entries
+            .into_iter()
+            .find_map(|(_, stat, value)| (stat == id).then_some(value)))
     }
 }
 
@@ -2068,6 +2020,17 @@ enum Object {
     Shrine(Shrine),
     Well(Well),
     Operated(OperatedObject),
+}
+
+/// The plausible user pointers among the little-endian u64 words of `bytes`.
+fn le_user_ptrs(bytes: &[u8]) -> Vec<u64> {
+    bytes
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|&w| u64::from_le_bytes(w))
+        .filter(|&p| d2r_core::reader::is_user_ptr(p))
+        .collect()
 }
 
 /// Lowercase hex of `bytes`, no separators.
