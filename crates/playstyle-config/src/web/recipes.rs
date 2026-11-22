@@ -2,18 +2,18 @@
 //! inputs counted against the runes and gems the character holds.
 
 use super::PanelInfo;
+use crate::config::Recipe;
+use d2r_core::quests::Reward;
 
-/// Gem grade prefixes (chipped … perfect; the normal grade has none) and colours, for
-/// reading recipe inputs.
+/// Gem grade prefixes; the normal grade has none.
 pub const GEM_GRADES: [&str; 4] = ["chipped", "flawed", "flawless", "perfect"];
 
 pub const GEM_COLOURS: [&str; 7] = [
     "amethyst", "topaz", "sapphire", "emerald", "ruby", "diamond", "skull",
 ];
 
-/// One recipe input line, read: a material the reader counts (rune or gem, by its
-/// [`d2r_core::stash::material_name`] name), any gem of one grade, or a base item the reader
-/// can't check (free text).
+/// One recipe input line: a counted rune or gem, any gem of one grade, or a base item the
+/// reader can't check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
     Material { name: String, need: u32 },
@@ -22,9 +22,8 @@ pub enum Input {
 }
 
 impl Input {
-    /// Reads `"Tal"`, `"3 Tal Rune"`, `"1-2 Ral Rune"`, `"Ort Rune x2"`, `"1 Chipped Topaz"`,
-    /// `"1 Chipped Gem (any)"`; everything else is a [`Input::Base`]. A count range takes its
-    /// minimum.
+    /// Reads `"Tal"`, `"3 Tal Rune"`, `"1-2 Ral Rune"` (the minimum), `"Ort Rune x2"`,
+    /// `"1 Chipped Topaz"`, `"1 Chipped Gem (any)"`; anything else is a base.
     #[must_use]
     pub fn parse(text: &str) -> Self {
         let text = text.trim();
@@ -75,8 +74,7 @@ impl Input {
         }
     }
 
-    /// How many of this input the character has, from the merged material counts; `None`
-    /// for a base item.
+    /// How many of this input the merged material counts hold; `None` for a base item.
     #[must_use]
     pub fn have(&self, materials: &[(String, u32)]) -> Option<u32> {
         match self {
@@ -102,7 +100,6 @@ impl Input {
         }
     }
 
-    /// The material key and count this input needs (`None` for a base item).
     #[must_use]
     pub fn need(&self) -> Option<(String, u32)> {
         match self {
@@ -113,7 +110,6 @@ impl Input {
     }
 }
 
-/// `"chipped topaz"` → `"Chipped Topaz"`.
 #[must_use]
 pub fn title_case(text: &str) -> String {
     text.split_whitespace()
@@ -127,15 +123,13 @@ pub fn title_case(text: &str) -> String {
         .join(" ")
 }
 
-/// The runes and gems the character has: the shared materials tab's stacks plus the ones
-/// held in inventory, cube and stash pages, `(name, count)` merged by name.
+/// The runes and gems of the materials tab plus those held in inventory, cube and stash
+/// pages, merged by name.
 #[must_use]
 pub fn owned_materials(info: &PanelInfo) -> Vec<(String, u32)> {
     materials_of(info.live.held_materials, info.live.stash)
 }
 
-/// [`owned_materials`] from the runes and gems `held` outside the shared stash and its `stash`
-/// tabs.
 #[must_use]
 pub fn materials_of(held: &[(String, u32)], stash: &[d2r_core::stash::StashTab]) -> Vec<(String, u32)> {
     let mut out: Vec<(String, u32)> = held.to_vec();
@@ -153,7 +147,7 @@ pub fn materials_of(held: &[(String, u32)], stash: &[d2r_core::stash::StashTab])
     out
 }
 
-/// The socket count a base input names (`"with exactly 2 sockets"`, `"2-socket helm"`).
+/// The socket count of `"with exactly 2 sockets"`, `"2-socket helm"`.
 #[must_use]
 pub fn socket_count(text: &str) -> Option<u8> {
     let lower = text.to_lowercase();
@@ -167,8 +161,8 @@ pub fn socket_count(text: &str) -> Option<u8> {
     })
 }
 
-/// The white bases (`"Hard Leather Armor 2os"`) a base input line names by base name, with
-/// the socket count it asks for when it names one: a cheap "you probably have it" hint.
+/// The held white bases (`"Hard Leather Armor 2os"`) a base input line names, with its
+/// socket count when it asks for one.
 pub fn matching_bases<'a>(text: &str, bases: &'a [String]) -> Vec<&'a str> {
     let lower = text.to_lowercase();
     let sockets = socket_count(text);
@@ -186,10 +180,7 @@ pub fn matching_bases<'a>(text: &str, bases: &'a [String]) -> Vec<&'a str> {
         .collect()
 }
 
-/// How many copies of runeword `name` the character has: one per [`LiveInfo::runeword_copies`]
-/// entry (worn, carried, cubed, private stash, the mercenary's worn) plus one per runeword
-/// item in the shared-stash tabs. The two sources don't overlap: the shared stash's items are
-/// owned by its tab units, never by the player.
+/// How many copies of runeword `name` the character holds, its shared stash included.
 #[must_use]
 pub fn runeword_copies(info: &PanelInfo, name: &str) -> usize {
     let held = info
@@ -208,8 +199,8 @@ pub fn runeword_copies(info: &PanelInfo, name: &str) -> usize {
     held + stashed
 }
 
-/// How many copies of runeword `name` the stage `build` wants: the player and merc slots
-/// whose piece list names it, at least one (a recipe for a runeword no slot lists).
+/// How many copies of runeword `name` `build` wants: one per player or merc slot listing it,
+/// at least one.
 #[must_use]
 pub fn runeword_slots(build: &crate::config::Build, name: &str) -> usize {
     build
@@ -225,45 +216,40 @@ pub fn runeword_slots(build: &crate::config::Build, name: &str) -> usize {
         .max(1)
 }
 
-/// The current stage's recipes (`live_json`'s `recipes` section; an `upgrade` recipe that
-/// makes a rune or gem — `material` — only when another recipe still misses it), each
-/// `{ "name", "kind", "material", "result", "req", "notes", "quest", "inputs": [...] }`
-/// (`quest`: `"ready"` when the recipe's quest reward waits to be taken, `"todo"` while the
-/// quest isn't done, else `null`; a recipe whose quest reward is used, or a runeword the
-/// character has a copy of for every stage slot wanting it, is left out) with every input as
-/// `{ "text", "status", "have", "need", "hint" }`: `status` is `"have"`/`"missing"` for a rune or gem (counted over
-/// all of the recipe's lines naming it, against [`owned_materials`]), `"likely"` for a base
-/// line naming a white socketed base the character holds (`hint` lists them), else
-/// `"check"` (a base the reader can't verify).
+/// The current stage's open recipes. Gone: a used quest reward, a runeword held for every slot
+/// wanting it, and an `upgrade` recipe whose result no other recipe misses.
 #[must_use]
 pub fn recipes_json(info: &PanelInfo) -> Vec<serde_json::Value> {
     let Some(build) = info.build else {
         return Vec::new();
     };
-    // A quest-reward recipe (Charsi's imbue, Larzuk's socket) is gone once its reward is
-    // used (user request, 2026-11-18); with the flags unread it stays.
-    let reward = |r: &crate::config::Recipe| {
-        d2r_core::quests::word_of(&r.quest).and_then(|w| d2r_core::quests::reward(info.live.quests, w))
-    };
-    // A runeword is built once the character has a copy for every slot of the stage that
-    // wants it (player and merc slots naming it, at least one): its recipe goes (user request,
-    // 2026-11-18; Spirit sword plus Spirit shield stays until both exist). Other kinds have no
-    // such signal: a craft's result is a rare with a random name, cube recipes (repair,
-    // recharge) are repeatable, a socket recipe's base isn't told apart from a found one; only
-    // their quest rewards (above) drop them.
-    let already_made = |r: &crate::config::Recipe| {
-        r.kind == "runeword" && runeword_copies(info, &r.name) >= runeword_slots(build, &r.name)
-    };
-    let recipes: Vec<&crate::config::Recipe> = build
+    let already_made =
+        |r: &Recipe| r.kind == "runeword" && runeword_copies(info, &r.name) >= runeword_slots(build, &r.name);
+    let recipes: Vec<&Recipe> = build
         .recipes
         .iter()
-        .filter(|r| reward(r) != Some(d2r_core::quests::Reward::Used) && !already_made(r))
+        .filter(|r| quest_reward(r, info) != Some(Reward::Used) && !already_made(r))
         .collect();
     let materials = owned_materials(info);
-    // The runes and gems the other recipes still miss: an `upgrade` recipe (3 Ral → Ort,
-    // gem upgrades) is shown only when its result is one of them (coordinator request,
-    // 2026-11-17: the tornado guide lists ~60 of them).
-    let missing: Vec<String> = recipes
+    let missing = missing_materials(&recipes, &materials);
+    recipes
+        .into_iter()
+        .filter(|recipe| {
+            let makes = Input::parse(&recipe.result).need();
+            recipe.kind != "upgrade" || makes.is_none_or(|(key, _)| missing.contains(&key))
+        })
+        .map(|recipe| recipe_json(recipe, info, &materials))
+        .collect()
+}
+
+/// The quest reward state of `recipe`'s quest; `None` without one or with the flags unread.
+fn quest_reward(recipe: &Recipe, info: &PanelInfo) -> Option<Reward> {
+    d2r_core::quests::word_of(&recipe.quest).and_then(|w| d2r_core::quests::reward(info.live.quests, w))
+}
+
+/// The material keys the non-`upgrade` recipes still miss.
+fn missing_materials(recipes: &[&Recipe], materials: &[(String, u32)]) -> Vec<String> {
+    recipes
         .iter()
         .filter(|r| r.kind != "upgrade")
         .flat_map(|r| {
@@ -274,72 +260,75 @@ pub fn recipes_json(info: &PanelInfo) -> Vec<serde_json::Value> {
                     inputs
                         .iter()
                         .find(|i| i.need().is_some_and(|(k, _)| k == *key))
-                        .and_then(|i| i.have(&materials))
+                        .and_then(|i| i.have(materials))
                         .is_some_and(|have| have < *need)
                 })
                 .map(|(key, _)| key)
                 .collect::<Vec<_>>()
         })
-        .collect();
-    recipes
-        .into_iter()
-        .filter(|recipe| {
-            let makes = Input::parse(&recipe.result).need();
-            recipe.kind != "upgrade" || makes.is_none_or(|(key, _)| missing.contains(&key))
-        })
-        .map(|recipe| {
-            let inputs: Vec<Input> = recipe.inputs.iter().map(|t| Input::parse(t)).collect();
-            let totals = need_totals(&inputs);
-            let lines: Vec<serde_json::Value> = recipe
-                .inputs
-                .iter()
-                .zip(&inputs)
-                .map(|(text, input)| {
-                    let have = input.have(&materials);
-                    let need = input
-                        .need()
-                        .and_then(|(key, _)| totals.iter().find(|(k, _)| *k == key))
-                        .map(|(_, n)| *n);
-                    let bases = if have.is_none() {
-                        matching_bases(text, info.live.white_bases)
-                    } else {
-                        Vec::new()
-                    };
-                    let status = match (have, need) {
-                        (Some(have), Some(need)) if have >= need => "have",
-                        (Some(_), _) => "missing",
-                        (None, _) if !bases.is_empty() => "likely",
-                        (None, _) => "check",
-                    };
-                    serde_json::json!({
-                        "text": text,
-                        "status": status,
-                        "have": have,
-                        "need": need,
-                        "hint": (!bases.is_empty()).then(|| bases.join(", ")),
-                    })
-                })
-                .collect();
-            serde_json::json!({
-                "name": recipe.name,
-                "kind": recipe.kind,
-                "material": Input::parse(&recipe.result).need().is_some(),
-                "result": recipe.result,
-                "req": recipe.req,
-                "notes": recipe.notes,
-                "quest": match reward(recipe) {
-                    Some(d2r_core::quests::Reward::Ready) => Some("ready"),
-                    Some(d2r_core::quests::Reward::NotEarned) => Some("todo"),
-                    Some(d2r_core::quests::Reward::Used) | None => None,
-                },
-                "inputs": lines,
-            })
-        })
         .collect()
 }
 
-/// The material keys a recipe's inputs need, summed over its lines (a runeword naming one
-/// rune twice needs two).
+fn recipe_json(recipe: &Recipe, info: &PanelInfo, materials: &[(String, u32)]) -> serde_json::Value {
+    let inputs: Vec<Input> = recipe.inputs.iter().map(|t| Input::parse(t)).collect();
+    let totals = need_totals(&inputs);
+    let lines: Vec<serde_json::Value> = recipe
+        .inputs
+        .iter()
+        .zip(&inputs)
+        .map(|(text, input)| input_json(text, input, &totals, info, materials))
+        .collect();
+    serde_json::json!({
+        "name": recipe.name,
+        "kind": recipe.kind,
+        "material": Input::parse(&recipe.result).need().is_some(),
+        "result": recipe.result,
+        "req": recipe.req,
+        "notes": recipe.notes,
+        "quest": match quest_reward(recipe, info) {
+            Some(Reward::Ready) => Some("ready"),
+            Some(Reward::NotEarned) => Some("todo"),
+            Some(Reward::Used) | None => None,
+        },
+        "inputs": lines,
+    })
+}
+
+/// One input line: `status` is `"have"` / `"missing"` for a counted material (`need` summed
+/// over the recipe's lines), `"likely"` for a base the character seems to hold, else `"check"`.
+fn input_json(
+    text: &str,
+    input: &Input,
+    totals: &[(String, u32)],
+    info: &PanelInfo,
+    materials: &[(String, u32)],
+) -> serde_json::Value {
+    let have = input.have(materials);
+    let need = input
+        .need()
+        .and_then(|(key, _)| totals.iter().find(|(k, _)| *k == key))
+        .map(|(_, n)| *n);
+    let bases = if have.is_none() {
+        matching_bases(text, info.live.white_bases)
+    } else {
+        Vec::new()
+    };
+    let status = match (have, need) {
+        (Some(have), Some(need)) if have >= need => "have",
+        (Some(_), _) => "missing",
+        (None, _) if !bases.is_empty() => "likely",
+        (None, _) => "check",
+    };
+    serde_json::json!({
+        "text": text,
+        "status": status,
+        "have": have,
+        "need": need,
+        "hint": (!bases.is_empty()).then(|| bases.join(", ")),
+    })
+}
+
+/// The material keys a recipe's inputs need, summed over its lines.
 pub fn need_totals(inputs: &[Input]) -> Vec<(String, u32)> {
     let mut totals: Vec<(String, u32)> = Vec::new();
     for (key, n) in inputs.iter().filter_map(Input::need) {

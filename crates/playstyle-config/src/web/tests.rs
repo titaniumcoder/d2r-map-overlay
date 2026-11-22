@@ -14,7 +14,6 @@ use d2r_core::build::Damage;
 use d2r_core::web::fixtures::{EMPTY_MARKS, EMPTY_SKILLS, lines_of, stash_item, test_stash};
 use d2r_core::web::{GearInfo, LiveInfo};
 
-/// The core fixture ([`d2r_core::web::fixtures::live_info`]) without a build, stage or farm list.
 fn live_info<'a>(
     class: u32,
     blocks: &'a d2r_core::render::TextBlocks,
@@ -33,17 +32,14 @@ fn live_info<'a>(
     }
 }
 
-/// The whole dashboard JSON: the core panels plus this playstyle's ([`panels`]).
 fn live_json(info: &PanelInfo) -> String {
     d2r_core::web::live_json(&info.live, panels(info))
 }
 
-/// The vendor panel with this playstyle's notes ([`gear::shop_notes`]).
 fn shop_json(info: &PanelInfo) -> serde_json::Value {
     d2r_core::web::vendor::shop_json(&info.live, &gear::shop_notes(info))
 }
 
-/// The settings of a `bis.toml` / old `config.toml` text, with its warnings.
 fn settings(text: &str) -> Result<(crate::config::Settings, Vec<String>), toml::de::Error> {
     crate::config::parse_tables(text).map(|(tables, warnings)| (tables.into_settings(), warnings))
 }
@@ -93,14 +89,12 @@ fn clearing_a_selection_removes_the_build_and_empty_entries() -> Result<()> {
 
 #[test]
 fn set_bis_selection_rejects_non_table_bis() {
-    // A bare value, and a non-table entry: the save would silently do nothing, so the
-    // caller must get `None` and answer the browser with an error instead.
+    // A bare value and a non-table entry can't be saved.
     assert_eq!(set_bis_selection("bis = \"oops\"\n", "Hork", Some("b")), None);
     assert_eq!(set_bis_selection("[bis]\nHork = 5\n", "Hork", Some("b")), None);
 }
 
-/// A config with one build definition and a selection-only character, plus a builds-only
-/// character, for the resolved-view tests.
+/// One build definition, a selection-only character and a builds-only character.
 fn resolved_config() -> crate::config::Settings {
     let mut config = crate::config::Settings::default();
     config.build_defs.insert(
@@ -125,7 +119,6 @@ fn resolved_config() -> crate::config::Settings {
     config
 }
 
-/// A played entry keyed by its lowercased name.
 fn played_entry(name: &str, t: u64, class: Option<u32>) -> (String, d2r_core::played::Entry) {
     (
         name.to_lowercase(),
@@ -159,7 +152,7 @@ fn config_json_lists_every_character_once_recently_played_first() {
         };
         config.bis.insert(name.to_owned(), bis);
     }
-    // A `[builds]`-only character, and one in both tables (listed once).
+    // Builds-only, and one in both tables (listed once).
     config.builds.names.insert("hork".to_owned(), vec![Damage::Fire]);
     config.builds.names.insert("vex".to_owned(), vec![Damage::Cold]);
     let played = d2r_core::played::Played::from([
@@ -277,8 +270,7 @@ fn set_bis_selection_writes_every_spelling() -> Result<()> {
 
 #[test]
 fn config_json_resolves_the_selected_build() {
-    // The resolved view: the selection-only character gets the build's display name,
-    // damages and annotated pieces; a builds-only character rides along for its select.
+    // The selection-only character gets the build's name, damages and pieces.
     let json = config_json(
         &resolved_config(),
         &GearInfo::default(),
@@ -297,7 +289,6 @@ fn config_json_resolves_the_selected_build() {
         char.get("damages"),
         Some(&serde_json::json!(["physical", "fire"]))
     );
-    // The piece carries its level, tick and runeword info.
     let weapon = char
         .pointer("/slots/weapon/0")
         .map_or(serde_json::Value::Null, Clone::clone);
@@ -321,8 +312,7 @@ fn config_json_resolves_the_selected_build() {
 
 #[test]
 fn config_json_marks_owned_stash_and_better_pieces() {
-    // The live gear state annotates the pieces: owned ✓, stash ✓(stash), and a set/unique
-    // equipped piece strikes the slot's chase pieces through.
+    // Owned ✓, stash ✓(stash), and an equipped unique strikes the chase pieces through.
     let gear = GearInfo {
         worn: vec![],
         owned: vec!["Heart of the Oak".to_owned()],
@@ -347,7 +337,7 @@ fn config_json_marks_owned_stash_and_better_pieces() {
         char.pointer("/merc_slots/weapon/0/tick"),
         Some(&serde_json::json!("stash"))
     );
-    // Worn beats owned (owned_names include the worn pieces): the green ✓.
+    // Worn beats owned.
     let wearing = GearInfo {
         worn: vec!["Heart of the Oak".to_owned()],
         ..gear
@@ -359,7 +349,6 @@ fn config_json_marks_owned_stash_and_better_pieces() {
     );
 }
 
-/// The gear-grid JSON of one column, by title.
 fn column_of<'a>(gear: &'a serde_json::Value, title: &str) -> &'a serde_json::Value {
     gear.get("columns")
         .and_then(|c| c.as_array())
@@ -435,7 +424,6 @@ fn gear_grid_states_and_equipped_headers() {
         ("offhand", vec!["Spirit Monarch@35".to_owned()]),
     ];
     let gear = gear_grid(&slots, &equipped, &["Heart of the Oak".to_owned()]);
-    // 10 columns in the user's two rows of five.
     let titles: Vec<&str> = gear.get("columns").map_or_default(|v| {
         v.as_array()
             .iter()
@@ -449,8 +437,7 @@ fn gear_grid_states_and_equipped_headers() {
             "Helm", "Body", "Hands", "Belt", "Foot", "Amulet", "Ring", "Weapons", "Off-Hand", "Swap"
         ]
     );
-    // Helm: a magic equipped piece is unnameable but comparable — the base level 43
-    // strikes the below pieces; the 71 one is better but above the 47 gate.
+    // Helm: a magic piece is unnameable but comparable (base level 43); 71 is above the gate.
     let helm = column_of(&gear, "Helm");
     assert_eq!(
         helm.get("equipped").cloned().unwrap_or_default(),
@@ -473,8 +460,6 @@ fn gear_grid_states_and_equipped_headers() {
             ),
         ]
     );
-    // Amulet: the unique equipped piece is named with its exact level; a below piece
-    // is worse, one above (and inside the gate) is better.
     let amulet = column_of(&gear, "Amulet");
     assert_eq!(
         amulet.get("equipped").cloned().unwrap_or_default(),
@@ -482,9 +467,7 @@ fn gear_grid_states_and_equipped_headers() {
     );
     // 62 ≤ 62 → worse even though the piece is the same item.
     assert_eq!(piece_states(amulet).first().map(|p| p.2.as_str()), Some("worse"),);
-    // Weapons: the equipped runeword is uncomparable, so nothing is struck through
-    // (and the page's hint says so); the 55 piece would be better but sits above the
-    // 47 gate — too_high; the owned piece is ticked.
+    // Weapons: an equipped runeword is uncomparable; 55 is above the 47 gate.
     let weapons = column_of(&gear, "Weapons");
     assert_eq!(
         weapons.get("equipped").cloned().unwrap_or_default(),
@@ -499,8 +482,7 @@ fn gear_grid_states_and_equipped_headers() {
             serde_json::json!("owned")
         )]
     );
-    // Off-hand: nothing equipped, so the piece is better; no two-handed note (the
-    // equipped Crystal Sword is one-handed).
+    // Off-hand: nothing equipped, and the Crystal Sword is one-handed: no note.
     let offhand = column_of(&gear, "Off-Hand");
     assert_eq!(
         piece_states(offhand).first().map(|p| p.2.as_str()),
@@ -511,8 +493,7 @@ fn gear_grid_states_and_equipped_headers() {
 
 #[test]
 fn gear_grid_merges_the_ring_slots() {
-    // Two equipped rings: the unique Dwarf Star (row 274, lvl req 45) and a magic one;
-    // the merged column compares against the higher of the two requirements.
+    // Dwarf Star (lvl 45) and a magic ring: the merged column compares against the higher.
     let equipped = [
         d2r_core::game::Equipped {
             body: 6,
@@ -539,7 +520,6 @@ fn gear_grid_merges_the_ring_slots() {
     ];
     let gear = gear_grid(&slots, &equipped, &[]);
     let ring = column_of(&gear, "Ring");
-    // Both equipped rings in the header, deduplicated pieces from both slots in order.
     assert_eq!(
         ring.get("equipped").map(|e| e.as_array().map_or(0, Vec::len)),
         Some(2)
@@ -552,8 +532,6 @@ fn gear_grid_merges_the_ring_slots() {
             .collect()
     });
     assert_eq!(names, ["Dwarf Star", "Ring A", "Ring C"]);
-    // Equipped base: the stronger ring's level (45); the 46 piece is better (the 47
-    // gate still holds at clvl 42), the rest worse.
     let states: Vec<&str> = ring.get("pieces").map_or_default(|v| {
         v.as_array()
             .iter()
@@ -566,8 +544,7 @@ fn gear_grid_merges_the_ring_slots() {
 
 #[test]
 fn gear_grid_notes_two_handed_weapons() {
-    // An equipped Elder Staff (code 6cs, weapons.txt `2handed` 1): the off-hand is
-    // unusable, and the note says so. With the one-handed Crystal Sword: no note.
+    // Elder Staff (6cs) is two-handed: the off-hand gets the note.
     for (code, expected) in [("6cs", Some("(two-handed weapon equipped)")), ("crs", None)] {
         let equipped = [d2r_core::game::Equipped {
             body: 4,
@@ -615,8 +592,7 @@ fn builds_json_lists_slug_name_damages_and_counts() {
     assert_eq!(build.get("merc_slots"), Some(&serde_json::json!({"weapon": 1})));
 }
 
-/// A gear grid over a one-slot build, one equipped piece and one owned name; the
-/// pieces' per-column state is what the tests assert on.
+/// A gear grid over a one-slot build, one equipped piece and one owned name.
 fn gear_grid<'a>(
     slots: &[(&str, Vec<String>)],
     equipped_items: &'a [d2r_core::game::Equipped],
@@ -667,7 +643,7 @@ fn gear_grid<'a>(
     gear_json(&info)
 }
 
-/// A unique equipped piece: Harlequin Crest's live-verified row (248 → lvl req 62).
+/// Harlequin Crest's live-verified row (248 → lvl req 62).
 fn equipped_unique(body: u8) -> d2r_core::game::Equipped {
     d2r_core::game::Equipped {
         body,
@@ -680,7 +656,6 @@ fn equipped_unique(body: u8) -> d2r_core::game::Equipped {
     }
 }
 
-/// One item-plan entry, no reason.
 fn advice(
     name: &str,
     spot: crate::stash_plan::Spot,
@@ -741,7 +716,6 @@ fn live_json_has_the_documented_shape() -> Result<()> {
         json.get("area").and_then(|v| v.as_str()),
         Some("Durance of Hate Level 3")
     );
-    // Each block becomes `{ "text", "colour" }` lines in the block's overlay colour.
     let colour_of = |key: &str| -> Vec<(String, String)> { lines_of(&json, key) };
     assert_eq!(
         colour_of("guide"),
@@ -834,8 +808,6 @@ fn live_json_bis_lines_carry_structural_ticks() -> Result<()> {
 
 #[test]
 fn live_json_bis_lines_carry_runeword_runes_and_bases() -> Result<()> {
-    // A runeword piece carries its runes and bases for the dashboard's hint line; a
-    // non-runeword piece carries neither field.
     let treachery = d2r_core::runewords_data::lookup("Treachery").copied();
     let blocks = d2r_core::render::TextBlocks {
         bis: vec![
@@ -1016,8 +988,8 @@ fn recipe_inputs_parse() {
     assert_eq!(socket_count("Socketed (2)"), None);
 }
 
-/// A leveling build: Stealth (body, 17) and Leaf (weapon, 19) runewords, a Tal → Ral and
-/// an Ort → Thul upgrade, a cube recipe; one unique per slot for the equip upgrades.
+/// Stealth (body, 17) and Leaf (weapon, 19), Tal → Ral and Ort → Thul upgrades, a cube
+/// recipe, and one unique per slot.
 fn guide_build() -> config::Build {
     let recipe = |name: &str, kind: &str, inputs: &[&str], result: &str| config::Recipe {
         name: name.to_owned(),
@@ -1073,8 +1045,6 @@ fn guide_build() -> config::Build {
     }
 }
 
-/// The live JSON of a level-`level` character with `build`, the materials tab `stash`,
-/// `held` materials and `bases`, `owned` names and `equipped_items`.
 #[allow(
     clippy::too_many_arguments,
     reason = "test fixture builder; each argument is one LiveInfo field"
@@ -1126,8 +1096,6 @@ fn materials_tab(stacks: &[(&str, &str, u32)]) -> Vec<d2r_core::stash::StashTab>
 #[test]
 fn recipes_tick_owned_inputs_and_fold_upgrades() -> Result<()> {
     let build = guide_build();
-    // Tal in the shared materials tab, Eth and a chipped gem held in the inventory, a
-    // white 2os Hard Leather Armor in the cube.
     let stash = materials_tab(&[("Tal Rune", "r07", 1), ("Ral Rune", "r08", 1)]);
     let held = [("Eth Rune".to_owned(), 1), ("Chipped Ruby".to_owned(), 2)];
     let bases = ["Hard Leather Armor 2os".to_owned()];
@@ -1137,8 +1105,7 @@ fn recipes_tick_owned_inputs_and_fold_upgrades() -> Result<()> {
         .and_then(|r| r.as_array())
         .context("recipes")?;
     let names: Vec<&str> = recipes.iter().filter_map(|r| r.get("name")?.as_str()).collect();
-    // Tir is missing for Leaf, but no upgrade makes Tir; Thul is needed nowhere, Ral is
-    // owned: both rune upgrades stay out. The Imbue isn't a rune or gem: always shown.
+    // Tir is missing but no upgrade makes it; Thul is needed nowhere; Ral is owned.
     assert_eq!(names, ["Stealth", "Leaf", "Imbue", "Recharge"]);
     let statuses = |i: usize| -> Vec<String> {
         recipes
@@ -1200,8 +1167,6 @@ fn recipes_tick_owned_inputs_and_fold_upgrades() -> Result<()> {
     Ok(())
 }
 
-/// The recipe names `live_json` lists for `build` with these runeword copies held and
-/// these runewords in a shared-stash page.
 fn recipe_names(build: &config::Build, copies: &[String], stashed: &[&str]) -> Result<Vec<String>> {
     let blocks = d2r_core::render::TextBlocks::default();
     let stash = vec![d2r_core::stash::StashTab {
@@ -1235,20 +1200,17 @@ fn recipes_hide_runewords_already_built() -> Result<()> {
         all.contains(&"Stealth".to_owned()) && all.contains(&"Leaf".to_owned()),
         "{all:?}"
     );
-    // Held (worn, carried, cubed, private stash or on the merc), any case: Stealth goes,
-    // Leaf stays.
+    // Held anywhere, any case: Stealth goes, Leaf stays.
     let got = recipe_names(&build, &["stealth".to_owned()], &[])?;
     assert!(
         !got.contains(&"Stealth".to_owned()) && got.contains(&"Leaf".to_owned()),
         "{got:?}"
     );
-    // In the shared stash counts too.
     let got = recipe_names(&build, &[], &["Leaf"])?;
     assert!(
         !got.contains(&"Leaf".to_owned()) && got.contains(&"Stealth".to_owned()),
         "{got:?}"
     );
-    // Only runewords: an owned item named like another kind's recipe keeps it.
     let got = recipe_names(&build, &["Recharge".to_owned(), "Imbue".to_owned()], &[])?;
     assert!(
         got.contains(&"Recharge".to_owned()) && got.contains(&"Imbue".to_owned()),
@@ -1260,7 +1222,6 @@ fn recipes_hide_runewords_already_built() -> Result<()> {
 #[test]
 fn recipes_keep_runewords_until_every_slot_has_a_copy() -> Result<()> {
     let mut build = guide_build();
-    // Stealth wanted twice: the body slot and a merc body slot.
     build
         .merc_slots
         .insert("body".to_owned(), vec!["Stealth@17".to_owned()]);
@@ -1271,13 +1232,10 @@ fn recipes_keep_runewords_until_every_slot_has_a_copy() -> Result<()> {
         Ok(recipe_names(&build, copies, stashed)?.contains(&"Stealth".to_owned()))
     };
     assert!(stealth(&[], &[])?);
-    // Needed 2, owned 1: shown.
     assert!(stealth(&["Stealth".to_owned()], &[])?);
     assert!(stealth(&[], &["Stealth"])?);
-    // Owned 2, held and stashed in any mix: hidden.
     assert!(!stealth(&["Stealth".to_owned(), "Stealth".to_owned()], &[])?);
     assert!(!stealth(&["Stealth".to_owned()], &["Stealth"])?);
-    // Another runeword's copy doesn't count.
     assert!(stealth(&["Stealth".to_owned(), "Leaf".to_owned()], &[])?);
     Ok(())
 }
@@ -1319,7 +1277,6 @@ fn recipes_hide_used_quest_rewards() -> Result<()> {
             .filter(|(name, _)| ["Imbue", "Larzuk", "Respec"].contains(&name.as_str()))
             .collect())
     };
-    // Unread flags: every quest recipe stays, unmarked.
     let null = serde_json::Value::Null;
     assert_eq!(
         quest_view(&[])?,
@@ -1329,7 +1286,7 @@ fn recipes_hide_used_quest_rewards() -> Result<()> {
             ("Respec".to_owned(), null)
         ]
     );
-    // Elemental's live record: imbue used (gone), Act 5 not reached, respec pending.
+    // Elemental's live record: imbue used, Act 5 not reached, respec pending.
     let mut live = vec![0u16; 48];
     for (word, value) in [(3, 0x1049), (41, 0x8002)] {
         if let Some(w) = live.get_mut(word) {
@@ -1366,8 +1323,7 @@ fn shop_rows(json: &serde_json::Value) -> Vec<String> {
     })
 }
 
-/// The druid-leveling build's slots (pieces as in the build file) and a trade window
-/// with two of its pieces, one non-matching item, two identical potions.
+/// A trade window with two build pieces, one other item and two identical potions.
 #[test]
 fn shop_marks_build_pieces_and_chimes_them_as_upgrades() {
     use d2r_core::shop::shop_item;
@@ -1465,9 +1421,8 @@ fn shop_better_rows(json: &serde_json::Value) -> Vec<String> {
     })
 }
 
-/// A level-12 bow amazon wearing a Short Bow and one fire ring: the store's Long Bow and
-/// a better ring are marked with why; a javelin (not her weapon kind), a ring below the
-/// bar and a bow above her level are not; nothing joins the upgrade list.
+/// A level-12 bow amazon wearing a Short Bow and a fire ring: only the Long Bow and the
+/// better ring are marked.
 #[test]
 fn shop_marks_items_better_than_the_worn_ones() {
     use d2r_core::item_stats::{ItemStat, stat};
@@ -1561,7 +1516,6 @@ fn shop_marks_items_better_than_the_worn_ones() {
     assert!(upgrades_json(&info).is_empty(), "better items don't chime");
 }
 
-/// The weapon kind: the worn weapon's, else the best stage weapon piece wearable now.
 #[test]
 fn score_profile_takes_the_weapon_kind_from_gear_or_build() {
     static CODELESS: [d2r_core::game::Equipped; 1] = [d2r_core::game::Equipped {
@@ -1647,7 +1601,6 @@ fn upgrades_list_wearable_owned_pieces_and_craftable_runewords() -> Result<()> {
                     .collect()
             })
     };
-    // Biggin's Bonnet (helm, 3) and Nagelring (rings, 7) are owned; level 20.
     let owned = ["Biggin's Bonnet".to_owned(), "Nagelring".to_owned()];
     let json = guide_json(&build, 20, &[], &[], &[], &owned, &[])?;
     assert_eq!(
@@ -1655,7 +1608,6 @@ fn upgrades_list_wearable_owned_pieces_and_craftable_runewords() -> Result<()> {
         ["equip:ring:Nagelring", "equip:helm:Biggin's Bonnet"],
         "slot order, one ring entry"
     );
-    // Too low a level to wear Nagelring; Biggin's already equipped: neither.
     let worn = [d2r_core::game::Equipped {
         body: 1,
         quality: d2r_core::offsets::item_data::QUALITY_UNIQUE,
@@ -1667,10 +1619,9 @@ fn upgrades_list_wearable_owned_pieces_and_craftable_runewords() -> Result<()> {
     }];
     let json = guide_json(&build, 6, &[], &[], &[], &owned, &worn)?;
     assert_eq!(keys(&json), Vec::<String>::new());
-    // An equipped unique of a higher level than the piece (Harlequin Crest, 62) beats it.
     let json = guide_json(&build, 20, &[], &[], &[], &owned[..1], &[equipped_unique(1)])?;
     assert_eq!(keys(&json), Vec::<String>::new(), "already beaten: worse");
-    // Craft: Stealth's runes owned at 17+ (the base is not checked); Leaf misses Tir.
+    // Leaf misses Tir; the craft's base is not checked.
     let stash = materials_tab(&[("Tal Rune", "r07", 1), ("Ral Rune", "r08", 1)]);
     let held = [("Eth Rune".to_owned(), 1)];
     let json = guide_json(&build, 17, &stash, &held, &[], &[], &[])?;
@@ -1679,11 +1630,9 @@ fn upgrades_list_wearable_owned_pieces_and_craftable_runewords() -> Result<()> {
         json.pointer("/upgrades/0/why").and_then(|w| w.as_str()),
         Some("all runes owned · base: non-magic Hard Leather Armor with exactly 2 sockets")
     );
-    // Below the runeword's level: not yet.
     let json = guide_json(&build, 16, &stash, &held, &[], &[], &[])?;
     assert_eq!(keys(&json), Vec::<String>::new());
-    // Stealth worn already (the reader names a runeword by its socketed runes): no
-    // craft and no equip, even with its runes owned and the piece ticked as owned.
+    // The reader names a worn runeword by its socketed runes: no craft, no equip.
     let stealth = [rune_worded(3, "lea", "Stealth")];
     let owned = ["Stealth".to_owned()];
     let json = guide_json(&build, 17, &stash, &held, &[], &owned, &stealth)?;
@@ -1691,7 +1640,6 @@ fn upgrades_list_wearable_owned_pieces_and_craftable_runewords() -> Result<()> {
     Ok(())
 }
 
-/// A named runeword on a superior base `code`, equipped in `body`.
 fn rune_worded(body: u8, code: &str, name: &str) -> d2r_core::game::Equipped {
     d2r_core::game::Equipped {
         body,
@@ -1783,7 +1731,7 @@ fn stage_json_shows_current_and_next() {
             },
         })
     );
-    // Every group met: ready to switch (the level doesn't count).
+    // The switch level doesn't count.
     let owns_all = |item: &str| match item {
         "Raven Frost" | "Enigma" => 1,
         "Lawbringer" => 2,
@@ -1809,7 +1757,6 @@ fn stage_json_shows_current_and_next() {
     assert_eq!(stage_json(None, &owns), serde_json::Value::Null);
 }
 
-/// The Fury Druid farm list of `farm.toml`, parsed like the real file.
 fn fury_farm() -> Result<Vec<config::FarmGroup>> {
     let (groups, warnings) = crate::config::parse_farm(
         "[[farm]]\nfor = \"Fury Druid\"\nitems = [\n\
@@ -1873,7 +1820,6 @@ fn farm_status_done_found_missing_and_rune_needs() -> Result<()> {
         items: vec![
             stash_item("Raven Frost", "rin", QUALITY_UNIQUE, None),
             lawbringer,
-            // An unidentified unique is no copy yet.
             d2r_core::stash::StashItem {
                 identified: false,
                 ..stash_item("Ribcracker", "8cs", QUALITY_UNIQUE, None)
@@ -1904,7 +1850,6 @@ fn farm_status_done_found_missing_and_rune_needs() -> Result<()> {
             row("Fortitude", "missing", 0, 0),
             row("Raven Frost", "done", 1, 0),
             row("Ribcracker", "found", 0, 1),
-            // 1 stashed + 1 carried of 2: not done, found, nothing left to build.
             row("Lawbringer", "found", 1, 1),
             row("Smoke", "missing", 0, 0),
             row("Bulwark", "missing", 0, 0),
@@ -1935,8 +1880,7 @@ fn farm_status_done_found_missing_and_rune_needs() -> Result<()> {
         Some(&serde_json::Value::Null),
         "unknown character level: no item level to check bases by"
     );
-    // The rune list sums over the list: Sol for Fortitude and Bulwark; held runes count
-    // as had, but not as in the stash.
+    // Held runes count as had, but not as in the stash.
     let runes = json
         .pointer("/farm/runes")
         .and_then(serde_json::Value::as_array)
@@ -1984,7 +1928,6 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
     let row = |status: &str, stashed: u64, carried: u64| {
         vec![("Teleport Amulet".to_owned(), status.to_owned(), stashed, carried)]
     };
-    // Nothing held; a Teleport ring and a plain amulet are no copies.
     let ring = d2r_core::stash::StashItem {
         stats: teleport.clone(),
         ..stash_item("Magic Ring", "rin", QUALITY_MAGIC, None)
@@ -2003,7 +1946,6 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
     assert_eq!(entry.get("slot"), Some(&serde_json::json!("amulet")));
     assert_eq!(entry.get("needs"), Some(&serde_json::json!(["Teleport"])));
     assert_eq!(entry.get("note"), Some(&serde_json::json!("until Enigma")));
-    // Worn, or in the inventory: found.
     let worn = [d2r_core::game::Equipped {
         body: 2,
         quality: QUALITY_MAGIC,
@@ -2035,7 +1977,6 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
     )];
     info.live.owned_items = &carried;
     assert_eq!(rows(&info)?, row("found", 0, 1));
-    // In the shared stash: done.
     let stashed = [d2r_core::stash::StashTab {
         kind: d2r_core::stash::TabKind::Page(2),
         items: vec![d2r_core::stash::StashItem {
@@ -2045,8 +1986,6 @@ fn a_rolled_teleport_amulet_is_missing_found_done_and_hidden_with_enigma() -> Re
     }];
     info.live.stash = &stashed;
     assert_eq!(rows(&info)?, row("done", 1, 1));
-    // An Enigma only the mercenary wears doesn't count; one the character holds does: the
-    // entry (and its group, now empty) leaves the panel.
     let copies = ["Enigma".to_owned()];
     info.live.runeword_copies = &copies;
     assert_eq!(rows(&info)?, row("done", 1, 1));
@@ -2062,14 +2001,12 @@ fn farm_counts_split_and_multiply_rune_needs() -> Result<()> {
     let blocks = d2r_core::render::TextBlocks::default();
     let mut info = live_info(5, &blocks, &[], &[], &[]);
     info.farm = &farm;
-    // No copy anywhere: two Lawbringers to build, two of each rune.
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     let rune = |r: &str, need: u64| (r.to_owned(), need, 0);
     assert_eq!(
         farm_runes(&json, 3),
         [rune("Amn", 2), rune("Lem", 2), rune("Ko", 2)]
     );
-    // One carried: one left to build.
     let copies = ["Lawbringer".to_owned()];
     info.live.runeword_copies = &copies;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
@@ -2081,7 +2018,6 @@ fn farm_counts_split_and_multiply_rune_needs() -> Result<()> {
         json.pointer("/farm/groups/0/items/3/status"),
         Some(&serde_json::json!("found"))
     );
-    // Two in the shared stash: done, no runes, gone from the rune list.
     let mut stashed = stash_item("Lawbringer", "flc", 2, None);
     stashed.runeword = true;
     let stash = vec![d2r_core::stash::StashTab {
@@ -2112,9 +2048,8 @@ fn farm_names_the_bosses_worth_farming() -> Result<()> {
         json.pointer("/farm/worth/difficulty"),
         Some(&serde_json::json!("Normal"))
     );
-    // Normal Countess (level 11) drops runes up to Ral and keeps them all: Fortitude's El and
-    // Smoke's Nef. Normal Andariel (12) drops no rune above Ral, so she is not listed;
-    // Mephisto (26) is the first boss worth it, for runes above Ral.
+    // Normal Countess (11) keeps runes up to Ral; Andariel (12) drops none above it; Mephisto
+    // (26) is the first boss worth farming for higher runes.
     let boss = |i: usize| json.pointer(&format!("/farm/worth/bosses/{i}/boss")).cloned();
     assert!(
         (0..20).all(|i| boss(i) != Some(serde_json::json!("Andariel"))),
@@ -2137,7 +2072,7 @@ fn farm_names_the_bosses_worth_farming() -> Result<()> {
         Some(&serde_json::json!({
             "boss": "The Countess",
             "level": 11,
-            // Both from her rune TC (Runes 4): 1 - (1 - p)^3 per kill.
+            // Rune TC Runes 4: 1 - (1 - p)^3 per kill.
             "reliable": [
                 { "rune": "El", "one_in": 9.0, "for": ["Fortitude"] },
                 { "rune": "Nef", "one_in": 6.0, "for": ["Smoke"] },
@@ -2149,7 +2084,6 @@ fn farm_names_the_bosses_worth_farming() -> Result<()> {
             ],
         }))
     );
-    // Unknown difficulty: no note.
     info.live.difficulty = None;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(json.pointer("/farm/worth"), Some(&serde_json::Value::Null));
@@ -2264,7 +2198,6 @@ fn live_json_sends_the_place_of_each_plan_entry_apart() -> Result<()> {
         ])],
         "an own keeper on the character is where it may be"
     );
-    // The page renders the place in its own span, red only when wrong.
     let page = d2r_core::web::page::DASHBOARD_PAGE;
     assert!(page.contains(r#"<span class="wrong">${esc(e.place)}</span>"#));
     assert!(page.contains(".line.run .wrong { color: var(--bad);"));
@@ -2272,10 +2205,7 @@ fn live_json_sends_the_place_of_each_plan_entry_apart() -> Result<()> {
     Ok(())
 }
 
-/// The live JSON's `gear_attention_why` for a level-`level` character with player
-/// `slots`, mercenary `merc` slots, in `difficulty` (it farms up to
-/// [`d2r_core::info::reachable_level`]: in Normal the level +2), `owned` names and `held`
-/// materials; asserts `gear_attention` agrees with it.
+/// The live JSON's `gear_attention_why`; asserts `gear_attention` agrees with it.
 fn attention(
     slots: &[(&str, &[&str])],
     merc: &[(&str, &[&str])],
@@ -2322,7 +2252,6 @@ fn gear_attention_for_an_owned_upgrade() -> Result<()> {
         Some("▲ upgrade to wear: Biggin's Bonnet"),
         "owned and wearable, whatever the areas"
     );
-    // Harlequin Crest (lvl 62) and Biggin's Bonnet (lvl 3) are too high to wear at 2: closed.
     assert_eq!(attention(&slots[..], &[], 2, 0, &[], &[])?, None);
     Ok(())
 }
@@ -2346,7 +2275,6 @@ fn gear_attention_for_a_findable_unique() -> Result<()> {
         Some("▲ findable: Biggin's Bonnet"),
         "Nagelring needs level 7"
     );
-    // A piece described in words has no item level to check: never findable.
     let words: [(&str, &[&str]); 1] = [("helm", &["Druid pelt with +summoning skills@3"])];
     assert_eq!(attention(&words, &[], 10, 0, &[], &[])?, None);
     Ok(())
@@ -2354,9 +2282,8 @@ fn gear_attention_for_a_findable_unique() -> Result<()> {
 
 #[test]
 fn gear_attention_for_runewords_counts_owned_runes() -> Result<()> {
-    // Stealth = Tal (qlvl 17) + Eth (15); Leaf = Tir (13) + Ral (19). The pieces' levels
-    // are set below the runes' so a level-14 character (farming up to 16 in Normal) can
-    // wear both but finds neither Tal nor Ral.
+    // Stealth = Tal (qlvl 17) + Eth (15), Leaf = Tir (13) + Ral (19): a level-14 character
+    // farming up to 16 can wear both but finds neither Tal nor Ral.
     let slots: [(&str, &[&str]); 2] = [("body", &["Stealth@14"]), ("weapon", &["Leaf@14"])];
     assert_eq!(
         attention(&slots, &[], 14, 0, &[], &[])?,
@@ -2378,7 +2305,7 @@ fn gear_attention_for_runewords_counts_owned_runes() -> Result<()> {
 
 #[test]
 fn runeword_pieces_and_farm_entries_name_natural_socket_bases() -> Result<()> {
-    // A level-43 druid (class 5) in Nightmare: it farms up to monster level 45.
+    // Nightmare, level 43: farms up to monster level 45.
     let blocks = d2r_core::render::TextBlocks::default();
     let slot = |s: &str, p: &str| (s.to_owned(), vec![p.to_owned()]);
     let bis = config::Bis {
@@ -2409,7 +2336,6 @@ fn runeword_pieces_and_farm_entries_name_natural_socket_bases() -> Result<()> {
             })
             .context("column")
     };
-    // The weapon column keeps Spirit's swords (not its shields).
     let spirit = hint(&format!(
         "/gear/columns/{}/pieces/0/base_hint",
         column("Weapons")?
@@ -2419,18 +2345,15 @@ fn runeword_pieces_and_farm_entries_name_natural_socket_bases() -> Result<()> {
         "{spirit}"
     );
     assert!(!spirit.contains("shields"), "{spirit}");
-    // The body column keeps Fortitude's armor (not its weapons).
     let fort = hint(&format!("/gear/columns/{}/pieces/0/base_hint", column("Body")?))?;
     assert!(fort.starts_with("4 sockets: "), "{fort}");
     assert!(!fort.contains("Staff"), "{fort}");
-    // The mercenary's Insight (taken as Act 2): polearms only, no staves or bows.
     let insight = hint("/gear/merc/0/pieces/0/base_hint")?;
     assert!(
         !insight.contains("Staff") && !insight.contains("Bow") && !insight.contains("staves"),
         "{insight}"
     );
     assert!(insight.starts_with("4 sockets: Voulge (50 Str)"), "{insight}");
-    // The farm list has no slot: Fortitude lists weapons and armor separately.
     let farm_fort = hint("/farm/groups/0/items/0/base_hint")?;
     assert!(
         farm_fort.contains("weapons: ") && farm_fort.contains(" · armor: "),
@@ -2468,11 +2391,9 @@ fn farm_merc_and_slot_fields_steer_the_base_hint() -> Result<()> {
             .with_context(|| format!("no hint at {pointer}"))?
             .to_owned())
     };
-    // Fortitude as body armor: armor only, no weapon group.
     let fort = hint("/farm/groups/0/items/0/base_hint")?;
     assert!(fort.starts_with("4 sockets: "), "{fort}");
     assert!(!fort.contains("weapons: ") && !fort.contains("armor: "), "{fort}");
-    // The merc's Bulwark: no druid pelt, strongest first with its defense.
     let merc = hint("/farm/groups/0/items/1/base_hint")?;
     assert!(
         !merc.contains("Wolf Head") && !merc.contains("Hawk Helm"),
@@ -2485,9 +2406,7 @@ fn farm_merc_and_slot_fields_steer_the_base_hint() -> Result<()> {
         .collect::<Result<_, _>>()?;
     assert!(defs.len() >= 2, "{merc}");
     assert!(defs.windows(2).all(|w| w.first() >= w.get(1)), "{merc}");
-    // The gear card's merc helm column ranks the same way.
     assert_eq!(hint("/gear/merc/0/pieces/0/base_hint")?, merc);
-    // Without merc/slot the druid's own cheapest helms, pelts included.
     let own = hint("/farm/groups/0/items/2/base_hint")?;
     assert!(own.contains("Wolf Head") && !own.contains("(def "), "{own}");
     Ok(())
@@ -2502,7 +2421,6 @@ fn gear_attention_ignores_the_mercenary() -> Result<()> {
     Ok(())
 }
 
-/// A named item (unique or runeword) the character wears in `body`.
 fn worn_item(body: u8, name: &str, runeword: bool) -> d2r_core::game::Equipped {
     d2r_core::game::Equipped {
         body,
@@ -2558,7 +2476,6 @@ fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
     .map(str::to_owned)
     .to_vec();
     let fury_rest: Vec<String> = fury_all.iter().filter(|n| *n != "Raven Frost").cloned().collect();
-    // The summoner wears Spirit and Raven Frost, and one of the two Lawbringers.
     let worn = [
         worn_item(4, "Spirit", true),
         worn_item(6, "Raven Frost", false),
@@ -2570,10 +2487,9 @@ fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
     info.live.equipped_items = &worn;
     info.stage_chain = &summoner_chain;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
-    // Spirit worn for the current build: its group (all hidden) disappears. Raven Frost
-    // worn for the later Fury stage: hidden too. One Lawbringer of two: still listed.
+    // Spirit worn for the current build and Raven Frost for the later stage: hidden; one
+    // Lawbringer of two: listed.
     assert_eq!(names(&json), [("Fury Druid".to_owned(), fury_rest.clone())]);
-    // Another build's character wearing the same items: everything stays.
     let other_chain = ["Other Build".to_owned()];
     info.stage_chain = &other_chain;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
@@ -2584,7 +2500,6 @@ fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
             ("Fury Druid".to_owned(), fury_all.clone()),
         ]
     );
-    // A carried copy doesn't hide an entry.
     let owned = ["Raven Frost".to_owned()];
     info.stage_chain = &summoner_chain;
     info.live.equipped_items = &[];
@@ -2597,14 +2512,12 @@ fn farm_hides_entries_worn_for_the_characters_own_build() -> Result<()> {
             ("Fury Druid".to_owned(), fury_all.clone()),
         ]
     );
-    // Mercenary-worn copies (a unique and a runeword; `merc_worn` is filled only in solo
-    // games, `game::held_copies`) hide an entry like the character's own.
     let merc = ["Raven Frost".to_owned(), "Spirit".to_owned()];
     info.live.owned = &[];
     info.live.merc_worn = &merc;
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(names(&json), [("Fury Druid".to_owned(), fury_rest)]);
-    // In a group game `merc_worn` is empty: the merc's gear hides nothing.
+    // In a group game `merc_worn` is empty.
     info.live.merc_worn = &[];
     let json: serde_json::Value = serde_json::from_str(&live_json(&info))?;
     assert_eq!(
@@ -2667,8 +2580,8 @@ fn next_section_carries_the_route_step() -> Result<()> {
     Ok(())
 }
 
-/// The summoner's merc weapon column (`merc_acts = [2, 1]`): Insight's hint names the Act 2
-/// merc's polearms, Harmony's the Act 1 rogue's bows, marked as that act's.
+/// The summoner's merc (`merc_acts = [2, 1]`): Insight's hint names Act 2 polearms,
+/// Harmony's the Act 1 rogue's bows.
 #[test]
 fn merc_hints_are_per_act() -> Result<()> {
     let config = crate::files::load(&d2r_core::playstyle::Files {
@@ -2715,11 +2628,8 @@ fn merc_hints_are_per_act() -> Result<()> {
     Ok(())
 }
 
-/// The live case of 2026-11-20 on the shipped summoner build: a level-57 druid whose merc
-/// wears Insight, Smoke and Bulwark (solo game, so `merc_worn` is filled). Each worn piece is
-/// ticked ✓ (Insight although its leveling window ended at 40), the stash's Soul Harvest and
-/// The Battlebranch are beaten, Smoke drops its "missing Lum" note, and no merc piece reaches
-/// the upgrade bar.
+/// A level-57 druid whose merc wears Insight, Smoke and Bulwark: each is ticked (Insight past
+/// its window), the pieces below are beaten, Smoke drops its rune note, nothing reaches upgrades.
 #[test]
 fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
     let config = crate::files::load(&d2r_core::playstyle::Files {
@@ -2763,7 +2673,6 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
 
     let weapon = column(&gear, "Merc weapon");
     let names: Vec<_> = weapon.iter().map(|p| field(p, "name")).collect();
-    // Harmony last: the Act 1 rogue's (the build's second merc act), with that act's bows.
     assert_eq!(
         names,
         ["Insight", "Soul Harvest", "The Battlebranch", "Harmony"],
@@ -2814,11 +2723,10 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
         .any(|n| why.contains(n))),
         "attention"
     );
-    // Only the pieces ranked above the worn one stay open for the vendor match.
     let weapons = bis.merc_slots.get("weapon").context("merc weapon slot")?;
     assert_eq!(super::gear::merc_open(weapons, &info), &[] as &[String]);
 
-    // In a group game the merc's gear is unread: no ticks, nothing beaten.
+    // In a group game the merc's gear is unread.
     info.live.merc_worn = &[];
     let gear = gear_json(&info);
     let weapon = column(&gear, "Merc weapon");

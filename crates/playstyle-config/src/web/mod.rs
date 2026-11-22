@@ -1,19 +1,5 @@
-//! The playstyle's dashboard panels, as JSON for the core page ([`d2r_core::web`]): the item
-//! plan (sell / move / keep / give-away), the `BiS` lines, the gear grid with its upgrades and
-//! attention flag ([`gear`]), the guide stage, the recipes ([`recipes`]) and the farm list
-//! ([`farm`]); the vendor panel's slot / better notes and the skill plan for the core panels;
-//! and the `/config` page's JSON and `config.toml` edits ([`config_page`]).
-//!
-//! Its sections of the live JSON ([`panels`]): `sell`, `move`, `keep_own`, `keep_trade`,
-//! `give` (the item plan's groups, [`crate::stash_plan`], one structured entry each,
-//! [`advice_lines`]; the page joins each group into one wrapping run in the Sell / Keep panel),
-//! `bis` (the chase list, each line with a structured `"tick": "worn" | "owned" | "stash" |
-//! null` and, for a runeword piece, `"runes"` and `"bases"`, [`bis_line`]), `gear` (the 2×5
-//! `BiS` grid, [`gear::gear_json`]), `gear_attention` (bool) and `gear_attention_why` (text or
-//! `null`, [`gear::gear_attention`]), `upgrades` ([`gear::upgrades_json`]), `stage`
-//! ([`stage_json`]), `recipes` ([`recipes::recipes_json`]) and `farm` (the cross-character farm
-//! list, [`farm::farm_json`], `null` without one) and `next` (the route's current step,
-//! [`crate::route::Advice::json`], `null` without one).
+//! The playstyle's dashboard panels as JSON sections for the core page ([`d2r_core::web`]),
+//! and the `/config` page ([`config_page`]).
 
 pub mod config_page;
 pub mod farm;
@@ -22,7 +8,7 @@ pub mod recipes;
 #[cfg(test)]
 mod tests;
 
-use crate::config::{Bis, Build, FarmGroup, Stage};
+use crate::config::{Bis, Build, FarmGroup, Stage, SwitchGroup};
 use d2r_core::socket_bases::Wearer;
 use d2r_core::web::{LiveInfo, Panels, hex};
 
@@ -31,27 +17,17 @@ use d2r_core::web::{LiveInfo, Panels, hex};
 #[derive(Debug, Clone, Copy)]
 pub struct PanelInfo<'a> {
     pub live: LiveInfo<'a>,
-    /// The character's resolved `BiS` slots (`None` without a build): the gear grid lists
-    /// each slot's pieces.
     pub bis: Option<&'a Bis>,
-    /// The current stage's build definition (`None` without one): the per-piece details, the
-    /// targets and the extras (charms, jewels, runes) the gear panel shows.
+    /// The current stage's build definition.
     pub build: Option<&'a Build>,
-    /// The character's guide stage ([`crate::config::Settings::stage`]; `None` without a
-    /// build): the `stage` section (not rendered), and `build` is its build.
     pub stage: Option<Stage<'a>>,
-    /// The cross-character farm list (`farm.toml`, [`d2r_core::config::load_farm`]): the Farm
-    /// panel ([`farm::farm_json`]).
     pub farm: &'a [FarmGroup],
-    /// The build names of the character's current stage and every later one
-    /// ([`crate::config::Settings::stage_chain`]): a farm entry for one of them that the
-    /// character wears enough copies of is hidden ([`farm::farm_worn`]).
+    /// The build names of the current stage and every later one.
     pub stage_chain: &'a [String],
-    /// The route's current step ([`crate::route::current`]): the `next` section.
     pub next: Option<&'a crate::route::Advice>,
 }
 
-/// The playstyle's part of one tick's dashboard (see the module docs for its sections).
+/// The playstyle's part of one tick's dashboard.
 #[must_use]
 pub fn panels<'a>(info: &PanelInfo<'a>) -> Panels<'a> {
     let blocks = info.live.blocks;
@@ -74,7 +50,6 @@ pub fn panels<'a>(info: &PanelInfo<'a>) -> Panels<'a> {
         "next": info.next.map(crate::route::Advice::json),
     });
     let serde_json::Value::Object(sections) = sections else {
-        // `json!` with braces always builds an object.
         return Panels::default();
     };
     Panels {
@@ -84,15 +59,8 @@ pub fn panels<'a>(info: &PanelInfo<'a>) -> Panels<'a> {
     }
 }
 
-/// The guide stage (`live_json`'s `stage` section): `{ "slug", "name", "class_default",
-/// "next": { "slug", "name", "level", "auto", "note", "ready", "requires": [{ "label", "count",
-/// "have", "met", "any": [{ "name", "owned" }] }] } | null }`, `null` without a build.
-/// `ready`: every `requires` group is met (the level is not part of it; with `auto` the stage
-/// switches by itself once `level` is reached too). The page sounds when it turns true (user
-/// request, 2026-11-20: "ready to switch to Fury").
-/// `requires` lists the current stage's `switch_requires` groups ([`crate::config::SwitchGroup`]):
-/// `have` copies of the group's items (`copies` per item, [`d2r_core::stash::Holdings::count`]),
-/// met at `count`; `owned` = at least one copy of that item.
+/// The guide stage section, `null` without a build. `ready` (all `switch_requires` groups met)
+/// ignores the switch level; `copies` counts the held copies of an item.
 pub fn stage_json(stage: Option<&Stage>, copies: &dyn Fn(&str) -> u32) -> serde_json::Value {
     let Some(stage) = stage else {
         return serde_json::Value::Null;
@@ -109,20 +77,7 @@ pub fn stage_json(stage: Option<&Stage>, copies: &dyn Fn(&str) -> u32) -> serde_
                 .build
                 .switch_requires
                 .iter()
-                .map(|group| {
-                    let any = group
-                        .any
-                        .iter()
-                        .map(|item| serde_json::json!({ "name": item, "owned": copies(item) > 0 }))
-                        .collect::<Vec<_>>();
-                    serde_json::json!({
-                        "label": group.label,
-                        "count": group.count,
-                        "have": group.have(copies),
-                        "met": group.met(copies),
-                        "any": any,
-                    })
-                })
+                .map(|group| switch_group_json(group, copies))
                 .collect::<Vec<_>>(),
         })
     });
@@ -134,12 +89,23 @@ pub fn stage_json(stage: Option<&Stage>, copies: &dyn Fn(&str) -> u32) -> serde_
     })
 }
 
-/// The natural-socket base hint for runeword `word` ([`d2r_core::socket_bases::hint`]): bases
-/// that can drop with its socket count up to the highest monster level the character farms
-/// ([`d2r_core::info::reachable_level`], the cap [`gear_attention`] uses), for `wearer` (the
-/// character's class, or the build's mercenary: [`Wearer::Merc`]) and, with `slot`
-/// set, worn in that `ItemData::BODY` slot. `None` for an unknown character level or difficulty
-/// or when nothing qualifies: the dashboard then shows the runeword's `bases` categories.
+fn switch_group_json(group: &SwitchGroup, copies: &dyn Fn(&str) -> u32) -> serde_json::Value {
+    let any = group
+        .any
+        .iter()
+        .map(|item| serde_json::json!({ "name": item, "owned": copies(item) > 0 }))
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "label": group.label,
+        "count": group.count,
+        "have": group.have(copies),
+        "met": group.met(copies),
+        "any": any,
+    })
+}
+
+/// The natural-socket bases for runeword `word` that can drop where the character farms now,
+/// for `wearer`, worn in body `slot` when set.
 #[must_use]
 pub fn base_hint(
     word: &d2r_core::runewords_data::Runeword,
@@ -154,10 +120,8 @@ pub fn base_hint(
     d2r_core::socket_bases::hint(word, max_mlvl, wearer, slot)
 }
 
-/// The base hint ([`base_hint`]) of mercenary runeword `word` in body slot `slot`, for the act
-/// of `build` that carries it ([`crate::config::Build::merc_wearer`]; Act 2 without a build).
-/// Prefixed `"Act 1 merc: "` when that isn't the build's first act (Harmony for the rogue of
-/// `merc_acts = [2, 1]`), so the hint says whose bases they are.
+/// [`base_hint`] for the mercenary act of `build` that carries `word`, prefixed `"Act N merc: "`
+/// when that isn't the build's first act.
 #[must_use]
 pub fn merc_base_hint(
     word: &d2r_core::runewords_data::Runeword,
@@ -175,8 +139,7 @@ pub fn merc_base_hint(
     })
 }
 
-/// The `ItemData::BODY` slots a build slot's equipped piece sits in (the merged ring column
-/// reads both rings).
+/// The `ItemData::BODY` slots of a build slot.
 #[must_use]
 pub fn slot_bodies(slot: &str) -> &'static [u8] {
     match slot {
@@ -193,9 +156,7 @@ pub fn slot_bodies(slot: &str) -> &'static [u8] {
     }
 }
 
-/// The comparison base of the equipped piece(s) in `bodies`: the strongest one's required
-/// level (two rings compare against the higher one), `None` when nothing comparable is
-/// equipped.
+/// The highest required level of the comparable pieces equipped in `bodies`.
 pub fn equipped_level(bodies: &[u8], info: &PanelInfo) -> Option<u32> {
     bodies
         .iter()
@@ -204,8 +165,7 @@ pub fn equipped_level(bodies: &[u8], info: &PanelInfo) -> Option<u32> {
         .max()
 }
 
-/// A build piece's grid state against the equipped comparison level and the character
-/// level `lvl` (see [`grid_pieces`] for the states).
+/// A build piece's grid state: `"worse"`, `"too_high"` (above clvl + 5) or `"better"`.
 #[must_use]
 pub fn piece_state(req: Option<u32>, equipped_level: Option<u32>, lvl: u32) -> &'static str {
     match req {
@@ -215,8 +175,7 @@ pub fn piece_state(req: Option<u32>, equipped_level: Option<u32>, lvl: u32) -> &
     }
 }
 
-/// Whether a piece named `name` is equipped already (any slot), by the equipped items'
-/// unique/set/runeword names ([`d2r_core::names::same_name`]).
+/// Whether a piece named `name` is equipped in any slot.
 #[must_use]
 pub fn is_worn(name: &str, info: &PanelInfo) -> bool {
     info.live.equipped_items.iter().any(|e| {
@@ -226,10 +185,7 @@ pub fn is_worn(name: &str, info: &PanelInfo) -> bool {
     })
 }
 
-/// One `BiS` line as `{ "text", "colour", "tick" }`: the tick is the structural ✓ source
-/// ([`info::Tick`]) — `null` when the piece is owned by neither the character nor the stash.
-/// A piece that is a known runeword also carries `"runes"` and `"bases"` (the dashboard renders
-/// them as a dim hint line under the piece).
+/// One `BiS` line; a runeword piece also carries its `runes` and `bases`.
 pub fn bis_line(line: &d2r_core::info::BisLine) -> serde_json::Value {
     let mut json = serde_json::json!({
         "text": line.text,
@@ -257,8 +213,7 @@ pub fn piece_window(piece: &str, info: &PanelInfo) -> (Option<(u32, u32)>, bool)
     )
 }
 
-/// True when the character outgrew the piece's leveling window: it leaves the dashboard
-/// (user request, 2026-11-18). A rune never runs out, it only has a minimum level.
+/// Whether the character is past the piece's leveling window (never for a rune).
 #[must_use]
 pub fn outgrown(piece: &str, info: &PanelInfo) -> bool {
     let (range, rune) = piece_window(piece, info);
@@ -268,20 +223,15 @@ pub fn outgrown(piece: &str, info: &PanelInfo) -> bool {
     }
 }
 
-/// The character-level range of a build piece's `setup` ("lvl 13-26" → (13, 26)); `None` for
-/// the other setups ("starter", "standard", "alternative") and anything unparsable.
+/// The character-level range of a piece's `setup` ("lvl 13-26" → (13, 26)).
 #[must_use]
 pub fn level_range(setup: &str) -> Option<(u32, u32)> {
     let (from, to) = setup.strip_prefix("lvl ")?.split_once('-')?;
     Some((from.trim().parse().ok()?, to.trim().parse().ok()?))
 }
 
-/// The item plan's entries as `{ "text", "colour", "name", "count", "place", "target",
-/// "wrong_place", "reason" }` objects in the block's colour: `text` is the whole entry
-/// ([`d2r_core::info::advice_entry`]); `place` the spot (`inv`, `page 4`); `target` the pages a
-/// move goes to (`1–2`, or the tab: `mats`, `gems`, `runes`; else `null`); `wrong_place` whether the item sits where it doesn't
-/// belong (every move: the page shows the place in red, user request 2026-11-20); `reason` why
-/// a scored item is sold (else `null`).
+/// The item plan's entries in the block's `colour`; an item with a move target is in the
+/// wrong place.
 #[must_use]
 pub fn advice_lines(list: &[crate::stash_plan::Advice], colour: [u8; 4]) -> Vec<serde_json::Value> {
     use crate::stash_plan::Action;
