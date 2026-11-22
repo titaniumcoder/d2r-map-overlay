@@ -443,7 +443,7 @@ pub fn font() -> Option<&'static FontVec> {
 }
 
 /// One item-plan entry as text: `Magefist ×2 (stash)`, `Hunter's Bow 4os (page 4 → 1–2)`,
-/// `Rare Ring (page 4, no build stats)`.
+/// `Rare Ring (page 4, not on the farm list)`.
 #[must_use]
 pub fn advice_entry(a: &Advice) -> String {
     let mut place = a.spot.label();
@@ -1264,8 +1264,8 @@ mod tests {
             "a (page 1)"
         );
         let mut ring = advice("Rare Ring", Spot::Page(4), Action::Sell, 1);
-        ring.reason = Some("no build stats");
-        assert_eq!(advice_entry(&ring), "Rare Ring (page 4, no build stats)");
+        ring.reason = Some("not on the farm list");
+        assert_eq!(advice_entry(&ring), "Rare Ring (page 4, not on the farm list)");
     }
 
     #[test]

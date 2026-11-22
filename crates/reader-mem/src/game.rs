@@ -3961,12 +3961,12 @@ mod tests {
                 "Crystal Sword 3os (inv)",
                 "Crystal Sword 4os (inv)",
                 "Crystal Sword 4os (stash)",
-                "Magic Crystal Sword (cube → 1–2)",
+                "Magic Crystal Sword (cube, not on the farm list)",
                 "Harlequin Crest (inv → 3–4)",
                 "Harlequin Crest (stash → 3–4)",
             ],
             "the swords (B, A twink) are sold with no base need; the equipped and Alice's Shakos \
-             aren't Bob's; the magic sword is kept, but not in the cube"
+             aren't Bob's; the magic sword is read with its stats and sold"
         );
         Ok(())
     }

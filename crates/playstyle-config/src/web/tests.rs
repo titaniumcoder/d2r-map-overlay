@@ -2684,7 +2684,7 @@ fn live_json_sends_every_sell_and_keep_entry() -> Result<()> {
 fn live_json_sends_the_place_of_each_plan_entry_apart() -> Result<()> {
     use crate::stash_plan::{Action, Side, Spot};
     let mut ring = advice("Rare Ring", Spot::Page(4), Action::Sell);
-    ring.reason = Some("no build stats");
+    ring.reason = Some("not on the farm list");
     let mut shako = advice("Harlequin Crest", Spot::Cube, Action::Move(Side::Trade));
     shako.count = 2;
     let blocks = d2r_core::render::TextBlocks {
@@ -2745,13 +2745,13 @@ fn live_json_sends_the_place_of_each_plan_entry_apart() -> Result<()> {
     assert_eq!(
         fields("sell"),
         vec![serde_json::json!([
-            "Rare Ring (page 4, no build stats)",
+            "Rare Ring (page 4, not on the farm list)",
             "Rare Ring",
             1,
             "page 4",
             null,
             false,
-            "no build stats"
+            "not on the farm list"
         ])]
     );
     assert_eq!(

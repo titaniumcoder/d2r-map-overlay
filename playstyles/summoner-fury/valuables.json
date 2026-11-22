@@ -14,7 +14,8 @@
     "keep": "\"one\" = one copy per item name is worth keeping across inventory, cube and stashes; further copies are give-aways. Absent = every copy counts",
     "stats": "list of {stat, min[, skills][, tab]}, all must hold on the read item stats (identified items; an unidentified drop has none): skill_tab (any tab; tab = a skill tree name such as \"Shape Shifting\" narrows it), class_skills, single_skill (skills = names, any of them; empty = any), fcr, ias, life, mana, mf, gold_find, all_res (the lowest of the four), fire_res, cold_res, lightning_res, poison_res, elemental_res (the highest of fire, cold, lightning), max_damage (flat, any hand), attack_rating, fhr, frw, poison_damage (tooltip total: rate x length / 256), lightning_max_damage, fire_max_damage. A rule with stats never matches an item without them",
     "identified": "true/false = required; absent = ignore. false matches only unidentified items (no stats read yet); it goes with no stats or item_names",
-    "own": "true = a keeper for the player's own use only (needs stats): no ring, coin or trade keep; the stash plan keeps it when the build values its stats"
+    "own": "true = a keeper for the player's own use only (needs stats): no ring, coin or trade keep; the stash plan keeps it when the build values its stats",
+    "any_of": "[{min_count, stats: [[condition, ...], ...]}]: each group needs at least min_count entries holding; an entry holds when any of its conditions does (min_count 1 = an or). Like stats, never matches an item without read stats"
   },
   "rules": [
     {
@@ -1941,14 +1942,49 @@
       ],
       "quality": "magic",
       "sockets": [
-        2,
+        1,
         3
       ],
       "ethereal": null,
-      "name": "Socketed magic circlets/tiaras/diadems",
-      "label": "Circ",
-      "note": "2-3 os magic circlets (Artisan's, +2 class skills/FCR/FRW). Sockets are visible; affixes need stats.",
-      "needs_stats": true,
+      "name": "Socketed magic circlets: +2 skills, 20 FCR or 30 FRW",
+      "note": "User rule 2026-11-22: a magic circlet with sockets, +2 class skills or +2 to a skill tree, plus 20 FCR or 30 FRW.",
+      "any_of": [
+        {
+          "min_count": 1,
+          "stats": [
+            [
+              {
+                "stat": "class_skills",
+                "min": 2
+              }
+            ],
+            [
+              {
+                "stat": "skill_tab",
+                "min": 2
+              }
+            ]
+          ]
+        },
+        {
+          "min_count": 1,
+          "stats": [
+            [
+              {
+                "stat": "fcr",
+                "min": 20
+              }
+            ],
+            [
+              {
+                "stat": "frw",
+                "min": 30
+              }
+            ]
+          ]
+        }
+      ],
+      "label": "",
       "base_names": [
         "Circlet",
         "Coronet",
@@ -1957,7 +1993,7 @@
       ]
     },
     {
-      "tier": "B",
+      "tier": "A",
       "category": "trade",
       "item_codes": [
         "ci0",
@@ -1968,10 +2004,110 @@
       "quality": "rare",
       "sockets": null,
       "ethereal": null,
-      "name": "Rare circlets",
-      "label": "Circ",
-      "note": "+2 skills / FCR / FRW / sockets. Needs stats.",
-      "needs_stats": true,
+      "name": "Rare circlets: +2 skills, 20 FCR",
+      "note": "User rule 2026-11-22: +2 class skills or +2 to a skill tree, plus 20 FCR.",
+      "stats": [
+        {
+          "stat": "fcr",
+          "min": 20
+        }
+      ],
+      "any_of": [
+        {
+          "min_count": 1,
+          "stats": [
+            [
+              {
+                "stat": "class_skills",
+                "min": 2
+              }
+            ],
+            [
+              {
+                "stat": "skill_tab",
+                "min": 2
+              }
+            ]
+          ]
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Circlet",
+        "Coronet",
+        "Tiara",
+        "Diadem"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "ci0",
+        "ci1",
+        "ci2",
+        "ci3"
+      ],
+      "quality": "rare",
+      "sockets": [
+        2,
+        3
+      ],
+      "ethereal": null,
+      "name": "Rare circlets: +2 skills, 2 sockets",
+      "note": "User rule 2026-11-22: +2 class skills or +2 to a skill tree, plus 2 sockets.",
+      "any_of": [
+        {
+          "min_count": 1,
+          "stats": [
+            [
+              {
+                "stat": "class_skills",
+                "min": 2
+              }
+            ],
+            [
+              {
+                "stat": "skill_tab",
+                "min": 2
+              }
+            ]
+          ]
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Circlet",
+        "Coronet",
+        "Tiara",
+        "Diadem"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "ci0",
+        "ci1",
+        "ci2",
+        "ci3"
+      ],
+      "quality": "rare",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Rare circlets: 20 FCR, 30 FRW",
+      "note": "User rule 2026-11-22: 20 FCR plus 30 FRW.",
+      "stats": [
+        {
+          "stat": "fcr",
+          "min": 20
+        },
+        {
+          "stat": "frw",
+          "min": 30
+        }
+      ],
+      "label": "",
       "base_names": [
         "Circlet",
         "Coronet",
@@ -2020,20 +2156,199 @@
       ]
     },
     {
-      "tier": "B",
+      "tier": "A",
       "category": "trade",
       "item_codes": [
-        "rin",
+        "rin"
+      ],
+      "quality": "rare",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Rare caster rings: 10 FCR, two of str / dex / res / life / mana leech",
+      "note": "User rule 2026-11-22: 10 FCR plus two of 15 strength, 15 dexterity, 20 all res or 30 to one res, 30 life, 5 mana leech.",
+      "stats": [
+        {
+          "stat": "fcr",
+          "min": 10
+        }
+      ],
+      "any_of": [
+        {
+          "min_count": 2,
+          "stats": [
+            [
+              {
+                "stat": "strength",
+                "min": 15
+              }
+            ],
+            [
+              {
+                "stat": "dexterity",
+                "min": 15
+              }
+            ],
+            [
+              {
+                "stat": "all_res",
+                "min": 20
+              },
+              {
+                "stat": "any_res",
+                "min": 30
+              }
+            ],
+            [
+              {
+                "stat": "life",
+                "min": 30
+              }
+            ],
+            [
+              {
+                "stat": "mana_leech",
+                "min": 5
+              }
+            ]
+          ]
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Ring"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "rin"
+      ],
+      "quality": "rare",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Rare melee rings: life leech, AR, str or dex",
+      "note": "User rule 2026-11-22: 5 life leech plus 80 attack rating plus 15 strength or 15 dexterity.",
+      "stats": [
+        {
+          "stat": "life_leech",
+          "min": 5
+        },
+        {
+          "stat": "attack_rating",
+          "min": 80
+        }
+      ],
+      "any_of": [
+        {
+          "min_count": 1,
+          "stats": [
+            [
+              {
+                "stat": "strength",
+                "min": 15
+              }
+            ],
+            [
+              {
+                "stat": "dexterity",
+                "min": 15
+              }
+            ]
+          ]
+        }
+      ],
+      "label": "",
+      "base_names": [
+        "Ring"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
         "amu"
       ],
       "quality": "rare",
       "sockets": null,
       "ethereal": null,
-      "name": "Rare rings and amulets",
-      "note": "Caster (FCR + skills/str/dex/res) and melee (LL/AR/str/dex) rares. Needs stats.",
-      "needs_stats": true,
+      "name": "Rare amulets: +2 class skills, 10 FCR",
+      "note": "User rule 2026-11-22: +2 class skills plus 10 FCR.",
+      "stats": [
+        {
+          "stat": "class_skills",
+          "min": 2
+        },
+        {
+          "stat": "fcr",
+          "min": 10
+        }
+      ],
+      "label": "",
       "base_names": [
-        "Ring",
+        "Amulet"
+      ]
+    },
+    {
+      "tier": "A",
+      "category": "trade",
+      "item_codes": [
+        "amu"
+      ],
+      "quality": "rare",
+      "sockets": null,
+      "ethereal": null,
+      "name": "Rare amulets: +2 class skills, two of str / dex / res / life / mana leech",
+      "note": "User rule 2026-11-22: +2 class skills plus two of the caster ring stats (15 strength, 15 dexterity, 20 all res or 30 to one res, 30 life, 5 mana leech).",
+      "stats": [
+        {
+          "stat": "class_skills",
+          "min": 2
+        }
+      ],
+      "any_of": [
+        {
+          "min_count": 2,
+          "stats": [
+            [
+              {
+                "stat": "strength",
+                "min": 15
+              }
+            ],
+            [
+              {
+                "stat": "dexterity",
+                "min": 15
+              }
+            ],
+            [
+              {
+                "stat": "all_res",
+                "min": 20
+              },
+              {
+                "stat": "any_res",
+                "min": 30
+              }
+            ],
+            [
+              {
+                "stat": "life",
+                "min": 30
+              }
+            ],
+            [
+              {
+                "stat": "mana_leech",
+                "min": 5
+              }
+            ]
+          ]
+        }
+      ],
+      "label": "",
+      "base_names": [
         "Amulet"
       ]
     },

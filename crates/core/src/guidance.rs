@@ -137,7 +137,7 @@ pub struct Advice {
     pub name: String,
     pub spot: Spot,
     pub action: Action,
-    /// Why a scored magic / rare item is sold.
+    /// Why the item is kept or sold ("not on the farm list", "Teleport", "two-handed").
     pub reason: Option<&'static str>,
     pub count: u32,
     /// The grid cells of the merged items that have one (for the in-game frames).

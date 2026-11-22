@@ -80,6 +80,14 @@ enum StatKind {
     PoisonRes,
     /// The highest of fire, cold and lightning resistance.
     ElementalRes,
+    /// The highest of the four resistances.
+    AnyRes,
+    Strength,
+    Dexterity,
+    /// Life stolen per hit %.
+    LifeLeech,
+    /// Mana stolen per hit %.
+    ManaLeech,
     /// Flat maximum damage (one-handed, two-handed or thrown, whichever is highest).
     MaxDamage,
     AttackRating,
@@ -112,6 +120,11 @@ impl StatKind {
             Self::LightningRes => "lightning res",
             Self::PoisonRes => "poison res",
             Self::ElementalRes => "fire, cold or lightning res",
+            Self::AnyRes => "one res",
+            Self::Strength => "strength",
+            Self::Dexterity => "dexterity",
+            Self::LifeLeech => "life leech",
+            Self::ManaLeech => "mana leech",
             Self::MaxDamage => "max damage",
             Self::AttackRating => "attack rating",
             Self::Fhr => "FHR",
@@ -139,6 +152,16 @@ impl StatKind {
             Self::LightningRes => &[stat::RES_LIGHTNING],
             Self::PoisonRes => &[stat::RES_POISON],
             Self::ElementalRes => &[stat::RES_FIRE, stat::RES_COLD, stat::RES_LIGHTNING],
+            Self::AnyRes => &[
+                stat::RES_FIRE,
+                stat::RES_COLD,
+                stat::RES_LIGHTNING,
+                stat::RES_POISON,
+            ],
+            Self::Strength => &[stat::STRENGTH],
+            Self::Dexterity => &[stat::DEXTERITY],
+            Self::LifeLeech => &[stat::LIFE_LEECH],
+            Self::ManaLeech => &[stat::MANA_LEECH],
             Self::MaxDamage => &[stat::MAX_DAMAGE, stat::MAX_DAMAGE_2H, stat::THROW_MAX],
             Self::AttackRating => &[stat::ATTACK_RATING],
             Self::Fhr => &[stat::FHR],
@@ -271,6 +294,42 @@ impl StatNeed {
     }
 }
 
+/// At least `min_count` of `stats` hold; an entry holds when any of its conditions does
+/// (`[[all_res 20], [any_res 30]]` is one entry: "all res 20 or one res 30"). `min_count` 1 is
+/// an "or" of the entries.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnyOf {
+    min_count: usize,
+    stats: Vec<Vec<StatNeed>>,
+}
+
+impl AnyOf {
+    fn holds(&self, stats: &[ItemStat]) -> bool {
+        let held = self
+            .stats
+            .iter()
+            .filter(|entry| entry.iter().any(|need| need.holds(stats, None)))
+            .count();
+        held >= self.min_count
+    }
+
+    /// `min_count` between 1 and the entry count, no empty entry, every condition valid.
+    fn check(&self) -> Result<(), String> {
+        if !(1..=self.stats.len()).contains(&self.min_count) {
+            return Err(format!(
+                "any_of min_count {} is not 1..={}",
+                self.min_count,
+                self.stats.len()
+            ));
+        }
+        if self.stats.iter().any(Vec::is_empty) {
+            return Err("any_of has an empty entry".to_owned());
+        }
+        self.stats.iter().flatten().try_for_each(StatNeed::check)
+    }
+}
+
 /// One rule of `valuables.json`.
 #[derive(Debug, Deserialize)]
 struct Rule {
@@ -301,6 +360,10 @@ struct Rule {
     /// matches none.
     #[serde(default)]
     stats: Vec<StatNeed>,
+    /// Counted conditions on the read stats ([`AnyOf`]), each group needed; none match an item
+    /// without stats either.
+    #[serde(default)]
+    any_of: Vec<AnyOf>,
     /// `None` ignores it; `Some(false)` matches only unidentified items.
     #[serde(default)]
     identified: Option<bool>,
@@ -342,8 +405,9 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
 });
 
 /// The checks serde can't make: labels of at most 4 characters, `stats` conditions that pass
-/// [`StatNeed::check`], no `stats` or `item_names` on an unidentified-only rule (such an item
-/// has neither), and `stats` on an own-use rule.
+/// [`StatNeed::check`] and `any_of` groups [`AnyOf::check`], no `stats`, `any_of` or
+/// `item_names` on an unidentified-only rule (such an item has neither), and `stats` on an
+/// own-use rule.
 fn validate(rules: &[Rule]) -> Result<(), String> {
     for r in rules {
         if r.own && r.stats.is_empty() {
@@ -352,7 +416,9 @@ fn validate(rules: &[Rule]) -> Result<(), String> {
         if let Some(l) = r.label.as_ref().filter(|l| l.chars().count() > 4) {
             return Err(format!("{}: label {l:?} is longer than 4 characters", r.name));
         }
-        if r.identified == Some(false) && !(r.stats.is_empty() && r.item_names.is_empty()) {
+        if r.identified == Some(false)
+            && !(r.stats.is_empty() && r.any_of.is_empty() && r.item_names.is_empty())
+        {
             return Err(format!(
                 "{}: an unidentified item has no stats or name to check",
                 r.name
@@ -360,6 +426,9 @@ fn validate(rules: &[Rule]) -> Result<(), String> {
         }
         for need in &r.stats {
             need.check().map_err(|e| format!("{}: {e}", r.name))?;
+        }
+        for group in &r.any_of {
+            group.check().map_err(|e| format!("{}: {e}", r.name))?;
         }
     }
     Ok(())
@@ -400,7 +469,8 @@ fn check(rule: &Rule, drop: &ItemDrop, name: Option<&str>) -> Option<bool> {
         && rule
             .identified
             .is_none_or(|i| i == (drop.flags & item_data::FLAG_IDENTIFIED != 0))
-        && rule.stats.iter().all(|need| need.holds(&drop.stats, None));
+        && rule.stats.iter().all(|need| need.holds(&drop.stats, None))
+        && rule.any_of.iter().all(|group| group.holds(&drop.stats));
     if !fits {
         return None;
     }
@@ -509,13 +579,13 @@ pub enum Keeper {
     Own,
 }
 
-/// The best kind of `stats` rule `item` matches, of any tier; `None` for none (a charm worth
-/// nothing to anyone).
+/// The best kind of `stats` / `any_of` rule `item` matches, of any tier; `None` for none (a
+/// charm worth nothing to anyone).
 #[must_use]
 pub fn stat_keeper(item: &ItemDrop) -> Option<Keeper> {
     RULES
         .iter()
-        .filter(|r| !r.stats.is_empty() && check(r, item, None).is_some())
+        .filter(|r| !(r.stats.is_empty() && r.any_of.is_empty()) && check(r, item, None).is_some())
         .map(|r| if r.own { Keeper::Own } else { Keeper::Trade })
         .min_by_key(|k| *k != Keeper::Trade)
 }
@@ -654,9 +724,23 @@ mod tests {
         assert!(RULES.len() > 50, "{} rules", RULES.len());
         assert_eq!(validate(&parsed.rules), Ok(()));
         let charm = |r: &&Rule| r.item_codes.iter().all(|c| CHARM_CODES.contains(&c.as_str()));
+        let jewelry = |r: &&Rule| r.item_codes.iter().all(|c| JEWELRY_CODES.contains(&c.as_str()));
+        let jewelry_rules: Vec<&Rule> = RULES
+            .iter()
+            .filter(|r| !(r.stats.is_empty() && r.any_of.is_empty()) && jewelry(r))
+            .collect();
+        assert_eq!(jewelry_rules.len(), 8, "ring, amulet and circlet rules");
+        for r in jewelry_rules {
+            assert_eq!(
+                (r.tier, r.category, r.label.as_deref(), r.needs_stats),
+                (Tier::A, Category::Trade, Some(""), false),
+                "{}: an A trade rule without a tag, certain",
+                r.name
+            );
+        }
         let skill_rules: Vec<&Rule> = RULES
             .iter()
-            .filter(|r| !r.stats.is_empty() && !charm(r))
+            .filter(|r| !r.stats.is_empty() && !charm(r) && !jewelry(r))
             .collect();
         assert_eq!(skill_rules.len(), 8, "stat rules");
         let charm_rules: Vec<&Rule> = RULES.iter().filter(|r| !r.stats.is_empty() && charm(r)).collect();
@@ -685,6 +769,7 @@ mod tests {
     }
 
     const CHARM_CODES: [&str; 3] = ["cm1", "cm2", "cm3"];
+    const JEWELRY_CODES: [&str; 6] = ["rin", "amu", "ci0", "ci1", "ci2", "ci3"];
 
     fn rules_of(json: &str) -> serde_json::Result<Vec<Rule>> {
         serde_json::from_str::<RuleFile>(&format!(r#"{{"schema": 1, "rules": [{json}]}}"#)).map(|f| f.rules)
@@ -729,6 +814,30 @@ mod tests {
         ] {
             assert!(validate(&rules_of(&rule(extra))?).is_err(), "{what}");
         }
+        let two_of = |min_count: usize, entries: &str| {
+            format!(r#", "any_of": [{{"min_count": {min_count}, "stats": [{entries}]}}]"#)
+        };
+        let fcr_or_life = r#"[{"stat": "fcr", "min": 10}], [{"stat": "life", "min": 30}]"#;
+        assert_eq!(validate(&rules_of(&rule(&two_of(2, fcr_or_life)))?), Ok(()));
+        for (extra, what) in [
+            (two_of(3, fcr_or_life), "min_count over the entries"),
+            (two_of(0, fcr_or_life), "min_count 0"),
+            (two_of(1, r#"[{"stat": "fcr", "min": 10}], []"#), "an empty entry"),
+            (two_of(1, r#"[{"stat": "fcr", "min": 0}]"#), "min 0 in an entry"),
+            (
+                format!(r#", "identified": false{}"#, two_of(1, fcr_or_life)),
+                "any_of on an unidentified-only rule",
+            ),
+        ] {
+            assert!(validate(&rules_of(&rule(&extra))?).is_err(), "{what}");
+        }
+        assert!(
+            rules_of(&rule(
+                r#", "any_of": [{"count": 1, "stats": [[{"stat": "fcr", "min": 1}]]}]"#
+            ))
+            .is_err(),
+            "serde rejects an unknown any_of key"
+        );
         let charm = rules_of(&rule(
             r#", "own": true, "stats": [{"stat": "all_res", "min": 5}, {"stat": "poison_damage", "min": 100}]"#,
         ))?;
@@ -911,14 +1020,9 @@ mod tests {
                 "+3 BO helm",
             ),
             (
-                rolled("ci3", RARE, &[(stat::CLASS_SKILLS, 5, 2), (stat::FCR, 0, 20)]),
-                None,
-                "rare 2/20 diadem: no skill rule (only the B rare circlet rule)",
-            ),
-            (
                 rolled("amu", CRAFTED, &[(stat::CLASS_SKILLS, 1, 2), (stat::FCR, 0, 20)]),
                 None,
-                "crafted 2/20 amulet: no skill rule",
+                "crafted 2/20 amulet: the amulet rules are rare only",
             ),
             (
                 rolled("7bw", 2, &[(stat::SINGLE_SKILL, skill("Bone Spear"), 3)]),
@@ -942,6 +1046,120 @@ mod tests {
                 assert_eq!(rule_label(&d, None), Some(""), "{what}: no tag");
             }
         }
+    }
+
+    /// A rare `code` item with `stats` (id, value; class skills and skill trees the druid's).
+    fn rare(code: &str, stats: &[(u16, i32)]) -> ItemDrop {
+        let stats: Vec<(u16, u16, i32)> = stats
+            .iter()
+            .map(|&(id, v)| match id {
+                stat::CLASS_SKILLS => (id, 5, v),
+                stat::SKILL_TAB => (id, tab(5, 1), v),
+                _ => (id, 0, v),
+            })
+            .collect();
+        rolled(code, RARE, &stats)
+    }
+
+    /// `d` with `sockets`.
+    fn socketed(mut d: ItemDrop, sockets: u8) -> ItemDrop {
+        d.sockets = sockets;
+        d
+    }
+
+    const FCR: u16 = stat::FCR;
+    const STR: u16 = stat::STRENGTH;
+    const DEX: u16 = stat::DEXTERITY;
+    const SKILLS: u16 = stat::CLASS_SKILLS;
+    const TAB: u16 = stat::SKILL_TAB;
+
+    #[test]
+    fn rare_rings() {
+        let a = |rule| Some((Tier::A, rule));
+        let caster = a("Rare caster rings: 10 FCR, two of str / dex / res / life / mana leech");
+        let ring = |stats: &[(u16, i32)]| rare("rin", stats);
+        assert_best_of(
+            &ring(&[(FCR, 10), (STR, 15), (DEX, 15)]),
+            caster,
+            "10 FCR str dex",
+        );
+        let res_life = all_res(20, &[(FCR, 10), (LIFE, 30)]);
+        assert_best_of(&ring(&res_life), caster, "10 FCR 20@ 30 life");
+        let one_res = [(FCR, 10), (stat::RES_POISON, 30), (stat::MANA_LEECH, 5)];
+        assert_best_of(&ring(&one_res), caster, "10 FCR 30 poison res 5 ML");
+        assert_best_of(
+            &ring(&all_res(30, &[(FCR, 10)])),
+            None,
+            "30@ is all res and one res, still one stat",
+        );
+        assert_best_of(&ring(&[(FCR, 10), (STR, 15), (LIFE, 29)]), None, "29 life");
+        assert_best_of(&ring(&[(FCR, 5), (STR, 15), (DEX, 15)]), None, "5 FCR");
+        assert_best_of(&ring(&[(STR, 15), (DEX, 15), (LIFE, 30)]), None, "no FCR");
+        let melee = a("Rare melee rings: life leech, AR, str or dex");
+        let ll = |ar, more: &[(u16, i32)]| {
+            let mut stats = vec![(stat::LIFE_LEECH, 5), (stat::ATTACK_RATING, ar)];
+            stats.extend_from_slice(more);
+            ring(&stats)
+        };
+        assert_best_of(&ll(80, &[(DEX, 15)]), melee, "5 LL 80 AR 15 dex");
+        assert_best_of(&ll(120, &[(STR, 20)]), melee, "5 LL 120 AR 20 str");
+        assert_best_of(&ll(79, &[(STR, 15)]), None, "79 AR");
+        assert_best_of(&ll(100, &[(LIFE, 40)]), None, "no str or dex");
+        let mut unidentified = rare("rin", &[]);
+        unidentified.flags = 0;
+        assert_eq!(best(&unidentified, &all()), None, "unidentified: no rule");
+    }
+
+    #[test]
+    fn rare_amulets() {
+        let a = |rule| Some((Tier::A, rule));
+        let amu = |stats: &[(u16, i32)]| rare("amu", stats);
+        let fcr = a("Rare amulets: +2 class skills, 10 FCR");
+        assert_best_of(&amu(&[(SKILLS, 2), (FCR, 10)]), fcr, "2/10");
+        let two = a("Rare amulets: +2 class skills, two of str / dex / res / life / mana leech");
+        assert_best_of(&amu(&[(SKILLS, 2), (STR, 15), (LIFE, 30)]), two, "+2 str life");
+        assert_best_of(&amu(&all_res(20, &[(SKILLS, 2), (DEX, 18)])), two, "+2 20@ dex");
+        assert_best_of(&amu(&[(SKILLS, 2), (STR, 15)]), None, "+2 and one stat");
+        assert_best_of(&amu(&[(SKILLS, 1), (FCR, 10)]), None, "+1/10");
+        assert_best_of(&amu(&[(FCR, 10), (STR, 15), (DEX, 15)]), None, "no skills");
+    }
+
+    #[test]
+    fn circlets() {
+        let a = |rule| Some((Tier::A, rule));
+        let ci = |stats: &[(u16, i32)]| rare("ci3", stats);
+        let fcr = a("Rare circlets: +2 skills, 20 FCR");
+        assert_best_of(&ci(&[(SKILLS, 2), (FCR, 20)]), fcr, "rare 2/20 diadem");
+        assert_best_of(&ci(&[(TAB, 2), (FCR, 20)]), fcr, "rare +2 Shape Shifting 20 FCR");
+        assert_best_of(&ci(&[(SKILLS, 2), (FCR, 10)]), None, "rare 2/10");
+        let sockets = a("Rare circlets: +2 skills, 2 sockets");
+        assert_best_of(&socketed(ci(&[(TAB, 2)]), 2), sockets, "rare +2 tab 2os");
+        assert_best_of(&socketed(ci(&[(SKILLS, 2)]), 1), None, "rare +2 1os");
+        let speed = a("Rare circlets: 20 FCR, 30 FRW");
+        assert_best_of(&ci(&[(FCR, 20), (stat::FRW, 30)]), speed, "rare 20/30");
+        assert_best_of(&ci(&[(FCR, 20), (stat::FRW, 20)]), None, "rare 20/20");
+        let magic = |sockets, stats: &[(u16, i32)]| {
+            let mut d = socketed(ci(stats), sockets);
+            d.quality = MAGIC;
+            d
+        };
+        let socket_rule = a("Socketed magic circlets: +2 skills, 20 FCR or 30 FRW");
+        assert_best_of(
+            &magic(2, &[(SKILLS, 2), (stat::FRW, 30)]),
+            socket_rule,
+            "2os +2 30 FRW",
+        );
+        assert_best_of(
+            &magic(3, &[(TAB, 3), (FCR, 20)]),
+            socket_rule,
+            "3os +3 tab 20 FCR",
+        );
+        assert_best_of(&magic(0, &[(SKILLS, 2), (FCR, 20)]), None, "no sockets");
+        assert_best_of(&magic(2, &[(SKILLS, 2), (stat::FRW, 20)]), None, "20 FRW");
+        assert_best_of(&magic(2, &[(FCR, 20), (stat::FRW, 30)]), None, "no skills");
+        let mut unidentified = magic(2, &[]);
+        unidentified.flags = 0;
+        assert_eq!(best(&unidentified, &all()), None, "unidentified: no rule");
     }
 
     /// An identified magic charm of `code` with `stats` (id, value).

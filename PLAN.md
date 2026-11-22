@@ -444,7 +444,8 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
     dagger / dirk / kriss / blade and their exceptional and elite versions; not throwing knives
     `tkni`, not the Gidbinn quest items). The javelin, spear, bow, pelt, barbarian helm, paladin
     shield, necro head, claw, grimoire, amulet and circlet skill rules are gone (12 rules); the
-    pre-existing circlet, amulet and jewel trade rules stay. A `rules_parse` test holds every stat
+    pre-existing jewel trade rules stay (the circlet, ring and amulet ones were replaced, see
+    "Rings, amulets and circlets" below). A `rules_parse` test holds every stat
     rule but the charms' to those 48 bases.
   - 8 rules, all trade with `label` "" (affix ranges from d2data magicprefix/magicsuffix: +3 tab is
     a magic-only level-60 prefix, rares top out at +2 tab; 20 FCR "of the Magus" only on wands /
@@ -477,12 +478,33 @@ lvlprest ids per landmark; a W/E/S/N family counts as confirmed once one member 
     unidentified items; validated: no `stats` or `item_names` with it) ends the match once the item
     is identified: then only the +3 stat rules decide (solid ring and coin, or nothing for junk).
     An empty label holds for an uncertain match too (`rule_label`), so the candidates carry no tag.
-    The stash plan gives an unidentified candidate no line (`valuables::worth_identifying`), neither
-    "Keep · trade" nor the own-use "not a build weapon" sale; identified, the stat rules make it a
-    trade keep or the own-use scoring judges it (a magic Amazon spear: "not a build weapon" sale).
+    The stash plan gives an unidentified candidate no line (`valuables::worth_identifying`);
+    identified, the stat rules make it a trade keep, else it is sold "not on the farm list" (a
+    magic Amazon spear too).
     Replaces the B "Class-specific magic items" rule. Staves are not candidates. The rules are
     hand-added to the JSON like the labels;
     `research/gen_valuables.py` has neither yet.
+- **Rings, amulets and circlets** (user decision 2026-11-22, confirmed "Yes, like this"):
+  stricter trade rules replace "Rare rings and amulets" (B), "Rare circlets" (B) and "Socketed
+  magic circlets/tiaras/diadems" (A). All tier A, category trade, `label` "", certain matches
+  (stat conditions, no `needs_stats`), so an unidentified one gets no ring until identified:
+  - Rare rings: 10 FCR plus two of (15 strength, 15 dexterity, 20 all res or 30 to one res,
+    30 life, 5 mana leech); or melee: 5 life leech plus 80 AR plus 15 strength or 15 dexterity.
+  - Rare amulets: +2 class skills plus 10 FCR; or +2 class skills plus two of the ring stats.
+  - Rare circlets (all four bases): +2 class skills or +2 to a tree, plus 20 FCR; or +2 skills
+    plus 2 sockets (`sockets` [2, 3]); or 20 FCR plus 30 FRW.
+  - Magic circlets with 1–3 sockets: +2 class skills or +2 to a tree, plus 20 FCR or 30 FRW.
+  - Rule format: `any_of: [{min_count, stats: [[condition, ...], ...]}]` beside `stats`; each
+    group needs `min_count` entries holding, an entry holds when any of its conditions does
+    (min_count 1 = an "or"; "20 all res or 30 to one res" is one entry, so a 30 all res ring
+    counts it once). Validated (`AnyOf::check`: min_count 1..=entries, no empty entry, valid
+    conditions; not on an unidentified-only rule) and serde rejects unknown keys. Chosen over
+    expanding into plain rules (the caster ring alone would be 14). New stat kinds:
+    `strength` 0, `dexterity` 2, `life_leech` 60, `mana_leech` 62, `any_res` (the highest of
+    the four resistances); sockets use the rule's `sockets` range.
+  - Money items (wands, scepters, orbs, daggers), white +3 scepters, jewels and charms are
+    unchanged. `rules_parse` holds the 8 rules to tier A, trade, no tag, certain. Hand-edited
+    in the JSON; `research/gen_valuables.py` still writes the three old rules.
 - **Charms** (user request 2026-11-22: "mark me charms too. we follow this basic rules" +
   "everything else: sell it directly. and then naturally the charms for the summoner and fury,
   we keep them for real"). 38 hand-added magic charm rules (cm1 small, cm2 large, cm3 grand),
@@ -874,8 +896,8 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   min damage, mana/life steal, attributes, life, resists, absorbs, DR, MDR, Cannot Be Frozen,
   MF) have no build-file form: a build piece is a named unique/set/runeword/magic item and a
   farm `kind = "rolled"` entry only matches skill `needs`. Until then a rare or crafted ring is
-  judged by `gear_score` against the worse worn ring (kept within `NEAR_WORN` of it or with
-  notable affixes, else sold "worse than worn" / "no build stats"), not by the guide's affix list.
+  kept only by a trade rule (see "Rings, amulets and circlets"), else sold "not on the farm
+  list" (user decision 2026-11-22, see "Item places").
 - **Fury guide alternatives (user decision 2026-11-22: "Yes, all slots as alternatives, without
   one-handers and shields")**: every other slot lists the Maxroll guide's unique/set/runeword
   pieces as `alternative`, after the user's options (weapons two-handed only: eth Tomb Reaver,
@@ -1059,7 +1081,7 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   `label` (new optional field in `valuables.json`, only on certain matches: Annihilus `Anni`, Torch
   `Torc`, Shako `Shak`, Griffon's `Grif`, SoJ `SoJ`, Colossal Jewels `CJ`, Tal Rasha's `TalS`, IK
   `IK`, Trang-Oul's `Trng`, Laying of Hands `LoH`, Sigon's `Sigo`, magic / rare jewels `MJ` /
-  `RJ`, magic / rare circlets `Circ`, Jeweler's Monarch `JMon`; `""` = no tag); NO tag for gems,
+  `RJ`, Jeweler's Monarch `JMon` (circlets `Circ` until 2026-11-22: their stat rules carry none); `""` = no tag); NO tag for gems,
   runes and materials (uber keys, organs, essences, token, Standard, statues, shards, CJ
   materials; user 2026-11-22: the in-game loot filter names them, "just show it"); charms `SC` / `LC` / `GC`, unique ones `Anni` / `Torc` / `Ghee` / `Sund`
   (sunders); a socketed non-unique/set base `5os`, ethereal `e4os`;
@@ -1298,8 +1320,8 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   Face); Act 2 and 3 none (`MercAct::class_items`).
 - **Several merc acts** (user, 2026-11-20: "sometimes I play the act 1 merc especially in normal
   before I have the insight runeword ... or just for fun as she can give me the harmony buff
-  too"). `merc_acts = [2, 1]` on the summoner, `[5]` on the Fury. Gear any listed act can wear
-  is kept (`Scoring::merc_acts`); the merc grid and farm hints name each runeword's bases for its
+  too"). `merc_acts = [2, 1]` on the summoner, `[5]` on the Fury. Bases any listed act can
+  carry are kept for its runeword needs; the merc grid and farm hints name each runeword's bases for its
   act, prefixed "Act 1 merc:" when it isn't the primary (`web::merc_base_hint`). The summoner's
   merc weapon list ends with Harmony for the rogue. **One Harmony, one base**: an alternative
   act's runeword that another need already wants (the Fury's swap Harmony) adds no second need;
@@ -1341,27 +1363,18 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
 - **Sell**: extra copies of own bases, worse bases for a runeword whose better base is held,
   plain bases nobody needs (twink-A ones included), uniques/sets no rule wants.
   **Give away**: B-only uniques/sets and extra keep-one copies (Sigon's).
-- **Magic / rare / crafted** (user, 2026-11-20): trade rule first; then two hard rules
-  (user, 2026-11-20): a weapon whose items.txt type no build of the stage chain uses → sell
-  "not a build weapon", identified or not ("druids barely use javelins"). The types come from the
-  chain's weapon / swap / offhand pieces and its single-item `switch_requires` groups: a unique /
-  set its own base (`item_names_data::UNIQUE_CODES` / `SET_CODES`), a runeword every weapon base
-  that can carry its socket count for the class (`socket_bases::carries`). Groups with
-  alternatives don't count at all: their runewords (Breath of the Dying, Hustle, Eternity …)
-  allow almost any weapon, and their uniques (Rune Master, The Jade Tan Do, Tomb Reaver) are
-  kept by name, not for their base type. Summoner → Fury today: bow, club, hamm, mace, scep,
-  staf, swor, xbow. Axes, daggers, polearms, spears, javelins, claws, orbs, wands are out. The
-  merc's weapons (its act's, for any build of the chain) keep their rule (javelins never count). No builds
-  known → no weapon rule; neither when a weapon or swap runeword of the chain has no weapon base
-  the class can carry (an unknown class, another class's runeword): a partial type set would
-  sell legitimate weapons. Identified boots without faster run/walk (stat 96) → sell "no run
-  speed", whatever else they roll; unidentified boots stay. Then: unidentified or stats unread → keep own;
-  identified → scored with `gear_score` for the build chain: keep own if ≥ 80% of the worn item in
-  its slot or if its affixes alone score ≥ 20 (a planned skill, +1 class skill, 20 res/life);
-  charms and jewels if they score at all (charms carried in the inventory stay out); else sell with
-  a reason ("no build stats", "worse than worn", "other class"). The merc's gear has no stats in
-  the snapshot, so a merc-wearable base (helm, body, its act's weapon) failing the player's test
-  is kept unscored.
+- **Magic / rare / crafted** (user decision 2026-11-22, confirmed "Yes, like this": "I can still
+  decide to wear it myself, my decision"): no own-use judgement any more. Kept only as a copy of
+  a farm-list `kind = "rolled"` entry (Keep · own, the entry's first need as the reason:
+  "Teleport"; `stash_plan::farm_entry`, a Teleport entry only while no Enigma is held) or by a
+  valuables trade rule (Keep · trade); charms keep their own rules (`charm_action`, the charm
+  wishlist). Everything else identified is sold "not on the farm list"; an unidentified item or
+  one whose stats are unread gets no line (identify first). Build pieces (named uniques, sets,
+  runewords) and runeword bases are unaffected. Removed with it (2026-11-20 rules): the gear
+  score comparison with the worn piece (`NEAR_WORN` 80%, `NOTABLE` affixes ≥ 20, "worse than
+  worn" / "no build stats" / "other class"), the merc-wearable keep, the "not a build weapon"
+  sale (`build_weapon_types`), "no run speed" boots, Teleport on any item outside the farm list,
+  and the jewels kept for any score (a jewel is kept only by a trade rule now).
 - Left alone: gems, runes, carried charms, finished runewords that aren't build pieces, quest items.
 - **Teleport until Enigma** (user, 2026-11-20: "there was an amulet with teleport on it. that
   one is also in the farm list and very high for the summoner until he gets enigma. for the fury
@@ -1371,10 +1384,10 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   (`gear_score::grants_skill`). While the player has no Enigma of its own
   (`gear_score::teleport_wanted`: worn, inventory, cube, personal stash or the own shared pages
   1–2; one on the trade pages 3–4, on page 5 or on the merc doesn't count):
-  - stash plan: an identified magic / rare / crafted item with Teleport is Keep · own, reason
-    "Teleport" (Move to 1–2 from elsewhere), before the trade rules and the boots rule
-    (`stash_plan::keeps_teleport`); a weapon of a type no build uses is still sold as "not a
-    build weapon";
+  - stash plan: an identified magic / rare / crafted copy of the farm list's Teleport Amulet
+    (slot amulet) is Keep · own, reason "Teleport" (Move to 1–2 from elsewhere), before the
+    trade rules (`stash_plan::farm_entry`; since 2026-11-22 only the farm entry keeps Teleport,
+    see "Magic / rare / crafted");
   - gear score: `Part::Teleport` weighs 40 (= +1 all skills), counted once per item, so the
     vendor panel marks a Teleport amulet better; with Enigma held it falls back to an ordinary
     skill (1);

@@ -1,3 +1,6 @@
+# STALE: valuables.json is hand-edited since 2026-11-22 (labels, stat / any_of rules, charm rules,
+# the ring / amulet / circlet rules replacing the three generic ones below). Re-running this
+# script would drop them; port them here first (PLAN.md, "Item fields and valuables").
 import json, sys, os
 D = sys.argv[1]; OUT = sys.argv[2]
 W = json.load(open(f'{D}/weapons.json')); A = json.load(open(f'{D}/armor.json')); M = json.load(open(f'{D}/misc.json'))
