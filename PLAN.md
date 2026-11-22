@@ -939,20 +939,54 @@ delete old ones by hand. Use it to find more landmark patterns offline.
   SIGUSR1 together with the map. The overlay thread draws `ui_marks::UiMarks` itself at the
   configured size (`Msg::UiMarks`; live sends it only when it changes).
 - `UiMarks` = `frames: Vec<(Rect, Rgba)>` (screen rectangles, 2 px outline) + `lines` (the text
-  box). Frames are empty until the grids are calibrated.
-- Vendor box (`ui_marks::vendor`, from the Vendor panel's `ShopNote`s): build pieces, "better"
-  than worn, runeword bases the builds want (green), then coin-tier valuables matches (gold: trade
-  S/A, e.g. +3 wands/scepters/orbs/daggers), one short line each (the game's name, "Nos" for a
-  socketed base), identical lines once, at most 8 with "+N more". A store item is judged as an
-  identified ground drop (`marks::shop_marks`: sockets from stat 194, its read stats). Dark box
-  `ui_marks::BOX_TOP` = 12 px below the top, centred: the vendor window is the left half, the
-  inventory the right. Position not yet checked live.
+  box).
+- **Grid geometry** (measured 2026-11-22 on the user's 1920×1080 fullscreen screenshots, pixel
+  profiles of the cell borders; `ui_marks::{VENDOR_GRID, STASH_GRID, INVENTORY_GRID}`): cell pitch
+  49 px, each cell box 48 px (its border included) with a 1 px gap. First cell's top-left px:
+  store grid (10×10) 163,221; stash Personal tab and shared pages (10×10) 163,213 (the last row
+  measured at 655, the 49 px pitch gives 654: 1 px); inventory (10×4) 1269,552 (last cell ends
+  1757,746). Gems / Materials / Runes tabs are fixed slot layouts (no grid, no frames). Frames
+  are drawn only at exactly 1920×1080 (`ui_marks::CALIBRATED`; other sizes: no frames, one
+  warning; the in-game UI scale at other resolutions isn't a plain proportion) and at output
+  scale 1 (warning otherwise).
+- **Item cells** (`game::CellRect`): a stored or store item's static path x/y (`static_path::X/Y`,
+  unit `+0x38` → `+0x10/+0x14`, the ground position's fields) taken as its grid column/row, as
+  classic D2's `dwPosX/dwPosY` and d2go (koolo) read it; its size from `inv_sizes_data`
+  (items.txt `invwidth/invheight`, `research/gen_inv_sizes.py`). Carried on `ItemDrop.cell`
+  (inventory, cube, personal stash), `StashItem.cell` (shared pages), `ShopItem.cell`; the stash
+  plan's `Advice.cells` keeps every merged item's. A cell outside the grid draws nothing.
+  **Not yet seen live.**
+- Frames: store items as the box picks them (green build / gold money) on the shown store tab
+  only (`ui_marks::vendor(…, tab)`); the player's items by the stash plan's action
+  (`ui_marks::item_frames`: sell red, move / stow orange, keep trade gold, keep own green,
+  give-away none): inventory always, the stash grid only for the shown tab (`Spot::Stash` or
+  `Spot::Page(n)`).
+- Live now: while a trade window is open, the box and the inventory's frames (the inventory is
+  shown beside every trade window). The shown store tab, whether the stash window is open and
+  which tab / shared page it shows are **not known**: no store-grid or stash-grid frames yet.
+- UI-state research (2026-11-22): no known signal. d2go reads a panel-flag byte array at a
+  `.data` global (stash, store, inventory flags) found by a code signature, but D2R re-encrypts
+  its code pages (see Memory layer), the on-disk D2R.exe is encrypted, and the offsets are
+  unverified here. Probe instead: `D2R_UI_PROBE=1` (`crates/reader-mem/src/ui_probe.rs`): every
+  town tick diffs `.data` (bytes going between values ≤ 16, a byte dropped after 40 changes) and
+  the player's `Inventory` head (0x100 bytes, every byte) and appends to
+  `~/.local/share/d2r-map-overlay/ui-probe.jsonl`, with the trade window's item count, the stash
+  tab count and the inventory items' read cells; `research/ui_probe.py` prints it per byte.
+- Vendor box `BOX_TOP` = 12 px: the screenshots show only the game world at the top centre
+  (the windows start at y ≈ 100), so it stays.
 - [x] Step 1: layer surface, vendor text box (2026-11-22). Not yet seen live.
-- [ ] Calibration screenshots (vendor window open, stash open, at the user's resolution) → tune
-  `BOX_TOP`; vendor grid cell rectangles → frames around the worthwhile store items (needs each
-  store item's grid x/y read from `ItemData`/the item path, not read yet).
-- [ ] Stash-open detection → stash grid frames: sell / move / keep per item (the stash plan's
-  actions), same layer.
+- [x] Calibration (2026-11-22): grid geometry above, item cells read, inventory frames at the
+  vendor. Not yet seen live (cells and frame placement).
+- [ ] UI-state recording → the stash-open flag, the shown stash tab / shared page, the shown
+  store tab → store-grid and stash-grid frames (`vendor(…, Some(tab))`, `item_frames(…,
+  Some(spot))`). Session (one town, ~5 min; every step held ≥ 5 s with nothing else in
+  between, so each change stands alone in the probe's timeline): deploy with
+  `D2R_UI_PROBE=1 scripts/deploy.sh`; in town, stand still, no window open, 10 s; open the
+  stash (Personal shows); Shared; shared page arrows to 2, 3, 4, 5, then back to 1; Gems,
+  Materials, Runes, Personal; close (Esc); open again (note which tab it reopens on), close;
+  open the inventory alone (I), close; trade with a vendor: Armor, Weapons, second Weapons,
+  Misc, Armor, then a screenshot (checks the inventory frames and cells), close. Then
+  `research/ui_probe.py` on the jsonl.
 
 ## Permissions
 Reading `/proc/<pid>/mem` needs `CAP_SYS_PTRACE` (ptrace_scope=1). After each release build the user runs
