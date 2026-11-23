@@ -2428,7 +2428,7 @@ fn held_row(target: &str, name: &str, copies: u64) -> (String, String, u64) {
 
 fn shipped_route() -> Result<crate::route::Route> {
     let (route, warnings) =
-        crate::route::parse_route(include_str!("../../../../playstyles/summoner-fury/route.toml"))?;
+        crate::route::parse_route(include_str!("../../../../playstyles/fury-druid/route.toml"))?;
     assert_eq!(warnings, Vec::<String>::new());
     Ok(route)
 }
@@ -3385,24 +3385,22 @@ fn no_farm_list_is_null() -> Result<()> {
     Ok(())
 }
 
-/// The summoner's merc (`merc_acts = [2, 1]`): Insight's hint names Act 2 polearms,
-/// Harmony's the Act 1 rogue's bows.
+/// The Fury's mercs (`merc_acts = [5, 1, 2]`): Strength's hint names the Act 5 barbarian's
+/// swords, Edge's the Act 1 rogue's bows, Pride's the later Act 2 merc's polearms.
 #[test]
 fn merc_hints_are_per_act() -> Result<()> {
     let config = crate::files::load(&d2r_core::playstyle::Files {
-        shipped: Some(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury"),
-        ),
+        shipped: Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/fury-druid")),
         quiet: true,
         ..d2r_core::playstyle::Files::default()
     });
     let build = config
         .build_defs
-        .get("summoner druid")
-        .context("shipped summoner build")?;
+        .get("fury druid")
+        .context("shipped fury build")?;
     let blocks = d2r_core::render::TextBlocks::default();
     let mut info = live_info(5, &blocks, &[], &[], &[]);
-    info.live.char_level = Some(57);
+    info.live.char_level = Some(30);
     info.live.difficulty = Some(1);
     info.build = Some(build);
     let weapon = build.merc_slots.get("weapon").context("merc weapon")?;
@@ -3421,41 +3419,48 @@ fn merc_hints_are_per_act() -> Result<()> {
             .unwrap_or_default()
     };
     assert!(
-        hint("Insight").starts_with("4 sockets: Voulge"),
+        hint("Strength").starts_with("2 sockets: "),
         "{}",
-        hint("Insight")
+        hint("Strength")
     );
     assert!(
-        hint("Harmony").starts_with("Act 1 merc: 4 sockets: Hunter's Bow"),
+        hint("Edge").starts_with("Act 1 merc: 3 sockets: "),
         "{}",
-        hint("Harmony")
+        hint("Edge")
+    );
+    assert!(
+        hint("Pride").starts_with("Act 2 merc: 4 sockets: "),
+        "{}",
+        hint("Pride")
     );
     Ok(())
 }
 
-/// A level-57 druid whose merc wears Insight, Smoke and Bulwark: each is ticked (Insight past
-/// its window), the pieces below are beaten, Smoke drops its rune note, nothing reaches upgrades.
+/// A level-57 druid whose merc wears Lawbringer, Smoke and Undead Crown: each is ticked (Undead
+/// Crown past its window), the pieces below are beaten, nothing reaches upgrades.
 #[test]
 fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
     let config = crate::files::load(&d2r_core::playstyle::Files {
-        shipped: Some(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury"),
-        ),
+        shipped: Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/fury-druid")),
         quiet: true,
         ..d2r_core::playstyle::Files::default()
     });
     let build = config
         .build_defs
-        .get("summoner druid")
-        .context("shipped summoner build")?;
+        .get("fury druid")
+        .context("shipped fury build")?;
     let bis = config::Bis {
         build: build.name.clone(),
         slots: build.slots.clone(),
         merc_slots: build.merc_slots.clone(),
     };
     let blocks = d2r_core::render::TextBlocks::default();
-    let stash_owned = ["Soul Harvest".to_owned(), "The Battlebranch".to_owned()];
-    let merc = ["Bulwark".to_owned(), "Insight".to_owned(), "Smoke".to_owned()];
+    let stash_owned = ["Strength".to_owned(), "Coldsteel Eye".to_owned()];
+    let merc = [
+        "Lawbringer".to_owned(),
+        "Smoke".to_owned(),
+        "Undead Crown".to_owned(),
+    ];
     let mut info = live_info(5, &blocks, &[], &[], &stash_owned);
     info.live.char_level = Some(57);
     info.live.difficulty = Some(1);
@@ -3480,14 +3485,7 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
     let weapon = column(&gear, "Merc weapon");
     assert_eq!(
         names(&weapon),
-        [
-            "Insight",
-            "Soul Harvest",
-            "The Battlebranch",
-            "The Reaper's Toll",
-            "Hustle (weapon)",
-            "Harmony"
-        ],
+        ["Lawbringer", "Strength", "Pride", "The Reaper's Toll"],
         "{weapon:?}"
     );
     assert_eq!(field(&at(&weapon, 0), "tick"), "worn");
@@ -3497,18 +3495,22 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
     }
 
     let body = column(&gear, "Merc body");
-    assert_eq!(names(&body), ["Smoke", "Fortitude", "Treachery"], "{body:?}");
+    assert_eq!(names(&body), ["Smoke", "Shaftstop", "Treachery"], "{body:?}");
     assert_eq!(field(&at(&body, 0), "tick"), "worn");
-    assert_eq!(
-        field(&at(&body, 0), "notes"),
-        serde_json::Value::Null,
-        "no missing-rune note"
-    );
     assert_eq!(field(&at(&body, 0), "now"), serde_json::Value::Null);
 
     let helm = column(&gear, "Merc helm");
-    assert_eq!(names(&helm), ["Bulwark", "Guillaume's Face"], "{helm:?}");
-    assert_eq!(field(&at(&helm, 0), "tick"), "worn");
+    assert_eq!(
+        names(&helm),
+        ["Bulwark", "Undead Crown", "Vampire Gaze", "Guillaume's Face"],
+        "{helm:?}"
+    );
+    assert_eq!(field(&at(&helm, 1), "tick"), "worn", "past its lvl 30-42 window");
+    assert_eq!(
+        field(&at(&helm, 3), "state"),
+        "neutral",
+        "Guillaume's Face: the merc's copy is a guide alternative (merc_setup)"
+    );
 
     let ups = upgrades_json(&info);
     assert!(
@@ -3518,16 +3520,16 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
     );
     assert!(
         !ups.iter().any(
-            |u| ["Insight", "Soul Harvest", "The Battlebranch", "Smoke", "Bulwark"]
+            |u| ["Lawbringer", "Strength", "Coldsteel Eye", "Smoke", "Undead Crown"]
                 .contains(&field(u, "name").as_str().unwrap_or_default())
         ),
         "{ups:?}"
     );
     assert!(
         super::gear::gear_attention(&info, &ups).is_none_or(|why| ![
-            "Soul Harvest",
-            "The Battlebranch",
-            "Insight"
+            "Strength",
+            "Coldsteel Eye",
+            "Lawbringer"
         ]
         .iter()
         .any(|n| why.contains(n))),
@@ -3583,12 +3585,24 @@ fn merc_guide_alternatives_are_not_struck_below_the_worn_piece() {
     assert_eq!(states, ["neutral", "neutral", "worse"], "{gear}");
 }
 
-/// The shipped playstyle (`playstyles/summoner-fury`).
+/// A test-only stage before the shipped Fury, wishing for Summoning skillers.
+fn earlier_stage() -> Result<config::Build> {
+    Ok(config::Build {
+        name: "Switch Druid".to_owned(),
+        class: Some(5),
+        next: Some("fury druid".to_owned()),
+        charms: vec![toml::from_str(
+            "name = \"Summoning skiller\"\nsize = \"grand\"\ncount = 7\n\
+             stats = [{ stat = \"skill_tab\", tab = \"Summoning\", min = 1 }]",
+        )?],
+        ..config::Build::default()
+    })
+}
+
+/// The shipped playstyle (`playstyles/fury-druid`).
 fn shipped_settings() -> crate::config::Settings {
     crate::files::load(&d2r_core::playstyle::Files {
-        shipped: Some(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury"),
-        ),
+        shipped: Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/fury-druid")),
         quiet: true,
         ..d2r_core::playstyle::Files::default()
     })
@@ -3599,11 +3613,11 @@ fn gear_lists_the_charm_wishlist_with_what_is_found_and_the_next_stage_s_wishes(
     use crate::charms::tests::{magic, unique};
     use d2r_core::item_stats::stat;
     let config = shipped_settings();
-    let build = |slug: &str| config.build_defs.get(slug).ok_or_else(|| anyhow!("no {slug}"));
-    let (summoner, fury) = (build("summoner druid")?, build("fury druid")?);
+    let fury = config.build_defs.get("fury druid").context("no fury druid")?;
+    let earlier = earlier_stage()?;
     let stage = config::Stage {
-        slug: "summoner druid",
-        build: summoner,
+        slug: "switch druid",
+        build: &earlier,
         class_default: true,
         next: Some(("fury druid", fury)),
     };
@@ -3626,7 +3640,7 @@ fn gear_lists_the_charm_wishlist_with_what_is_found_and_the_next_stage_s_wishes(
     let blocks = d2r_core::render::TextBlocks::default();
     let mut info = live_info(5, &blocks, &[], &stash, &[]);
     info.live.owned_items = &owned;
-    info.build = Some(summoner);
+    info.build = Some(&earlier);
     info.stage = Some(stage);
     let gear = gear_json(&info);
     let rows: Vec<(String, u64, u64, Option<String>)> = gear
@@ -3651,26 +3665,30 @@ fn gear_lists_the_charm_wishlist_with_what_is_found_and_the_next_stage_s_wishes(
     assert_eq!(
         rows,
         [
-            row("Annihilus", 1, 1, None),
-            row("Hellfire Torch", 0, 1, None),
-            row("Gheed's Fortune", 0, 1, None),
-            row("Bone Break", 1, 1, None),
             row("Summoning skiller", 2, 7, None),
-            row("Life small charm", 0, 2, None),
-            row("Resistance small charm", 0, 2, None),
-            row("FHR small charm", 0, 1, None),
-            row("Mana small charm", 0, 1, None),
+            row("Annihilus", 1, 1, Some("Fury Druid")),
+            row("Hellfire Torch", 0, 1, Some("Fury Druid")),
+            row("Gheed's Fortune", 0, 1, Some("Fury Druid")),
+            row("Bone Break", 1, 1, Some("Fury Druid")),
+            row("Small charm of Life", 0, 3, Some("Fury Druid")),
+            row("Single resist small charm", 0, 2, Some("Fury Druid")),
+            row("Sharp grand charm of Substinence", 0, 2, Some("Fury Druid")),
+            row("Shimmering small charm of Substinence", 0, 3, Some("Fury Druid")),
             row("Shape Shifting skiller", 1, 6, Some("Fury Druid")),
             row("10/60 grand charm", 0, 1, Some("Fury Druid")),
             row("Max damage / AR / life small charm", 0, 2, Some("Fury Druid")),
+            row("Life small charm", 0, 2, Some("Fury Druid")),
+            row("Resistance small charm", 0, 1, Some("Fury Druid")),
+            row("FHR small charm", 0, 1, Some("Fury Druid")),
         ]
     );
     let at = |path: &str| gear.pointer(path).cloned().unwrap_or_default();
-    assert_eq!(at("/charms/0/base"), "Small Charm", "the unique's piece details");
-    assert!(at("/charms/0/setup").is_null(), "no alternative fold");
-    assert_eq!(at("/charms/4/size"), "Grand Charm");
-    assert_eq!(at("/charms/4/need"), serde_json::json!(["+1 Summoning skills"]));
-    assert_eq!(at("/charms/1/need"), serde_json::json!(["+3 class skills"]));
+    assert_eq!(at("/charms/1/base"), "Small Charm", "the unique's piece details");
+    assert!(at("/charms/1/setup").is_null(), "no alternative fold");
+    assert_eq!(at("/charms/0/size"), "Grand Charm");
+    assert_eq!(at("/charms/0/need"), serde_json::json!(["+1 Summoning skills"]));
+    assert_eq!(at("/charms/2/need"), serde_json::json!(["+3 class skills"]));
+    assert_eq!(at("/charms/5/level"), 14, "a magic wish's level");
     assert!(
         gear.get("extras")
             .and_then(serde_json::Value::as_array)
@@ -3828,14 +3846,14 @@ fn next_stage_gear_needs_a_next_stage() -> Result<()> {
 #[test]
 fn next_stage_gear_lists_the_next_build_s_charm_wishes() -> Result<()> {
     let config = shipped_settings();
-    let build = |slug: &str| config.build_defs.get(slug).ok_or_else(|| anyhow!("no {slug}"));
-    let (summoner, fury) = (build("summoner druid")?, build("fury druid")?);
+    let fury = config.build_defs.get("fury druid").context("no fury druid")?;
+    let earlier = earlier_stage()?;
     let blocks = d2r_core::render::TextBlocks::default();
     let mut info = live_info(5, &blocks, &[], &[], &[]);
-    info.build = Some(summoner);
+    info.build = Some(&earlier);
     info.stage = Some(config::Stage {
-        slug: "summoner druid",
-        build: summoner,
+        slug: "switch druid",
+        build: &earlier,
         class_default: true,
         next: Some(("fury druid", fury)),
     });
@@ -3980,4 +3998,70 @@ fn next_stage_gear_spends_a_shared_base_once() -> Result<()> {
         "{pieces:?}"
     );
     Ok(())
+}
+
+/// A piece the druid outgrew at 5 that the mercenary keeps to 30 (`merc_setup`): a store copy
+/// matches the merc's helm, and its merc column shows the merc's window.
+#[test]
+fn the_mercs_own_window_decides_its_store_match_and_setup() {
+    let build = config::Build {
+        name: "Test".to_owned(),
+        slots: [("helm".to_owned(), vec!["Full Helm@1".to_owned()])].into(),
+        merc_slots: [("helm".to_owned(), vec!["Full Helm@1".to_owned()])].into(),
+        pieces: [(
+            "Full Helm".to_owned(),
+            config::PieceInfo {
+                setup: "lvl 1-5".to_owned(),
+                merc_setup: "lvl 1-30".to_owned(),
+                ..config::PieceInfo::default()
+            },
+        )]
+        .into(),
+        ..config::Build::default()
+    };
+    let bis = config::Bis {
+        build: build.name.clone(),
+        slots: build.slots.clone(),
+        merc_slots: build.merc_slots.clone(),
+    };
+    let blocks = d2r_core::render::TextBlocks::default();
+    let mut info = live_info(5, &blocks, &[], &[], &[]);
+    info.live.char_level = Some(20);
+    info.bis = Some(&bis);
+    info.build = Some(&build);
+    let item = d2r_core::shop::ShopItem {
+        code: Some("fhl".to_owned()),
+        quality: 2,
+        page: 0,
+        base: "Full Helm".to_owned(),
+        prefix: None,
+        suffix: None,
+        name: "Full Helm".to_owned(),
+        req_level: Some(1),
+        stats: Vec::new(),
+        cell: None,
+    };
+    assert_eq!(
+        super::gear::shop_match(&item, &info),
+        Some(("merc helm".to_owned(), "Full Helm".to_owned()))
+    );
+    let merc = super::gear::grid_pieces(
+        &["Full Helm@1".to_owned()],
+        None,
+        &[],
+        (Some(1), Wearer::Merc(d2r_core::socket_bases::MercAct::Act1)),
+        &info,
+    );
+    let setup = merc
+        .first()
+        .and_then(|p| p.get("setup")?.as_str().map(str::to_owned));
+    assert_eq!(setup.as_deref(), Some("lvl 1-30"));
+    let player = super::gear::grid_pieces(
+        &["Full Helm@1".to_owned()],
+        None,
+        &[],
+        (Some(1), Wearer::Player(5)),
+        &info,
+    );
+    assert!(player.is_empty(), "the druid outgrew it: {player:?}");
 }

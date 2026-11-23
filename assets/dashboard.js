@@ -151,8 +151,7 @@ function charmCard(charms, build) {
   return (charms || []).length
     ? `<div class="slot charmcard"><div class="slot-h"><span>Charms</span></div><div class="pieces">${charms.map(c => charmLine(c, build)).join("")}</div></div>` : "";
 }
-// The next stage's gear (user 2026-11-22: "a fury gear list while I walk the summoner ... so
-// that I can directly see what I could already wear"): per slot the pieces held or craftable
+// The next stage's gear: per slot the pieces held or craftable
 // now, every other one folded under "alternatives"; hidden without a next stage.
 function nextGear(n) {
   $("nextpanel").hidden = !n;
@@ -174,7 +173,7 @@ function nextGear(n) {
   $("nextmercbox").hidden = !(n.merc || []).length && !(n.charms || []).length;
 }
 // One charm wish (user 2026-11-22: "all of them until found"): ✓ once every wanted copy is
-// owned, else have/wanted; a later stage's wish (the summoner sees the Fury's) carries its
+// owned, else have/wanted; a later stage's wish carries its
 // build name; the conditions an owned charm must meet are listed under it.
 function charmLine(c, build) {
   const done = c.have >= c.count;

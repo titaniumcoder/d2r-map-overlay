@@ -1,6 +1,4 @@
-//! The next stage's gear section (user request 2026-11-22: "a fury gear list while I walk the
-//! summoner ... the ones that I could craft right now or have active are shown there and the
-//! rest is under 'alternative'"): per gear-grid slot of the next build, the pieces the account
+//! The next stage's gear section: per gear-grid slot of the next build, the pieces the account
 //! holds or can make now up front, every other one folded.
 
 use d2r_core::guidance::Spot;
@@ -137,7 +135,7 @@ fn piece_json(
     let name = d2r_core::info::piece_name(piece);
     let req = d2r_core::info::piece_level(piece);
     let tick = held_tick(name, wearer, info);
-    if tick.is_none() && outgrown(piece, next) {
+    if tick.is_none() && outgrown(piece, next, matches!(wearer, Wearer::Merc(_))) {
         return None;
     }
     let word = d2r_core::runewords_data::lookup(name);
@@ -164,7 +162,12 @@ fn piece_json(
         "ready": tick.is_some() || craft.is_some(),
         "craft": craft,
     });
-    add_piece_details(&mut json, name, Some(next.build), slot);
+    add_piece_details(
+        &mut json,
+        name,
+        Some(next.build),
+        (slot, matches!(wearer, Wearer::Merc(_))),
+    );
     if let (Some(w), Some(obj)) = (word, json.as_object_mut()) {
         obj.insert("runes".to_owned(), serde_json::json!(w.runes));
         obj.insert(
@@ -208,13 +211,13 @@ fn held_tick(name: &str, wearer: Wearer, info: &PanelInfo) -> Option<&'static st
     }
 }
 
-/// Whether the character is past the piece's leveling window in the next build (never for a
-/// rune).
-fn outgrown(piece: &str, next: &Next) -> bool {
+/// Whether the character is past the piece's leveling window in the next build, the
+/// mercenary's when `merc` (never for a rune).
+fn outgrown(piece: &str, next: &Next, merc: bool) -> bool {
     let Some(details) = next.build.pieces.get(d2r_core::info::piece_name(piece)) else {
         return false;
     };
-    match (level_range(&details.setup), next.info.live.char_level) {
+    match (level_range(details.window(merc)), next.info.live.char_level) {
         (Some((_, to)), Some(lvl)) => details.kind != "rune" && u32::from(lvl) > to,
         _ => false,
     }

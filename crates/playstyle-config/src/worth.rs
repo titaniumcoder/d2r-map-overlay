@@ -291,7 +291,7 @@ mod tests {
     const HELL: u8 = 2;
 
     fn shipped_farm() -> Result<Vec<FarmGroup>> {
-        let text = include_str!("../../../playstyles/summoner-fury/farm.toml");
+        let text = include_str!("../../../playstyles/fury-druid/farm.toml");
         let (groups, warnings) = crate::config::parse_farm(text)?;
         assert_eq!(warnings, Vec::<String>::new());
         Ok(groups)
@@ -486,11 +486,11 @@ mod tests {
             "Nightmare Countess: {}",
             shown_worth("The Countess", &farm, &[]).join("; ")
         );
-        assert!(andariel.iter().any(|w| w == "Bloodfist"));
-        assert!(mephisto.iter().any(|w| w == "Bloodfist"));
-        assert!(!andariel.iter().any(|w| w == "Arachnid Mesh"), "qlvl 87");
+        assert!(andariel.iter().any(|w| w == "Hone Sundan"));
+        assert!(mephisto.iter().any(|w| w == "Raven Frost"));
+        assert!(!andariel.iter().any(|w| w == "Highlord's Wrath"), "qlvl 73");
         assert!(!andariel.iter().any(|w| w.contains('(')), "{andariel:?}");
-        assert!(mephisto.iter().any(|w| w == "Heart of the Oak (Pul)"));
+        assert!(mephisto.iter().any(|w| w == "Lawbringer (Lem)"));
         Ok(())
     }
 

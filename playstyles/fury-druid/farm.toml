@@ -1,0 +1,74 @@
+# Farm list: gear to collect with any character for a planned build (agent-authored).
+# An entry is "found" while a copy is on the character currently played (inventory, cube,
+# personal stash, worn) and "done" once enough copies sit in the shared stash.
+# Runewords also mark their missing runes on the dashboard's rune list.
+# Hot-reloaded like the build files.
+# Optional per entry: merc = true (for the mercenary of the group's build: its merc_act,
+# Act 2 by default) and slot = "weapon" / "shield" /
+# "helm" / "body" / ...: they steer a runeword's natural-socket base hint; note = "..." is
+# shown with the entry.
+# kind = "rolled" is any item of its slot carrying every stat in needs (skill names, as an
+# oskill or as charges; "<tree> skills" for +skills to one class's skill tree): done once one is in the shared stash, found while the character has
+# one (worn, inventory, cube, personal stash). An entry needing Teleport is hidden once
+# Enigma is held (Enigma gives Teleport).
+
+# The Fury Druid from level 1 (twinked by Vex), sorted by the level each piece is needed at,
+# the merc's included (an Act 1 Cold Arrow rogue until Normal Act 5, then the Act 5 Frenzy
+# Barbarian); the leveling runewords only from runes in the stash. Then the endgame core.
+[[farm]]
+for = "Fury Druid"
+items = [
+  { name = "Death's Hand", kind = "set" },
+  { name = "Death's Guard", kind = "set" },
+  { name = "Nagelring", kind = "unique" },
+  { name = "Pluckeye", kind = "unique", merc = true, slot = "weapon" },
+  { name = "Greyform", kind = "unique", merc = true, slot = "body" },
+  { name = "Dimoak's Hew", kind = "unique" },
+  { name = "Isenhart's Horns", kind = "set", count = 2, note = "one for the druid (8-12), one for the rogue until the Act 5 merc" },
+  { name = "Cathan's Seal", kind = "set" },
+  { name = "Sigon's Gage", kind = "set" },
+  { name = "Sigon's Sabot", kind = "set" },
+  { name = "Steel", kind = "runeword", slot = "weapon", note = "2-socket Bastard Sword, or a 2-socket Giant Axe" },
+  { name = "Nadir", kind = "runeword", slot = "helm" },
+  { name = "Witherstring", kind = "unique", merc = true, slot = "weapon", note = "or Rimeraven" },
+  { name = "Rimeraven", kind = "unique", merc = true, slot = "weapon", note = "or Witherstring" },
+  { name = "The Eye of Etlich", kind = "unique" },
+  { name = "Manald Heal", kind = "unique" },
+  { name = "Shape Shifting amulet", kind = "rolled", slot = "amulet", needs = ["Shape Shifting skills"], note = "+1 (Spiritual, required level 15) or +2 (Feral, required level 30) to Shape Shifting skills: replaces The Eye of Etlich" },
+  { name = "The Battlebranch", kind = "unique" },
+  { name = "Stealth", kind = "runeword", slot = "body" },
+  { name = "Zephyr", kind = "runeword", merc = true, slot = "weapon" },
+  { name = "Goblin Toe", kind = "unique" },
+  { name = "Bonesob", kind = "unique" },
+  { name = "Edge", kind = "runeword", merc = true, slot = "weapon" },
+  { name = "Lore", kind = "runeword", slot = "helm" },
+  { name = "Steeldriver", kind = "unique" },
+  { name = "Venom Grip", kind = "unique" },
+  { name = "String of Ears", kind = "unique" },
+  { name = "Undead Crown", kind = "unique", merc = true, slot = "helm" },
+  { name = "Strength", kind = "runeword", merc = true, slot = "weapon" },
+  { name = "King's Grace", kind = "runeword", merc = true, slot = "weapon" },
+  { name = "Ribcracker", kind = "unique" },
+  { name = "Coldsteel Eye", kind = "unique", merc = true, slot = "weapon" },
+  { name = "Guillaume's Face", kind = "set", note = "if found; else Bulwark at 35" },
+  { name = "Bulwark", kind = "runeword", slot = "helm", note = "the merc's helm once Jalal's Mane is on" },
+  { name = "Hone Sundan", kind = "unique", note = "with 3 Shael" },
+  { name = "Smoke", kind = "runeword", merc = true, slot = "body" },
+  { name = "Harmony", kind = "runeword", slot = "weapon" },
+  { name = "Lionheart", kind = "runeword", slot = "body" },
+  { name = "Jalal's Mane", kind = "unique" },
+  { name = "War Traveler", kind = "unique" },
+  { name = "Lawbringer", kind = "runeword", count = 2, merc = true, slot = "weapon" },
+  { name = "Raven Frost", kind = "unique" },
+  { name = "Dwarf Star", kind = "unique" },
+  { name = "Duress", kind = "runeword", slot = "body" },
+  { name = "Gore Rider", kind = "unique" },
+  { name = "The Cat's Eye", kind = "unique" },
+  { name = "Fortitude", kind = "runeword", slot = "body" },
+  { name = "Atma's Scarab", kind = "unique" },
+  { name = "Verdungo's Hearty Cord", kind = "unique" },
+  { name = "Laying of Hands", kind = "set" },
+  { name = "Highlord's Wrath", kind = "unique" },
+  { name = "Enigma", kind = "runeword", slot = "body" },
+  { name = "Dracul's Grasp", kind = "unique" },
+]

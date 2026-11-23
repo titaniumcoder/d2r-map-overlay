@@ -8,7 +8,7 @@ use d2r_core::played::Played;
 use d2r_core::playstyle::{Evaluation, EvaluationOf, Files, Playstyle};
 use d2r_core::web::{LiveInfo, Panels};
 
-use crate::config::{FarmGroup, Settings, Stage, owns_nothing, playstyle_of};
+use crate::config::{FarmGroup, Settings, Stage, owns_nothing, playstyle_of, split_selection};
 use crate::stash_plan::{Other, Others, Wants};
 use crate::{files, marks, stash_plan, web};
 
@@ -90,6 +90,16 @@ impl ConfigDriven {
         playstyle_of(&self.folders(), name, class).unwrap_or((&self.selected.key, &self.selected.config))
     }
 
+    /// Says each selection that names no build of any playstyle; its character follows its
+    /// class default.
+    fn say_stale_selections(&self, files: &Files) {
+        for (name, build) in stale_selections(&self.folders()) {
+            files.say(format_args!(
+                "playstyle: [bis.{name:?}] build = {build:?} names no build any more; the class default is followed"
+            ));
+        }
+    }
+
     /// The selections live in the selected playstyle's files (an old `config.toml` may hold
     /// some): every playstyle reads the same ones.
     fn share_selections(&mut self) {
@@ -159,6 +169,7 @@ impl Playstyle for ConfigDriven {
             others: folders.collect(),
         };
         playstyle.share_selections();
+        playstyle.say_stale_selections(files);
         playstyle
     }
 
@@ -169,6 +180,7 @@ impl Playstyle for ConfigDriven {
             files::reload(&mut folder.config, files);
         }
         self.share_selections();
+        self.say_stale_selections(files);
     }
 
     fn mark_drops(&self, drops: &mut Vec<ItemDrop>, wants: &PlaystyleWants) -> Marks {
@@ -274,6 +286,24 @@ impl Playstyle for ConfigDriven {
     }
 }
 
+/// The `(character, selection)` of each build selection (shared by every folder, read from the
+/// first) whose build slug no folder holds; one without a build (inline slots only) is none.
+fn stale_selections(folders: &[(&str, &Settings)]) -> Vec<(String, String)> {
+    let Some((_, first)) = folders.first() else {
+        return Vec::new();
+    };
+    first
+        .bis
+        .iter()
+        .filter(|(_, bis)| !bis.build.trim().is_empty())
+        .filter(|(_, bis)| {
+            let (_, slug) = split_selection(&bis.build);
+            !folders.iter().any(|(_, c)| c.build_defs.contains_key(&slug))
+        })
+        .map(|(name, bis)| (name.clone(), bis.build.clone()))
+        .collect()
+}
+
 /// `stage` when it is further along than `reached` or off its chain (a new selection); never
 /// one behind it (a level not yet read must not undo the latch).
 fn stage_to_remember<'a>(
@@ -300,7 +330,7 @@ mod tests {
     #[test]
     fn the_assassin_follows_the_trapsin_and_the_druid_keeps_for_her() -> Result<()> {
         let files = Files {
-            shipped: Some(shipped("summoner-fury")),
+            shipped: Some(shipped("fury-druid")),
             others: vec![("trapsin".to_owned(), shipped("trapsin"))],
             quiet: true,
             ..Files::default()
@@ -359,13 +389,10 @@ mod tests {
             ["Fire Wake Assassin", "Trapsin"],
             "another own assassin still needs it"
         );
-        let summoner = playstyle.evaluate(&druid, None, &none);
+        let fury = playstyle.evaluate(&druid, None, &none);
         assert_eq!(
-            (
-                summoner.extra.stage.map(|s| s.slug),
-                summoner.wants.playstyle.as_str()
-            ),
-            (Some("summoner druid"), "summoner-fury")
+            (fury.extra.stage.map(|s| s.slug), fury.wants.playstyle.as_str()),
+            (Some("fury druid"), "fury-druid")
         );
         // The druid's stash plan wants the trapsin's farm list, and more once she was played.
         let alone = ConfigDriven::load(&Files {
@@ -373,7 +400,7 @@ mod tests {
             ..files
         });
         let without = alone.evaluate(&druid, None, &none).wants.wants;
-        assert_ne!(summoner.wants.wants, without, "the trapsin farm list");
+        assert_ne!(fury.wants.wants, without, "the trapsin farm list");
         let played = Played::from([(
             "trapper".to_owned(),
             d2r_core::played::Entry {
@@ -386,20 +413,62 @@ mod tests {
             },
         )]);
         let with_her = playstyle.evaluate(&druid, None, &played).wants.wants;
-        assert_ne!(with_her, summoner.wants.wants, "her build's own pieces");
+        assert_ne!(with_her, fury.wants.wants, "her build's own pieces");
+        Ok(())
+    }
+
+    #[test]
+    fn a_selection_or_stage_of_a_removed_build_falls_back_to_the_class_default() -> Result<()> {
+        let files = Files {
+            shipped: Some(shipped("fury-druid")),
+            others: vec![("trapsin".to_owned(), shipped("trapsin"))],
+            quiet: true,
+            ..Files::default()
+        };
+        let mut playstyle = ConfigDriven::load(&files);
+        let select = |build: &str| d2r_core::guidance::Bis {
+            build: build.to_owned(),
+            slots: std::collections::BTreeMap::new(),
+            merc_slots: std::collections::BTreeMap::new(),
+        };
+        playstyle.selected.config.bis = [
+            ("bigbadwolf".to_owned(), select("summoner druid")),
+            ("renamed".to_owned(), select("summoner-fury/fury druid")),
+            ("vex".to_owned(), select("trapsin/trapsin")),
+        ]
+        .into();
+        playstyle.share_selections();
+        assert_eq!(
+            stale_selections(&playstyle.folders()),
+            [("bigbadwolf".to_owned(), "summoner druid".to_owned())],
+            "a renamed folder still finds its build"
+        );
+        let fixture = include_str!("../../../tests/fixtures/flayer-marks-snapshot.json");
+        let mut snap: Snapshot = serde_json::from_str(fixture).context("parsing fixture")?;
+        "BigBadWolf".clone_into(&mut snap.player.name);
+        let evaluation = playstyle.evaluate(&snap, Some("summoner druid"), &Played::new());
+        assert_eq!(
+            (
+                evaluation.extra.stage.map(|s| (s.slug, s.class_default)),
+                evaluation.wants.playstyle.as_str(),
+                evaluation.reached
+            ),
+            (Some(("fury druid", true)), "fury-druid", Some("fury druid")),
+            "the class default, and its stage replaces the old latch"
+        );
         Ok(())
     }
 
     #[test]
     fn ground_drops_get_keep_farm_and_trade_marks() -> Result<()> {
         use d2r_core::guidance::MarkKind;
-        // Level-50 Summoner without Harmony; drops: Hunter's Bow 4os, Monarch 4os, Long Sword
+        // Level-50 druid without Harmony; drops: Hunter's Bow 4os, Monarch 4os, Long Sword
         // 0os, unidentified unique ring and Heavy Gloves.
         let snap: Snapshot =
             serde_json::from_str(include_str!("../../../tests/fixtures/flayer-marks-snapshot.json"))
                 .context("parsing fixture")?;
         let playstyle = ConfigDriven::load(&Files {
-            shipped: Some(shipped("summoner-fury")),
+            shipped: Some(shipped("fury-druid")),
             quiet: true,
             ..Files::default()
         });
@@ -421,10 +490,10 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                (Some("hbw"), Some(MarkKind::Keep), Some("Harmony base"), false),
+                (Some("hbw"), Some(MarkKind::Keep), Some("Brand base"), false),
                 (Some("uit"), Some(MarkKind::Trade), Some("Monarch 4os"), false),
                 (Some("rin"), Some(MarkKind::Trade), Some("Stone of Jordan"), true),
-                (Some("vgl"), Some(MarkKind::Farm), Some("Bloodfist?"), true),
+                (Some("vgl"), Some(MarkKind::Keep), Some("Bloodfist?"), true),
             ],
             "the Long Sword 0os is gone"
         );

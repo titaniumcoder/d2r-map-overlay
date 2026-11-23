@@ -89,8 +89,8 @@ Optional configuration lives in `~/.config/d2r-map-overlay/config.toml`. See
 
 The leveling and farming strategy (builds and their stages, farm list, which drops get a mark) is a
 **playstyle**: a folder under [`playstyles/`](playstyles/). The repo ships two:
-[`playstyles/summoner-fury/`](playstyles/summoner-fury/) (Summoner Druid, switching to Fury Druid from
-level 75) and [`playstyles/trapsin/`](playstyles/trapsin/) (Fire Wake Assassin from level 13,
+[`playstyles/fury-druid/`](playstyles/fury-druid/) (Fury Druid, one build from level 1 to
+99) and [`playstyles/trapsin/`](playstyles/trapsin/) (Fire Wake Assassin from level 13,
 switching to the Lightning Sentry Trapsin at 38). Every folder is loaded; each character follows
 one (below). A folder holds:
 
@@ -105,7 +105,8 @@ one (below). A folder holds:
 - `farm.toml`: a cross-character farm list for a planned build (the dashboard's Farm list panel).
   Each entry is `{ name, kind, count?, merc?, slot?, note? }` with `kind = "runeword" | "unique" |
   "set"` (counted by name), or `kind = "rolled"` with `slot` and `needs` (skill names given as an
-  oskill or as charges), for example
+  oskill or as charges, or `"<tree> skills"` such as `"Shape Shifting skills"` for +skills to one
+  class's skill tree), for example
   `{ name = "Teleport Amulet", kind = "rolled", slot = "amulet", needs = ["Teleport"], note = "until Enigma" }`:
   done once such an item is in the shared stash, found while the character has one; an entry
   needing Teleport is hidden once Enigma is held. An unknown `needs` name fails the file.
@@ -116,7 +117,7 @@ one (below). A folder holds:
   button copies it (served at `/api/loot-filter`) for import in the game. `filter_name` in
   `playstyle.toml` is the profile `name` it should have (a mismatch is warned about at load)
 
-`playstyle = "<folder>"` in `config.toml` names the main one (default `summoner-fury`): a
+`playstyle = "<folder>"` in `config.toml` names the main one (default `fury-druid`): a
 character follows the playstyle chosen for it on the `/config` page, else the one with a default
 build for its class, else the main one. The shared stash plan keeps what every one of your
 characters wants (the overlay remembers each character's level and worn gear in `played.json`)
@@ -167,7 +168,7 @@ cargo fmt --all --check && cargo clippy --workspace --all-targets --all-features
 
 ### Adding a playstyle
 
-Most changes need no code: copy `playstyles/summoner-fury/` to `playstyles/<your-name>/` and edit
+Most changes need no code: copy `playstyles/fury-druid/` to `playstyles/<your-name>/` and edit
 its files; it is loaded beside the others (restart the overlay), and its builds show on `/config`. Write code only for new logic:
 
 1. Add a crate under `crates/` that depends on `d2r-core` and implements

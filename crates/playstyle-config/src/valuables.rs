@@ -386,7 +386,7 @@ struct RuleFile {
 const SCHEMA: u32 = 1;
 
 static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
-    match serde_json::from_str::<RuleFile>(include_str!("../../../playstyles/summoner-fury/valuables.json")) {
+    match serde_json::from_str::<RuleFile>(include_str!("../../../playstyles/fury-druid/valuables.json")) {
         Ok(f) if f.schema == SCHEMA => match validate(&f.rules) {
             Ok(()) => f.rules,
             Err(e) => {
@@ -733,7 +733,7 @@ mod tests {
     #[test]
     fn rules_parse() -> serde_json::Result<()> {
         let parsed: RuleFile =
-            serde_json::from_str(include_str!("../../../playstyles/summoner-fury/valuables.json"))?;
+            serde_json::from_str(include_str!("../../../playstyles/fury-druid/valuables.json"))?;
         assert_eq!(parsed.schema, SCHEMA);
         assert_eq!(parsed.rules.len(), RULES.len());
         assert!(RULES.len() > 50, "{} rules", RULES.len());

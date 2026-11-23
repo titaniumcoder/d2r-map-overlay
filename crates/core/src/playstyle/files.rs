@@ -259,8 +259,8 @@ mod tests {
         // The source tree's own folder is found.
         let repo = [source_playstyles()];
         assert_eq!(
-            find_shipped("summoner-fury", &repo),
-            Some(source_playstyles().join("summoner-fury"))
+            find_shipped("fury-druid", &repo),
+            Some(source_playstyles().join("fury-druid"))
         );
         std::fs::remove_dir_all(&dir)?;
         Ok(())
@@ -301,7 +301,7 @@ mod tests {
             (Some(b.join("alpha")), None, None, Some(dir.join("data")), vec![])
         );
         // The repo ships the trapsin beside the default.
-        let repo = other_folders("summoner-fury", &[source_playstyles()]);
+        let repo = other_folders("fury-druid", &[source_playstyles()]);
         assert!(repo.iter().any(|(name, _)| name == "trapsin"), "{repo:?}");
         std::fs::remove_dir_all(&dir)?;
         Ok(())

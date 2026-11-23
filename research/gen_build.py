@@ -1,13 +1,13 @@
-"""Turn a researched build guide (JSON, see playstyles/summoner-fury/builds/*.source.json)
+"""Turn a researched build guide (JSON, see playstyles/fury-druid/builds/*.source.json)
 into an agent-authored build file (builds/<slug>.toml) for the overlay's dashboard.
 
 Usage:
     python3 -I research/gen_build.py SOURCE [OUT.toml] [--leveling LEVELING.json]
                                      [--prerequisites NEXT.json]
 
-SOURCE is a .source.json path or a bare stem (`summoner-druid`), which means
+SOURCE is a .source.json path or a bare stem (`fury-druid`), which means
 playstyles/<playstyle>/builds/<stem>.source.json in the repo, <playstyle> being the stem's
-BUILDS `playstyle` (default `summoner-fury`). OUT defaults to <stem>.toml next to SOURCE: the
+BUILDS `playstyle` (default `fury-druid`). OUT defaults to <stem>.toml next to SOURCE: the
 shipped playstyle (a copy in ~/.config/d2r-map-overlay/playstyle/builds/ overrides it per file).
 
 Deterministic: the same inputs give the same file byte for byte, so it can be re-run whenever
@@ -18,13 +18,16 @@ live in BUILDS below, keyed by the source file's stem (`druid-leveling.source` c
 - `--leveling` (Tornado / Lightning Fury endgame): the leveling guide's post-respec plan
   (level 38-75) and its tips for those levels are merged in front of the endgame plan; that
   guide's respec IS the switch into this stage (its `respec_note` in BUILDS is the switch note).
-- BUILDS `switch_requires` (Summoner Druid: the Fury switch conditions): item groups that must
+- BUILDS `switch_requires` (optional): item groups that must
   all be met before the switch to `next`; each entry is a plain name (a group of one) or a dict
   {label, any, count?} (met when the copies owned of `any` sum to `count`, default 1), emitted as
   a top-level `switch_requires = [...]` (strings, inline tables) after `auto_switch`, only when set.
 - BUILDS `weapon_rule` (Fury Druid: {two_handed, melee}): the player's `weapon` slot takes
   two-handed / non-missile bases only (runeword bases in the stash plan and the next stage
   gear); `swap` is unaffected. Emitted as `weapon_rule = { ... }` after `merc_acts`, only when set.
+- BUILDS `order = "rank"` (Fury Druid: leveling and endgame in one build): every slot lists its
+  pieces by the source's `rank_in_slot` alone, instead of a leveling build's latest-stage-first.
+- BUILDS `stats_plan` (optional): attribute lines, emitted as `stats_plan = [...]`.
 - `--prerequisites` (the stage before a manual switch): the next stage's `prerequisites`
   become this stage's `switch_note`.
 
@@ -37,9 +40,14 @@ live in BUILDS below, keyed by the source file's stem (`druid-leveling.source` c
 
 - The source's `charms` list (optional) becomes the `[[charms]]` wishlist, in order: unique
   charms `{name, unique: true, stats?, why?}` (the level is the source item's `req_level`) and
-  magic ones `{name, size: small|large|grand, count, stats: [{stat, min, tab?, skills?}], why}`
+  magic ones `{name, size: small|large|grand, count, level?, stats: [{stat, min, tab?, skills?}], why}`
   in the valuables' stat vocabulary. Items of slot `charm` give only their `[pieces]` details
   (no `[extras]` group): the wishlist lists the charms, not the alternatives fold.
+- A piece in several slots takes its details from the lowest `rank_in_slot`, a player slot's
+  before a merc slot's when both wear it; the merc copy's own leveling window, when it differs,
+  becomes `merc_setup`.
+- A skill plan target over the level cap (character level - the skill's required level + 1
+  hard points) is a problem.
 
 Skill names are checked against crates/core/src/skills_data.rs (class skills); mismatches are reported
 on stderr and in the exit summary.
@@ -52,53 +60,11 @@ import sys
 
 # Per-build settings by source stem. `next` is the next stage's slug (lowercased name).
 BUILDS = {
-    # Agent-computed from the D2R game tables, not from a guide (user, 2026-11-19: "guides are
-    # practically all out of date"). A complete summoner 1-99 (user: "he can be summoner till 99
-    # if he doesn't find what he needs"); the switch into Fury (werewolf) is possible from 75 and
-    # only with the switch gear in switch_requires.
-    # Physical only (user 2026-11-20: physical immunes are bad for the summoner): the pets and
-    # ravens hit physical; Arctic Blast is a 1-point prerequisite, not a damage source.
-    "summoner-druid": dict(
-        name="Summoner Druid", cls="druid", damages=["physical"], default=True,
-        next="fury druid", switch_level=75, auto_switch=True,
-        # The user's conditions for the Fury switch (2026-11-19). "Cannot Be Frozen" and the merc
-        # helm group are computed from d2data: every unique/set item (base props) and complete
-        # runeword with the `nofreeze` / `lifesteal` property; items of another class's item type
-        # (itemtypes.json `Class`) are out: Cerebus' Bite (druid pelt, a merc can't wear class
-        # items). Arreat's Face and Demonhorn's Edge (barbarian helms) are in: the Fury's Act 5
-        # merc wears barbarian helms since D2R patch 2.4. No circlet has life steal.
-        switch_requires=[
-            dict(label="Cannot Be Frozen", any=[
-                "Raven Frost", "Darksight Helm", "Duriel's Shell", "Hawkmail", "Kira's Guardian",
-                "Lava Gout", "Rune Master", "Sureshrill Frost", "The Gladiator's Bane",
-                "The Jade Tan Do", "The Spirit Shroud", "Tyrael's Might", "Death's Guard",
-                "Horazon's Legacy", "Trang-Oul's Girth", "Eternity", "Hearth", "Rhyme",
-                "Voice of Reason", "Wisdom", "Wrath"]),
-            dict(label="Powerful weapon", any=[
-                "Ribcracker", "Buriza-Do Kyanon", "Tomb Reaver", "Grief", "Beast",
-                "Breath of the Dying", "Eternity", "Oath", "Unbending Will", "Hustle (weapon)"]),
-            "Harmony",
-            dict(label="Merc's 2x Lawbringer", any=["Lawbringer"], count=2),
-            "Smoke",
-            dict(label="Merc helm with life leech", any=[
-                "Andariel's Visage", "Crown of Thieves", "Isenhart's Horns", "Stealskull",
-                "Tal Rasha's Horadric Crest", "Undead Crown", "Vampire Gaze", "Wormskull",
-                "Arreat's Face", "Demonhorn's Edge", "Bulwark"]),
-        ],
-        notes="Summoner Druid 1-99 (Ravens, Spirit Wolves, Dire Wolves, Grizzly, Heart of Wolverine). From level 75 an optional skill reset into Fury (next stage), only once the switch gear is owned: a Cannot Be Frozen item, a powerful weapon, Harmony, two Lawbringers for the merc, Smoke and a life-leech merc helm; without it the summoner goes on to 99. Numbers computed from the D2R game tables (blizzhackers/d2data), not from a guide.",
-        respec_note=("optional, from level 75 once the switch gear is owned (Cannot Be Frozen item, powerful weapon such as "
-                     "Ribcracker or Grief, Harmony for speed on weapon swap, 2x Lawbringer for the dual-wielding Act 5 merc (physical immunes), Smoke for the "
-                     "merc, a life-leech merc helm): respec to Fury at Akara (free reset of any difficulty "
-                     "whose Den of Evil reward is unused): Fury 20, Werewolf 20, Feral Rage 20, Lycanthropy 20 (460 s form), "
-                     "Rabies 1, Oak Sage 5 = 86 points (74 levels + 12 quest points, Normal/Nightmare/Hell); keep the Cannot "
-                     "Be Frozen item, Jalal's Mane and String of Ears on, swap the Spirit sword for the powerful weapon and "
-                     "Bloodfist for Laying of Hands"),
-    ),
     "fury-druid": dict(
-        name="Fury Druid", cls="druid", damages=["physical"],
-        notes="Fury Werewolf from the optional skill reset at 75 (Summoner Druid with Raven Frost); standard = the user's core (Ribcracker, Fortitude, Jalal's Mane, Laying of Hands, Raven Frost; the merc's 2x Lawbringer, Smoke, Bulwark); the druid always fights two-handed. Durations, breakpoints and skill order computed from the D2R game tables, not from a guide.",
-        # The werewolf can't shoot, and fights two-handed only (user, 2026-11-20: "never one
-        # handed"); the swap (Harmony) is out of form and keeps its bow.
+        name="Fury Druid", cls="druid", damages=["physical"], default=True, order="rank",
+        notes="Fury Werewolf from level 1 to 99 in one build: no stage switch, no skill reset. Leveling gear by level (two-handed from level 1, natural-socket bases only, twinked by Vex), then the user's endgame core (Eternity / Breath of the Dying, Fortitude, Jalal's Mane, Laying of Hands, Raven Frost; the merc's 2x Lawbringer, Smoke, Bulwark). Merc: an Act 1 Cold Arrow rogue until Normal Act 5, then the Act 5 Frenzy Barbarian. Durations, breakpoints and skill order computed from the D2R game tables, not from a guide.",
+        stats_plan=["Strength only for the gear's requirements: 40 by 6, 70 by 12, 69+ by 24 (Bonesob), 101 by 37 (Hone Sundan), then what the endgame gear needs",
+                    "No Dexterity", "Everything else into Vitality"],
         weapon_rule=dict(two_handed=True, melee=True),
     ),
     # The trapsin playstyle (user request, 2026-11-22: "leveling as fire wake (ignore the first 13
@@ -127,7 +93,7 @@ BUILDS = {
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # The playstyle folder of a build without a BUILDS `playstyle` key.
-DEFAULT_PLAYSTYLE = "summoner-fury"
+DEFAULT_PLAYSTYLE = "fury-druid"
 
 
 def builds_dir(stem):
@@ -184,13 +150,24 @@ def stat_need(n):
 
 
 def class_skills(cls):
-    """Skill names of class `cls` from the generated crates/core/src/skills_data.rs."""
+    """Skill name -> required level of class `cls`, from the generated crates/core/src/skills_data.rs."""
     text = open(os.path.join(HERE, "..", "crates", "core", "src", "skills_data.rs"), encoding="utf-8").read()
-    names = set()
-    for m in re.finditer(r'name: "([^"]+)",\s*class: (\d+),', text):
+    skills = {}
+    pattern = r'name: "([^"]+)",\s*class: (\d+),\s*page: \d+,\s*row: \d+,\s*col: \d+,\s*req_level: (\d+),'
+    for m in re.finditer(pattern, text):
         if int(m.group(2)) == CLASS_IDS[cls]:
-            names.add(m.group(1))
-    return names
+            skills[m.group(1)] = int(m.group(3))
+    return skills
+
+
+def check_level_caps(plan, known, build):
+    """A skill holds at most character level - its required level + 1 hard points: each target
+    over that cap is a problem."""
+    for skill, points, level, _ in plan:
+        req = known.get(skill)
+        if req is not None and points > level - req + 1:
+            problems.append(f"{build}: {skill} {points} by level {level} is over the cap "
+                            f"{max(0, level - req + 1)} (required level {req})")
 
 
 def clean_skill(name):
@@ -465,7 +442,9 @@ def main(argv):
     merc_acts = merc_src.get("acts") or ([merc_src["act"]] if merc_src.get("act") is not None else [])
     # An alternative merc act's piece (its own `merc_act`, not the primary) after the others.
     alt = lambda i: i.get("merc_act") is not None and i["merc_act"] != (merc_acts or [2])[0]
-    if leveling_items:
+    if cfg.get("order") == "rank":
+        key = lambda i: (i["slot"], i.get("rank_in_slot") if i.get("rank_in_slot") is not None else 999)
+    elif leveling_items:
         # Stage pieces by required level (the latest stage first); a guide's "alternative"
         # pieces after them in their own rank order, so the stage gear stays first.
         guide = lambda i: i.get("setup") == "alternative"
@@ -509,7 +488,11 @@ def main(argv):
                 lst.append(ref(i))
     pieces = {}
     piece_slot = {}
-    for i in sorted(d["items"], key=lambda i: i.get("rank_in_slot") if i.get("rank_in_slot") is not None else 999):
+    worn_by_both = ({i["name"] for i in d["items"] if not i["slot"].startswith("merc_")}
+                    & {i["name"] for i in d["items"] if i["slot"].startswith("merc_")})
+    piece_order = lambda i: (i["slot"].startswith("merc_") and i["name"] in worn_by_both,
+                             i.get("rank_in_slot") if i.get("rank_in_slot") is not None else 999)
+    for i in sorted(d["items"], key=piece_order):
         notes = [n for n in [i.get("notes") or ""] if n]
         setup = short_setup(i.get("setup"))
         if setup == "alternative" and i.get("setup") not in (None, "alternative"):
@@ -530,13 +513,18 @@ def main(argv):
         pieces[i["name"]] = dict(kind=i.get("kind") or "", setup=setup, stats=i.get("stats") or [],
                                  slot={}, **details)
 
+    for i in d["items"]:
+        piece = pieces.get(i["name"])
+        if (piece is not None and i["slot"].startswith("merc_") and i["name"] in worn_by_both
+                and short_setup(i.get("setup")) != piece["setup"]):
+            piece["merc_setup"] = short_setup(i.get("setup"))
     for i in late:
         if i["name"] not in pieces:
             pieces[i["name"]] = dict(kind=i.get("kind") or "", setup=short_setup(i.get("setup")),
                                      base=i.get("base") or "", stats=i.get("stats") or [], slot={},
                                      why=i.get("why") or "", notes="from the leveling guide; " + (i.get("notes") or ""))
-    plan, recipes, tips, stats, switch_note = [], [], [], [], cfg.get("switch_note", "")
-    # No attribute plan either (user request): `stats` stays empty.
+    plan, recipes, tips, switch_note = [], [], [], cfg.get("switch_note", "")
+    stats = cfg.get("stats_plan", [])
     targets = targets_generic(d)
     recipes = [recipe_of(r) for r in d.get("recipes") or []]
     sp = d.get("skill_plan")
@@ -577,6 +565,7 @@ def main(argv):
         rng = tip_range(t["range"])
         if rng:
             tips += [(rng, x) for x in t.get("tips") or []]
+    check_level_caps(plan, known, stem)
     if "--prerequisites" in opts:
         switch_note = switch_note_prereq(json.load(open(opts["--prerequisites"], encoding="utf-8"))["prerequisites"])
 
@@ -636,14 +625,16 @@ def main(argv):
                 problems.append(f"{stem}: unique charm {c['name']!r} has no source item with req_level")
         else:
             L += [f"size = {q(c['size'])}", f"count = {int(c.get('count', 1))}"]
+            if c.get("level"):
+                L.append(f"level = {int(c['level'])}")
         if c.get("stats"):
             L.append("stats = [" + ", ".join(stat_need(x) for x in c["stats"]) + "]")
         if c.get("why"):
             L.append(f"why = {q(c['why'])}")
     for n, p in pieces.items():
         L += ["", f"[pieces.{q(n)}]"]
-        for k in ["kind", "setup", "base", "why", "notes"]:
-            if p[k]:
+        for k in ["kind", "setup", "merc_setup", "base", "why", "notes"]:
+            if p.get(k):
                 L.append(f"{k} = {q(p[k])}")
         if p["stats"]:
             L.append("stats = [" + ", ".join(q(x) for x in p["stats"]) + "]")

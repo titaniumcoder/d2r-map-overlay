@@ -22,7 +22,7 @@ filter_name = "Trapsin"
 
 [valuables]
 # Ground drops matched by the valuables rules (valuables.json; the binary compiles in
-# playstyles/summoner-fury/'s, this folder has none) get a trade ring around their marker, coloured by
+# playstyles/fury-druid/'s, this folder has none) get a trade ring around their marker, coloured by
 # tier: S red, A orange, B yellow; dashed when the match is uncertain (unique/set name unknown,
 # the item's stats decide, a superior base's enhanced defense or damage unknown). List the tiers to
 # highlight per category ("S", "A", "B").

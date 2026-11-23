@@ -17,7 +17,7 @@ pub use d2r_core::web::SkillTarget;
 /// The playstyle's settings, as loaded from its files ([`crate::files::load`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
-    /// `playstyle.toml`'s `name` ("Summoner Druid → Fury Druid"); empty without one.
+    /// `playstyle.toml`'s `name` ("Fire Wake Assassin → Trapsin"); empty without one.
     pub name: String,
     /// `[valuables]`: the drop mark tiers.
     pub valuables: Valuables,
@@ -444,6 +444,8 @@ pub struct PieceInfo {
     pub kind: String,
     /// starter, standard or alternative.
     pub setup: String,
+    /// The mercenary's leveling window when it differs from the player's `setup` ("lvl 8-30").
+    pub merc_setup: String,
     pub base: String,
     /// The key mods with their ranges, one line each.
     pub stats: Vec<String>,
@@ -464,6 +466,17 @@ pub struct SlotDetails {
 }
 
 impl PieceInfo {
+    /// The `setup` the leveling window is read from: the mercenary's own (`merc_setup`) when
+    /// `merc` and it is set, else the piece's.
+    #[must_use]
+    pub fn window(&self, merc: bool) -> &str {
+        if merc && !self.merc_setup.is_empty() {
+            &self.merc_setup
+        } else {
+            &self.setup
+        }
+    }
+
     /// These details for the copy worn in `body` (an `ItemData::BODY` slot): a slot's own
     /// details replace the general ones they set; the leveling window (`setup`) stays the
     /// piece's.
@@ -518,7 +531,8 @@ pub struct FarmItem {
     /// The body slot it is worn in; narrows a runeword's base hint. Left out: any slot.
     #[serde(default)]
     pub slot: Option<FarmSlot>,
-    /// `needs = ["Teleport"]`: skills a rolled entry's item must grant.
+    /// `needs = ["Teleport"]`: skills a rolled entry's item must grant; `"Shape Shifting skills"`
+    /// names a skill tree.
     #[serde(default)]
     pub needs: Vec<FarmStat>,
     #[serde(default)]
@@ -537,44 +551,94 @@ impl FarmItem {
         self.kind == FarmKind::Rolled
             && !self.needs.is_empty()
             && slot_ok
-            && self
-                .needs
-                .iter()
-                .all(|n| crate::gear_score::grants_skill(stats, n.skill))
+            && self.needs.iter().all(|n| n.holds(stats))
     }
 
     /// Whether this entry wants Teleport, which Enigma gives.
     #[must_use]
     pub fn wants_teleport(&self) -> bool {
-        self.kind == FarmKind::Rolled && self.needs.iter().any(|n| n.skill == crate::gear_score::TELEPORT)
+        self.kind == FarmKind::Rolled && self.needs.contains(&FarmStat::Skill(crate::gear_score::TELEPORT))
     }
 }
 
-/// One stat a rolled [`FarmItem`] needs: a skill by its skills.txt name ("Teleport").
+/// One stat a rolled [`FarmItem`] needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
-pub struct FarmStat {
-    pub skill: u16,
+pub enum FarmStat {
+    /// A skill by its skills.txt id ("Teleport"), as an oskill or as charges.
+    Skill(u16),
+    /// +skills to one class's skill tree ("Shape Shifting skills"): the `SKILL_TAB` stat's
+    /// param, class × 8 + tree.
+    Tab(u16),
 }
 
 impl FarmStat {
     #[must_use]
     pub fn name(self) -> &'static str {
-        d2r_core::skills_data::name(self.skill).unwrap_or("?")
+        match self {
+            Self::Skill(id) => d2r_core::skills_data::name(id).unwrap_or("?"),
+            Self::Tab(param) => tree_name(param).unwrap_or("?"),
+        }
     }
+
+    /// Whether item `stats` carry this stat.
+    #[must_use]
+    pub fn holds(self, stats: &[ItemStat]) -> bool {
+        match self {
+            Self::Skill(id) => crate::gear_score::grants_skill(stats, id),
+            Self::Tab(param) => stats
+                .iter()
+                .any(|s| s.id == d2r_core::item_stats::stat::SKILL_TAB && s.param == param && s.value > 0),
+        }
+    }
+}
+
+/// The skill tree of a `SKILL_TAB` param (class × 8 + tree).
+fn tree_name(param: u16) -> Option<&'static str> {
+    let trees = d2r_core::skills_data::TREES.get(usize::from(param / 8))?;
+    trees.get(usize::from(param % 8)).copied()
+}
+
+/// The `SKILL_TAB` param of the one skill tree named `name` ("Shape Shifting"); `None` when no
+/// tree or several classes' trees have that name.
+fn tree_param(name: &str) -> Option<u16> {
+    let mut found = d2r_core::skills_data::TREES
+        .iter()
+        .enumerate()
+        .flat_map(|(class, trees)| {
+            trees
+                .iter()
+                .enumerate()
+                .filter(|(_, tree)| d2r_core::names::same_name(tree, name))
+                .map(move |(page, _)| class * 8 + page)
+        });
+    let param = found.next()?;
+    if found.next().is_some() {
+        return None;
+    }
+    u16::try_from(param).ok()
 }
 
 impl TryFrom<String> for FarmStat {
     type Error = String;
 
     fn try_from(name: String) -> Result<Self, Self::Error> {
-        d2r_core::skills_data::SKILLS
+        if let Some(skill) = d2r_core::skills_data::SKILLS
             .iter()
             .find(|s| d2r_core::names::same_name(s.name, &name))
-            .map(|s| Self { skill: s.id })
-            .ok_or_else(|| {
-                format!("unknown stat {name:?} in needs: expected a skill name such as \"Teleport\"")
-            })
+        {
+            return Ok(Self::Skill(skill.id));
+        }
+        let tree = name
+            .trim()
+            .strip_suffix(" skills")
+            .or_else(|| name.trim().strip_suffix(" Skills"));
+        tree.and_then(tree_param).map(Self::Tab).ok_or_else(|| {
+            format!(
+                "unknown stat {name:?} in needs: expected a skill name such as \"Teleport\" or one \
+                 class's skill tree such as \"Shape Shifting skills\""
+            )
+        })
     }
 }
 
@@ -1288,10 +1352,26 @@ fn class_of_build(class: &str, label: &str, warnings: &mut Vec<String>) -> Optio
 
 /// Warns about skill-plan skills that aren't skills of `class` (any class when unknown).
 fn check_skill_names(plan: &[SkillTarget], class: Option<u32>, label: &str, warnings: &mut Vec<String>) {
+    let mut capped: Vec<&str> = Vec::new();
     for target in plan {
-        let known = d2r_core::skills_data::SKILLS.iter().any(|s| {
+        let info = d2r_core::skills_data::SKILLS.iter().find(|s| {
             s.name.eq_ignore_ascii_case(target.skill.trim()) && class.is_none_or(|c| u32::from(s.class) == c)
         });
+        if let Some(info) = info
+            && u16::from(target.points) > level_cap(target.by_level, info.req_level)
+            && !capped.contains(&info.name)
+        {
+            capped.push(info.name);
+            warnings.push(format!(
+                "{label}: skill plan: {} {} by level {} is over the cap of {} (required level {})",
+                info.name,
+                target.points,
+                target.by_level,
+                level_cap(target.by_level, info.req_level),
+                info.req_level
+            ));
+        }
+        let known = info.is_some();
         if !known
             && !warnings
                 .iter()
@@ -1305,10 +1385,46 @@ fn check_skill_names(plan: &[SkillTarget], class: Option<u32>, label: &str, warn
     }
 }
 
+/// The most hard points a skill of required level `req` holds at character level `level`.
+fn level_cap(level: u8, req: u8) -> u16 {
+    (u16::from(level) + 1).saturating_sub(u16::from(req))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::{Result, anyhow};
+
+    #[test]
+    fn a_skill_plan_target_over_the_level_cap_is_warned_once() -> Result<()> {
+        let (_, _, warnings) = parse_build(
+            "name = \"B\"\nclass = \"druid\"\nskill_plan = [\n\
+             { skill = \"Fury\", points = 1, by_level = 30 },\n\
+             { skill = \"Fury\", points = 20, by_level = 49 },\n\
+             { skill = \"Werewolf\", points = 10, by_level = 11 },\n]\n",
+        )?;
+        assert_eq!(warnings, Vec::<String>::new(), "at the cap");
+        let (_, _, warnings) = parse_build(
+            "name = \"B\"\nclass = \"druid\"\nskill_plan = [\n\
+             { skill = \"Fury\", points = 2, by_level = 30 },\n\
+             { skill = \"Fury\", points = 20, by_level = 46 },\n\
+             { skill = \"Feral Rage\", points = 1, by_level = 11 },\n]\n",
+        )?;
+        assert_eq!(
+            warnings,
+            [
+                "build B: skill plan: Fury 2 by level 30 is over the cap of 1 (required level 30)",
+                "build B: skill plan: Feral Rage 1 by level 11 is over the cap of 0 (required level 12)",
+            ]
+        );
+        assert_eq!((level_cap(49, 30), level_cap(1, 1), level_cap(5, 6)), (20, 1, 0));
+        assert_eq!((level_cap(255, 1), level_cap(255, 30)), (255, 226), "no overflow");
+        let (_, _, warnings) = parse_build(
+            "name = \"B\"\nclass = \"druid\"\nskill_plan = [{ skill = \"Fury\", points = 20, by_level = 255 }]\n",
+        )?;
+        assert_eq!(warnings, Vec::<String>::new());
+        Ok(())
+    }
 
     #[test]
     fn a_pieces_slot_details_replace_the_general_ones_in_that_slot() -> Result<()> {
@@ -2038,9 +2154,7 @@ mod tests {
         assert_eq!(amulet.slot, Some(FarmSlot::Amulet));
         assert_eq!(
             amulet.needs,
-            [FarmStat {
-                skill: crate::gear_score::TELEPORT
-            }],
+            [FarmStat::Skill(crate::gear_score::TELEPORT)],
             "skill names match case-insensitively"
         );
         assert_eq!(amulet.needs.first().map(|n| n.name()), Some("Teleport"));
@@ -2077,6 +2191,45 @@ mod tests {
             err.contains("unknown stat \"Telport\"") && err.contains("Teleport") && err.contains("line 4"),
             "{err}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_rolled_entry_can_need_a_skill_tree() -> Result<()> {
+        use d2r_core::item_stats::stat::SKILL_TAB;
+        let (groups, warnings) = parse_farm(
+            "[[farm]]\nfor = \"Fury Druid\"\nitems = [\n\
+             { name = \"Shape Shifting amulet\", kind = \"rolled\", slot = \"amulet\", needs = [\"Shape Shifting skills\"] },\n]\n",
+        )?;
+        assert_eq!(warnings, Vec::<String>::new());
+        let amulet = groups
+            .first()
+            .and_then(|g| g.items.first())
+            .ok_or_else(|| anyhow!("no entry"))?;
+        assert_eq!(amulet.needs, [FarmStat::Tab(5 * 8 + 1)]);
+        assert_eq!(amulet.needs.first().map(|n| n.name()), Some("Shape Shifting"));
+        let tab = |param: u16, value: i32| ItemStat {
+            id: SKILL_TAB,
+            param,
+            value,
+            base: false,
+        };
+        assert!(
+            amulet.rolled_match(Some("amu"), &[tab(5 * 8 + 1, 2)]),
+            "+2 Shape Shifting"
+        );
+        assert!(!amulet.rolled_match(Some("amu"), &[tab(5 * 8, 1)]), "Summoning");
+        assert!(!amulet.rolled_match(Some("rin"), &[tab(5 * 8 + 1, 1)]), "a ring");
+        assert!(!amulet.wants_teleport());
+        for bad in ["Summoning skills", "Shape Shifting"] {
+            assert!(
+                parse_farm(&format!(
+                    "[[farm]]\nfor = \"X\"\nitems = [{{ name = \"T\", kind = \"rolled\", needs = [\"{bad}\"] }}]\n"
+                ))
+                .is_err(),
+                "{bad}: two classes' trees, or no tree named"
+            );
+        }
         Ok(())
     }
 

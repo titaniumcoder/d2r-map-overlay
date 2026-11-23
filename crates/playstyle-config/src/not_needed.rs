@@ -117,8 +117,8 @@ pub fn set(text: &str, build: &str, piece: &str, needed: bool) -> Option<String>
 
 /// The marks in force per build: each build's own, plus those of every earlier stage whose
 /// chain (`next` links) reaches it. The dashboard shows one stage, but the stash plan keeps
-/// for the whole chain: a piece marked while playing the Summoner must not stay wanted
-/// through the Fury stage after it.
+/// for the whole chain: a piece marked while playing an earlier stage must not stay wanted
+/// through the stages after it.
 #[must_use]
 pub fn marks(marked: &NotNeeded, builds: &BTreeMap<String, Build>) -> Marks {
     let mut out = Marks::new();

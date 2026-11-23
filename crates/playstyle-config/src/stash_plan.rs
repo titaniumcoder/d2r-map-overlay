@@ -469,18 +469,20 @@ fn slot_body(slot: &str) -> Option<u8> {
     }
 }
 
-/// `slots` of `build` without the pieces whose leveling window (`setup = "lvl a-b"`) ends
-/// below the character's `level`; a rune never outgrows, and a slot left empty leaves.
+/// `slots` of `build` without the pieces whose leveling window (`setup = "lvl a-b"`, the
+/// mercenary's `merc_setup` for `merc` slots) ends below the character's `level`; a rune never
+/// outgrows, and a slot left empty leaves.
 fn current(
     slots: &BTreeMap<String, Vec<String>>,
     build: Option<&Build>,
     level: Option<u8>,
+    merc: bool,
 ) -> BTreeMap<String, Vec<String>> {
     let outgrown = |entry: &str| {
         let info = build.and_then(|b| b.pieces.get(piece_name(entry)));
         info.zip(level).is_some_and(|(info, level)| {
             info.kind != "rune"
-                && crate::web::level_range(&info.setup).is_some_and(|(_, to)| u32::from(level) > to)
+                && crate::web::level_range(info.window(merc)).is_some_and(|(_, to)| u32::from(level) > to)
         })
     };
     slots
@@ -681,12 +683,12 @@ impl Needs {
             let def = build_def(config, &bis.build);
             let rule = def.map_or_default(|b| b.weapon_rule);
             needs.slots(
-                &current(&bis.slots, def, level),
+                &current(&bis.slots, def, level, false),
                 Wearer::Player(class),
                 rule,
                 worn,
             );
-            needs.merc_slots(&current(&bis.merc_slots, def, level), def, worn, &mut spare);
+            needs.merc_slots(&current(&bis.merc_slots, def, level, true), def, worn, &mut spare);
         }
         for build in chain_builds(config, chain) {
             needs.build(build, (class, level), worn, &mut spare);
@@ -762,13 +764,13 @@ impl Needs {
     ) {
         let player = Wearer::Player(build.class.unwrap_or(class));
         self.slots(
-            &current(&build.slots, Some(build), level),
+            &current(&build.slots, Some(build), level, false),
             player,
             build.weapon_rule,
             worn,
         );
         self.merc_slots(
-            &current(&build.merc_slots, Some(build), level),
+            &current(&build.merc_slots, Some(build), level, true),
             Some(build),
             worn,
             spare,
@@ -2104,15 +2106,14 @@ mod tests {
 
     /// The druid with the shipped farm list's rolled entries (the Teleport amulet) while no
     /// Enigma is held.
+    /// A druid without Enigma whose farm list wants a Teleport amulet.
     fn druid_without_enigma() -> Scoring {
-        let config = shipped();
-        let rolled: Vec<FarmItem> = config
-            .farm
-            .iter()
-            .flat_map(|g| &g.items)
-            .filter(|i| i.kind == FarmKind::Rolled)
-            .cloned()
-            .collect();
+        let farm = "[[farm]]\nfor = \"Fury Druid\"\nitems = [{ name = \"Teleport Amulet\", kind = \"rolled\", \
+                    slot = \"amulet\", needs = [\"Teleport\"], note = \"until Enigma\" }]\n";
+        let rolled: Vec<FarmItem> = crate::config::parse_farm(farm).map_or_else(
+            |_| Vec::new(),
+            |(groups, _)| groups.into_iter().flat_map(|g| g.items).collect(),
+        );
         let mut scoring = druid();
         scoring.profile.teleport = true;
         scoring.rolled = rolled;
@@ -2120,7 +2121,7 @@ mod tests {
     }
 
     #[test]
-    fn the_farm_lists_teleport_amulet_is_kept_own_and_stays_carried() {
+    fn a_farm_lists_teleport_amulet_is_kept_own_and_stays_carried() {
         let scoring = druid_without_enigma();
         assert!(
             scoring.rolled.iter().any(|i| i.name == "Teleport Amulet"),
@@ -2322,24 +2323,14 @@ mod tests {
 
     #[test]
     fn charms_the_druid_builds_use_are_kept_for_real() {
-        let summoner = shipped_druid("summoner druid", true);
         let fury = shipped_druid("fury druid", false);
         let summoning = charm("cm3", &[skiller(5, 0)]);
         let shape_shifting = charm("cm3", &[skiller(5, 1)]);
+        let elemental = charm("cm3", &[skiller(5, 2)]);
         let combat = charm("cm3", &[skiller(3, 0)]);
         let one = |c: &ItemDrop, s: &Scoring| judged(&[at(c.clone(), Spot::Page(3))], s);
         let own = |name: &str| vec![(name.to_owned(), Spot::Page(3), Action::Move(Side::Own), None)];
         let trade = |name: &str| vec![(name.to_owned(), Spot::Page(3), Action::Keep(Side::Trade), None)];
-        assert_eq!(
-            one(&summoning, &summoner),
-            own("Magic Grand Charm"),
-            "summoner: Summoning skiller"
-        );
-        assert_eq!(
-            one(&shape_shifting, &summoner),
-            own("Magic Grand Charm"),
-            "the chain's Fury stage plans Shape Shifting"
-        );
         assert_eq!(
             one(&shape_shifting, &fury),
             own("Magic Grand Charm"),
@@ -2348,21 +2339,15 @@ mod tests {
         assert_eq!(
             one(&summoning, &fury),
             own("Magic Grand Charm"),
-            "Fury: Oak Sage is Summoning"
-        );
-        let elemental = charm("cm3", &[skiller(5, 2)]);
-        assert_eq!(
-            one(&elemental, &summoner),
-            own("Magic Grand Charm"),
-            "summoner: Arctic Blast, Cyclone Armor"
+            "Fury: Oak Sage and Heart of Wolverine are Summoning"
         );
         assert_eq!(
             one(&elemental, &fury),
             trade("Magic Grand Charm"),
-            "the Fury stage alone plans no Elemental"
+            "the Fury plans no Elemental"
         );
         assert_eq!(
-            one(&combat, &summoner),
+            one(&combat, &fury),
             trade("Magic Grand Charm"),
             "Paladin Combat skiller: a trade good"
         );
@@ -2381,7 +2366,7 @@ mod tests {
             (stat::RES_POISON, 0, 5),
         ];
         assert_eq!(
-            one(&charm("cm1", &res), &summoner),
+            one(&charm("cm1", &res), &fury),
             own("Magic Small Charm"),
             "5 all res"
         );
@@ -2399,14 +2384,9 @@ mod tests {
             own("Magic Grand Charm"),
             "10/60: the Fury fights"
         );
-        assert_eq!(
-            one(&gc_10_60, &summoner),
-            own("Magic Grand Charm"),
-            "10/60: the chain's Fury stage wishes for one"
-        );
         let caster = Scoring {
             charms: Vec::new(),
-            ..summoner
+            ..shipped_druid("fury druid", true)
         };
         assert_eq!(
             one(&gc_10_60, &caster),
@@ -2437,7 +2417,7 @@ mod tests {
         };
         assert_eq!(judged(&[gold()], &wishing), row(Action::Move(Side::Own)));
         // The unique wishes are build pieces: one copy each is wanted (Annihilus, Torch, ...).
-        let needs = shipped_needs(&shipped(), "summoner druid")?;
+        let needs = shipped_needs(&shipped(), "fury druid")?;
         for name in ["Annihilus", "Hellfire Torch", "Gheed's Fortune", "Bone Break"] {
             assert!(
                 needs.pieces.iter().any(|(n, c)| n == name && *c == 1),
@@ -2450,10 +2430,10 @@ mod tests {
 
     #[test]
     fn six_mf_is_kept_for_own_use_and_seven_for_trade() {
-        let summoner = shipped_druid("summoner druid", true);
+        let fury = shipped_druid("fury druid", false);
         let mf = |n| at(charm("cm1", &[(stat::MAGIC_FIND, 0, n)]), Spot::Stash);
         assert_eq!(
-            judged(&[mf(6), mf(7), mf(5)], &summoner),
+            judged(&[mf(6), mf(7), mf(5)], &fury),
             vec![
                 (
                     "Magic Small Charm".to_owned(),
@@ -2491,7 +2471,7 @@ mod tests {
                 &[
                     at(large, Spot::Page(4)),
                     at(unid, Spot::Stash),
-                    at(charm("cm1", &[(stat::RES_FIRE, 0, 8)]), Spot::Stash),
+                    at(charm("cm1", &[(stat::RES_FIRE, 0, 5)]), Spot::Stash),
                     at(charm("cm1", &weak), Spot::Page(1)),
                     at(charm("cm1", &[(stat::MAX_LIFE, 0, 20)]), Spot::Inventory),
                 ],
@@ -2517,7 +2497,7 @@ mod tests {
                     Some("no keeper stats")
                 ),
             ],
-            "a plain 35 life large charm, 8 fire res and a lifeless 3/20: vendor trash; the \
+            "a plain 35 life large charm, 5 fire res and a lifeless 3/20: vendor trash; the \
              unidentified grand charm: identify first; the carried charm stays out"
         );
     }
@@ -3074,18 +3054,36 @@ mod tests {
         );
     }
 
-    /// The shipped playstyle (`playstyles/summoner-fury/`): build files and farm list.
+    /// The shipped playstyle (`playstyles/fury-druid/`): build files and farm list.
     fn shipped() -> Settings {
         crate::files::load(&d2r_core::playstyle::Files {
             shipped: Some(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury"),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/fury-druid"),
             ),
             quiet: true,
             ..d2r_core::playstyle::Files::default()
         })
     }
 
-    /// The needs of a druid holding nothing, on the shipped chain at stage `bis_build`.
+    /// A test-only leveling stage before the shipped Fury: an Act 2 merc with an Act 1 rogue for
+    /// Harmony, two switch groups, a ring the Fury lists too and boots with a leveling window.
+    const SWITCH_STAGE: &str = "name = \"Switch Druid\"\nclass = \"druid\"\nmerc_acts = [2, 1]\n\
+        next = \"fury druid\"\nswitch_level = 75\nauto_switch = true\n\
+        switch_requires = [\"Harmony\", { label = \"Merc helm with life leech\", \
+        any = [\"Stealskull\", \"Wormskull\", \"Bulwark\"] }]\n\
+        [slots]\nring1 = [\"Manald Heal@15\"]\nboots = [\"Aldur's Advance@45\"]\n\
+        [merc_slots]\nweapon = [\"Insight@27\", \"Harmony@39\"]\nhelm = [\"Bulwark@35\"]\nbody = [\"Smoke@37\"]\n\
+        [pieces.\"Aldur's Advance\"]\nsetup = \"lvl 45-60\"\n";
+
+    /// The shipped playstyle with [`SWITCH_STAGE`] as `"switch druid"`.
+    fn with_switch_stage() -> anyhow::Result<Settings> {
+        let mut config = shipped();
+        let (_, build, _) = crate::config::parse_build(SWITCH_STAGE)?;
+        config.build_defs.insert("switch druid".to_owned(), build);
+        Ok(config)
+    }
+
+    /// The needs of a druid holding nothing, on the chain from stage `bis_build`.
     fn shipped_needs(config: &Settings, bis_build: &str) -> anyhow::Result<Needs> {
         let def = config
             .build_defs
@@ -3096,7 +3094,7 @@ mod tests {
             slots: def.slots.clone(),
             merc_slots: def.merc_slots.clone(),
         };
-        let chain = ["summoner druid".to_owned(), "fury druid".to_owned()];
+        let chain = config.stage_chain(bis_build);
         Ok(Needs::from_config(
             config,
             &chain,
@@ -3129,19 +3127,11 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("fury"))?;
         assert_eq!(
             fury.merc_acts,
-            vec![MercAct::Act5, MercAct::Act2],
-            "the Lawbringer merc first, the Act 2 Pride merc after Bone Break"
+            vec![MercAct::Act5, MercAct::Act1, MercAct::Act2],
+            "the Lawbringer merc first, the leveling rogue, the Act 2 Pride merc after Bone Break"
         );
-        let summoner = config
-            .build_defs
-            .get("summoner druid")
-            .ok_or_else(|| anyhow::anyhow!("summoner"))?;
-        assert_eq!(
-            summoner.merc_acts,
-            vec![MercAct::Act2, MercAct::Act1],
-            "Insight's Act 2 merc first, the Act 1 rogue for Harmony"
-        );
-        for stage in ["summoner druid", "fury druid"] {
+        let config = with_switch_stage()?;
+        for stage in ["switch druid", "fury druid"] {
             let needs = shipped_needs(&config, stage)?;
             let lawbringer: Vec<(Wearer, Option<u8>)> = needs
                 .bases
@@ -3159,14 +3149,6 @@ mod tests {
                 "{stage}"
             );
 
-            // Harmony in the swap slot keeps both hands (a bow).
-            assert!(
-                needs
-                    .bases
-                    .iter()
-                    .any(|n| n.word.name == "Harmony" && n.wearer == DRUID),
-                "{stage}"
-            );
             // The Act 2 merc's one 4-socket polearm: Pride's, which serves Insight too.
             let act2: Vec<&str> = needs
                 .bases
@@ -3176,6 +3158,20 @@ mod tests {
                 .map(|n| n.word.name)
                 .collect();
             assert_eq!(act2, ["Pride"], "{stage}");
+            // The rogue's bow runewords want bows for her; the barbarian's swords are his.
+            let wearer = |word: &str| -> Vec<Wearer> {
+                needs
+                    .bases
+                    .iter()
+                    .filter(|n| n.word.name == word)
+                    .map(|n| n.wearer)
+                    .collect()
+            };
+            assert_eq!(wearer("Edge"), [Wearer::Merc(MercAct::Act1)], "{stage}");
+            assert_eq!(wearer("Zephyr"), [Wearer::Merc(MercAct::Act1)], "{stage}");
+            assert_eq!(wearer("Strength"), [Wearer::Merc(MercAct::Act5)], "{stage}");
+            // King's Grace's 3-socket sword is the off-hand Lawbringer's, the higher one's.
+            assert_eq!(wearer("King's Grace"), [], "{stage}");
         }
         // The Fury has no off-hand: its weapon-slot runewords keep both hands.
         let bis = Bis {
@@ -3319,62 +3315,6 @@ mod tests {
     }
 
     #[test]
-    fn summoner_guide_alternatives_are_kept_one_copy_each() -> anyhow::Result<()> {
-        // The shipped Summoner lists the Maxroll Summon Druid guide's pieces of every slot
-        // (shields, one-handers, both rings, the merc's) after its own stage pieces.
-        let config = shipped();
-        let summoner = config
-            .build_defs
-            .get("summoner druid")
-            .ok_or_else(|| anyhow::anyhow!("no summoner druid"))?;
-        let first = |slots: &BTreeMap<String, Vec<String>>, slot: &str| {
-            slots.get(slot).and_then(|s| s.first()).cloned()
-        };
-        let own = &summoner.slots;
-        assert_eq!(
-            first(own, "weapon").as_deref(),
-            Some("Heart of the Oak@55"),
-            "core first"
-        );
-        assert_eq!(first(own, "offhand").as_deref(), Some("Spirit@54"));
-        assert_eq!(first(own, "helm").as_deref(), Some("Jalal's Mane@42"));
-        assert_eq!(first(own, "ring1").as_deref(), Some("Raven Frost@45"));
-        let merc = &summoner.merc_slots;
-        assert_eq!(first(merc, "weapon").as_deref(), Some("Insight@27"));
-        assert_eq!(first(merc, "body").as_deref(), Some("Smoke@37"));
-        assert_eq!(first(merc, "helm").as_deref(), Some("Bulwark@35"));
-        assert_eq!(
-            merc.get("weapon").and_then(|w| w.last()).map(String::as_str),
-            Some("Harmony@39"),
-            "the Act 1 rogue's piece stays last"
-        );
-        let needs = shipped_needs(&config, "summoner druid")?;
-        kept_one_copy_each(
-            &needs,
-            &[
-                ("uit", "Stormshield", item_data::QUALITY_UNIQUE, 253),
-                ("dre", "Ravenlore", item_data::QUALITY_UNIQUE, 350),
-                ("rin", "The Stone of Jordan", item_data::QUALITY_UNIQUE, 122),
-                ("rin", "Bul-Kathos' Wedding Band", item_data::QUALITY_UNIQUE, 268),
-                ("cm1", "Annihilus", item_data::QUALITY_UNIQUE, 381),
-                ("7s8", "The Reaper's Toll", item_data::QUALITY_UNIQUE, 326),
-                ("xhm", "Guillaume's Face", item_data::QUALITY_SET, 104),
-            ],
-        );
-        // The Act 2 merc's Hustle and Fortitude want polearm / body armor bases for Act 2.
-        for word in ["Hustle (weapon)", "Fortitude"] {
-            assert!(
-                needs
-                    .bases
-                    .iter()
-                    .any(|n| n.word.name == word && n.wearer == Wearer::Merc(MercAct::Act2)),
-                "{word}"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
     fn fury_merc_guide_alternatives_follow_the_lawbringers() -> anyhow::Result<()> {
         // The Act 5 Lawbringer merc stays first; Pride and The Reaper's Toll are the later
         // Act 2 Might merc's (after Bone Break), the armor and helms any merc wears.
@@ -3386,13 +3326,36 @@ mod tests {
         let slot = |s: &str| fury.merc_slots.get(s).cloned().unwrap_or_default();
         assert_eq!(
             slot("weapon"),
-            ["Lawbringer@43", "Pride@67", "The Reaper's Toll@75"]
+            [
+                "Lawbringer@43",
+                "Strength@30",
+                "Edge@25",
+                "Zephyr@21",
+                "Rimeraven@15",
+                "Witherstring@13",
+                "Pluckeye@7",
+                "Pride@67",
+                "The Reaper's Toll@75"
+            ]
+        );
+        assert_eq!(
+            slot("offhand"),
+            ["Lawbringer@43", "Coldsteel Eye@31", "King's Grace@30"]
         );
         assert_eq!(
             slot("helm"),
-            ["Bulwark@35", "Vampire Gaze@41", "Guillaume's Face@34"]
+            [
+                "Bulwark@35",
+                "Undead Crown@29",
+                "Isenhart's Horns@8",
+                "Vampire Gaze@41",
+                "Guillaume's Face@34"
+            ]
         );
-        assert_eq!(slot("body"), ["Smoke@37", "Shaftstop@38", "Treachery@43"]);
+        assert_eq!(
+            slot("body"),
+            ["Smoke@37", "Greyform@7", "Shaftstop@38", "Treachery@43"]
+        );
         assert!(fury.charms.iter().any(|c| c.unique && c.name == "Bone Break"));
         assert!(fury.extras.is_empty(), "the unique charms left the extras");
         assert_eq!(fury.merc_wearer("Pride@67", Some(4)), MercAct::Act2);
@@ -3483,30 +3446,28 @@ mod tests {
     }
 
     #[test]
-    fn a_mark_made_on_the_summoner_stage_holds_for_the_fury_stage_after_it() -> anyhow::Result<()> {
-        // Manald Heal is in both builds' ring slots and the Summoner's farm group; the
-        // Summoner's stash plan keeps for the whole chain.
+    fn a_mark_made_on_an_earlier_stage_holds_for_the_stage_after_it() -> anyhow::Result<()> {
+        // Manald Heal is in both builds' ring slots; the earlier stage's stash plan keeps for
+        // the whole chain.
         let wanted = |needs: &Needs| {
             needs
                 .pieces
                 .iter()
                 .any(|(n, c)| same_name(n, "Manald Heal") && *c > 0)
         };
-        let mut config = shipped();
+        let mut config = with_switch_stage()?;
         let ring = [at(named("rin", item_data::QUALITY_UNIQUE, 121), Spot::Page(1))];
-        let needs = shipped_needs(&config, "summoner druid")?;
+        let needs = shipped_needs(&config, "switch druid")?;
         assert!(wanted(&needs));
         assert_eq!(
             rows(&ring, &needs),
             vec![row("Manald Heal", Spot::Page(1), Action::Keep(Side::Own), 1)]
         );
-        let marked = crate::not_needed::NotNeeded::from([(
-            "summoner druid".to_owned(),
-            vec!["Manald Heal".to_owned()],
-        )]);
+        let marked =
+            crate::not_needed::NotNeeded::from([("switch druid".to_owned(), vec!["Manald Heal".to_owned()])]);
         let mut marks = crate::not_needed::marks(&marked, &config.build_defs);
         crate::not_needed::apply(&mut marks, &mut config.build_defs, &mut config.farm);
-        let needs = shipped_needs(&config, "summoner druid")?;
+        let needs = shipped_needs(&config, "switch druid")?;
         assert!(!wanted(&needs), "{:?}", needs.pieces);
         assert!(
             rows(&ring, &needs)
@@ -3520,8 +3481,8 @@ mod tests {
 
     #[test]
     fn one_harmony_base_serves_the_druid_swap_and_the_act1_rogue() -> anyhow::Result<()> {
-        let config = shipped();
-        let needs = shipped_needs(&config, "summoner druid")?;
+        let config = with_switch_stage()?;
+        let needs = shipped_needs(&config, "switch druid")?;
         // The Fury's swap Harmony and the rogue's Harmony are one need.
         let harmony: Vec<_> = needs
             .bases
@@ -3558,7 +3519,8 @@ mod tests {
                 mine("Stag Bow 4os", own)
             ]
         );
-        // The Fury stage alone has no rogue: the amazon bow is no base.
+        // The Fury stage alone has no Harmony rogue (hers take 2 and 3 sockets): the amazon
+        // bow is no base.
         let fury = config
             .build_defs
             .get("fury druid")
@@ -3619,12 +3581,12 @@ mod tests {
     #[test]
     fn live_two_broad_swords_kept_and_the_zweihander_is_the_hustle_base() -> anyhow::Result<()> {
         // The shipped build files must load, or every build drops and both swords are sold.
-        let config = shipped();
+        let config = with_switch_stage()?;
         assert_eq!(
             config.build_defs.get("fury druid").map(|b| b.merc_acts.clone()),
-            Some(vec![MercAct::Act5, MercAct::Act2])
+            Some(vec![MercAct::Act5, MercAct::Act1, MercAct::Act2])
         );
-        let needs = shipped_needs(&config, "summoner druid")?;
+        let needs = shipped_needs(&config, "switch druid")?;
         let items = [
             at(base("bsd", 3), Spot::Page(2)),
             at(base("bsd", 3), Spot::Page(2)),
@@ -3715,13 +3677,13 @@ mod tests {
         );
     }
 
-    /// The needs of a level `level` druid on the shipped `chain`, Summoner `BiS`, holding the
-    /// pieces `held` (worn by its merc).
+    /// The needs of a level `level` druid on `chain` of [`with_switch_stage`], its first stage's
+    /// `BiS`, holding the pieces `held` (worn by its merc).
     fn druid_needs(config: &Settings, chain: &[&str], level: u8, held: &[&str]) -> anyhow::Result<Needs> {
         let def = config
             .build_defs
-            .get("summoner druid")
-            .ok_or_else(|| anyhow::anyhow!("no summoner druid"))?;
+            .get("switch druid")
+            .ok_or_else(|| anyhow::anyhow!("no switch druid"))?;
         let bis = Bis {
             build: def.name.clone(),
             slots: def.slots.clone(),
@@ -3741,7 +3703,7 @@ mod tests {
         ))
     }
 
-    const CHAIN: [&str; 2] = ["summoner druid", "fury druid"];
+    const CHAIN: [&str; 2] = ["switch druid", "fury druid"];
 
     fn wants_piece(needs: &Needs, name: &str) -> bool {
         needs.pieces.iter().any(|(n, c)| same_name(n, name) && *c > 0)
@@ -3749,14 +3711,11 @@ mod tests {
 
     #[test]
     fn a_not_needed_mark_reaches_the_switch_groups() -> anyhow::Result<()> {
-        // The user's not-needed.toml (2026-11-22): Harmony and Arkaine's Valor on the Summoner.
-        // Harmony is also a one-item switch group of the Summoner; marked, it wants neither the
+        // Harmony is a one-item switch group of the earlier stage; marked, it wants neither the
         // piece nor a base (the switch condition itself stays).
-        let mut config = shipped();
-        let marked = crate::not_needed::NotNeeded::from([(
-            "summoner druid".to_owned(),
-            vec!["Arkaine's Valor".to_owned(), "Harmony".to_owned()],
-        )]);
+        let mut config = with_switch_stage()?;
+        let marked =
+            crate::not_needed::NotNeeded::from([("switch druid".to_owned(), vec!["Harmony".to_owned()])]);
         let mut marks = crate::not_needed::marks(&marked, &config.build_defs);
         crate::not_needed::apply(&mut marks, &mut config.build_defs, &mut config.farm);
         config.not_needed = marks;
@@ -3767,11 +3726,11 @@ mod tests {
             "{:?}",
             needs.bases
         );
-        let summoner = config
+        let earlier = config
             .build_defs
-            .get("summoner druid")
-            .ok_or_else(|| anyhow::anyhow!("summoner"))?;
-        assert!(summoner.switch_requires.iter().any(|g| g.any == ["Harmony"]));
+            .get("switch druid")
+            .ok_or_else(|| anyhow::anyhow!("switch druid"))?;
+        assert!(earlier.switch_requires.iter().any(|g| g.any == ["Harmony"]));
         // Two 4os missile bases: one is the Fury's swap Brand base (a guide alternative, kept
         // by user decision), the other was the switch group's Harmony base and goes.
         let items = [
@@ -3790,18 +3749,18 @@ mod tests {
 
     #[test]
     fn a_met_any_of_switch_group_wants_only_its_held_candidates() -> anyhow::Result<()> {
-        let config = shipped();
-        let horns = [at(named("fhl", item_data::QUALITY_SET, 16), Spot::Page(2))];
+        let config = with_switch_stage()?;
+        let horns = [at(named("xlm", item_data::QUALITY_UNIQUE, 203), Spot::Page(2))];
         // Nothing held: every life-leech merc helm is a candidate.
         let open = druid_needs(&config, &CHAIN, 77, &[])?;
-        assert!(wants_piece(&open, "Isenhart's Horns"));
+        assert!(wants_piece(&open, "Stealskull"));
         assert_eq!(
             rows(&horns, &open),
-            vec![row("Isenhart's Horns", Spot::Page(2), Action::Keep(Side::Own), 1)]
+            vec![row("Stealskull", Spot::Page(2), Action::Keep(Side::Own), 1)]
         );
         // The merc wears Bulwark: the group is met, the other candidates are no pieces.
         let met = druid_needs(&config, &CHAIN, 77, &["Bulwark"])?;
-        assert!(!wants_piece(&met, "Isenhart's Horns"), "{:?}", met.pieces);
+        assert!(!wants_piece(&met, "Stealskull"), "{:?}", met.pieces);
         assert!(
             rows(&horns, &met)
                 .iter()
@@ -3812,22 +3771,22 @@ mod tests {
         // A held candidate stays wanted: Wormskull in the stash meets the group itself.
         let def = config
             .build_defs
-            .get("summoner druid")
-            .ok_or_else(|| anyhow::anyhow!("summoner"))?;
+            .get("switch druid")
+            .ok_or_else(|| anyhow::anyhow!("switch druid"))?;
         let mut held = Needs::default();
         held.switch_gear(&config, def, 5, &[], &|n| u32::from(n == "Wormskull"));
-        assert!(wants_piece(&held, "Wormskull") && !wants_piece(&held, "Isenhart's Horns"));
-        // Live 2026-11-22: the merc wears Bulwark and Isenhart's Horns is on page 2. The group
-        // needs one helm: the worn one; Isenhart's isn't wanted by it.
+        assert!(wants_piece(&held, "Wormskull") && !wants_piece(&held, "Stealskull"));
+        // The merc wears Bulwark and Stealskull is on page 2. The group
+        // needs one helm: the worn one; Stealskull isn't wanted by it.
         let mut both = Needs::default();
         let worn = ["Bulwark".to_owned()];
         both.switch_gear(&config, def, 5, &worn, &|n| {
-            u32::from(n == "Bulwark" || n == "Isenhart's Horns")
+            u32::from(n == "Bulwark" || n == "Stealskull")
         });
         both.subtract_worn(&worn);
-        assert!(!wants_piece(&both, "Isenhart's Horns"), "{:?}", both.pieces);
+        assert!(!wants_piece(&both, "Stealskull"), "{:?}", both.pieces);
         assert!(!wants_piece(&both, "Bulwark"), "worn: no stash copy");
-        let owns = |n: &str| u32::from(n == "Bulwark" || n == "Isenhart's Horns");
+        let owns = |n: &str| u32::from(n == "Bulwark" || n == "Stealskull");
         let chain: Vec<String> = CHAIN.iter().map(|&c| c.to_owned()).collect();
         let live = Needs::from_config(
             &config,
@@ -3838,7 +3797,7 @@ mod tests {
             &[],
             &owns,
         );
-        assert!(!wants_piece(&live, "Isenhart's Horns"), "{:?}", live.pieces);
+        assert!(!wants_piece(&live, "Stealskull"), "{:?}", live.pieces);
         assert!(
             rows(&horns, &live)
                 .iter()
@@ -3846,18 +3805,18 @@ mod tests {
             "{:?}",
             rows(&horns, &live)
         );
-        // Neither worn: the first held in the group's order (Isenhart's before Wormskull).
+        // Neither worn: the first held in the group's order (Stealskull before Wormskull).
         let mut stash = Needs::default();
         stash.switch_gear(&config, def, 5, &[], &|n| {
-            u32::from(n == "Wormskull" || n == "Isenhart's Horns")
+            u32::from(n == "Wormskull" || n == "Stealskull")
         });
-        assert!(wants_piece(&stash, "Isenhart's Horns") && !wants_piece(&stash, "Wormskull"));
+        assert!(wants_piece(&stash, "Stealskull") && !wants_piece(&stash, "Wormskull"));
         Ok(())
     }
 
     #[test]
     fn the_werewolf_weapon_takes_no_bow_and_no_one_hander() -> anyhow::Result<()> {
-        let config = shipped();
+        let config = with_switch_stage()?;
         let needs = druid_needs(&config, &CHAIN, 77, &[])?;
         let fits_word = |word: &str, code: &str, sockets: u8| {
             needs
@@ -3884,27 +3843,27 @@ mod tests {
 
     #[test]
     fn an_outgrown_leveling_piece_is_wanted_only_by_another_list() -> anyhow::Result<()> {
-        // Sigon's Sabot: the Summoner's lvl 40-60 boots, a Fury guide alternative.
-        let config = shipped();
-        let sabot = [at(named("hbt", item_data::QUALITY_SET, 38), Spot::Page(2))];
-        let summoner = ["summoner druid"];
+        // Aldur's Advance: the earlier stage's lvl 45-60 boots, a Fury guide alternative.
+        let config = with_switch_stage()?;
+        let boots = [at(named("xtb", item_data::QUALITY_SET, 69), Spot::Page(2))];
+        let earlier = ["switch druid"];
         assert!(wants_piece(
-            &druid_needs(&config, &summoner, 50, &[])?,
-            "Sigon's Sabot"
+            &druid_needs(&config, &earlier, 50, &[])?,
+            "Aldur's Advance"
         ));
-        let past = druid_needs(&config, &summoner, 77, &[])?;
-        assert!(!wants_piece(&past, "Sigon's Sabot"), "{:?}", past.pieces);
+        let past = druid_needs(&config, &earlier, 77, &[])?;
+        assert!(!wants_piece(&past, "Aldur's Advance"), "{:?}", past.pieces);
         assert!(
-            rows(&sabot, &past)
+            rows(&boots, &past)
                 .iter()
                 .all(|(_, _, action, _)| *action != Action::Keep(Side::Own)),
             "{:?}",
-            rows(&sabot, &past)
+            rows(&boots, &past)
         );
         let both = druid_needs(&config, &CHAIN, 77, &[])?;
         assert_eq!(
-            rows(&sabot, &both),
-            vec![row("Sigon's Sabot", Spot::Page(2), Action::Keep(Side::Own), 1)]
+            rows(&boots, &both),
+            vec![row("Aldur's Advance", Spot::Page(2), Action::Keep(Side::Own), 1)]
         );
         Ok(())
     }
@@ -4044,10 +4003,39 @@ mod tests {
     }
 
     #[test]
+    fn a_merc_window_keeps_a_piece_for_the_merc_after_the_players_window() -> anyhow::Result<()> {
+        // Isenhart's Horns: the druid's helm 8-13, the rogue's 8-30.
+        let config = shipped();
+        let fury = config
+            .build_defs
+            .get("fury druid")
+            .ok_or_else(|| anyhow::anyhow!("fury druid"))?;
+        let has = |slots: &BTreeMap<String, Vec<String>>| {
+            slots
+                .get("helm")
+                .is_some_and(|h| h.iter().any(|p| p.starts_with("Isenhart's Horns@")))
+        };
+        let at = |level| {
+            (
+                has(&current(&fury.slots, Some(fury), Some(level), false)),
+                has(&current(&fury.merc_slots, Some(fury), Some(level), true)),
+            )
+        };
+        assert_eq!(at(13), (true, true));
+        assert_eq!(
+            at(20),
+            (false, true),
+            "past the druid's window, inside the rogue's"
+        );
+        assert_eq!(at(31), (false, false));
+        Ok(())
+    }
+
+    #[test]
     fn one_merc_base_serves_the_merc_of_every_stage() -> anyhow::Result<()> {
-        // The Summoner's Act 2 merc and the Fury's Act 5 merc both list Bulwark and Smoke:
+        // The earlier stage's Act 2 merc and the Fury's Act 5 merc both list Bulwark and Smoke:
         // one merc at a time, so one base each; Bulwark's is the Act 5 one (barbarian helms too).
-        let needs = shipped_needs(&shipped(), "summoner druid")?;
+        let needs = shipped_needs(&with_switch_stage()?, "switch druid")?;
         let merc = |word: &str| -> Vec<Wearer> {
             needs
                 .bases

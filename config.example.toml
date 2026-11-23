@@ -7,7 +7,7 @@
 # rules, damage types; see README "Playstyles"). Files copied to
 # ~/.config/d2r-map-overlay/playstyle/ (same relative path) replace the shipped ones. Read at
 # start: restart the overlay after changing it.
-playstyle = "summoner-fury"
+playstyle = "fury-druid"
 
 [shrines]
 # Shrine types to show (unused ones near the player). Names, lowercase: none, refilling, health, mana,

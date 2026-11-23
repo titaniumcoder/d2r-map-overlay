@@ -160,7 +160,7 @@ fn character_json(
 
 /// The `/api/builds` JSON: every build a character can follow, per playstyle of `folders`
 /// in order, by slug, with the `value` a selection saves (`"<folder>/<slug>"`), its class name
-/// (`null`: any class), its stage chain's names (`["Summoner Druid", "Fury Druid"]`) and its
+/// (`null`: any class), its stage chain's names (`["Fire Wake Assassin", "Trapsin"]`) and its
 /// playstyle (`{key, name}`).
 #[must_use]
 pub fn builds_json(folders: &[(&str, &Settings)]) -> serde_json::Value {

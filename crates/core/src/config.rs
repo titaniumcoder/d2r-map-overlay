@@ -63,7 +63,7 @@ const DEFAULT_SHRINES: [&str; 5] = ["refilling", "skill", "stamina", "gem", "mon
 /// Stamina is useless after Normal.
 const DEFAULT_NORMAL_ONLY: [&str; 1] = ["stamina"];
 
-pub const DEFAULT_PLAYSTYLE: &str = "summoner-fury";
+pub const DEFAULT_PLAYSTYLE: &str = "fury-druid";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -246,7 +246,7 @@ mod tests {
     fn defaults() -> Result<()> {
         let c = Config::default();
         assert_eq!(c.shrines.show, vec![1, 12, 14, 18, 20]);
-        assert_eq!(c.playstyle, "summoner-fury");
+        assert_eq!(c.playstyle, "fury-druid");
         assert_eq!(parse("")?, (c.clone(), vec![]), "empty file = defaults");
         assert_eq!(parse("[shrines]\n")?.0, c, "empty section = defaults");
         assert_eq!(parse("playstyle = \" \"\n")?.0, c, "blank name = the default");

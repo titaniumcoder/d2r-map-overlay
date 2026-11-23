@@ -8,8 +8,8 @@ use d2r_core::web::ShopNote;
 
 use super::recipes::{Input, need_totals, owned_materials};
 use super::{
-    PanelInfo, base_hint, equipped_level, is_worn, merc_base_hint, outgrown, piece_state, piece_window,
-    slot_bodies,
+    PanelInfo, base_hint, equipped_level, is_worn, merc_base_hint, outgrown, outgrown_for, piece_state,
+    piece_window, slot_bodies,
 };
 use crate::config::{Bis, Recipe};
 
@@ -299,10 +299,10 @@ fn planned_weapon_kind(info: &PanelInfo) -> Option<&'static str> {
 #[must_use]
 pub fn shop_match(item: &d2r_core::shop::ShopItem, info: &PanelInfo) -> Option<(String, String)> {
     let bis = info.bis?;
-    let piece_in = |pieces: &[String]| {
+    let piece_in = |pieces: &[String], merc: bool| {
         pieces
             .iter()
-            .filter(|p| !outgrown(p, info))
+            .filter(|p| !outgrown_for(p, info, merc))
             .map(|p| d2r_core::info::piece_name(p))
             .find(|name| d2r_core::shop::matches(item, name))
             .map(str::to_owned)
@@ -310,13 +310,13 @@ pub fn shop_match(item: &d2r_core::shop::ShopItem, info: &PanelInfo) -> Option<(
     d2r_core::config::SLOT_NAMES
         .iter()
         .find_map(|slot| {
-            let name = piece_in(bis.slots.get(*slot)?)?;
+            let name = piece_in(bis.slots.get(*slot)?, false)?;
             Some((column_name(slot).to_owned(), name))
         })
         .or_else(|| {
-            bis.merc_slots
-                .iter()
-                .find_map(|(slot, pieces)| Some((format!("merc {slot}"), piece_in(merc_open(pieces, info))?)))
+            bis.merc_slots.iter().find_map(|(slot, pieces)| {
+                Some((format!("merc {slot}"), piece_in(merc_open(pieces, info), true)?))
+            })
         })
 }
 
@@ -658,7 +658,7 @@ pub fn gear_json(info: &PanelInfo) -> serde_json::Value {
 
 /// The charm wishlist: the current stage's `[[charms]]`, then the next stage's whose name it
 /// doesn't list (a same-named wish of the next stage is left out, whatever its count; `stage` =
-/// that build's name: the summoner sees the Fury's), each with `have` = the owned
+/// that build's name: the Fire Wake Assassin sees the Trapsin's), each with `have` = the owned
 /// charms that fill it ([`crate::charms::found`]: carried, cube, stash, shared stash pages),
 /// `need` = its stat conditions, and a unique's build-file details.
 fn charms_json(info: &PanelInfo) -> Vec<serde_json::Value> {
@@ -711,7 +711,7 @@ pub(super) fn charm_wishes_json(
                 "stage": later.map(|b| b.name.as_str()),
             });
             if wish.unique {
-                add_piece_details(&mut json, &wish.name, later.or(own), None);
+                add_piece_details(&mut json, &wish.name, later.or(own), (None, false));
             }
             if let Some(obj) = json.as_object_mut() {
                 // A unique charm's piece is a guide alternative: here it is simply wanted.
@@ -922,7 +922,8 @@ fn grid_piece(
     let lvl = u32::from(info.live.char_level.unwrap_or(0));
     let tick = d2r_core::info::piece_tick(piece, worn, info.live.owned, info.live.stash_owned);
     let is_worn = tick == Some(d2r_core::info::Tick::Worn);
-    if outgrown(piece, info) && !is_worn {
+    let merc = matches!(wearer, Wearer::Merc(_));
+    if outgrown_for(piece, info, merc) && !is_worn {
         return None;
     }
     let name = d2r_core::info::piece_name(piece);
@@ -943,7 +944,7 @@ fn grid_piece(
     if let Some(rw) = runeword {
         add_runeword_hint(&mut json, rw, (slot, wearer), info);
     }
-    add_piece_details(&mut json, name, info.build, slot);
+    add_piece_details(&mut json, name, info.build, (slot, merc));
     if is_worn
         && runeword.is_some()
         && let Some(obj) = json.as_object_mut()
@@ -951,7 +952,7 @@ fn grid_piece(
         // The missing-rune remark is moot once the runeword is made.
         obj.remove("notes");
     }
-    add_level_window(&mut json, piece, req, state != "worse" && !is_worn, info);
+    add_level_window(&mut json, piece, req, (state != "worse" && !is_worn, merc), info);
     Some(json)
 }
 
@@ -980,10 +981,10 @@ fn add_level_window(
     json: &mut serde_json::Value,
     piece: &str,
     req: Option<u32>,
-    can_be_better: bool,
+    (can_be_better, merc): (bool, bool),
     info: &PanelInfo,
 ) {
-    let (range, rune) = piece_window(piece, info);
+    let (range, rune) = piece_window(piece, info, merc);
     let (Some((from, to)), Some(obj)) = (range, json.as_object_mut()) else {
         return;
     };
@@ -1001,20 +1002,22 @@ fn add_level_window(
 }
 
 /// Adds the build file's `[pieces."<name>"]` details that are set to a piece's JSON, those of
-/// its copy worn in `body` where they differ.
+/// its copy worn in `body` where they differ; `setup` is the mercenary's window (`merc_setup`) for a
+/// `merc` copy.
 pub fn add_piece_details(
     json: &mut serde_json::Value,
     name: &str,
     build: Option<&crate::config::Build>,
-    body: Option<u8>,
+    (body, merc): (Option<u8>, bool),
 ) {
     let Some(info) = build.and_then(|b| b.pieces.get(name)).map(|p| p.in_body(body)) else {
         return;
     };
     let Some(obj) = json.as_object_mut() else { return };
+    let setup = info.window(merc).to_owned();
     for (key, value) in [
         ("kind", &info.kind),
-        ("setup", &info.setup),
+        ("setup", &setup),
         ("base", &info.base),
         ("why", &info.why),
         ("notes", &info.notes),

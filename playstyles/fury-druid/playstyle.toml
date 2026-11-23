@@ -1,5 +1,5 @@
-# The shipped example playstyle: Summoner Druid, switching to Fury Druid from level 75.
-# Selected in ~/.config/d2r-map-overlay/config.toml with `playstyle = "summoner-fury"` (the
+# The shipped example playstyle: the Fury Druid, one build from level 1 to 99.
+# Selected in ~/.config/d2r-map-overlay/config.toml with `playstyle = "fury-druid"` (the
 # default). Any file of this folder copied to ~/.config/d2r-map-overlay/playstyle/ (same
 # relative path, e.g. builds/fury-druid.toml or farm.toml) replaces the shipped one.
 #
@@ -16,8 +16,8 @@
 # Which build each character follows (the /config page's selection) is state, not playstyle:
 # ~/.local/share/d2r-map-overlay/bis.toml.
 
-name = "Summoner Druid → Fury Druid"
-description = "Summoner Druid 1-99, with an optional skill reset into Fury Werewolf from level 75 once the switch gear is owned."
+name = "Fury Druid"
+description = "Fury Werewolf Druid from level 1 to 99 in one build (no skill reset): leveling gear by level, then the endgame core; an Act 1 rogue merc until Normal Act 5, then the Act 5 Frenzy Barbarian."
 # The `name` of loot-filter.json's profile (the name the game shows); a mismatch is warned about.
 filter_name = "Fury Druid"
 

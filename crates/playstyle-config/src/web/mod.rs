@@ -213,22 +213,30 @@ pub fn bis_line(line: &d2r_core::info::BisLine) -> serde_json::Value {
     json
 }
 
-/// A build piece's level window from its `setup` ("lvl 13-26"), and whether it is a rune.
+/// A build piece's level window from its `setup` ("lvl 13-26"; the mercenary's `merc_setup`
+/// when `merc`), and whether it is a rune.
 #[must_use]
-pub fn piece_window(piece: &str, info: &PanelInfo) -> (Option<(u32, u32)>, bool) {
+pub fn piece_window(piece: &str, info: &PanelInfo, merc: bool) -> (Option<(u32, u32)>, bool) {
     let details = info
         .build
         .and_then(|b| b.pieces.get(d2r_core::info::piece_name(piece)));
     (
-        details.and_then(|p| level_range(&p.setup)),
+        details.and_then(|p| level_range(p.window(merc))),
         details.is_some_and(|p| p.kind == "rune"),
     )
 }
 
-/// Whether the character is past the piece's leveling window (never for a rune).
+/// Whether the character is past the player's leveling window of the piece (never for a rune).
 #[must_use]
 pub fn outgrown(piece: &str, info: &PanelInfo) -> bool {
-    let (range, rune) = piece_window(piece, info);
+    outgrown_for(piece, info, false)
+}
+
+/// Whether the character is past the piece's leveling window for the mercenary (`merc`) or
+/// the player (never for a rune).
+#[must_use]
+pub fn outgrown_for(piece: &str, info: &PanelInfo, merc: bool) -> bool {
+    let (range, rune) = piece_window(piece, info, merc);
     match (range, info.live.char_level) {
         (Some((_, to)), Some(lvl)) => !rune && u32::from(lvl) > to,
         _ => false,

@@ -568,7 +568,7 @@ mod tests {
     use d2r_core::testutil::temp_dir;
 
     fn shipped() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/summoner-fury")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../playstyles/fury-druid")
     }
 
     fn write(path: &Path, text: &str) -> Result<()> {
@@ -596,24 +596,24 @@ mod tests {
         let dir = shipped();
         let ((name, tables), warnings) =
             parse_playstyle(&std::fs::read_to_string(dir.join("playstyle.toml"))?)?;
-        assert_eq!((name.as_str(), warnings), ("Summoner Druid → Fury Druid", vec![]));
+        assert_eq!((name.as_str(), warnings), ("Fury Druid", vec![]));
         assert_eq!(tables.valuables, Some(Valuables::default()));
         assert_eq!(tables.damages, Some(Builds::default()));
         let (groups, warnings) = parse_farm(&std::fs::read_to_string(dir.join("farm.toml"))?)?;
         assert_eq!(warnings, Vec::<String>::new());
         assert_eq!(
             groups.iter().map(|g| g.target.as_str()).collect::<Vec<_>>(),
-            ["Summoner Druid", "Fury Druid"]
+            ["Fury Druid"]
         );
-        for file in ["summoner-druid", "fury-druid"] {
-            let text = std::fs::read_to_string(dir.join(format!("builds/{file}.toml")))?;
-            let (_, _, warnings) = parse_build(&text)?;
-            assert_eq!(warnings, Vec::<String>::new(), "{file}");
-            assert!(
-                dir.join(format!("builds/{file}.source.json")).is_file(),
-                "{file} source"
-            );
-        }
+        let text = std::fs::read_to_string(dir.join("builds/fury-druid.toml"))?;
+        let (_, build, warnings) = parse_build(&text)?;
+        assert_eq!(warnings, Vec::<String>::new());
+        assert!(dir.join("builds/fury-druid.source.json").is_file(), "its source");
+        assert_eq!(
+            (build.next, build.switch_requires.len()),
+            (None, 0),
+            "one build, no switch"
+        );
         assert!(dir.join("valuables.json").is_file(), "the compiled-in mark rules");
         let (_, warnings) = parse_route(&std::fs::read_to_string(dir.join("route.toml"))?)?;
         assert_eq!(warnings, Vec::<String>::new(), "route.toml");
@@ -622,33 +622,21 @@ mod tests {
             ..Files::default()
         };
         let settings = load(&files);
-        assert_eq!(
-            settings.build_defs.keys().collect::<Vec<_>>(),
-            ["fury druid", "summoner druid"]
-        );
-        assert_eq!(settings.farm.len(), 2);
+        assert_eq!(settings.build_defs.keys().collect::<Vec<_>>(), ["fury druid"]);
+        assert_eq!(settings.farm.len(), 1);
         assert_eq!(settings.route.bosses.len(), 4);
         assert_eq!(
             settings.class_default(5).map(|(slug, _)| slug),
-            Some("summoner druid")
+            Some("fury druid")
         );
-        assert_eq!(
-            settings.stage_chain("summoner druid"),
-            ["Summoner Druid", "Fury Druid"]
-        );
-        assert!(settings.leads_to("summoner druid", "fury druid"));
-        let stage = |level, owns: &dyn Fn(&str) -> u32| {
-            settings
-                .stage("anyone", Some(5), Some(level), owns, None)
-                .map(|s| s.slug)
-        };
-        assert_eq!(stage(80, &owns_nothing), Some("summoner druid"), "no switch gear");
-        assert_eq!(
-            stage(80, &|_| 2),
-            Some("fury druid"),
-            "the gear owned: Fury from 75"
-        );
-        assert_eq!(stage(70, &|_| 2), Some("summoner druid"), "not before 75");
+        assert_eq!(settings.stage_chain("fury druid"), ["Fury Druid"]);
+        for level in [1, 30, 80] {
+            let stage = settings.stage("anyone", Some(5), Some(level), &owns_nothing, None);
+            assert_eq!(
+                stage.map(|s| (s.slug, s.next.is_none())),
+                Some(("fury druid", true))
+            );
+        }
         Ok(())
     }
 
@@ -851,7 +839,7 @@ mod tests {
             ),
             "the unknown name changes nothing but stays listed for its undo"
         );
-        assert_eq!(marked.not_needed.get("summoner druid"), None, "no earlier stage");
+        assert_eq!(marked.not_needed.len(), 1, "only the marked build");
         set_not_needed(&files, "fury druid", "duress", true)?;
         set_not_needed(&files, "Fury Druid", "No Such Piece", true)?;
         assert_eq!(fury(&load(&files))?, (true, true, true, vec![]), "undone");

@@ -99,8 +99,15 @@
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
     "level": "Izual (Nightmare)",
     "skill": "Lightning Sentry",
-    "points": 2,
-    "note": "Quest points."
+    "points": 1,
+    "note": "Quest point (Lightning Sentry 16: a level-24 skill holds at most character level - 23 points)."
+   },
+   {
+    "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
+    "level": "Izual (Nightmare)",
+    "skill": "Shock Web",
+    "points": 1,
+    "note": "Quest point."
    },
    {
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
@@ -111,16 +118,16 @@
    },
    {
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
-    "level": "40-42",
+    "level": "40-43",
     "skill": "Lightning Sentry",
-    "points": 3,
+    "points": 4,
     "note": "Lightning Sentry 20; then the endgame guide's order: Shock Web, Charged Bolt Sentry, Death Sentry, Fire Blast."
    },
    {
     "stage": "lvl 38-99 (Trapsin, from the skill reset at 38)",
-    "level": "43-59",
+    "level": "44-59",
     "skill": "Shock Web",
-    "points": 17,
+    "points": 16,
     "note": "Synergy of Lightning Sentry."
    },
    {

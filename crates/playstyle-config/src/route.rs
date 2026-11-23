@@ -35,7 +35,7 @@ mod tests {
 
     #[test]
     fn the_shipped_route_parses_without_warnings() -> Result<()> {
-        let (route, warnings) = parse_route(include_str!("../../../playstyles/summoner-fury/route.toml"))?;
+        let (route, warnings) = parse_route(include_str!("../../../playstyles/fury-druid/route.toml"))?;
         assert_eq!(warnings, Vec::<String>::new());
         assert_eq!(route.bosses, ["The Countess", "Mephisto", "Andariel", "Baal"]);
         let (_, warnings) = parse_route("bosses = [\"Nobody\"]")?;

@@ -1057,14 +1057,14 @@ mod tests {
         assert_eq!(piece_kind("Titan's Revenge"), None);
     }
 
-    /// A summoner druid at 20 FCR (the 19 breakpoint: 15 frames) with a plain club, a magic
+    /// A caster druid at 20 FCR (the 19 breakpoint: 15 frames) with a plain club, a magic
     /// armor with 20 FCR and an empty helm slot.
-    fn summoner_worn<'a>(club: &'a [ItemStat], armor: &'a [ItemStat]) -> [(u8, Piece<'a>); 2] {
+    fn caster_worn<'a>(club: &'a [ItemStat], armor: &'a [ItemStat]) -> [(u8, Piece<'a>); 2] {
         [(4, piece("clb", club)), (3, piece("qui", armor))]
     }
 
-    /// The summoner's plan: no plain or magic weapon piece, a shield in the off-hand.
-    fn summoner_plan() -> Plan {
+    /// The caster's plan: no plain or magic weapon piece, a shield in the off-hand.
+    fn caster_plan() -> Plan {
         Plan {
             weapon_kinds: Vec::new(),
             offhand: true,
@@ -1076,21 +1076,21 @@ mod tests {
     fn a_magic_wand_is_no_weapon_of_the_druids_build() {
         let club = [base(stat::MIN_DAMAGE, 1), base(stat::MAX_DAMAGE, 6)];
         let armor = [base(stat::DEFENSE, 8), st(stat::FCR, 20)];
-        let worn = summoner_worn(&club, &armor);
+        let worn = caster_worn(&club, &armor);
         let wand = [st(stat::MAX_MANA, 40), st(stat::FCR, 10)];
         let who = druid();
         assert!(
             verdict(piece("wnd", &wand), Some(0), &worn, &who, None).is_some(),
             "without a build any kind counts"
         );
-        let plan = summoner_plan();
+        let plan = caster_plan();
         assert_eq!(
             verdict(piece("wnd", &wand), Some(0), &worn, &who, Some(&plan)),
             None
         );
         let magic_staff = Plan {
             weapon_kinds: vec!["staf"],
-            ..summoner_plan()
+            ..caster_plan()
         };
         assert_eq!(
             verdict(piece("bst", &wand), Some(0), &worn, &who, Some(&magic_staff)).as_deref(),
@@ -1099,7 +1099,7 @@ mod tests {
         );
         let no_offhand = Plan {
             offhand: false,
-            ..summoner_plan()
+            ..caster_plan()
         };
         let shield = [st(stat::RES_FIRE, 30)];
         assert!(verdict(piece("buc", &shield), Some(0), &worn, &who, Some(&plan)).is_some());
@@ -1114,9 +1114,9 @@ mod tests {
     fn an_armor_that_costs_an_fcr_breakpoint_is_not_better() {
         let club = [base(stat::MIN_DAMAGE, 1), base(stat::MAX_DAMAGE, 6)];
         let armor = [base(stat::DEFENSE, 8), st(stat::FCR, 20)];
-        let worn = summoner_worn(&club, &armor);
+        let worn = caster_worn(&club, &armor);
         let who = druid();
-        let plan = summoner_plan();
+        let plan = caster_plan();
         let life = [base(stat::DEFENSE, 20), st(stat::MAX_LIFE, 60)];
         assert_eq!(
             verdict(piece("lea", &life), Some(0), &worn, &who, Some(&plan)),
@@ -1137,7 +1137,7 @@ mod tests {
         let who = druid();
         let plan = Plan {
             build_pieces: vec![3],
-            ..summoner_plan()
+            ..caster_plan()
         };
         let res = [st(stat::FCR, 20), st(stat::FHR, 25), st(stat::RES_FIRE, 20)];
         assert!(verdict(piece("qui", &res), Some(0), &worn, &who, None).is_some());
@@ -1164,7 +1164,7 @@ mod tests {
         let worn = [(11, piece("bst", &worn_staff))];
         let mut who = druid();
         who.teleport = true;
-        let plan = summoner_plan();
+        let plan = caster_plan();
         let level_3 = charges(3);
         assert_eq!(
             verdict(piece("bst", &level_3), Some(0), &worn, &who, Some(&plan)).as_deref(),
