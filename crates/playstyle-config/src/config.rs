@@ -938,6 +938,17 @@ impl Settings {
         }
     }
 
+    /// Whether every own character following this playstyle is past the farm group for build
+    /// `target`: `stages` (their current stage names) holds one whose stage comes after it along
+    /// the `next` links and none at it or before it.
+    #[must_use]
+    pub fn farm_passed(&self, target: &str, stages: &[&str]) -> bool {
+        let target = target.trim().to_lowercase();
+        let stages: Vec<String> = stages.iter().map(|s| s.trim().to_lowercase()).collect();
+        stages.iter().any(|s| *s != target && self.leads_to(&target, s))
+            && !stages.iter().any(|s| self.leads_to(s, &target))
+    }
+
     /// The character's `BiS`: its inline slots when it has any, else the current stage's.
     #[must_use]
     pub fn resolved_bis(
@@ -1907,6 +1918,20 @@ mod tests {
             b.next = Some("leveling".to_owned());
         }
         assert_eq!(config.stage_chain("tornado"), ["Tornado", "Fissure", "Leveling"]);
+    }
+
+    #[test]
+    fn a_farm_group_is_passed_once_every_character_is_past_its_stage() {
+        let config = druid_chain();
+        assert!(config.farm_passed("Leveling", &["Tornado"]));
+        assert!(config.farm_passed("Leveling", &["Fissure", "Tornado"]));
+        assert!(!config.farm_passed("Tornado", &["Tornado"]), "at the stage");
+        assert!(
+            !config.farm_passed("Leveling", &["Fissure", "Leveling"]),
+            "one still before"
+        );
+        assert!(!config.farm_passed("Leveling", &[]), "nobody plays the chain");
+        assert!(!config.farm_passed("Elsewhere", &["Fissure"]), "off the chain");
     }
 
     #[test]

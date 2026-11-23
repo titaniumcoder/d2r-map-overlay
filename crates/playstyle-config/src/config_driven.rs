@@ -8,7 +8,7 @@ use d2r_core::played::Played;
 use d2r_core::playstyle::{Evaluation, EvaluationOf, Files, Playstyle};
 use d2r_core::web::{LiveInfo, Panels};
 
-use crate::config::{Settings, Stage, owns_nothing, playstyle_of};
+use crate::config::{FarmGroup, Settings, Stage, owns_nothing, playstyle_of};
 use crate::stash_plan::{Other, Others, Wants};
 use crate::{files, marks, stash_plan, web};
 
@@ -49,6 +49,9 @@ pub struct Extra<'a> {
     pub stage: Option<Stage<'a>>,
     /// The names of the current stage and its later ones, for the farm panel.
     pub chain: Vec<String>,
+    /// The farm groups some own character following the playstyle still needs
+    /// ([`stash_plan::farm_needed`]), for the farm panel.
+    pub farm: Vec<FarmGroup>,
 }
 
 /// Each folder's files: the selected one's as given, every other one's own files only.
@@ -96,8 +99,9 @@ impl ConfigDriven {
     }
 
     /// The other own characters in `played` (not `me`; class known), by the playstyle they
-    /// follow, for the playing character's playstyle `mine`; every other playstyle is listed,
-    /// with or without characters (its farm list counts).
+    /// follow, for the playing character's playstyle `mine`; one of the playstyle's class
+    /// without a stage has an empty chain (no farm group is passed while it is there). Every
+    /// other playstyle is listed, with or without characters (its farm list counts).
     fn others(&self, me: &str, mine: &str, played: &Played) -> Others<'_> {
         let folders = self.folders();
         let mut others = Others {
@@ -114,11 +118,15 @@ impl ConfigDriven {
             };
             let (folder, config) = self.playstyle_of(key, Some(class));
             let reached = entry.stage.as_deref();
-            let Some(stage) = config.stage(key, Some(class), entry.level, &owns_nothing, reached) else {
-                continue;
+            let stage = config.stage(key, Some(class), entry.level, &owns_nothing, reached);
+            let of_class = config.build_defs.values().any(|b| b.class == Some(class));
+            let chain = match stage {
+                Some(stage) => config.stage_chain(stage.slug),
+                None if of_class => Vec::new(),
+                None => continue,
             };
             let other = Other {
-                chain: config.stage_chain(stage.slug),
+                chain,
                 class,
                 level: entry.level,
                 worn: entry.worn.clone(),
@@ -185,6 +193,10 @@ impl Playstyle for ConfigDriven {
         let chain = stage.map_or_else(Vec::new, |s| config.stage_chain(s.slug));
         let others = self.others(name, folder, played);
         let (items, wants) = stash_plan::for_snapshot(snap, config, &chain, bis.as_ref(), &others);
+        let farm = stash_plan::farm_needed(config, &others.own_stages(&chain))
+            .into_iter()
+            .cloned()
+            .collect();
         Evaluation {
             guidance: Guidance {
                 rating: build::rate(snap.level.id, snap.difficulty, damages),
@@ -197,7 +209,12 @@ impl Playstyle for ConfigDriven {
                 wants,
             },
             reached: moved_on,
-            extra: Extra { config, stage, chain },
+            extra: Extra {
+                config,
+                stage,
+                chain,
+                farm,
+            },
         }
     }
 
@@ -209,7 +226,7 @@ impl Playstyle for ConfigDriven {
             bis: evaluation.guidance.bis.as_ref(),
             build: extra.stage.map(|s| s.build),
             stage: extra.stage,
-            farm: &config.farm,
+            farm: &extra.farm,
             route: &config.route,
             stage_chain: &extra.chain,
             not_needed: &config.not_needed,
@@ -314,6 +331,33 @@ mod tests {
         assert_eq!(
             at(38)?,
             (Some("trapsin".to_owned()), "trapsin".to_owned(), trapsin)
+        );
+        // The farm panel hides the Fire Wake group once she is past that stage.
+        let farm_at = |level: u8, played: &Played| -> Result<Vec<String>> {
+            let mut snap: Snapshot = serde_json::from_str(fixture)?;
+            snap.player.class = 6;
+            "Trapper".clone_into(&mut snap.player.name);
+            snap.player.char_level = Some(level);
+            let evaluation = playstyle.evaluate(&snap, None, played);
+            Ok(evaluation.extra.farm.iter().map(|g| g.target.clone()).collect())
+        };
+        assert_eq!(farm_at(20, &none)?, ["Fire Wake Assassin", "Trapsin"]);
+        assert_eq!(farm_at(55, &none)?, ["Trapsin"]);
+        let leveling_alt = Played::from([(
+            "starter".to_owned(),
+            d2r_core::played::Entry {
+                name: "Starter".to_owned(),
+                t: 1,
+                class: Some(6),
+                stage: None,
+                level: Some(12),
+                worn: Vec::new(),
+            },
+        )]);
+        assert_eq!(
+            farm_at(55, &leveling_alt)?,
+            ["Fire Wake Assassin", "Trapsin"],
+            "another own assassin still needs it"
         );
         let summoner = playstyle.evaluate(&druid, None, &none);
         assert_eq!(

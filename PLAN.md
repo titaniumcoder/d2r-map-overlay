@@ -1356,7 +1356,8 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   pieces whose leveling window the character has passed, extras, `switch_requires` without the
   not-needed ones and, for a met any-of group, only its count of held candidates, worn first) and of the farm list,
   as many copies as needed minus the worn ones; one white
-  base per (runeword, wearer, slot) need: allowed type, exactly the rune count of sockets, usable by
+  base per (runeword, wearer, slot) need, only for upgrades and one per slot and socket count
+  (see "Only upgrades keep a base" below): allowed type, exactly the rune count of sockets, usable by
   the player class (within the build's `weapon_rule` for its `weapon` slot) or the merc of
   the build's act that carries it (`merc_acts`); each copy of the runeword already held (worn, carried,
   stashed, merc) drops one such need, and the narrowest need picks its base first. Each need
@@ -1366,6 +1367,32 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   plain, then the lower str + dex requirement, then the better place. The worse bases are sold,
   even one already kept on pages 1–2. Fine on pages 1–2 and in the personal stash; in the
   inventory or cube it is a move to 1–2 (user, 2026-11-20: "wrong place (inv, stash)").
+- **Only upgrades keep a base** (user decision 2026-11-23, replacing 2026-11-22's "guide
+  alternatives keep their bases"; report: "you keep a lot of 2os and 3os armors around, why?").
+  Rank = the required level of the build entry (`Name@N`; else the runeword's known level,
+  `info::piece_level`). Per slot list (player and merc, every build of the chain, the `[bis]`
+  slots, and the slots a farm entry's build places it in), a runeword ranking at or below the
+  piece worn in that slot wants no base; the worn one itself keeps its need, which its worn copy
+  then meets (`stash_plan::upgrades`). Nothing of the list worn: all count. The live player's
+  pieces are matched by body slot (`Equipped::body`; the `swap` list by the swap hands' bodies
+  11 / 12, so a main-hand runeword is not worn in the swap, `worn_bodies`; the swap bodies are
+  the game's BODYLOC numbers, not yet seen live in a snapshot), the merc's by name; other own characters (`played.json` worn, own and merc mixed) by name in every slot. A
+  worn copy meets the need of the slot it is worn in first (`drop_made_bases`): the Trapsin's
+  worn Spirit sword meets the weapon need, the off-hand Spirit Monarch is still wanted.
+  Then **one base per holder, slot and socket count** (`Needs::collapse`, before held copies drop
+  needs): the higher-ranked runeword's need takes a lower one's when every base that makes the
+  lower one makes it too (Enigma's 3os armor serves Treachery, Eternity's 5os weapon Grief,
+  Brand's 4os bow Harmony, Pride's polearm Insight); a full tie keeps the one with more bases,
+  else the first. Different fitting bases keep both (Plague's 3os claw / sword / dagger and
+  Hustle's any 3os weapon; Harmony shared with the Act 1 rogue's amazon bows stays beside
+  Brand). The holder is the player class (with or without an off-hand) or the mercenary of any
+  act (one at a time, its gear handed on: the Summoner's Act 2 and the Fury's Act 5 merc share
+  one Bulwark helm base, the Act 5 one that also takes barbarian helms). Slot-less needs
+  (extras, a farm entry without slot) are not collapsed. A made copy of the kept runeword drops
+  the need as before; a made copy of a lower one drops nothing (its base was the higher one's).
+  Collapse runs before held copies drop needs on purpose (reviewed 2026-11-23): an owned higher
+  runeword supersedes the lower ones, so no base is kept for them.
+- [x] only upgrades + one base per slot and socket count (2026-11-23)
 - **Hands and merc acts** (user, 2026-11-20: "why replace a Broad Sword with a Zweihander? a
   2h sword can't be used by the Act 5 merc for dual wield"). One-/two-handed comes from
   weapons.txt `2handed` and `1or2handed` (`weapons_data`, `gen_weapons.py`; a barbarian player
@@ -1630,6 +1657,18 @@ trait; `src/playstyle/stash_plan.rs`, shown in the dashboard's Sell / Keep panel
   per build a "for X · held/total held" heading and a grid of item cards (name, kind, status
   pill, needs, note, runes short in red as have/need, base hint), with the where line at each
   card's bottom. The boss-card JSON and page are gone.
+  **Passed stages hidden** (user decision 2026-11-23: Vex, a Trapsin, still saw "for Fire Wake
+  Assassin · 6/6 held"): a farm group leaves the panel (`groups`, `held`, the where lines'
+  worth) once every own character following the playstyle is past its build: one character's
+  current stage comes strictly after the group's build along the `next` links and none is at
+  it or before it (`Settings::farm_passed`; the player's stage and the other own characters'
+  from `played.json`, `Others::own_stages`; nobody on its chain: shown). An own character of
+  the playstyle's class without a resolved stage keeps every group shown (it may still need
+  any). Characters on an unrelated chain of the same playstyle neither pass nor keep a group. `Extra::farm` holds the
+  groups left, `stash_plan::farm_needed` picks them. Such a group adds no pieces and no base
+  needs to the stash plan either (`Needs::from_config` / `add_party` take the stages). Its
+  rolled entries still keep their copies (`Scoring::rolled`: the Trapsin's Lower Resist wand
+  "is needed sometimes", user 2026-11-22).
 - [x] 9. The route engine and a "Next" panel on the dashboard. **Data**:
   `playstyles/summoner-fury/route.toml` (user override `~/.config/d2r-map-overlay/playstyle/route.toml`
   wins whole; no old place; hot-reloaded, a broken file keeps the current route). Format (the
@@ -1788,7 +1827,7 @@ gear farming immediately starts the same as with the fury druid. think of it as 
 
 ## Stash-plan anomalies (found 2026-11-22; fixed the same day by user decision)
 User decided 2026-11-22: fix these four; guide alternatives keep their bases ("the bases are
-fine, keep them").
+fine, keep them"; superseded 2026-11-23 by "Only upgrades keep a base", see "Item places").
 - [x] A not-needed mark reaches `switch_requires`: Harmony (marked on the Summoner) no longer
   wants the piece or a base via the Summoner's one-item switch group (`Needs::switch_gear`);
   the switch condition itself is unchanged. The Colossus Crossbow 4os stays kept, now as the

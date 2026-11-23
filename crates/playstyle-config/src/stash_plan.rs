@@ -1,7 +1,7 @@
 //! Keep / move / stow / sell / give-away verdicts for the player's items: shared pages 1–2 are
 //! own, 3–4 trade, 5 ignored. The rules are in `PLAN.md` ("Item places: sell / move / keep").
 
-use std::cmp::Reverse;
+use std::cmp::{Ordering, Reverse};
 use std::collections::BTreeMap;
 
 pub use d2r_core::guidance::{Action, Advice, Side, Spot};
@@ -14,6 +14,7 @@ use crate::valuables::{self, Tier, Verdict};
 use crate::web::farm::{FarmStatus, farm_status};
 use d2r_core::game::{ItemDrop, Place, Snapshot};
 use d2r_core::guidance::Tab;
+use d2r_core::info::piece_level;
 use d2r_core::item_stats::stat;
 use d2r_core::items::DropKind;
 use d2r_core::names::same_name;
@@ -226,7 +227,116 @@ impl Others<'_> {
             .flat_map(|(config, others)| others.iter().map(move |o| (*config, o)));
         alongside.chain(elsewhere)
     }
+
+    /// The current stages of the player (its stage `chain`) and of the other characters
+    /// following its playstyle, for [`Settings::farm_passed`].
+    #[must_use]
+    pub fn own_stages<'s>(&'s self, chain: &'s [String]) -> Vec<&'s str> {
+        let others = self.alongside.iter().map(|o| o.chain.as_slice());
+        stages(std::iter::once(chain).chain(others))
+    }
 }
+
+/// The current stage of each stage chain ([`Settings::stage_chain`]: its first name); none at
+/// all when a chain is empty (a character without a stage may still need any farm group).
+fn stages<'a>(chains: impl IntoIterator<Item = &'a [String]>) -> Vec<&'a str> {
+    let firsts: Option<Vec<&str>> = chains
+        .into_iter()
+        .map(|c| c.first().map(String::as_str))
+        .collect();
+    firsts.unwrap_or_default()
+}
+
+/// The farm groups of `config` some own character still needs (`stages`: the current stages
+/// of the characters following it, [`Settings::farm_passed`]).
+#[must_use]
+pub fn farm_needed<'c>(config: &'c Settings, stages: &[&str]) -> Vec<&'c FarmGroup> {
+    config
+        .farm
+        .iter()
+        .filter(|g| !config.farm_passed(&g.target, stages))
+        .collect()
+}
+
+/// What a character and its mercenary wear, for the upgrade rule ([`upgrades`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Worn<'a> {
+    /// Every piece the character and its mercenary wear.
+    pub names: &'a [String],
+    /// The player's pieces by `ItemData::BODY` slot, when known apart from the mercenary's
+    /// (`merc`); without, a piece of `names` counts as worn in every slot.
+    pub by_slot: Option<&'a [(u8, String)]>,
+    /// The mercenary's pieces, read only with `by_slot`.
+    pub merc: &'a [String],
+}
+
+impl<'a> Worn<'a> {
+    /// The pieces `names` worn, slots unknown.
+    const fn named(names: &'a [String]) -> Self {
+        Self {
+            names,
+            by_slot: None,
+            merc: &[],
+        }
+    }
+
+    /// Whether piece `name` is worn in one of the `ItemData::BODY` slots `bodies` (empty: any)
+    /// by the mercenary (`merc`) or the player.
+    fn wears(&self, bodies: &[u8], name: &str, merc: bool) -> bool {
+        let named = |w: &String| same_name(w, name);
+        match self.by_slot {
+            None => self.names.iter().any(named),
+            Some(_) if merc => self.merc.iter().any(named),
+            Some(player) => player
+                .iter()
+                .any(|(b, w)| (bodies.is_empty() || bodies.contains(b)) && named(w)),
+        }
+    }
+}
+
+/// `slots` (of the mercenary when `merc`) without the pieces that rank (by required level,
+/// [`d2r_core::info::piece_level`]) at or below the one worn in their slot, the worn one
+/// itself left in: only an upgrade of the worn piece keeps a base. A slot whose list holds
+/// nothing worn keeps all; a slot left empty stays (a held shield still makes the weapon
+/// one-handed).
+fn upgrades(
+    slots: &BTreeMap<String, Vec<String>>,
+    worn: Worn<'_>,
+    merc: bool,
+) -> BTreeMap<String, Vec<String>> {
+    slots
+        .iter()
+        .map(|(slot, pieces)| {
+            let bodies = worn_bodies(slot);
+            let worn_here = |entry: &&String| worn.wears(&bodies, piece_name(entry), merc);
+            let worn_rank = pieces
+                .iter()
+                .filter(worn_here)
+                .filter_map(|e| piece_level(e))
+                .max();
+            let left = pieces
+                .iter()
+                .filter(|e| worn_here(e) || worn_rank.is_none_or(|r| piece_level(e).is_none_or(|n| n > r)))
+                .cloned()
+                .collect();
+            (slot.clone(), left)
+        })
+        .collect()
+}
+
+/// The `ItemData::BODY` slots a piece of build slot `slot` is worn in: the weapon swap has its
+/// own (11 right, 12 left), unlike [`slot_body`] where it takes the weapon slot's bases.
+fn worn_bodies(slot: &str) -> Vec<u8> {
+    match slot {
+        "swap" => vec![SWAP_RIGHT, SWAP_LEFT],
+        "ring1" | "ring2" => vec![6, 7],
+        _ => slot_body(slot).into_iter().collect(),
+    }
+}
+
+/// `ItemData::BODY` of the swap weapon hands.
+const SWAP_RIGHT: u8 = 11;
+const SWAP_LEFT: u8 = 12;
 
 fn build_def<'a>(config: &'a Settings, name: &str) -> Option<&'a Build> {
     config.build_defs.get(&name.to_lowercase())
@@ -271,11 +381,61 @@ struct BaseNeed {
     also: Option<Wearer>,
     /// The build's rule for the player's `weapon` slot (the default elsewhere).
     rule: WeaponRule,
+    /// The runeword's required level ([`d2r_core::info::piece_level`]; 0 unknown): a higher
+    /// one in the same slot takes the base ([`Needs::collapse`]).
+    rank: u32,
 }
 
 impl BaseNeed {
+    fn new(word: &'static Runeword, entry: &str, wearer: Wearer, slot: Option<u8>, rule: WeaponRule) -> Self {
+        Self {
+            word,
+            wearer,
+            slot,
+            also: None,
+            rule,
+            rank: piece_level(entry).unwrap_or(0),
+        }
+    }
+
     fn wearers(&self) -> impl Iterator<Item = Wearer> {
         std::iter::once(self.wearer).chain(self.also)
+    }
+
+    /// Whether base `code` (socket count aside) makes this runeword for a wearer in the slot.
+    fn takes(&self, code: &str) -> bool {
+        self.wearers()
+            .any(|w| socket_bases::fits(self.word, code, w, self.slot) && self.rule.allows(code, w))
+    }
+
+    /// The player class whose hands it fills, `None` for the mercenary (one at a time, its
+    /// gear handed on between acts).
+    const fn holder(&self) -> Option<u32> {
+        match self.wearer {
+            Wearer::Player(class) | Wearer::PlayerWithOffhand(class) => Some(class),
+            Wearer::Merc(_) => None,
+        }
+    }
+
+    /// Whether this need takes the base of `low`, a need of its holder, slot and socket count:
+    /// it ranks higher, or as high with more bases (`at` and `low_at`: their places in the
+    /// list, the earlier winning a full tie), and every base that makes `low` makes it too.
+    fn serves(&self, at: usize, low: &Self, low_at: usize) -> bool {
+        let sockets = low.word.runes.len();
+        let same_place = self.slot.is_some()
+            && (self.holder(), self.slot, self.word.runes.len()) == (low.holder(), low.slot, sockets);
+        let covers = |high: &Self, low: &Self| {
+            d2r_core::bases_data::SOCKETABLE
+                .iter()
+                .filter(|row| usize::from(row.3) >= sockets)
+                .all(|row| !low.takes(row.0) || high.takes(row.0))
+        };
+        same_place
+            && match self.rank.cmp(&low.rank) {
+                Ordering::Greater => covers(self, low),
+                Ordering::Less => false,
+                Ordering::Equal => covers(self, low) && (at < low_at || !covers(low, self)),
+            }
     }
 }
 
@@ -351,26 +511,26 @@ impl Needs {
         let Some(word) = runewords_data::lookup(piece_name(entry)) else {
             return false;
         };
-        let need = BaseNeed {
-            word,
-            wearer,
-            slot,
-            also: None,
-            rule,
-        };
+        let need = BaseNeed::new(word, entry, wearer, slot, rule);
         if !self.bases.contains(&need) {
             self.bases.push(need);
         }
         true
     }
 
-    /// Every piece of build `slots` (slot name → pieces) and a base for each runeword in it,
-    /// the `weapon` slot's under `rule`.
-    fn slots(&mut self, slots: &BTreeMap<String, Vec<String>>, wearer: Wearer, rule: WeaponRule) {
+    /// Every piece of build `slots` (slot name → pieces) and a base for each runeword in it
+    /// that would upgrade the `worn` one ([`upgrades`]), the `weapon` slot's under `rule`.
+    fn slots(
+        &mut self,
+        slots: &BTreeMap<String, Vec<String>>,
+        wearer: Wearer,
+        rule: WeaponRule,
+        worn: Worn<'_>,
+    ) {
         for entry in slots.values().flatten() {
             self.piece(entry, 1);
         }
-        self.slot_bases(slots, wearer, rule, None);
+        self.slot_bases(&upgrades(slots, worn, false), wearer, rule, None);
     }
 
     /// A base for each runeword in build `slots` (only runeword `only` when set) for `wearer`;
@@ -405,17 +565,19 @@ impl Needs {
         any
     }
 
-    /// Every piece of mercenary `slots` and a base for each runeword in it.
+    /// Every piece of mercenary `slots` and a base for each runeword in it that would upgrade
+    /// the `worn` one ([`upgrades`]).
     fn merc_slots(
         &mut self,
         slots: &BTreeMap<String, Vec<String>>,
         build: Option<&Build>,
+        worn: Worn<'_>,
         spare: &mut Vec<BaseNeed>,
     ) {
         for entry in slots.values().flatten() {
             self.piece(entry, 1);
         }
-        self.merc_bases(slots, build, None, spare);
+        self.merc_bases(&upgrades(slots, worn, true), build, None, spare);
     }
 
     /// A base for each runeword in mercenary `slots` (only runeword `only` when set) of
@@ -455,13 +617,13 @@ impl Needs {
         let Some(word) = runewords_data::lookup(piece_name(entry)) else {
             return false;
         };
-        spare.push(BaseNeed {
+        spare.push(BaseNeed::new(
             word,
-            wearer: Wearer::Merc(act),
+            entry,
+            Wearer::Merc(act),
             slot,
-            also: None,
-            rule: WeaponRule::default(),
-        });
+            WeaponRule::default(),
+        ));
         true
     }
 
@@ -497,17 +659,20 @@ impl Needs {
     /// The player's own needs from the resolved `bis`, every build of the stage `chain`
     /// ([`Settings::stage_chain`]) and the farm list; a player piece is for `class` unless its
     /// build names one. A build's piece whose leveling window ends below the character's
-    /// `level` is no need of that build. Pieces `worn` by the character or its mercenary need
+    /// `level` is no need of that build, and a runeword no better than the one `worn` in its
+    /// slot wants no base ([`upgrades`]). Pieces `worn` by the character or its mercenary need
     /// no stash copy, and each copy `owns` counts drops one base need of that runeword (and
-    /// meets `switch_requires` groups).
+    /// meets `switch_requires` groups). A farm group every own character is past (`stages`:
+    /// the current stages of the characters following `config`, [`Settings::farm_passed`])
+    /// wants nothing.
     #[must_use]
     pub fn from_config(
         config: &Settings,
         chain: &[String],
         bis: Option<&Bis>,
-        class: u32,
-        level: Option<u8>,
-        worn: &[String],
+        (class, level): (u32, Option<u8>),
+        worn: Worn<'_>,
+        stages: &[&str],
         owns: &dyn Fn(&str) -> u32,
     ) -> Self {
         let mut needs = Self::default();
@@ -515,34 +680,48 @@ impl Needs {
         if let Some(bis) = bis {
             let def = build_def(config, &bis.build);
             let rule = def.map_or_default(|b| b.weapon_rule);
-            needs.slots(&current(&bis.slots, def, level), Wearer::Player(class), rule);
-            needs.merc_slots(&current(&bis.merc_slots, def, level), def, &mut spare);
+            needs.slots(
+                &current(&bis.slots, def, level),
+                Wearer::Player(class),
+                rule,
+                worn,
+            );
+            needs.merc_slots(&current(&bis.merc_slots, def, level), def, worn, &mut spare);
         }
         for build in chain_builds(config, chain) {
-            needs.build(build, class, level, &mut spare);
-            needs.switch_gear(config, build, class, worn, owns);
+            needs.build(build, (class, level), worn, &mut spare);
+            needs.switch_gear(config, build, class, worn.names, owns);
         }
-        for group in &config.farm {
-            needs.farm_group(group, build_def(config, &group.target), class, &mut spare);
+        for group in farm_needed(config, stages) {
+            needs.farm_group(group, build_def(config, &group.target), (class, worn), &mut spare);
         }
-        needs.share(spare);
-        needs.drop_slotless_placed();
-        needs.subtract_worn(worn);
-        needs.drop_made_bases(owns);
+        needs.settle(spare, worn, owns);
         needs
     }
 
+    /// Ends a character's (or party's) needs: the alternative mercenaries' `spare` ones shared
+    /// in, one base per slot and socket count, no stash copy of a `worn` piece, no base for a
+    /// runeword copy `owns` counts.
+    fn settle(&mut self, spare: Vec<BaseNeed>, worn: Worn<'_>, owns: &dyn Fn(&str) -> u32) {
+        self.share(spare);
+        self.drop_slotless_placed();
+        self.collapse();
+        self.subtract_worn(worn.names);
+        self.drop_made_bases(owns, worn);
+    }
+
     /// Adds what the other own characters `members` following `config`'s playstyle want, and
-    /// `config`'s farm list when `farm`: another character's copy, so piece counts add up
-    /// (within the party the larger count wins, as for one character). A copy a member wears
-    /// needs no stash copy; a runeword copy a member wears or the shared stash holds
-    /// (`stashed`) drops one of the party's base needs. A farm entry is for `class` unless
-    /// its build names one.
+    /// `config`'s farm list when `farm` holds the current stages of the characters following
+    /// it (a group every one of them is past wants nothing): another character's copy, so
+    /// piece counts add up (within the party the larger count wins, as for one character). A
+    /// copy a member wears needs no stash copy; a runeword copy a member wears or the shared
+    /// stash holds (`stashed`) drops one of the party's base needs. A farm entry is for
+    /// `class` unless its build names one.
     fn add_party(
         &mut self,
         config: &Settings,
         members: &[&Other],
-        (farm, class): (bool, u32),
+        (farm, class): (Option<&[&str]>, u32),
         stashed: &dyn Fn(&str) -> u32,
     ) {
         let mut party = Self::default();
@@ -550,21 +729,19 @@ impl Needs {
         let mut worn: Vec<String> = Vec::new();
         for member in members {
             let owns = |name: &str| worn_copies(&member.worn, name).saturating_add(stashed(name));
+            let wears = Worn::named(&member.worn);
             for build in chain_builds(config, &member.chain) {
-                party.build(build, member.class, member.level, &mut spare);
+                party.build(build, (member.class, member.level), wears, &mut spare);
                 party.switch_gear(config, build, member.class, &member.worn, &owns);
             }
             worn.extend(member.worn.iter().cloned());
         }
-        if farm {
-            for group in &config.farm {
-                party.farm_group(group, build_def(config, &group.target), class, &mut spare);
-            }
+        let worn = Worn::named(&worn);
+        for group in farm.map_or_default(|stages| farm_needed(config, stages)) {
+            party.farm_group(group, build_def(config, &group.target), (class, worn), &mut spare);
         }
-        party.share(spare);
-        party.drop_slotless_placed();
-        party.subtract_worn(&worn);
-        party.drop_made_bases(&|name: &str| worn_copies(&worn, name).saturating_add(stashed(name)));
+        let owns = |name: &str| worn_copies(worn.names, name).saturating_add(stashed(name));
+        party.settle(spare, worn, &owns);
         for (name, count) in party.pieces {
             match self.pieces.iter_mut().find(|(n, _)| same_name(n, &name)) {
                 Some((_, c)) => *c = c.saturating_add(count),
@@ -574,18 +751,26 @@ impl Needs {
         self.bases.extend(party.bases);
     }
 
-    /// The slots (those the character at `level` hasn't outgrown), extras and unique charm
-    /// wishes of `build`.
-    fn build(&mut self, build: &Build, class: u32, level: Option<u8>, spare: &mut Vec<BaseNeed>) {
+    /// The slots (those the character at `level` hasn't outgrown, bases only for upgrades of
+    /// the `worn` pieces), extras and unique charm wishes of `build`.
+    fn build(
+        &mut self,
+        build: &Build,
+        (class, level): (u32, Option<u8>),
+        worn: Worn<'_>,
+        spare: &mut Vec<BaseNeed>,
+    ) {
         let player = Wearer::Player(build.class.unwrap_or(class));
         self.slots(
             &current(&build.slots, Some(build), level),
             player,
             build.weapon_rule,
+            worn,
         );
         self.merc_slots(
             &current(&build.merc_slots, Some(build), level),
             Some(build),
+            worn,
             spare,
         );
         for entry in build.extras.values().flatten() {
@@ -658,19 +843,20 @@ impl Needs {
     }
 
     /// The named items of farm `group`. A runeword its `target` build places takes that
-    /// build's base needs, else one from the entry's own slot and wearer.
+    /// build's base needs (only where it upgrades the `worn` piece), else one from the entry's
+    /// own slot and wearer.
     fn farm_group(
         &mut self,
         group: &FarmGroup,
         target: Option<&Build>,
-        class: u32,
+        (class, worn): (u32, Worn<'_>),
         spare: &mut Vec<BaseNeed>,
     ) {
         let player = Wearer::Player(target.and_then(|b| b.class).unwrap_or(class));
         // A rolled entry names no item: [`farm_entry`] keeps its copies by their stats.
         for item in group.items.iter().filter(|i| i.kind != FarmKind::Rolled) {
             self.piece(&item.name, item.count);
-            if target.is_some_and(|build| self.placed_by(build, player, &item.name, spare)) {
+            if target.is_some_and(|build| self.placed_by(build, (player, worn), &item.name, spare)) {
                 continue;
             }
             let slot = item.slot.map(crate::config::FarmSlot::body);
@@ -682,12 +868,21 @@ impl Needs {
         }
     }
 
-    /// Wants the bases `build` places runeword `name` in, for the player and the mercenary;
-    /// whether it places it anywhere.
-    fn placed_by(&mut self, build: &Build, player: Wearer, name: &str, spare: &mut Vec<BaseNeed>) -> bool {
-        let placed = self.slot_bases(&build.slots, player, build.weapon_rule, Some(name));
-        let merc_placed = self.merc_bases(&build.merc_slots, Some(build), Some(name), spare);
-        placed || merc_placed
+    /// Wants the bases `build` places runeword `name` in where it upgrades the `worn` piece
+    /// ([`upgrades`]), for the player and the mercenary; whether it places it anywhere.
+    fn placed_by(
+        &mut self,
+        build: &Build,
+        (player, worn): (Wearer, Worn<'_>),
+        name: &str,
+        spare: &mut Vec<BaseNeed>,
+    ) -> bool {
+        let slots = upgrades(&build.slots, worn, false);
+        self.slot_bases(&slots, player, build.weapon_rule, Some(name));
+        let merc_slots = upgrades(&build.merc_slots, worn, true);
+        self.merc_bases(&merc_slots, Some(build), Some(name), spare);
+        let placed = build.slots.values().chain(build.merc_slots.values()).flatten();
+        runewords_data::lookup(name).is_some() && placed.into_iter().any(|e| same_name(piece_name(e), name))
     }
 
     /// Drops the slot-less needs of a runeword some build places in a slot: a two-hander could
@@ -710,21 +905,47 @@ impl Needs {
         }
     }
 
-    fn drop_made_bases(&mut self, owns: &dyn Fn(&str) -> u32) {
+    /// Keeps one need per holder, slot and socket count: a lower-ranked runeword's need goes
+    /// when a higher one's takes every base it would (that base serves whichever is made).
+    /// Slot-less needs stay.
+    fn collapse(&mut self) {
+        let bases = std::mem::take(&mut self.bases);
+        let served =
+            |i: usize, low: &BaseNeed| bases.iter().enumerate().any(|(j, high)| high.serves(j, low, i));
+        self.bases = bases
+            .iter()
+            .enumerate()
+            .filter(|&(i, low)| !served(i, low))
+            .map(|(_, need)| *need)
+            .collect();
+    }
+
+    /// Drops one base need per runeword copy `owns` counts, first the needs of the slot the
+    /// copy is `worn` in.
+    fn drop_made_bases(&mut self, owns: &dyn Fn(&str) -> u32, worn: Worn<'_>) {
         let mut held: Vec<(&str, u32)> = Vec::new();
-        self.bases.retain(|need| {
-            let name = need.word.name;
-            if !held.iter().any(|(n, _)| *n == name) {
-                held.push((name, owns(name)));
-            }
-            match held.iter_mut().find(|(n, _)| *n == name) {
-                Some((_, left)) if *left > 0 => {
-                    *left -= 1;
-                    false
+        let mut made = vec![false; self.bases.len()];
+        for worn_first in [true, false] {
+            for (need, made) in self.bases.iter().zip(&mut made) {
+                let name = need.word.name;
+                let merc = matches!(need.wearer, Wearer::Merc(_));
+                let bodies: Vec<u8> = need.slot.into_iter().collect();
+                if *made || worn.wears(&bodies, name, merc) != worn_first {
+                    continue;
                 }
-                _ => true,
+                if !held.iter().any(|(n, _)| *n == name) {
+                    held.push((name, owns(name)));
+                }
+                if let Some((_, left)) = held.iter_mut().find(|(n, _)| *n == name)
+                    && *left > 0
+                {
+                    *left -= 1;
+                    *made = true;
+                }
             }
-        });
+        }
+        let mut made = made.into_iter();
+        self.bases.retain(|_| !made.next().unwrap_or(false));
     }
 }
 
@@ -781,10 +1002,7 @@ fn base_rank(item: &ItemDrop) -> Rank {
 /// base of its type the wearer can use in the slot ([`socket_bases::fits`]).
 fn fills(need: &BaseNeed, base: &ItemDrop) -> bool {
     usize::from(base.sockets) == need.word.runes.len()
-        && base.code.as_deref().is_some_and(|code| {
-            need.wearers()
-                .any(|w| socket_bases::fits(need.word, code, w, need.slot) && need.rule.allows(code, w))
-        })
+        && base.code.as_deref().is_some_and(|code| need.takes(code))
 }
 
 /// The stash tab `h` belongs in when it is a gem, rune or material; `None` for anything else,
@@ -877,30 +1095,34 @@ pub fn for_snapshot(
         .into_iter()
         .chain(snap.merc_worn.iter().cloned())
         .collect();
+    let by_slot: Vec<(u8, String)> = snap
+        .equipped_items
+        .iter()
+        .filter_map(|e| Some((e.body, e.name.clone()?)))
+        .collect();
+    let wears = Worn {
+        names: &worn,
+        by_slot: Some(&by_slot),
+        merc: &snap.merc_worn,
+    };
     let holdings = snap.holdings();
     let owns = |name: &str| holdings.count(name);
-    let mut needs = Needs::from_config(
-        config,
-        chain,
-        bis,
-        snap.player.class,
-        snap.player.char_level,
-        &worn,
-        &owns,
-    );
+    let me = (snap.player.class, snap.player.char_level);
+    let mut needs = Needs::from_config(config, chain, bis, me, wears, &others.own_stages(chain), &owns);
     // Each other character is a party of its own (its copies add up); another playstyle's
     // farm list goes with its first character (as the own farm list goes with the player),
     // or stands alone.
     let stashed = |name: &str| holdings.copies(name, None).0;
     for other in &others.alongside {
-        needs.add_party(config, &[other], (false, other.class), &stashed);
+        needs.add_party(config, &[other], (None, other.class), &stashed);
     }
     for (other, members) in &others.playstyles {
         let class = members.first().map_or(snap.player.class, |m| m.class);
         let first: Vec<&Other> = members.first().into_iter().collect();
-        needs.add_party(other, &first, (true, class), &stashed);
+        let member_stages = stages(members.iter().map(|m| m.chain.as_slice()));
+        needs.add_party(other, &first, (Some(&member_stages), class), &stashed);
         for member in members.iter().skip(1) {
-            needs.add_party(other, &[member], (false, member.class), &stashed);
+            needs.add_party(other, &[member], (None, member.class), &stashed);
         }
     }
     let mut scoring = Scoring::new(snap, config, chain);
@@ -1461,7 +1683,7 @@ mod tests {
             }],
             ..Settings::default()
         };
-        Needs::from_config(&config, &[], None, 5, None, &[], &move |n| {
+        Needs::from_config(&config, &[], None, (5, None), Worn::default(), &[], &move |n| {
             u32::from(n == "Insight") * held
         })
     }
@@ -2501,9 +2723,9 @@ mod tests {
             &config,
             &["Fury".to_owned()],
             None,
-            0,
-            None,
-            &["Jalal's Mane".to_owned()],
+            (0, None),
+            Worn::named(&["Jalal's Mane".to_owned()]),
+            &[],
             &|_| 0,
         );
         let pieces: Vec<_> = needs.pieces.iter().map(|(n, c)| (n.as_str(), *c)).collect();
@@ -2608,9 +2830,10 @@ mod tests {
             level: Some(80),
             worn: vec!["Jalal's Mane".to_owned()],
         };
-        let mut needs = Needs::from_config(&druids, &chain("Fury"), None, 5, Some(90), &[], &|_| 0);
-        needs.add_party(&druids, &[&second_druid], (false, 5), &|_| 0);
-        needs.add_party(&assassins, &[&assassin], (true, 5), &|_| 0);
+        let fury = (5, Some(90));
+        let mut needs = Needs::from_config(&druids, &chain("Fury"), None, fury, Worn::default(), &[], &|_| 0);
+        needs.add_party(&druids, &[&second_druid], (None, 5), &|_| 0);
+        needs.add_party(&assassins, &[&assassin], (Some(&[]), 5), &|_| 0);
         let mut pieces: Vec<_> = needs.pieces.iter().map(|(n, c)| (n.as_str(), *c)).collect();
         pieces.sort_unstable();
         assert_eq!(
@@ -2707,7 +2930,7 @@ mod tests {
             ..Settings::default()
         };
         let needs = |held: u32| {
-            Needs::from_config(&config, &[], None, 5, None, &[], &move |n| {
+            Needs::from_config(&config, &[], None, (5, None), Worn::default(), &[], &move |n| {
                 u32::from(n == "Harmony") * held
             })
         };
@@ -2830,7 +3053,9 @@ mod tests {
             runeword_copies: &[],
             merc_worn: &[],
         };
-        let needs = Needs::from_config(&config, &[], None, 5, None, &[], &|n| holdings.count(n));
+        let needs = Needs::from_config(&config, &[], None, (5, None), Worn::default(), &[], &|n| {
+            holdings.count(n)
+        });
         assert_eq!(needs.bases.len(), 0, "Harmony on page 5 is held: no base wanted");
         assert_eq!(
             rows(&[at(base("hbw", 4), Spot::Page(1))], &needs),
@@ -2876,8 +3101,8 @@ mod tests {
             config,
             &chain,
             Some(&bis),
-            5,
-            None,
+            (5, None),
+            Worn::default(),
             &[],
             &|_| 0,
         ))
@@ -2942,14 +3167,15 @@ mod tests {
                     .any(|n| n.word.name == "Harmony" && n.wearer == DRUID),
                 "{stage}"
             );
-            // The summoner's merc keeps Act 2 for Insight.
-            assert!(
-                needs
-                    .bases
-                    .iter()
-                    .any(|n| n.word.name == "Insight" && n.wearer == Wearer::Merc(MercAct::Act2)),
-                "{stage}"
-            );
+            // The Act 2 merc's one 4-socket polearm: Pride's, which serves Insight too.
+            let act2: Vec<&str> = needs
+                .bases
+                .iter()
+                .filter(|n| n.wearer == Wearer::Merc(MercAct::Act2) && n.slot == Some(4))
+                .filter(|n| n.word.runes.len() == 4)
+                .map(|n| n.word.name)
+                .collect();
+            assert_eq!(act2, ["Pride"], "{stage}");
         }
         // The Fury has no off-hand: its weapon-slot runewords keep both hands.
         let bis = Bis {
@@ -2961,18 +3187,19 @@ mod tests {
             &config,
             &["fury druid".to_owned()],
             Some(&bis),
-            5,
-            None,
+            (5, None),
+            Worn::default(),
             &[],
             &|_| 0,
         );
-        let swap: Vec<Wearer> = own
+        // Brand's 4-socket bow serves Harmony too.
+        let swap: Vec<(&str, Wearer)> = own
             .bases
             .iter()
-            .filter(|n| matches!(n.word.name, "Harmony" | "Call to Arms"))
-            .map(|n| n.wearer)
+            .filter(|n| matches!(n.word.name, "Harmony" | "Brand" | "Call to Arms"))
+            .map(|n| (n.word.name, n.wearer))
             .collect();
-        assert_eq!(swap, vec![DRUID, DRUID]);
+        assert_eq!(swap, vec![("Call to Arms", DRUID), ("Brand", DRUID)]);
         Ok(())
     }
 
@@ -3207,8 +3434,8 @@ mod tests {
                 config,
                 &chain,
                 Some(&bis),
-                5,
-                None,
+                (5, None),
+                Worn::default(),
                 &[],
                 &|_| 0,
             ))
@@ -3222,7 +3449,9 @@ mod tests {
         let tomb_reaver = [at(named("7pa", item_data::QUALITY_UNIQUE, 298), Spot::Page(1))];
         let mut config = shipped();
         let needs = fury_needs(&config)?;
-        assert_eq!(wants(&needs, "Grief"), (true, true));
+        // Grief's 5-socket base is Eternity's, the higher runeword's.
+        assert_eq!(wants(&needs, "Grief"), (true, false));
+        assert_eq!(wants(&needs, "Eternity"), (true, true));
         assert_eq!(wants(&needs, "Tomb Reaver"), (true, false));
         let kept = rows(&tomb_reaver, &needs);
         assert_eq!(
@@ -3231,12 +3460,17 @@ mod tests {
         );
         let marked = crate::not_needed::NotNeeded::from([(
             "fury druid".to_owned(),
-            vec!["Grief".to_owned(), "Tomb Reaver".to_owned()],
+            vec![
+                "Eternity".to_owned(),
+                "Grief".to_owned(),
+                "Tomb Reaver".to_owned(),
+            ],
         )]);
         let mut marks = crate::not_needed::marks(&marked, &config.build_defs);
         crate::not_needed::apply(&mut marks, &mut config.build_defs, &mut config.farm);
         let needs = fury_needs(&config)?;
         assert_eq!(wants(&needs, "Grief"), (false, false), "no Grief base kept");
+        assert_eq!(wants(&needs, "Eternity"), (false, false));
         assert_eq!(wants(&needs, "Tomb Reaver"), (false, false));
         assert!(
             rows(&tomb_reaver, &needs)
@@ -3338,8 +3572,8 @@ mod tests {
             &config,
             &["fury druid".to_owned()],
             Some(&bis),
-            5,
-            None,
+            (5, None),
+            Worn::default(),
             &[],
             &|_| 0,
         );
@@ -3358,7 +3592,15 @@ mod tests {
         )?;
         let mut config = Settings::default();
         config.build_defs.insert("b".to_owned(), build);
-        let needs = Needs::from_config(&config, &["b".to_owned()], None, 5, None, &[], &|_| 0);
+        let needs = Needs::from_config(
+            &config,
+            &["b".to_owned()],
+            None,
+            (5, None),
+            Worn::default(),
+            &[],
+            &|_| 0,
+        );
         let wanted: Vec<_> = needs
             .bases
             .iter()
@@ -3435,7 +3677,7 @@ mod tests {
         let mut needs = Needs::default();
         let slots: BTreeMap<String, Vec<String>> =
             [("weapon".to_owned(), vec!["Lawbringer@43".to_owned()])].into();
-        needs.slots(&slots, DRUID, WeaponRule::default());
+        needs.slots(&slots, DRUID, WeaponRule::default(), Worn::default());
         let items = [
             at(base("bsd", 3), Spot::Page(2)),
             at(base("9fb", 3), Spot::Page(1)),
@@ -3451,7 +3693,7 @@ mod tests {
         let mut needs = Needs::default();
         let mut slots = slots;
         slots.insert("offhand".to_owned(), vec!["Ancients' Pledge@21".to_owned()]);
-        needs.slots(&slots, DRUID, WeaponRule::default());
+        needs.slots(&slots, DRUID, WeaponRule::default(), Worn::default());
         assert_eq!(
             reasoned(&items, &needs),
             vec![
@@ -3492,9 +3734,9 @@ mod tests {
             config,
             &chain,
             Some(&bis),
-            5,
-            Some(level),
-            &worn,
+            (5, Some(level)),
+            Worn::named(&worn),
+            &[],
             &owns,
         ))
     }
@@ -3587,7 +3829,15 @@ mod tests {
         assert!(!wants_piece(&both, "Bulwark"), "worn: no stash copy");
         let owns = |n: &str| u32::from(n == "Bulwark" || n == "Isenhart's Horns");
         let chain: Vec<String> = CHAIN.iter().map(|&c| c.to_owned()).collect();
-        let live = Needs::from_config(&config, &chain, None, 5, Some(77), &worn, &owns);
+        let live = Needs::from_config(
+            &config,
+            &chain,
+            None,
+            (5, Some(77)),
+            Worn::named(&worn),
+            &[],
+            &owns,
+        );
         assert!(!wants_piece(&live, "Isenhart's Horns"), "{:?}", live.pieces);
         assert!(
             rows(&horns, &live)
@@ -3656,6 +3906,158 @@ mod tests {
             rows(&sabot, &both),
             vec![row("Sigon's Sabot", Spot::Page(2), Action::Keep(Side::Own), 1)]
         );
+        Ok(())
+    }
+
+    const ASSASSIN: Wearer = Wearer::Player(6);
+
+    /// The base needs `(runeword, slot)` of an assassin build with `slots` (TOML lines), who
+    /// wears `worn` (`(body slot, name)`) and owns those copies.
+    fn upgrade_needs(slots: &str, worn: &[(u8, &str)]) -> anyhow::Result<Vec<(&'static str, Option<u8>)>> {
+        let (_, build, _) =
+            crate::config::parse_build(&format!("name = \"A\"\nclass = \"assassin\"\n[slots]\n{slots}"))?;
+        let mut config = Settings::default();
+        config.build_defs.insert("a".to_owned(), build);
+        let names: Vec<String> = worn.iter().map(|&(_, n)| n.to_owned()).collect();
+        let by_slot: Vec<(u8, String)> = worn.iter().map(|&(b, n)| (b, n.to_owned())).collect();
+        let wears = Worn {
+            names: &names,
+            by_slot: Some(&by_slot),
+            merc: &[],
+        };
+        let owns = |name: &str| worn_copies(&names, name);
+        let needs = Needs::from_config(&config, &["A".to_owned()], None, (6, Some(60)), wears, &[], &owns);
+        assert!(needs.bases.iter().all(|n| n.wearer == ASSASSIN));
+        Ok(needs.bases.iter().map(|n| (n.word.name, n.slot)).collect())
+    }
+
+    const BODY: &str = "body = [\"Enigma@65\", \"Treachery@43\", \"Smoke@37\", \"Stealth@17\"]\n";
+
+    #[test]
+    fn two_runewords_of_one_slot_and_socket_count_keep_one_base() -> anyhow::Result<()> {
+        // User decision 2026-11-23: one 3os armor serves Enigma or Treachery, one 2os Smoke or
+        // Stealth; the higher-ranked runeword holds the need.
+        assert_eq!(
+            upgrade_needs(BODY, &[])?,
+            [("Enigma", Some(3)), ("Smoke", Some(3))]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_outgrown_lower_runeword_keeps_no_base() -> anyhow::Result<()> {
+        // Smoke worn: Stealth ranks below it, Smoke's own need is met by the worn copy.
+        assert_eq!(upgrade_needs(BODY, &[(3, "Smoke")])?, [("Enigma", Some(3))]);
+        // Enigma worn: nothing in the body slot ranks above it.
+        assert_eq!(upgrade_needs(BODY, &[(3, "Enigma")])?, []);
+        Ok(())
+    }
+
+    #[test]
+    fn a_base_for_an_upgrade_above_the_worn_piece_is_kept() -> anyhow::Result<()> {
+        // Vex live 2026-11-23: Stealth worn, Smoke and Enigma are upgrades.
+        assert_eq!(
+            upgrade_needs(BODY, &[(3, "Stealth")])?,
+            [("Enigma", Some(3)), ("Smoke", Some(3))]
+        );
+        // Spirit worn in the weapon hand still leaves the off-hand Spirit (a shield) above
+        // Ancients' Pledge: the worn sword meets the weapon need, not the shield's.
+        let hands = "weapon = [\"Spirit@25\"]\noffhand = [\"Spirit@25\", \"Ancients' Pledge@21\"]\n";
+        assert_eq!(
+            upgrade_needs(hands, &[(4, "Spirit"), (5, "Ancients' Pledge")])?,
+            [("Spirit", Some(5))]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_main_hand_runeword_is_not_worn_in_the_swap() -> anyhow::Result<()> {
+        // Call to Arms in the main hand, the swap empty: the swap's Spirit is still an upgrade.
+        let hands =
+            "weapon = [\"Call to Arms@57\", \"Spirit@25\"]\nswap = [\"Call to Arms@57\", \"Spirit@25\"]\n";
+        assert_eq!(
+            upgrade_needs(hands, &[(4, "Call to Arms")])?,
+            [("Spirit", Some(4))]
+        );
+        // Worn in the swap hands (body 11), it outranks the swap's Spirit.
+        let swap_only = "swap = [\"Call to Arms@57\", \"Spirit@25\"]\n";
+        assert_eq!(upgrade_needs(swap_only, &[(11, "Call to Arms")])?, []);
+        Ok(())
+    }
+
+    #[test]
+    fn a_higher_runeword_with_other_bases_keeps_both() -> anyhow::Result<()> {
+        // Plague takes swords, claws and daggers; Hustle any weapon: one 3os base can't serve both.
+        let weapon = "weapon = [\"Plague@67\", \"Hustle (weapon)@39\"]\n";
+        assert_eq!(
+            upgrade_needs(weapon, &[])?,
+            [("Plague", Some(4)), ("Hustle (weapon)", Some(4))]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_farm_group_every_character_is_past_adds_no_needs() -> anyhow::Result<()> {
+        let (_, early, _) = crate::config::parse_build("name = \"Early\"\nnext = \"late\"\n")?;
+        let (_, late, _) = crate::config::parse_build("name = \"Late\"\n")?;
+        let mut config = Settings::default();
+        config.build_defs.insert("early".to_owned(), early);
+        config.build_defs.insert("late".to_owned(), late);
+        config.farm = vec![FarmGroup {
+            target: "Early".to_owned(),
+            items: vec![FarmItem {
+                name: "Stealth".to_owned(),
+                kind: FarmKind::Runeword,
+                count: 1,
+                merc: false,
+                slot: Some(crate::config::FarmSlot::Body),
+                needs: Vec::new(),
+                note: None,
+            }],
+        }];
+        let chain = config.stage_chain("late");
+        let needs = |stages: &[&str]| {
+            let needs = Needs::from_config(&config, &chain, None, (6, None), Worn::default(), stages, &|_| 0);
+            (needs.pieces.len(), needs.bases.len())
+        };
+        assert_eq!(needs(&["Late"]), (0, 0), "past the Early stage");
+        assert_eq!(
+            needs(&["Late", "Early"]),
+            (1, 1),
+            "another character is still there"
+        );
+        assert_eq!(needs(&[]), (1, 1));
+        let unstaged = Others {
+            alongside: vec![Other {
+                class: 6,
+                ..Other::default()
+            }],
+            ..Others::default()
+        };
+        assert_eq!(unstaged.own_stages(&chain), Vec::<&str>::new());
+        assert_eq!(
+            needs(&unstaged.own_stages(&chain)),
+            (1, 1),
+            "an own character without a stage may still need it"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn one_merc_base_serves_the_merc_of_every_stage() -> anyhow::Result<()> {
+        // The Summoner's Act 2 merc and the Fury's Act 5 merc both list Bulwark and Smoke:
+        // one merc at a time, so one base each; Bulwark's is the Act 5 one (barbarian helms too).
+        let needs = shipped_needs(&shipped(), "summoner druid")?;
+        let merc = |word: &str| -> Vec<Wearer> {
+            needs
+                .bases
+                .iter()
+                .filter(|n| n.word.name == word)
+                .map(|n| n.wearer)
+                .collect()
+        };
+        assert_eq!(merc("Bulwark"), [Wearer::Merc(MercAct::Act5)]);
+        assert_eq!(merc("Smoke").len(), 1);
         Ok(())
     }
 }
