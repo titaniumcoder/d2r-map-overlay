@@ -3351,6 +3351,7 @@ mod tests {
         };
         Guidance {
             bis: Some(crate::guidance::Bis {
+                name: String::new(),
                 build: String::new(),
                 slots: BTreeMap::from([("helm".to_owned(), vec!["Peasant Crown@28".to_owned()])]),
                 merc_slots: BTreeMap::new(),

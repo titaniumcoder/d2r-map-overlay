@@ -1275,6 +1275,7 @@ mod tests {
             return;
         };
         let bis = crate::guidance::Bis {
+            name: String::new(),
             build: "test".to_owned(),
             slots: [("helm".to_owned(), vec!["Harlequin Crest@82".to_owned()])].into(),
             merc_slots: [("body".to_owned(), vec!["Treachery@23".to_owned()])].into(),

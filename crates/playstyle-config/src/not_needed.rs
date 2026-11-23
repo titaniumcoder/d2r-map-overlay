@@ -458,6 +458,7 @@ mod tests {
             "own marks stay for the undo, the inherited one names where it was made"
         );
         let mut bis = Bis {
+            name: String::new(),
             build: String::new(),
             slots: BTreeMap::from([("weapon".to_owned(), list(&["Oath@49", "Spirit@25"]))]),
             merc_slots: BTreeMap::from([("weapon".to_owned(), list(&["Oath@49"]))]),

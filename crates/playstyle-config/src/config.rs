@@ -245,6 +245,7 @@ fn bis_entries(raw: BTreeMap<String, RawBis>, warnings: &mut Vec<String>) -> BTr
         bis.insert(
             name.to_lowercase(),
             Bis {
+                name: name.clone(),
                 build,
                 slots,
                 merc_slots,
@@ -883,7 +884,7 @@ pub fn playstyle_of<'a>(
 }
 
 impl Settings {
-    fn selected(&self, name: &str) -> Option<(&str, &Build)> {
+    pub(crate) fn selected(&self, name: &str) -> Option<(&str, &Build)> {
         let (_, slug) = split_selection(&self.bis.get(&name.to_lowercase())?.build);
         self.build_defs
             .get_key_value(&slug)
@@ -1038,6 +1039,7 @@ impl Settings {
         }
         let def = self.stage(name, class, level, owns, reached)?.build;
         Some(Bis {
+            name: name.to_owned(),
             build: def.name.clone(),
             slots: def.slots.clone(),
             merc_slots: def.merc_slots.clone(),
@@ -1490,6 +1492,7 @@ mod tests {
         config.bis.insert(
             "demonmaster".to_owned(),
             Bis {
+                name: String::new(),
                 build: "blood boil".to_owned(),
                 slots: BTreeMap::new(),
                 merc_slots: BTreeMap::new(),
@@ -1544,6 +1547,7 @@ mod tests {
         config.bis.insert(
             "ghost".to_owned(),
             Bis {
+                name: String::new(),
                 build: "nope".to_owned(),
                 slots: BTreeMap::new(),
                 merc_slots: BTreeMap::new(),
@@ -1986,6 +1990,7 @@ mod tests {
         config.bis.insert(
             "bear".to_owned(),
             Bis {
+                name: String::new(),
                 build: "Fissure".to_owned(),
                 slots: BTreeMap::new(),
                 merc_slots: BTreeMap::new(),

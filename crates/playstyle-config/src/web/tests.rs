@@ -118,6 +118,7 @@ fn resolved_config() -> crate::config::Settings {
     config.bis.insert(
         "demonmaster".to_owned(),
         crate::config::Bis {
+            name: String::new(),
             build: "blood boil".to_owned(),
             slots: BTreeMap::new(),
             merc_slots: BTreeMap::new(),
@@ -194,6 +195,7 @@ fn config_json_names_the_stage_reached_on_the_selected_chain() {
         .build_defs
         .insert("fury druid".to_owned(), build("Fury Druid", None));
     let selected = |slug: &str| crate::config::Bis {
+        name: String::new(),
         build: slug.to_owned(),
         slots: BTreeMap::new(),
         merc_slots: BTreeMap::new(),
@@ -376,6 +378,7 @@ fn each_character_follows_its_own_playstyle() {
     let mut druid = playstyle("Druids", &[("Summoner Druid", 5, true), ("Shared", 6, false)]);
     let mut trap = playstyle("Traps", &[("Fire Wake", 6, true), ("Shared", 6, false)]);
     let select = |build: &str| crate::config::Bis {
+        name: String::new(),
         build: build.to_owned(),
         slots: BTreeMap::new(),
         merc_slots: BTreeMap::new(),
@@ -765,6 +768,7 @@ fn gear_grid<'a>(
     owned: &'a [String],
 ) -> serde_json::Value {
     let bis = crate::config::Bis {
+        name: String::new(),
         build: "test".to_owned(),
         slots: slots
             .iter()
@@ -1030,6 +1034,7 @@ fn gear_carries_build_details_merc_and_extras() {
         ..crate::config::Build::default()
     };
     let bis = crate::config::Bis {
+        name: String::new(),
         build: "Blood Boil".to_owned(),
         slots: [("helm".to_owned(), vec!["Harlequin Crest@62".to_owned()])].into(),
         merc_slots: [("weapon".to_owned(), vec!["Insight@27".to_owned()])].into(),
@@ -1227,6 +1232,7 @@ fn guide_json(
     equipped_items: &[d2r_core::game::Equipped],
 ) -> Result<serde_json::Value> {
     let bis = config::Bis {
+        name: String::new(),
         build: build.name.clone(),
         slots: build.slots.clone(),
         merc_slots: BTreeMap::new(),
@@ -1496,6 +1502,7 @@ fn shop_rows(json: &serde_json::Value) -> Vec<String> {
 fn shop_marks_build_pieces_and_chimes_them_as_upgrades() {
     use d2r_core::shop::shop_item;
     let bis = crate::config::Bis {
+        name: String::new(),
         build: "test".to_owned(),
         slots: BTreeMap::from([
             ("gloves".to_owned(), vec!["Coral Heavy Gloves@13".to_owned()]),
@@ -1737,6 +1744,7 @@ fn shop_marks_only_what_the_summoner_build_can_use() {
         ],
     };
     let bis = crate::config::Bis {
+        name: String::new(),
         build: "summoner".to_owned(),
         slots: BTreeMap::from([
             (
@@ -1788,6 +1796,7 @@ fn score_profile_takes_the_weapon_kind_from_gear_or_build() {
         stats: Vec::new(),
     }];
     let bis = crate::config::Bis {
+        name: String::new(),
         build: "amazon leveling".to_owned(),
         slots: BTreeMap::from([(
             "weapon".to_owned(),
@@ -2010,6 +2019,7 @@ fn owned_gear_json(
     equipped: &[d2r_core::game::Equipped],
 ) -> Result<serde_json::Value> {
     let bis = config::Bis {
+        name: String::new(),
         build: build.name.clone(),
         slots: build.slots.clone(),
         merc_slots: BTreeMap::new(),
@@ -2905,6 +2915,7 @@ fn attention(
             .collect()
     };
     let bis = config::Bis {
+        name: String::new(),
         build: "test".to_owned(),
         slots: to_map(slots),
         merc_slots: to_map(merc),
@@ -2994,6 +3005,7 @@ fn runeword_pieces_and_farm_entries_name_natural_socket_bases() -> Result<()> {
     let blocks = d2r_core::render::TextBlocks::default();
     let slot = |s: &str, p: &str| (s.to_owned(), vec![p.to_owned()]);
     let bis = config::Bis {
+        name: String::new(),
         build: "test".to_owned(),
         slots: [slot("weapon", "Spirit"), slot("body", "Fortitude")].into(),
         merc_slots: [slot("weapon", "Insight")].into(),
@@ -3059,6 +3071,7 @@ fn farm_merc_and_slot_fields_steer_the_base_hint() -> Result<()> {
     )?;
     assert_eq!(warnings, Vec::<String>::new());
     let bis = config::Bis {
+        name: String::new(),
         build: "test".to_owned(),
         slots: BTreeMap::new(),
         merc_slots: [("helm".to_owned(), vec!["Bulwark".to_owned()])].into(),
@@ -3307,6 +3320,7 @@ fn gear_grid_and_upgrades_leave_out_pieces_marked_not_needed() -> Result<()> {
     );
     let build = builds.get("fury druid").context("the build stays")?;
     let bis = crate::config::Bis {
+        name: String::new(),
         build: build.name.clone(),
         slots: build.slots.clone(),
         merc_slots: build.merc_slots.clone(),
@@ -3337,6 +3351,7 @@ fn gear_grid_and_upgrades_leave_out_pieces_marked_not_needed() -> Result<()> {
     let upgrades = upgrades_json(&info);
     assert!(upgrades.is_empty(), "{upgrades:?}");
     let unmarked = crate::config::Bis {
+        name: String::new(),
         slots: [("helm".to_owned(), vec!["Harlequin Crest@62".to_owned()])].into(),
         ..bis.clone()
     };
@@ -3454,6 +3469,7 @@ fn merc_columns_follow_the_mercs_worn_gear() -> Result<()> {
         .get("fury druid")
         .context("shipped fury build")?;
     let bis = config::Bis {
+        name: String::new(),
         build: build.name.clone(),
         slots: build.slots.clone(),
         merc_slots: build.merc_slots.clone(),
@@ -3566,6 +3582,7 @@ fn merc_guide_alternatives_are_not_struck_below_the_worn_piece() {
         ..build_with_alternatives("helm", &[], &["Harmony"])
     };
     let bis = config::Bis {
+        name: String::new(),
         build: build.name.clone(),
         slots: build.slots.clone(),
         merc_slots: build.merc_slots.clone(),
@@ -4024,6 +4041,7 @@ fn the_mercs_own_window_decides_its_store_match_and_setup() {
         ..config::Build::default()
     };
     let bis = config::Bis {
+        name: String::new(),
         build: build.name.clone(),
         slots: build.slots.clone(),
         merc_slots: build.merc_slots.clone(),

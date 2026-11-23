@@ -147,6 +147,9 @@ pub struct Advice {
 /// A character's `BiS` selection; hand-written inline `slots` win over the selected build's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bis {
+    /// The character's name as `bis.toml` writes it (the map key is lowercased); empty in
+    /// hand-made selections.
+    pub name: String,
     /// The selected build's slug; empty when nothing is selected.
     pub build: String,
     /// Slot name → pieces in chase order, as `"Name@<required level>"`.

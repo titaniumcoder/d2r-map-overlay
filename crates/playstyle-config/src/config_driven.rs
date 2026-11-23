@@ -112,11 +112,14 @@ impl ConfigDriven {
         }
     }
 
-    /// The other own characters in `played` (not `me`; class known), by the playstyle they
-    /// follow, for the playing character's playstyle `mine`; one of the playstyle's class
-    /// without a stage has an empty chain (no farm group is passed while it is there). Every
-    /// other playstyle is listed, with or without characters (its farm list counts).
+    /// The other own characters in `played` (not `me`; class known) and those with a build
+    /// selection who haven't played yet ([`unplayed`]), by the playstyle they follow, for the
+    /// playing character's playstyle `mine`; one of the playstyle's class without a stage has
+    /// an empty chain (no farm group is passed while it is there). Every other playstyle is
+    /// listed, with or without characters (its farm list counts).
     fn others(&self, me: &str, mine: &str, played: &Played) -> Others<'_> {
+        let played = unplayed(&self.folders(), played);
+        let played = &played;
         let folders = self.folders();
         let mut others = Others {
             alongside: Vec::new(),
@@ -292,6 +295,38 @@ impl Playstyle for ConfigDriven {
     fn remove_character(files: &Files, name: &str) -> anyhow::Result<()> {
         files::remove_character(files, name)
     }
+}
+
+/// `played` plus a level-1 entry for each character with a build selection (`bis.toml`, read
+/// from the first folder) that isn't in it yet: a character made for a plan, like an offline
+/// druid the assassin farms for before he exists. Its class is its selected build's.
+fn unplayed(folders: &[(&str, &Settings)], played: &Played) -> Played {
+    let mut all = played.clone();
+    let Some((_, first)) = folders.first() else {
+        return all;
+    };
+    for (key, bis) in &first.bis {
+        if all.contains_key(key) || bis.name.is_empty() {
+            continue;
+        }
+        let Some((_, config)) = playstyle_of(folders, key, None) else {
+            continue;
+        };
+        let class = config.selected(key).and_then(|(_, build)| build.class);
+        if class.is_none() {
+            continue;
+        }
+        let entry = d2r_core::played::Entry {
+            name: bis.name.clone(),
+            t: 0,
+            class,
+            stage: None,
+            level: Some(1),
+            worn: Vec::new(),
+        };
+        all.insert(key.clone(), entry);
+    }
+    all
 }
 
 /// The farm panel's part for each own character following another playstyle than the played
@@ -633,6 +668,38 @@ mod tests {
     }
 
     #[test]
+    fn a_selected_character_who_never_played_gets_his_farm_group() -> Result<()> {
+        let mut playstyle = two_playstyles();
+        playstyle.selected.config.bis = [(
+            "bigbadwolf".to_owned(),
+            d2r_core::guidance::Bis {
+                name: "BigBadWolf".to_owned(),
+                build: "fury-druid/fury druid".to_owned(),
+                slots: std::collections::BTreeMap::new(),
+                merc_slots: std::collections::BTreeMap::new(),
+            },
+        )]
+        .into();
+        playstyle.share_selections();
+        let vex = played_by("Vex", 6, 6)?;
+        let shown: Vec<Option<String>> = farm_groups(&playstyle, &vex, &Played::new())
+            .into_iter()
+            .map(|(who, _, _)| who)
+            .collect();
+        assert!(
+            shown.contains(&Some("BigBadWolf".to_owned())),
+            "his group, under his name as written: {shown:?}"
+        );
+        let played = Played::from([entry("BigBadWolf", 5, "fury druid", 10, &[])]);
+        let wolves = farm_groups(&playstyle, &vex, &played)
+            .into_iter()
+            .filter(|(who, _, _)| who.as_deref() == Some("BigBadWolf"))
+            .count();
+        assert_eq!(wolves, 1, "once he played, played.json's entry is the only one");
+        Ok(())
+    }
+
+    #[test]
     fn a_selection_or_stage_of_a_removed_build_falls_back_to_the_class_default() -> Result<()> {
         let files = Files {
             shipped: Some(shipped("fury-druid")),
@@ -642,6 +709,7 @@ mod tests {
         };
         let mut playstyle = ConfigDriven::load(&files);
         let select = |build: &str| d2r_core::guidance::Bis {
+            name: String::new(),
             build: build.to_owned(),
             slots: std::collections::BTreeMap::new(),
             merc_slots: std::collections::BTreeMap::new(),

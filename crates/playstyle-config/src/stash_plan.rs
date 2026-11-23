@@ -3093,6 +3093,7 @@ mod tests {
             .get(bis_build)
             .ok_or_else(|| anyhow::anyhow!("no build {bis_build}"))?;
         let bis = Bis {
+            name: String::new(),
             build: def.name.clone(),
             slots: def.slots.clone(),
             merc_slots: def.merc_slots.clone(),
@@ -3178,6 +3179,7 @@ mod tests {
         }
         // The Fury has no off-hand: its weapon-slot runewords keep both hands.
         let bis = Bis {
+            name: String::new(),
             build: fury.name.clone(),
             slots: fury.slots.clone(),
             merc_slots: fury.merc_slots.clone(),
@@ -3391,6 +3393,7 @@ mod tests {
                 .get("fury druid")
                 .ok_or_else(|| anyhow::anyhow!("no fury druid"))?;
             let bis = Bis {
+                name: String::new(),
                 build: def.name.clone(),
                 slots: def.slots.clone(),
                 merc_slots: def.merc_slots.clone(),
@@ -3529,6 +3532,7 @@ mod tests {
             .get("fury druid")
             .ok_or_else(|| anyhow::anyhow!("fury"))?;
         let bis = Bis {
+            name: String::new(),
             build: fury.name.clone(),
             slots: fury.slots.clone(),
             merc_slots: fury.merc_slots.clone(),
@@ -3688,6 +3692,7 @@ mod tests {
             .get("switch druid")
             .ok_or_else(|| anyhow::anyhow!("no switch druid"))?;
         let bis = Bis {
+            name: String::new(),
             build: def.name.clone(),
             slots: def.slots.clone(),
             merc_slots: def.merc_slots.clone(),
