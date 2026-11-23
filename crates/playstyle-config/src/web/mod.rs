@@ -23,6 +23,8 @@ pub struct PanelInfo<'a> {
     pub build: Option<&'a Build>,
     pub stage: Option<Stage<'a>>,
     pub farm: &'a [FarmGroup],
+    /// The other own characters' farm groups, shown after `farm`.
+    pub other_farm: &'a [farm::OtherFarm<'a>],
     /// The route, whose bosses say where the farm list's entries drop.
     pub route: &'a crate::route::Route,
     /// The build names of the current stage and every later one.

@@ -1,7 +1,7 @@
 //! The farm list panel: what the cross-character farm list (`farm.toml`) still needs, per
 //! build, each entry with where to farm it.
 
-use crate::config::{FarmGroup, FarmItem};
+use crate::config::{Build, FarmGroup, FarmItem, Settings};
 use crate::worth::Why;
 use d2r_core::game::Place;
 use d2r_core::socket_bases::Wearer;
@@ -12,6 +12,78 @@ use super::{PanelInfo, base_hint, merc_base_hint};
 
 /// Rune → total need over the farm list, with the runewords needing it.
 type RuneNeeds = Vec<(&'static str, u32, Vec<String>)>;
+
+/// Another own character following another playstyle than the played one, with the farm
+/// groups of its playstyle it still needs; the panel lists them after the played character's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OtherFarm<'a> {
+    /// Its name as the game spells it.
+    pub character: String,
+    /// Its playstyle.
+    pub config: &'a Settings,
+    pub class: u32,
+    /// The build names of its current stage and every later one.
+    pub chain: Vec<String>,
+    /// The uniques, sets and runewords it and its mercenary wore when last seen live.
+    pub worn: Vec<String>,
+    pub groups: Vec<FarmGroup>,
+}
+
+/// Whose farm groups a part of the panel lists: the played character's or another own
+/// character's ([`OtherFarm`]).
+#[derive(Clone, Copy)]
+struct Owner<'a> {
+    /// `None` for the played character.
+    character: Option<&'a str>,
+    class: u32,
+    chain: &'a [String],
+    /// The recorded worn gear; `None` for the played character's live equipment.
+    worn: Option<&'a [String]>,
+    /// The current stage's build.
+    build: Option<&'a Build>,
+    not_needed: &'a crate::not_needed::Marks,
+    groups: &'a [FarmGroup],
+}
+
+impl<'a> Owner<'a> {
+    const fn played(info: &PanelInfo<'a>) -> Self {
+        Owner {
+            character: None,
+            class: info.live.class,
+            chain: info.stage_chain,
+            worn: None,
+            build: info.build,
+            not_needed: info.not_needed,
+            groups: info.farm,
+        }
+    }
+
+    fn other(other: &'a OtherFarm<'a>) -> Self {
+        let build = other.chain.first().and_then(|name| {
+            other
+                .config
+                .build_defs
+                .values()
+                .find(|b| d2r_core::names::same_name(&b.name, name))
+        });
+        Owner {
+            character: Some(&other.character),
+            class: other.class,
+            chain: &other.chain,
+            worn: Some(&other.worn),
+            build,
+            not_needed: &other.config.not_needed,
+            groups: &other.groups,
+        }
+    }
+
+    /// The marks in force for build `build`, for the undo list.
+    fn marks_of(&self, build: &str) -> &'a [crate::not_needed::Marked] {
+        self.not_needed
+            .get(&build.trim().to_lowercase())
+            .map_or(&[], Vec::as_slice)
+    }
+}
 
 /// Where a farm-list entry stands, across characters: `Done` once the shared stash holds
 /// `count` copies, `Found` while the played character carries a copy outside it.
@@ -54,11 +126,10 @@ pub fn rolled_copies(item: &FarmItem, live: &LiveInfo<'_>) -> (u32, u32) {
     (clamp(stashed), clamp(carried))
 }
 
-/// Whether farm entry `item` of the group for `target` leaves the panel: worn, or a Teleport
-/// entry once Enigma is held.
-#[must_use]
-pub fn farm_hidden(target: &str, item: &FarmItem, info: &PanelInfo) -> bool {
-    farm_worn(target, item, info)
+/// Whether farm entry `item` of `owner`'s group for `target` leaves the panel: worn, or a
+/// Teleport entry once Enigma is held.
+fn farm_hidden(target: &str, item: &FarmItem, owner: &Owner, info: &PanelInfo) -> bool {
+    farm_worn(target, item, owner, info)
         || (item.wants_teleport() && !crate::gear_score::teleport_wanted(&info.live.holdings()))
 }
 
@@ -76,32 +147,51 @@ pub const fn farm_status(count: u32, stashed: u32, carried: u32) -> FarmStatus {
 /// The farm list section, `null` without one: per farm group (build, in farm-list order) its
 /// still-missing entries, each with where to farm it ([`where_text`]), and the ones marked not
 /// needed (`not_needed`, for the undo); the entries held (`held`, the per-group done count), and
-/// the runes still needed over the whole list (in rune order).
+/// the runes still needed over the whole list (in rune order). The played character's groups
+/// come first (`character` null), then each other own character's ([`OtherFarm`]) with its
+/// name in `character`.
 #[must_use]
 pub fn farm_json(info: &PanelInfo) -> serde_json::Value {
-    if info.farm.is_empty() {
+    if info.farm.is_empty() && info.other_farm.iter().all(|o| o.groups.is_empty()) {
         return serde_json::Value::Null;
     }
     let materials = owned_materials(info);
     let mut wanted = RuneNeeds::new();
     let mut held: Vec<serde_json::Value> = Vec::new();
     let mut counted: Vec<(&str, bool)> = Vec::new();
-    let groups: Vec<(&FarmGroup, Vec<Needed>)> = info
-        .farm
+    let owners: Vec<Owner> = std::iter::once(Owner::played(info))
+        .chain(info.other_farm.iter().map(Owner::other))
+        .collect();
+    let groups: Vec<(Owner, &FarmGroup, Vec<Needed>)> = owners
         .iter()
-        .map(|group| {
-            let needed = collect_group(group, info, &materials, &mut wanted, &mut counted, &mut held);
-            (group, needed)
+        .flat_map(|owner| owner.groups.iter().map(move |group| (*owner, group)))
+        .map(|(owner, group)| {
+            let needed = collect_group(
+                group,
+                owner,
+                info,
+                &materials,
+                &mut wanted,
+                &mut counted,
+                &mut held,
+            );
+            (owner, group, needed)
         })
         .collect();
-    let spots = Spots::new(info, &materials);
+    let every_group: Vec<FarmGroup> = owners.iter().flat_map(|o| o.groups).cloned().collect();
+    let spots = Spots::new(info, &every_group, &materials);
     let groups: Vec<serde_json::Value> = groups
         .into_iter()
-        .map(|(group, needed)| (group, needed, info.marks_of(&group.target)))
-        .filter(|(_, needed, marks)| !needed.is_empty() || !marks.is_empty())
-        .map(|(group, needed, marks)| {
+        .map(|(owner, group, needed)| (owner, group, needed, owner.marks_of(&group.target)))
+        .filter(|(_, _, needed, marks)| !needed.is_empty() || !marks.is_empty())
+        .map(|(owner, group, needed, marks)| {
             let items: Vec<serde_json::Value> = needed.iter().map(|n| needed_json(n, &spots)).collect();
-            serde_json::json!({ "for": group.target, "items": items, "not_needed": marks })
+            serde_json::json!({
+                "for": group.target,
+                "character": owner.character,
+                "items": items,
+                "not_needed": marks,
+            })
         })
         .collect();
     let runes = rune_needs_json(wanted, &materials, &stash_materials(info));
@@ -122,25 +212,26 @@ struct Needed<'a> {
     base_hint: Option<String>,
 }
 
-/// Group `group`'s visible entries still missing, in farm-list order; a held one joins `held`.
-/// The runes of the copies still to build join `wanted` once per entry over the groups
-/// (`counted`: name and wearer already counted).
+/// `owner`'s group `group`'s visible entries still missing, in farm-list order; a held one
+/// joins `held`. The runes of the copies still to build join `wanted` once per entry over the
+/// groups (`counted`: name and wearer already counted).
 fn collect_group<'a>(
     group: &'a FarmGroup,
+    owner: Owner,
     info: &PanelInfo,
     materials: &[(String, u32)],
     wanted: &mut RuneNeeds,
     counted: &mut Vec<(&'a str, bool)>,
     held: &mut Vec<serde_json::Value>,
 ) -> Vec<Needed<'a>> {
-    let build = info
+    let build = owner
         .build
         .filter(|b| d2r_core::names::same_name(&b.name, &group.target));
     let mut needed = Vec::new();
     for item in group
         .items
         .iter()
-        .filter(|item| !farm_hidden(&group.target, item, info))
+        .filter(|item| !farm_hidden(&group.target, item, &owner, info))
     {
         let (stashed, carried) = farm_copies(item, info);
         let to_build = item.count.saturating_sub(stashed.saturating_add(carried));
@@ -158,7 +249,12 @@ fn collect_group<'a>(
         });
         if farm_status(item.count, stashed, carried) != FarmStatus::Missing {
             let copies = stashed.saturating_add(carried).min(item.count.max(1));
-            held.push(serde_json::json!({ "for": group.target, "name": item.name, "copies": copies }));
+            held.push(serde_json::json!({
+                "for": group.target,
+                "character": owner.character,
+                "name": item.name,
+                "copies": copies,
+            }));
             continue;
         }
         let base_hint = word.and_then(|w| {
@@ -166,7 +262,7 @@ fn collect_group<'a>(
             if item.merc {
                 merc_base_hint(w, info, slot, build)
             } else {
-                base_hint(w, info, slot, Wearer::Player(info.live.class))
+                base_hint(w, info, slot, Wearer::Player(owner.class))
             }
         });
         needed.push(Needed {
@@ -217,7 +313,8 @@ struct Spots<'a> {
 }
 
 impl<'a> Spots<'a> {
-    fn new(info: &PanelInfo<'a>, materials: &[(String, u32)]) -> Self {
+    /// The spots for the entries of `farm`.
+    fn new(info: &PanelInfo<'a>, farm: &[FarmGroup], materials: &[(String, u32)]) -> Self {
         let holdings = info.live.holdings();
         let difficulty = info.live.difficulty;
         let bosses = difficulty.map_or_else(Vec::new, |d| {
@@ -225,14 +322,14 @@ impl<'a> Spots<'a> {
                 .bosses
                 .iter()
                 .map(|boss| {
-                    let drops = crate::worth::worth(boss, d, info.farm, &holdings, materials);
+                    let drops = crate::worth::worth(boss, d, farm, &holdings, materials);
                     (boss.as_str(), drops)
                 })
                 .collect()
         });
         Spots {
             difficulty,
-            area_85: crate::worth::area_85(difficulty, info.farm, &holdings, materials),
+            area_85: crate::worth::area_85(difficulty, farm, &holdings, materials),
             bosses,
         }
     }
@@ -408,21 +505,27 @@ fn rune_needs_json(
         .collect()
 }
 
-/// Whether farm entry `item` of the group for build `target` is hidden: the character is on
-/// that build (or an earlier stage of it) and it or its mercenary wears `count` copies.
-pub fn farm_worn(target: &str, item: &FarmItem, info: &PanelInfo) -> bool {
-    let on_build = info
-        .stage_chain
+/// Whether farm entry `item` of `owner`'s group for build `target` is hidden: the owner is on
+/// that build (or an earlier stage of it) and it or its mercenary wears `count` copies (the
+/// played character live, another one as last seen).
+fn farm_worn(target: &str, item: &FarmItem, owner: &Owner, info: &PanelInfo) -> bool {
+    let on_build = owner
+        .chain
         .iter()
         .any(|b| b.trim().eq_ignore_ascii_case(target.trim()));
-    let worn = info
-        .live
-        .equipped_items
-        .iter()
-        .filter_map(|e| e.name.as_deref())
-        .chain(info.live.merc_worn.iter().map(String::as_str))
-        .filter(|n| d2r_core::names::same_name(n, &item.name))
-        .count();
+    let same = |n: &&str| d2r_core::names::same_name(n, &item.name);
+    let worn = owner.worn.map_or_else(
+        || {
+            info.live
+                .equipped_items
+                .iter()
+                .filter_map(|e| e.name.as_deref())
+                .chain(info.live.merc_worn.iter().map(String::as_str))
+                .filter(same)
+                .count()
+        },
+        |worn| worn.iter().map(String::as_str).filter(same).count(),
+    );
     on_build && u32::try_from(worn).is_ok_and(|w| w >= item.count.max(1))
 }
 

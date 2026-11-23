@@ -1793,6 +1793,26 @@ gear farming immediately starts the same as with the fury druid. think of it as 
   for any playstyle's farm list. The live loop re-reads `played.json` when the character changes
   and after a reload (a character deleted on /config stays counted until then). Characters known
   only from the save files (no class) and characters on another account don't count.
+- [x] **Other characters' farm groups** (user decision 2026-11-23, Q35: "Vex's farm panel shows a
+  'For BigBadWolf (Fury Druid)' group after her own. Items he needs also get the farm marker on
+  the map while she plays"). Farm panel: after the played character's groups, one part per other
+  own character (played.json, class known; own per the save files) following **another**
+  playstyle, in name order (stable while switching characters; last-played order would reorder
+  the panel on every switch): its playstyle's farm groups it hasn't passed (`farm_passed` with its
+  own current stage; all without one), heading "for <Character> (<build>)" (`farm.groups[].character`,
+  null for the own groups; `farm.held[].character` too). Same rules as the own groups: held =
+  the shared stash (found = carried by the played character), an entry it wore when last seen
+  (`played.json` `worn`, ≥ count, on that build's chain) is hidden, Teleport entries once Enigma
+  is held, its playstyle's not-needed marks (and undo list); base hints for its class; runes
+  join the rune list once per runeword. A character following the played one's playstyle gets no
+  part of its own: its stage already keeps the shared groups unpassed (`Others::own_stages`).
+  (`ConfigDriven` `Extra::other_farm`, `web::farm::OtherFarm`.) A playstyle no character follows
+  still counts for the stash plan and the map, but has no panel part. Map: a unique / set drop
+  still missing from another own character's farm list was already a Farm mark (its party's
+  needs, minus its recorded worn gear); since Q35 the farm flag only comes from groups some
+  character still needs (`farm_needed` per playstyle), the panel's rule, so a passed group's piece
+  that is still a build piece is a Keep mark, not Farm. The wants are computed once per
+  evaluation; drawing only looks them up.
 - [x] `/config`: the build select is grouped by playstyle (empty = class default), each row names
   its playstyle, one loot filter copy per playstyle (`/api/loot-filter?playstyle=<key>`).
 - `valuables.json` stays one compiled-in set (from `playstyles/fury-druid/`): trade, money and

@@ -198,6 +198,8 @@ impl Scoring {
 /// Another own character as `played.json` last saw it ([`d2r_core::played::Entry`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Other {
+    /// Its name as the game spells it.
+    pub name: String,
     /// Its stage chain from the stage it reached on ([`Settings::stage_chain`]).
     pub chain: Vec<String>,
     pub class: u32,
@@ -1118,6 +1120,7 @@ pub fn for_snapshot(
     for other in &others.alongside {
         needs.add_party(config, &[other], (None, other.class), &stashed);
     }
+    let mut farm_groups = farm_needed(config, &others.own_stages(chain));
     for (other, members) in &others.playstyles {
         let class = members.first().map_or(snap.player.class, |m| m.class);
         let first: Vec<&Other> = members.first().into_iter().collect();
@@ -1126,23 +1129,21 @@ pub fn for_snapshot(
         for member in members.iter().skip(1) {
             needs.add_party(other, &[member], (None, member.class), &stashed);
         }
+        farm_groups.extend(farm_needed(other, &member_stages));
     }
     let mut scoring = Scoring::new(snap, config, chain);
     scoring.add_others(config, others);
     let (advice, mut wants) = plan(&held(snap), &needs, &scoring);
-    let farm_lists = std::iter::once(config).chain(others.playstyles.iter().map(|(c, _)| *c));
-    let farm_lists: Vec<&Settings> = farm_lists.collect();
     for piece in &mut wants.pieces {
-        piece.farm = farm_lists
-            .iter()
-            .any(|config| farm_missing(config, &holdings, &piece.name));
+        piece.farm = farm_missing(&farm_groups, &holdings, &piece.name);
     }
     (advice, wants)
 }
 
-/// Whether `name` is a farm-list unique or set nobody holds yet (the farm panel's "missing").
-fn farm_missing(config: &Settings, holdings: &Holdings<'_>, name: &str) -> bool {
-    config.farm.iter().flat_map(|g| &g.items).any(|item| {
+/// Whether `name` is a unique or set of the farm `groups` some own character still needs
+/// ([`farm_needed`]) that nobody holds yet (the farm panel's "missing").
+fn farm_missing(groups: &[&FarmGroup], holdings: &Holdings<'_>, name: &str) -> bool {
+    groups.iter().flat_map(|g| &g.items).any(|item| {
         matches!(item.kind, FarmKind::Unique | FarmKind::Set) && same_name(&item.name, name) && {
             let (stashed, carried) = holdings.copies(&item.name, item.kind.item_kind());
             farm_status(item.count, stashed, carried) == FarmStatus::Missing
@@ -2803,12 +2804,14 @@ mod tests {
             class: 6,
             level: Some(50),
             worn: vec!["Harlequin Crest".to_owned()],
+            ..Other::default()
         };
         let second_druid = Other {
             chain: chain("Fury"),
             class: 5,
             level: Some(80),
             worn: vec!["Jalal's Mane".to_owned()],
+            ..Other::default()
         };
         let fury = (5, Some(90));
         let mut needs = Needs::from_config(&druids, &chain("Fury"), None, fury, Worn::default(), &[], &|_| 0);

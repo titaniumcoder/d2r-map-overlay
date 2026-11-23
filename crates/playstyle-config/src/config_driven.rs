@@ -10,6 +10,7 @@ use d2r_core::web::{LiveInfo, Panels};
 
 use crate::config::{FarmGroup, Settings, Stage, owns_nothing, playstyle_of, split_selection};
 use crate::stash_plan::{Other, Others, Wants};
+use crate::web::farm::OtherFarm;
 use crate::{files, marks, stash_plan, web};
 
 /// The playstyles of the folders' files: each character's playstyle (its selection, else the
@@ -52,6 +53,9 @@ pub struct Extra<'a> {
     /// The farm groups some own character following the playstyle still needs
     /// ([`stash_plan::farm_needed`]), for the farm panel.
     pub farm: Vec<FarmGroup>,
+    /// The other own characters following another playstyle, by name, each with the farm
+    /// groups it still needs, for the farm panel after the character's own groups.
+    pub other_farm: Vec<OtherFarm<'a>>,
 }
 
 /// Each folder's files: the selected one's as given, every other one's own files only.
@@ -136,6 +140,7 @@ impl ConfigDriven {
                 None => continue,
             };
             let other = Other {
+                name: entry.name.clone(),
                 chain,
                 class,
                 level: entry.level,
@@ -209,6 +214,7 @@ impl Playstyle for ConfigDriven {
             .into_iter()
             .cloned()
             .collect();
+        let other_farm = other_farm(&others);
         Evaluation {
             guidance: Guidance {
                 rating: build::rate(snap.level.id, snap.difficulty, damages),
@@ -226,6 +232,7 @@ impl Playstyle for ConfigDriven {
                 stage,
                 chain,
                 farm,
+                other_farm,
             },
         }
     }
@@ -239,6 +246,7 @@ impl Playstyle for ConfigDriven {
             build: extra.stage.map(|s| s.build),
             stage: extra.stage,
             farm: &extra.farm,
+            other_farm: &extra.other_farm,
             route: &config.route,
             stage_chain: &extra.chain,
             not_needed: &config.not_needed,
@@ -284,6 +292,34 @@ impl Playstyle for ConfigDriven {
     fn remove_character(files: &Files, name: &str) -> anyhow::Result<()> {
         files::remove_character(files, name)
     }
+}
+
+/// The farm panel's part for each own character following another playstyle than the played
+/// one, by name: the groups of its playstyle's farm list it hasn't passed (its current stage,
+/// [`Settings::farm_passed`]; all of them without a stage). A character following the played
+/// one's playstyle shares its groups instead ([`Others::own_stages`]).
+fn other_farm<'a>(others: &Others<'a>) -> Vec<OtherFarm<'a>> {
+    let mut farms: Vec<OtherFarm> = others
+        .playstyles
+        .iter()
+        .flat_map(|(config, members)| members.iter().map(move |m| (*config, m)))
+        .map(|(config, member)| {
+            let stage: Vec<&str> = member.chain.first().map(String::as_str).into_iter().collect();
+            OtherFarm {
+                character: member.name.clone(),
+                config,
+                class: member.class,
+                chain: member.chain.clone(),
+                worn: member.worn.clone(),
+                groups: stash_plan::farm_needed(config, &stage)
+                    .into_iter()
+                    .cloned()
+                    .collect(),
+            }
+        })
+        .collect();
+    farms.sort_by_key(|f| f.character.to_lowercase());
+    farms
 }
 
 /// The `(character, selection)` of each build selection (shared by every folder, read from the
@@ -414,6 +450,185 @@ mod tests {
         )]);
         let with_her = playstyle.evaluate(&druid, None, &played).wants.wants;
         assert_ne!(with_her, fury.wants.wants, "her build's own pieces");
+        Ok(())
+    }
+
+    fn entry(
+        name: &str,
+        class: u32,
+        stage: &str,
+        level: u8,
+        worn: &[&str],
+    ) -> (String, d2r_core::played::Entry) {
+        let entry = d2r_core::played::Entry {
+            name: name.to_owned(),
+            t: 1,
+            class: Some(class),
+            stage: Some(stage.to_owned()),
+            level: Some(level),
+            worn: worn.iter().map(|&w| w.to_owned()).collect(),
+        };
+        (name.to_lowercase(), entry)
+    }
+
+    /// The fixture's snapshot played by `name` of class `class` at `level`.
+    fn played_by(name: &str, class: u32, level: u8) -> Result<Snapshot> {
+        let fixture = include_str!("../../../tests/fixtures/flayer-marks-snapshot.json");
+        let mut snap: Snapshot = serde_json::from_str(fixture).context("parsing fixture")?;
+        snap.player.class = class;
+        name.clone_into(&mut snap.player.name);
+        snap.player.char_level = Some(level);
+        Ok(snap)
+    }
+
+    /// The farm panel's groups as `(character, build)`, and the entry names of each.
+    fn farm_groups(
+        playstyle: &ConfigDriven,
+        snap: &Snapshot,
+        played: &Played,
+    ) -> Vec<(Option<String>, String, Vec<String>)> {
+        let evaluation = playstyle.evaluate(snap, None, played);
+        let blocks = d2r_core::render::TextBlocks::default();
+        let info = d2r_core::web::fixtures::live_info(snap.player.class, &blocks, &[], &[], &[]);
+        let panels = playstyle.panels(&evaluation, &info);
+        let groups = panels
+            .sections
+            .get("farm")
+            .and_then(|f| f.get("groups"))
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        groups
+            .iter()
+            .map(|g| {
+                let text =
+                    |v: Option<&serde_json::Value>| v.and_then(serde_json::Value::as_str).map(str::to_owned);
+                let items = g
+                    .get("items")
+                    .and_then(serde_json::Value::as_array)
+                    .map_or_else(Vec::new, |items| {
+                        items.iter().filter_map(|i| text(i.get("name"))).collect()
+                    });
+                (
+                    text(g.get("character")),
+                    text(g.get("for")).unwrap_or_default(),
+                    items,
+                )
+            })
+            .collect()
+    }
+
+    fn two_playstyles() -> ConfigDriven {
+        ConfigDriven::load(&Files {
+            shipped: Some(shipped("trapsin")),
+            others: vec![("fury-druid".to_owned(), shipped("fury-druid"))],
+            quiet: true,
+            ..Files::default()
+        })
+    }
+
+    #[test]
+    fn the_farm_panel_lists_the_other_characters_groups_after_the_own() -> Result<()> {
+        let playstyle = two_playstyles();
+        let vex = played_by("Vex", 6, 55)?;
+        let wolf = Played::from([entry("BigBadWolf", 5, "fury druid", 10, &[])]);
+        let shown: Vec<(Option<String>, String)> = farm_groups(&playstyle, &vex, &wolf)
+            .into_iter()
+            .map(|(who, build, _)| (who, build))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (None, "Trapsin".to_owned()),
+                (Some("BigBadWolf".to_owned()), "Fury Druid".to_owned())
+            ],
+            "Vex is past the Fire Wake group"
+        );
+        // His recorded worn gear holds the entry for him; an assassin alongside her shares her groups.
+        let wearing = Played::from([
+            entry("BigBadWolf", 5, "fury druid", 10, &["Dimoak's Hew"]),
+            entry("Starter", 6, "fire wake assassin", 12, &[]),
+        ]);
+        let groups = farm_groups(&playstyle, &vex, &wearing);
+        let names = |groups: &[(Option<String>, String, Vec<String>)], who: Option<&str>| {
+            groups
+                .iter()
+                .filter(|(w, _, _)| w.as_deref() == who)
+                .map(|(_, build, items)| (build.clone(), items.clone()))
+                .collect::<Vec<_>>()
+        };
+        let his = names(&groups, Some("BigBadWolf"));
+        assert!(
+            his.iter()
+                .all(|(_, items)| !items.iter().any(|i| i == "Dimoak's Hew")),
+            "{his:?}"
+        );
+        assert!(
+            names(&farm_groups(&playstyle, &vex, &wolf), Some("BigBadWolf"))
+                .iter()
+                .any(|(_, items)| items.iter().any(|i| i == "Dimoak's Hew")),
+            "missing while he doesn't wear it"
+        );
+        let own: Vec<String> = names(&groups, None).into_iter().map(|(b, _)| b).collect();
+        assert_eq!(
+            own,
+            ["Fire Wake Assassin", "Trapsin"],
+            "Starter still needs Fire Wake"
+        );
+        assert!(names(&groups, Some("Starter")).is_empty(), "no duplicate group");
+        // Each other character's passed groups are hidden by its own stage.
+        let wolf_plays = played_by("BigBadWolf", 5, 30)?;
+        let farm_of_vex = |stage: &str, level: u8| {
+            let vex = Played::from([entry("Vex", 6, stage, level, &[])]);
+            let groups = farm_groups(&playstyle, &wolf_plays, &vex);
+            names(&groups, Some("Vex"))
+                .into_iter()
+                .map(|(b, _)| b)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(farm_of_vex("trapsin", 55), ["Trapsin"]);
+        assert_eq!(
+            farm_of_vex("fire wake assassin", 20),
+            ["Fire Wake Assassin", "Trapsin"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn another_characters_missing_farm_entry_gets_the_farm_mark_on_the_ground() -> Result<()> {
+        use d2r_core::guidance::MarkKind;
+        use d2r_core::offsets::item_data;
+        let mut vex = played_by("Vex", 6, 55)?;
+        let mut hew = vex.drops.first().cloned().context("a fixture drop")?;
+        hew.code = Some("bar".to_owned());
+        hew.quality = item_data::QUALITY_UNIQUE;
+        hew.flags = item_data::FLAG_IDENTIFIED;
+        hew.sockets = 0;
+        hew.unique_index = Some(48);
+        vex.drops = vec![hew];
+        let mark = |playstyle: &ConfigDriven, played: &Played| {
+            let wants = playstyle.evaluate(&vex, None, played).wants;
+            let mut drops = vex.drops.clone();
+            let marks = playstyle.mark_drops(&mut drops, &wants);
+            drops
+                .first()
+                .and_then(|d| marks.get(&d.id))
+                .map(|m| (m.kind, m.rule.clone()))
+        };
+        let playstyle = two_playstyles();
+        let wolf = Played::from([entry("BigBadWolf", 5, "fury druid", 10, &[])]);
+        assert_eq!(
+            mark(&playstyle, &wolf),
+            Some((MarkKind::Farm, "Dimoak's Hew".to_owned()))
+        );
+        let wearing = Played::from([entry("BigBadWolf", 5, "fury druid", 10, &["Dimoak's Hew"])]);
+        assert_eq!(mark(&playstyle, &wearing), None, "he wears it");
+        let trapsin_only = ConfigDriven::load(&Files {
+            shipped: Some(shipped("trapsin")),
+            quiet: true,
+            ..Files::default()
+        });
+        assert_eq!(mark(&trapsin_only, &wolf), None, "no fury farm list");
         Ok(())
     }
 

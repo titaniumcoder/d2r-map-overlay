@@ -359,13 +359,15 @@ function recipes(list) {
 }
 // The farm list per build, in farm-list order: one card per still-missing entry (held ones
 // are left out, owned runes too), its runes short, base hint, and at the bottom where to farm it.
+// The played character's groups first, then another own character's ("for BigBadWolf (Fury Druid)").
 function farm(f) {
   const groups = (f && f.groups) || [];
   const held = (f && f.held) || [];
   $("farmpanel").hidden = !groups.length;
   $("farm").innerHTML = groups.map(g => {
     const items = g.items || [];
-    const done = held.filter(h => h.for === g.for).length;
+    const who = g.character || null;
+    const done = held.filter(h => h.for === g.for && (h.character || null) === who).length;
     const cards = items.map(i => {
       const n = i.count > 1 ? ` ${esc(i.stashed)}/${esc(i.count)}` : "";
       const runes = (i.runes || []).length
@@ -380,7 +382,8 @@ function farm(f) {
       return `<div class="fm ${esc(i.kind)} missing${nnPend(g.for, i.name, false)}"><div class="fm-h"><span class="nm">${esc(i.name)}</span>`
         + `<span class="kd">${esc(i.kind)}</span><span class="fst missing">missing${n}</span>${nnButton(g.for, i.name, false)}</div>${needs}${note}${runes}${bases}${where}</div>`;
     }).join("");
-    return `<h3 class="row-h">for ${esc(g.for)} · ${done}/${done + items.length} held</h3><div class="fms">${cards}</div>`
+    const heading = who ? `${who} (${g.for})` : g.for;
+    return `<h3 class="row-h">for ${esc(heading)} · ${done}/${done + items.length} held</h3><div class="fms">${cards}</div>`
       + hiddenList(g.for, g.not_needed, "Not needed");
   }).join("");
 }
