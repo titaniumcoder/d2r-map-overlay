@@ -1953,6 +1953,18 @@ fine, keep them"; superseded 2026-11-23 by "Only upgrades keep a base", see "Ite
   level is no need of that build (`stash_plan::current`; runes never outgrow): Sigon's Sabot
   (Summoner lvl 40-60, character 77) is kept only as the Fury's guide alternative.
 
+## Offline play (2026-11-23, user plan; not started)
+The user will move to **offline** single player, starting new characters (the same names, offline only): "online play is not worth it". Online support stays as it is.
+
+Why offline helps: offline the level layout stays the same between games until the character changes difficulty (user), and the map seed is in the character's save file. Online the seed is hidden (see "ActMisc, difficulty and seed lead": the obvious in-memory value does not reproduce the Flayer Jungle with d2mapapi).
+
+Steps, in order:
+- [ ] **Smoke test**: an offline game with the current overlay (single-screen protocol), comparing it with the Tab automap. Same `D2R.exe`, so the memory reader should work unchanged; check the offsets, the shared-stash reading (offline tab units already showed up as stale units online, see Reader incidents), the own-character list (`<Name>.d2s` already counts) and played.json / bis.toml.
+- [ ] **Online and offline characters apart**: the same name can exist online and offline with separate shared stashes. Key played.json, the build selection and the stash plan by mode, or decide that offline replaces online. Ask the user which.
+- [ ] **Saves on disk**: offline, `.d2s` (character) and `.d2i` (shared stash) are the real data (online the local `.d2i` is a stub). The stash could be read from disk without opening it in game (research/notes/stash-format.md).
+- [ ] **Explored-layout cache**: since the layout persists until the difficulty changes, remember the explored rooms, exits and waypoints per character, difficulty and area across games, and draw them on later visits. Reset when the difficulty changes or the seed differs. Low risk; no reverse engineering.
+- [ ] **Full maps from the seed** (this is Phase 2 for offline): read the map seed from the `.d2s` header (believed to be the "map ID" field; verify) and generate the level with d2mapapi (classic 1.13c files kept for this, see Cleanup). Test first whether D2R's layouts still match d2mapapi's for one or two areas against the Tab automap. If they match: full maps, exits and waypoints on entry. If not: the explored-layout cache covers most of it.
+
 ## Milestones
 - [x] **M0 setup**: mise Rust pin, `cargo init`, lint config, rustfmt, PLAN.md + CLAUDE.md + .gitignore, `git init`, first commit.
    From here on the user can start sessions directly in `~/Work/d2r_map_overlay`.
@@ -1965,7 +1977,7 @@ fine, keep them"; superseded 2026-11-23 by "Only upgrades keep a base", see "Ite
 - [x] **Map toggle** (2026-11-18): `SIGUSR1` hides/shows the map; key binding left to the user's Hyprland config.
 - [x] ~~**Backlog: buff tracker**~~ **dropped** (user decision 2026-11-22: "remove it completely the buffs. it is not worth tracking"; Feral Rage is watched in game). Tried the same day: a dashboard Buffs panel from the player's state bits at stat list `+0xB30`, a journal `buffs` event with raw stat-list dumps (findings in Memory layer, "State stat lists and buff timing"), then a timed-buff strip as a second overlay surface. Not worth it: the client only learns that a state was set or cleared, the timer runs on the server, so countdowns could only be guessed from the game tables or the last run. All of it is removed (states table, `buffs.rs`, `buff_strip.rs`, `Player::states`, the reader's dump); git history before the removal commit has it. The state bitfield read for the Terror Zone `desecrated` state stays.
 - [ ] **Backlog: good areas at 75+** (user, 2026-11-20: "we will bring it back when we are level 75 to show us good areas, nothing else, especially when terrorized"): from character level 75 on, a dashboard panel that lists only the areas good for the build, terrorized ones especially. The old level-band "Where to go" panel was removed the same day. Useful leftovers: `levels_data::IMMUNITIES` (per area and difficulty: monster types and immune counts per damage type), `build::rate` (Good / Neutral / Bad for the build, already colours the overlay's info line), and the Terror Zone reading (`game::is_terrorized` from the monsters' `state::DESECRATED`, per visited level only; `Session` keeps the levels seen terrorized this game; no reader for the current zone list yet). `build::bad_reason` (the immune-damage tooltip text) was deleted with the panel; it is in git history (before 2026-11-20's removal commit).
-- [ ] **Phase 2 (separate plan)**: map seed RE → d2mapapi-backed full markers from entry.
+- [ ] **Phase 2 (separate plan)**: map seed RE → d2mapapi-backed full markers from entry. Offline the seed is in the save file: see "Offline play".
 
 ## Verification
 - Unit tests: iso projection, preset classification, marker cache, snapshot parsing from a captured byte fixture.
