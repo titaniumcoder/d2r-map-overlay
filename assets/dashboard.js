@@ -218,7 +218,7 @@ function stash(r) {
     const rare = Math.max(...chances.map(c => c || 0)) < 1;
     const tip = "Countess: " + chances.map((c, i) => c > 0 ? `${names[i]} 1 in ${Math.round(100 / c)}` : null)
       .filter(Boolean).join(", ") + (rare ? " (rare)" : "");
-    return { badge: `<span class="ctess${rare ? " rare" : ""}" title="${esc(tip)}">C·${short[first]}</span>`, tip };
+    return { badge: `<span class="ctess${rare ? " rare" : ""}" title="${esc(tip)}">Countess ${short[first]}</span>`, tip };
   };
   const stacks = (list, cls) => (list || []).map(s => {
     const f = cls === "rune" ? farmRunes.get(s.name) : null;
