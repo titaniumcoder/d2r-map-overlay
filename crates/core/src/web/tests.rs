@@ -236,3 +236,22 @@ fn skill_plan_targets_marks_and_next_point() -> Result<()> {
     assert_eq!(json.get("next"), Some(&serde_json::Value::Null));
     Ok(())
 }
+
+#[test]
+fn countess_runes_give_her_odds_per_difficulty() {
+    let runes = countess_runes_json();
+    let chances = |code: &str| {
+        runes
+            .get(code)
+            .and_then(serde_json::Value::as_array)
+            .map(|a| a.iter().map(serde_json::Value::is_number).collect::<Vec<_>>())
+    };
+    assert_eq!(chances("r08"), Some(vec![true, true, true]), "Ral from Normal on");
+    assert_eq!(
+        chances("r16"),
+        Some(vec![false, true, true]),
+        "Io from Nightmare on"
+    );
+    assert_eq!(chances("r24"), Some(vec![false, false, true]), "Ist only in Hell");
+    assert_eq!(chances("r25"), None, "Gul is not in her rune drop");
+}

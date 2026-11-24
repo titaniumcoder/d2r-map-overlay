@@ -122,6 +122,7 @@ pub fn live_value(info: &LiveInfo, panels: Panels) -> serde_json::Value {
         "skills": skills::skills_json(info.class, info.char_level, info.skills, panels.skill_plan),
         "shop": vendor::shop_json(info, &panels.shop),
         "drops": drops_json(info.marks),
+        "countess_runes": countess_runes_json(),
     });
     if let Some(obj) = json.as_object_mut() {
         for (key, value) in panels.sections {
@@ -129,6 +130,23 @@ pub fn live_value(info: &LiveInfo, panels: Panels) -> serde_json::Value {
         }
     }
     json
+}
+
+/// The runes of the Countess's own rune drop per rune code: the per-kill chance in percent
+/// per difficulty `[Normal, Nightmare, Hell]`, `null` where she doesn't drop it that way.
+fn countess_runes_json() -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for (difficulty, runes) in crate::drops_data::COUNTESS_RUNES.iter().enumerate() {
+        for &(code, chance) in *runes {
+            let entry = out
+                .entry(code.to_owned())
+                .or_insert_with(|| serde_json::json!([null, null, null]));
+            if let Some(slot) = entry.get_mut(difficulty) {
+                *slot = serde_json::json!(chance);
+            }
+        }
+    }
+    serde_json::Value::Object(out)
 }
 
 /// The marked ground drops sorted by unit id, so an unchanged frame gives the same JSON.

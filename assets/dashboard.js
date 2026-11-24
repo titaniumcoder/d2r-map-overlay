@@ -206,15 +206,30 @@ function stash(r) {
     if (!runeList.some(s => s.name === name)) runeList.push({ name, qty: 0, code: f.code, absent: true });
   }
   runeList.sort((a, b) => runeNo(a) - runeNo(b));
+  // The Countess's own rune drop: a badge with the first difficulty she drops the rune in,
+  // the tooltip her per-kill odds in each.
+  const countess = s => {
+    const chances = (r.countess_runes || {})[s.code];
+    if (!chances) return { badge: "", tip: "" };
+    const names = ["Normal", "Nightmare", "Hell"], short = ["N", "NM", "H"];
+    const first = chances.findIndex(c => c > 0);
+    if (first < 0) return { badge: "", tip: "" };
+    // Under 1 in 100 per kill in every difficulty: she drops it, but not reliably.
+    const rare = Math.max(...chances.map(c => c || 0)) < 1;
+    const tip = "Countess: " + chances.map((c, i) => c > 0 ? `${names[i]} 1 in ${Math.round(100 / c)}` : null)
+      .filter(Boolean).join(", ") + (rare ? " (rare)" : "");
+    return { badge: `<span class="ctess${rare ? " rare" : ""}" title="${esc(tip)}">C·${short[first]}</span>`, tip };
+  };
   const stacks = (list, cls) => (list || []).map(s => {
     const f = cls === "rune" ? farmRunes.get(s.name) : null;
-    if (!f) return `<span class="stk ${cls}" title="${esc(s.code || "")}"><span class="nm">${esc(s.name)}</span><span class="q">${esc(s.qty)}</span></span>`;
+    const c = cls === "rune" ? countess(s) : { badge: "", tip: "" };
+    if (!f) return `<span class="stk ${cls}" title="${esc([s.code || "", c.tip].filter(Boolean).join(" · "))}"><span class="nm">${esc(s.name)}</span><span class="q">${esc(s.qty)}</span>${c.badge}</span>`;
     // Short only when the character's own runes (held ones too) don't cover the need.
     const short = f.have < f.need;
-    const tip = `farm: ${f.for.join(", ")} · need ${f.need} · have ${f.have} (shared stash ${f.stash})`;
+    const tip = `farm: ${f.for.join(", ")} · need ${f.need} · have ${f.have} (shared stash ${f.stash})${c.tip ? " · " + c.tip : ""}`;
     const q = short ? `${esc(f.have)}/${esc(f.need)}` : s.absent ? `${esc(f.have)} held` : esc(s.qty);
     return `<span class="stk ${cls} farm${short ? " short" : ""}${s.absent ? " absent" : ""}" title="${esc(tip)}"><span class="nm">${esc(s.name)}</span>`
-      + `<span class="q">${q}</span></span>`;
+      + `<span class="q">${q}</span>${c.badge}</span>`;
   }).join("");
   const group = (title, list, cls) => list && list.length
     ? `<div><h3>${title}</h3><div class="stacks">${stacks(list, cls)}</div></div>` : "";
